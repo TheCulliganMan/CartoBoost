@@ -23,6 +23,8 @@ from typing import Any
 import numpy as np
 from cartoboost import __version__
 from cartoboost.forecasting.global_models import CartoBoostLagForecaster
+from cartoboost.metrics.m6 import rank_probability_score
+from cartoboost.metrics.wrmsse import rmsse_scale, wrmsse
 
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON_SOURCE = ROOT / "python"
@@ -301,6 +303,13 @@ def main() -> int:
         "model_settings": {"cartoboost_lag": cartoboost_benchmark_settings(cartoboost_config)},
         "metrics": metrics,
         "quality": quality,
+        "official_metrics": benchmark_objective_artifacts(
+            args.source,
+            train_table=table,
+            scored=scored,
+            model_names=benchmark_model_names(args.model_roster),
+            season_length=season_length,
+        ),
         "timing": timing,
         "plots": plots,
     }
@@ -1403,6 +1412,365 @@ def quality_summary(
         summary[f"best_{library}_method"] = best_model
         summary[f"best_{library}_rmse"] = metrics[best_model]["rmse"]
     return summary
+
+
+def benchmark_objective_artifacts(
+    source: str,
+    *,
+    train_table: Any,
+    scored: Any,
+    model_names: list[str],
+    season_length: int,
+) -> dict[str, Any]:
+    if source == "m5":
+        return {
+            "primary_metric": "wrmsse",
+            "objective": "M5 Forecasting Accuracy level-aware weighted RMSSE",
+            "m5": m5_wrmsse_artifact(
+                train_table,
+                scored,
+                model_names=model_names,
+                seasonal_period=1,
+            ),
+        }
+    if source == "m6":
+        return {
+            "primary_metric": "rank_probability_score",
+            "objective": "M6-style rank-probability scoring plus deterministic decisions",
+            "m6": m6_rps_artifact(scored, model_names=model_names),
+        }
+    return {}
+
+
+def m5_wrmsse_artifact(
+    table: Any,
+    scored: Any,
+    *,
+    model_names: list[str],
+    seasonal_period: int,
+) -> dict[str, Any]:
+    pl = require_polars()
+    cutoff = scored.select(pl.col("timestamp").min()).item()
+    train = table.filter(pl.col("date") < cutoff)
+    if train.is_empty():
+        raise ValueError("M5 WRMSSE artifact requires pre-origin training rows")
+
+    metadata = train.select("lane_id", *STATIC_COVARIATES).unique(subset=["lane_id"])
+    actual = scored.select("series_id", "timestamp", "horizon", "actual").unique()
+    levels = [
+        ("total", None),
+        ("state", "pickup_borough_code"),
+        ("store", "pickup_zone"),
+        ("item", "dropoff_zone"),
+        ("item_store", None),
+    ]
+    level_artifacts = {
+        level_name: m5_wrmsse_level_artifact(
+            train,
+            actual,
+            scored,
+            metadata,
+            level_name=level_name,
+            group_column=group_column,
+            model_names=model_names,
+            seasonal_period=seasonal_period,
+        )
+        for level_name, group_column in levels
+    }
+    model_scores: dict[str, float] = {}
+    for model in model_names:
+        available_scores = [
+            level["models"][model]["wrmsse"]
+            for level in level_artifacts.values()
+            if model in level["models"] and level["models"][model]["wrmsse"] is not None
+        ]
+        model_scores[model] = float(np.mean(available_scores)) if available_scores else None
+    ranking = sorted(
+        model_scores,
+        key=lambda name: (
+            math.inf if model_scores[name] is None else model_scores[name],
+            name,
+        ),
+    )
+    return {
+        "seasonal_period": int(seasonal_period),
+        "level_order": list(level_artifacts),
+        "levels": level_artifacts,
+        "model_scores": model_scores,
+        "ranking": ranking,
+        "notes": [
+            "Weights use recent unit-sales volume from the benchmark panel because sell prices "
+            "are not present in the shared forecasting frame.",
+            "Flat zero-scale series are reported under skipped_zero_scale_series rather than "
+            "assigned an artificial denominator.",
+        ],
+    }
+
+
+def m5_wrmsse_level_artifact(
+    train: Any,
+    actual: Any,
+    scored: Any,
+    metadata: Any,
+    *,
+    level_name: str,
+    group_column: str | None,
+    model_names: list[str],
+    seasonal_period: int,
+) -> dict[str, Any]:
+    pl = require_polars()
+    train_level = m5_level_frame(train, level_name=level_name, group_column=group_column)
+    actual_level = m5_level_scored_frame(
+        actual,
+        metadata,
+        level_name=level_name,
+        group_column=group_column,
+        value_column="actual",
+    )
+    ids = sorted(actual_level.select("level_id").unique().to_series().to_list())
+    train_rows = {
+        str(row["level_id"]): row["loads"]
+        for row in train_level.sort(["level_id", "date"])
+        .group_by("level_id", maintain_order=True)
+        .agg(pl.col("loads"))
+        .iter_rows(named=True)
+    }
+    actual_rows = {
+        str(row["level_id"]): row["actual"]
+        for row in actual_level.sort(["level_id", "horizon"])
+        .group_by("level_id", maintain_order=True)
+        .agg(pl.col("actual"))
+        .iter_rows(named=True)
+    }
+    weights = m5_level_weights(train_level, ids)
+    valid_ids: list[str] = []
+    skipped: list[str] = []
+    for level_id in ids:
+        try:
+            rmsse_scale(train_rows[str(level_id)], seasonal_period=seasonal_period)
+        except ValueError:
+            skipped.append(str(level_id))
+        else:
+            valid_ids.append(str(level_id))
+
+    model_artifacts: dict[str, Any] = {}
+    for model in model_names:
+        pred_level = m5_level_scored_frame(
+            scored.select("series_id", "timestamp", "horizon", pl.col(model).alias("forecast")),
+            metadata,
+            level_name=level_name,
+            group_column=group_column,
+            value_column="forecast",
+        )
+        pred_rows = {
+            str(row["level_id"]): row["forecast"]
+            for row in pred_level.sort(["level_id", "horizon"])
+            .group_by("level_id", maintain_order=True)
+            .agg(pl.col("forecast"))
+            .iter_rows(named=True)
+        }
+        if valid_ids:
+            result = wrmsse(
+                [train_rows[level_id] for level_id in valid_ids],
+                [actual_rows[level_id] for level_id in valid_ids],
+                [pred_rows[level_id] for level_id in valid_ids],
+                [weights[level_id] for level_id in valid_ids],
+                seasonal_period=seasonal_period,
+                series_ids=valid_ids,
+                return_breakdown=True,
+            )
+            model_artifacts[model] = {
+                "wrmsse": float(result["wrmsse"]),
+                "series_count": len(valid_ids),
+                "series": result["series"],
+            }
+        else:
+            model_artifacts[model] = {
+                "wrmsse": None,
+                "series_count": 0,
+                "series": [],
+            }
+    return {
+        "series_count": len(ids),
+        "scored_series_count": len(valid_ids),
+        "skipped_zero_scale_series": skipped,
+        "models": model_artifacts,
+    }
+
+
+def m5_level_frame(train: Any, *, level_name: str, group_column: str | None) -> Any:
+    pl = require_polars()
+    if level_name == "total":
+        return (
+            train.with_columns(pl.lit("total").alias("level_id"))
+            .group_by(["level_id", "date"], maintain_order=True)
+            .agg(pl.col("loads").sum())
+        )
+    if level_name == "item_store":
+        return train.with_columns(pl.col("lane_id").cast(pl.Utf8).alias("level_id")).select(
+            "level_id", "date", "loads"
+        )
+    if group_column is None:
+        raise ValueError(f"M5 level {level_name!r} requires a group column")
+    return (
+        train.with_columns(pl.col(group_column).cast(pl.Utf8).alias("level_id"))
+        .group_by(["level_id", "date"], maintain_order=True)
+        .agg(pl.col("loads").sum())
+    )
+
+
+def m5_level_scored_frame(
+    frame: Any,
+    metadata: Any,
+    *,
+    level_name: str,
+    group_column: str | None,
+    value_column: str,
+) -> Any:
+    pl = require_polars()
+    if level_name == "total":
+        return (
+            frame.with_columns(pl.lit("total").alias("level_id"))
+            .group_by(["level_id", "timestamp", "horizon"], maintain_order=True)
+            .agg(pl.col(value_column).sum())
+        )
+    joined = frame.join(metadata, left_on="series_id", right_on="lane_id", how="left")
+    if level_name == "item_store":
+        return joined.with_columns(pl.col("series_id").cast(pl.Utf8).alias("level_id")).select(
+            "level_id", "timestamp", "horizon", value_column
+        )
+    if group_column is None:
+        raise ValueError(f"M5 level {level_name!r} requires a group column")
+    return (
+        joined.with_columns(pl.col(group_column).cast(pl.Utf8).alias("level_id"))
+        .group_by(["level_id", "timestamp", "horizon"], maintain_order=True)
+        .agg(pl.col(value_column).sum())
+    )
+
+
+def m5_level_weights(train_level: Any, ids: list[Any]) -> dict[str, float]:
+    pl = require_polars()
+    weight_rows = (
+        train_level.sort(["level_id", "date"])
+        .group_by("level_id", maintain_order=True)
+        .agg(pl.col("loads").tail(28).sum().alias("weight"))
+    )
+    weights = {
+        str(row["level_id"]): float(row["weight"]) for row in weight_rows.iter_rows(named=True)
+    }
+    if sum(max(weights.get(str(level_id), 0.0), 0.0) for level_id in ids) <= 0.0:
+        return {str(level_id): 1.0 for level_id in ids}
+    return {str(level_id): max(weights.get(str(level_id), 0.0), 0.0) for level_id in ids}
+
+
+def m6_rps_artifact(scored: Any, *, model_names: list[str]) -> dict[str, Any]:
+    summaries = {model: m6_model_rps_summary(scored, prediction_col=model) for model in model_names}
+    ranking = sorted(model_names, key=lambda name: (summaries[name]["mean_rps"], name))
+    return {
+        "rank_bucket_count": 5,
+        "models": summaries,
+        "ranking": ranking,
+        "notes": [
+            "Rank probabilities are deterministic five-bucket distributions derived from "
+            "predicted cumulative holdout returns.",
+            "Decision rows are deterministic long/short selections for auditability; they "
+            "are not an official M6 submission file.",
+        ],
+    }
+
+
+def m6_model_rps_summary(scored: Any, *, prediction_col: str) -> dict[str, Any]:
+    pl = require_polars()
+    returns = (
+        scored.group_by("series_id", maintain_order=True)
+        .agg(
+            pl.col("actual").sum().alias("actual_return"),
+            pl.col(prediction_col).sum().alias("predicted_return"),
+        )
+        .sort("series_id")
+    )
+    actual_values = returns["actual_return"].to_list()
+    predicted_values = returns["predicted_return"].to_list()
+    actual_buckets = rank_buckets(actual_values, bucket_count=5)
+    predicted_buckets = rank_buckets(predicted_values, bucket_count=5)
+    rows = []
+    rps_values = []
+    for idx, row in enumerate(returns.iter_rows(named=True)):
+        probabilities = rank_bucket_probabilities(predicted_buckets[idx], bucket_count=5)
+        rps = rank_probability_score(probabilities, actual_buckets[idx])
+        rps_values.append(rps)
+        rows.append(
+            {
+                "series_id": str(row["series_id"]),
+                "actual_return": float(row["actual_return"]),
+                "predicted_return": float(row["predicted_return"]),
+                "observed_rank_bucket": int(actual_buckets[idx]),
+                "predicted_rank_bucket": int(predicted_buckets[idx]),
+                "rank_probabilities": probabilities,
+                "rps": float(rps),
+            }
+        )
+    decisions = m6_decision_rows(rows)
+    return {
+        "mean_rps": float(np.mean(rps_values)) if rps_values else float("nan"),
+        "asset_count": len(rows),
+        "assets": rows,
+        "decisions": decisions,
+        "decision_return": float(sum(row["actual_return"] * row["weight"] for row in decisions)),
+    }
+
+
+def rank_buckets(values: list[float], *, bucket_count: int) -> list[int]:
+    if bucket_count <= 0:
+        raise ValueError("bucket_count must be positive")
+    order = sorted(range(len(values)), key=lambda idx: (values[idx], idx))
+    buckets = [0] * len(values)
+    for rank, idx in enumerate(order):
+        buckets[idx] = min(bucket_count - 1, int(rank * bucket_count / max(len(values), 1)))
+    return buckets
+
+
+def rank_bucket_probabilities(predicted_bucket: int, *, bucket_count: int) -> list[float]:
+    if predicted_bucket < 0 or predicted_bucket >= bucket_count:
+        raise ValueError("predicted_bucket must be inside bucket_count")
+    weights = []
+    for bucket in range(bucket_count):
+        distance = abs(bucket - predicted_bucket)
+        weights.append(1.0 / (1.0 + distance * distance))
+    total = sum(weights)
+    return [float(weight / total) for weight in weights]
+
+
+def m6_decision_rows(asset_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not asset_rows:
+        return []
+    ordered = sorted(asset_rows, key=lambda row: (row["predicted_return"], row["series_id"]))
+    side_count = max(1, len(ordered) // 5)
+    shorts = ordered[:side_count]
+    longs = ordered[-side_count:]
+    long_weight = 0.5 / len(longs)
+    short_weight = -0.5 / len(shorts)
+    decisions = [
+        {
+            "series_id": row["series_id"],
+            "side": "short",
+            "weight": float(short_weight),
+            "actual_return": float(row["actual_return"]),
+            "predicted_return": float(row["predicted_return"]),
+        }
+        for row in shorts
+    ]
+    decisions.extend(
+        {
+            "series_id": row["series_id"],
+            "side": "long",
+            "weight": float(long_weight),
+            "actual_return": float(row["actual_return"]),
+            "predicted_return": float(row["predicted_return"]),
+        }
+        for row in longs
+    )
+    return sorted(decisions, key=lambda row: (row["side"], row["series_id"]))
 
 
 def forecast_model_roster(

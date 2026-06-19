@@ -382,6 +382,121 @@ def test_forecasting_benchmark_loads_m6_assets_file(tmp_path):
     assert {"lane_id", "date", "loads", *benchmark.STATIC_COVARIATES} <= set(table.columns)
 
 
+def test_forecasting_benchmark_emits_m5_wrmsse_artifact():
+    pl = pytest.importorskip("polars")
+    repo_root = Path(__file__).resolve().parents[2]
+    module_path = repo_root / "scripts" / "forecasting_library_benchmark.py"
+    spec = importlib.util.spec_from_file_location(
+        "forecasting_library_benchmark_m5_artifact",
+        module_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    benchmark = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = benchmark
+    spec.loader.exec_module(benchmark)
+
+    rows = []
+    start = date(2026, 1, 1)
+    for lane, base, pickup_zone in [("PU1->DO1", 10.0, 1.0), ("PU2->DO2", 20.0, 2.0)]:
+        for day in range(8):
+            rows.append(
+                {
+                    "lane_id": lane,
+                    "date": start + timedelta(days=day),
+                    "loads": base + day,
+                    "pickup_zone": pickup_zone,
+                    "dropoff_zone": pickup_zone + 10.0,
+                    "distance_miles": 1.0,
+                    "airport_lane": 0.0,
+                    "pickup_borough_code": pickup_zone,
+                }
+            )
+    table = pl.DataFrame(rows).with_columns(pl.col("date").cast(pl.Datetime("us")))
+    scored = pl.DataFrame(
+        [
+            {
+                "series_id": lane,
+                "timestamp": start + timedelta(days=day),
+                "horizon": day - 5,
+                "actual": base + day,
+                "cartoboost_lag": base + day - 1.0,
+                "cartoboost_auto_forecast": base + day,
+            }
+            for lane, base in [("PU1->DO1", 10.0), ("PU2->DO2", 20.0)]
+            for day in range(6, 8)
+        ]
+    ).with_columns(pl.col("timestamp").cast(pl.Datetime("us")))
+
+    artifact = benchmark.benchmark_objective_artifacts(
+        "m5",
+        train_table=table,
+        scored=scored,
+        model_names=["cartoboost_lag", "cartoboost_auto_forecast"],
+        season_length=1,
+    )
+
+    m5 = artifact["m5"]
+    assert artifact["primary_metric"] == "wrmsse"
+    assert m5["ranking"] == ["cartoboost_auto_forecast", "cartoboost_lag"]
+    assert set(m5["levels"]) == {"total", "state", "store", "item", "item_store"}
+    total = m5["levels"]["total"]["models"]
+    assert total["cartoboost_auto_forecast"]["wrmsse"] == pytest.approx(0.0)
+    assert total["cartoboost_lag"]["wrmsse"] > 0.0
+
+
+def test_forecasting_benchmark_emits_m6_rps_artifact():
+    pl = pytest.importorskip("polars")
+    repo_root = Path(__file__).resolve().parents[2]
+    module_path = repo_root / "scripts" / "forecasting_library_benchmark.py"
+    spec = importlib.util.spec_from_file_location(
+        "forecasting_library_benchmark_m6_artifact",
+        module_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    benchmark = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = benchmark
+    spec.loader.exec_module(benchmark)
+
+    scored = pl.DataFrame(
+        [
+            {
+                "series_id": symbol,
+                "timestamp": date(2026, 1, 1) + timedelta(days=horizon),
+                "horizon": horizon + 1,
+                "actual": actual,
+                "cartoboost_lag": lag,
+                "cartoboost_auto_forecast": actual,
+            }
+            for symbol, actual, lag in [
+                ("AAA", -0.03, 0.04),
+                ("BBB", -0.01, 0.03),
+                ("CCC", 0.01, 0.02),
+                ("DDD", 0.03, 0.01),
+                ("EEE", 0.05, -0.02),
+            ]
+            for horizon in range(2)
+        ]
+    ).with_columns(pl.col("timestamp").cast(pl.Datetime("us")))
+
+    artifact = benchmark.benchmark_objective_artifacts(
+        "m6",
+        train_table=scored,
+        scored=scored,
+        model_names=["cartoboost_lag", "cartoboost_auto_forecast"],
+        season_length=7,
+    )
+
+    m6 = artifact["m6"]
+    assert artifact["primary_metric"] == "rank_probability_score"
+    assert m6["ranking"][0] == "cartoboost_auto_forecast"
+    auto = m6["models"]["cartoboost_auto_forecast"]
+    assert auto["asset_count"] == 5
+    assert auto["mean_rps"] < m6["models"]["cartoboost_lag"]["mean_rps"]
+    assert sum(row["weight"] for row in auto["decisions"]) == pytest.approx(0.0)
+
+
 def test_model_benchmark_suite_graph_families_smoke(tmp_path):
     repo_root = Path(__file__).resolve().parents[2]
     output_dir = tmp_path / "model_benchmarks_graph"

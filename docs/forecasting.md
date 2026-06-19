@@ -108,6 +108,9 @@ When reporting a forecasting result, record:
 - feature configuration and covariate roles;
 - RMSE, MAE, R2 when applicable, bias, WAPE or MAPE family metrics, and any
   interval coverage or pinball-loss metrics;
+- for M5/M6-style benchmark claims, the `official_metrics` artifact section:
+  level-aware WRMSSE for M5 and rank-probability score plus decision rows for
+  M6;
 - training time and prediction time when comparing models.
 
 For benchmark claims, keep the train/test split, task names, model list, metrics,

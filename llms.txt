@@ -87,8 +87,9 @@ temporal, spatial, geotemporal, graph, and neural-embedding modeling.
 - Use `cartoboost.forecasting.AutoForecaster` for deterministic direct,
   decomposition, AutoStats, reconciliation, probabilistic, neural, and ensemble
   forecasting experiments; benchmark claims must cite the maintained artifact.
-- Use `cartoboost.metrics.wrmsse` and `cartoboost.metrics.m6` for M5/M6-style
-  metric checks instead of treating all forecasting benchmarks as RMSE-only.
+- Use `cartoboost.metrics.wrmsse`, `cartoboost.metrics.m6`, and the benchmark
+  artifact `official_metrics` section for M5/M6-style checks instead of
+  treating all forecasting benchmarks as RMSE-only.
 - Use `uv sync --group dev` for local development and
   `uv run --group dev maturin develop` after native binding changes.
 - Use `npm run typecheck` and `npm run build` for the Docusaurus docs site.
