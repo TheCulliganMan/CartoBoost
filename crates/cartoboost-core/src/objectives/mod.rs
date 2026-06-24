@@ -420,18 +420,46 @@ impl Objective for MulticlassLogLossObjective {
         validate_multiclass_targets(targets, self.class_count)?;
         validate_prediction_shape(targets, raw_predictions, self.class_count)?;
         validate_objective_weights(weights, targets.len())?;
-        let probabilities = self.transform_predictions(raw_predictions)?;
         let mut pairs = Vec::with_capacity(raw_predictions.len());
-        for (row, target) in targets.iter().enumerate() {
-            let class = *target as usize;
-            let weight = weight_at(weights, row);
-            for output in 0..self.class_count {
-                let probability = probabilities[row * self.class_count + output];
-                let label = if output == class { 1.0 } else { 0.0 };
-                pairs.push(GradientPair {
-                    gradient: weight * (probability - label),
-                    hessian: weight * probability * (1.0 - probability),
-                });
+        if let Some(weights) = weights {
+            for ((row, target), weight) in raw_predictions
+                .chunks_exact(self.class_count)
+                .zip(targets)
+                .zip(weights)
+            {
+                let class = *target as usize;
+                let max = row.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                let mut exp_sum = 0.0;
+                for value in row {
+                    exp_sum += (value - max).exp();
+                }
+                let inv_sum = 1.0 / exp_sum;
+                for (output, value) in row.iter().enumerate() {
+                    let probability = (value - max).exp() * inv_sum;
+                    let label = if output == class { 1.0 } else { 0.0 };
+                    pairs.push(GradientPair {
+                        gradient: weight * (probability - label),
+                        hessian: weight * probability * (1.0 - probability),
+                    });
+                }
+            }
+        } else {
+            for (row, target) in raw_predictions.chunks_exact(self.class_count).zip(targets) {
+                let class = *target as usize;
+                let max = row.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                let mut exp_sum = 0.0;
+                for value in row {
+                    exp_sum += (value - max).exp();
+                }
+                let inv_sum = 1.0 / exp_sum;
+                for (output, value) in row.iter().enumerate() {
+                    let probability = (value - max).exp() * inv_sum;
+                    let label = if output == class { 1.0 } else { 0.0 };
+                    pairs.push(GradientPair {
+                        gradient: probability - label,
+                        hessian: probability * (1.0 - probability),
+                    });
+                }
             }
         }
         Ok(pairs)
@@ -445,14 +473,19 @@ impl Objective for MulticlassLogLossObjective {
     ) -> Result<MetricValue> {
         validate_multiclass_targets(targets, self.class_count)?;
         validate_prediction_shape(targets, raw_predictions, self.class_count)?;
-        let probabilities = self.transform_predictions(raw_predictions)?;
         let loss = targets
             .iter()
-            .enumerate()
-            .map(|(row, target)| {
-                -probabilities[row * self.class_count + *target as usize]
+            .zip(raw_predictions.chunks_exact(self.class_count))
+            .map(|(target, row)| {
+                let max = row.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                let mut exp_sum = 0.0;
+                for value in row {
+                    exp_sum += (value - max).exp();
+                }
+                let probability = ((row[*target as usize] - max).exp() / exp_sum)
                     .clamp(PROBABILITY_EPSILON, 1.0)
-                    .ln()
+                    .ln();
+                -probability
             })
             .sum::<f64>()
             / targets.len().max(1) as f64;
@@ -747,12 +780,17 @@ fn transform_predictions(
             let mut probabilities = Vec::with_capacity(raw_predictions.len());
             for row in raw_predictions.chunks_exact(output_dimension) {
                 let max = row.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-                let exp_values = row
-                    .iter()
-                    .map(|value| (value - max).exp())
-                    .collect::<Vec<_>>();
-                let total = exp_values.iter().sum::<f64>();
-                probabilities.extend(exp_values.into_iter().map(|value| value / total));
+                let start = probabilities.len();
+                let mut total = 0.0;
+                for value in row {
+                    let exp_value = (value - max).exp();
+                    probabilities.push(exp_value);
+                    total += exp_value;
+                }
+                let inv_total = 1.0 / total;
+                for probability in &mut probabilities[start..] {
+                    *probability *= inv_total;
+                }
             }
             Ok(probabilities)
         }
