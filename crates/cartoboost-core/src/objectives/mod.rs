@@ -804,30 +804,47 @@ fn pairwise_gradients(
         };
         targets.len()
     ];
+    let mut position_by_row = if scale_by_ndcg_delta {
+        vec![0usize; targets.len()]
+    } else {
+        Vec::new()
+    };
     for range in ranges {
+        if range.len() < 2 {
+            continue;
+        }
         let ideal_dcg = if scale_by_ndcg_delta {
             dcg_for_sorted_targets(targets, range.clone(), None)
         } else {
             0.0
         };
-        let mut ranks = (range.clone()).collect::<Vec<_>>();
-        ranks.sort_by(|left, right| raw_predictions[*right].total_cmp(&raw_predictions[*left]));
-        let mut position_by_row = vec![0usize; targets.len()];
-        for (position, row) in ranks.iter().enumerate() {
-            position_by_row[*row] = position;
+        if scale_by_ndcg_delta {
+            let mut ranks = (range.clone()).collect::<Vec<_>>();
+            ranks.sort_by(|left, right| raw_predictions[*right].total_cmp(&raw_predictions[*left]));
+            for (position, row) in ranks.iter().enumerate() {
+                position_by_row[*row] = position;
+            }
         }
         for high in range.clone() {
+            let high_target = targets[high];
+            let high_prediction = raw_predictions[high];
+            let high_weight = weights.map_or(1.0, |values| values[high]);
             for low in range.clone() {
-                if targets[high] <= targets[low] {
+                let low_target = targets[low];
+                if high_target <= low_target {
                     continue;
                 }
-                let score_delta = raw_predictions[high] - raw_predictions[low];
+                let score_delta = high_prediction - raw_predictions[low];
                 let rho = sigmoid(-score_delta);
-                let pair_weight = 0.5 * (weight_at(weights, high) + weight_at(weights, low));
+                let pair_weight = if let Some(values) = weights {
+                    0.5 * (high_weight + values[low])
+                } else {
+                    1.0
+                };
                 let ndcg_weight = if scale_by_ndcg_delta && ideal_dcg > 0.0 {
                     ndcg_swap_delta(
-                        targets[high],
-                        targets[low],
+                        high_target,
+                        low_target,
                         position_by_row[high],
                         position_by_row[low],
                     ) / ideal_dcg
