@@ -19,6 +19,10 @@ type ForecastRecord = {
   horizon: number;
   model: string;
   prediction: number;
+  base_mean?: number;
+  spatial_correction?: number;
+  kriging_variance?: number;
+  selected_neighbors?: string[];
 };
 
 type ForecastComponentRecord = {
@@ -280,6 +284,7 @@ const fallbackModelOptions: ModelOption[] = [
   {value: 'auto_local_level_kalman', label: 'Auto Local Level Kalman', group: 'local'},
   {value: 'piecewise_linear_seasonal', label: 'Piecewise Linear Seasonal', group: 'local'},
   {value: 'kriging', label: 'Kriging', group: 'spatial'},
+  {value: 'spatial_piecewise_kriging', label: 'Spatial Piecewise Kriging', group: 'spatial'},
   {value: 'optimized_theta', label: 'Optimized Theta', group: 'local'},
   {value: 'naive', label: 'Naive', group: 'local'},
 ];
@@ -666,7 +671,7 @@ export default function ModelingLabClient(): React.ReactElement {
     setComparisonResults([]);
     setRunLog([]);
     setStatus('Running native model roster.');
-    const roster = modelOptions.filter((option) => option.value !== 'kriging' || hasCoordinateColumns(table.columns));
+    const roster = modelOptions.filter((option) => forecastModelCanRun(option, table.columns));
     setRunProgress({label: 'Running native roster', current: 0, total: roster.length});
     appendRunLog(`Started roster comparison with ${roster.length.toLocaleString()} models.`);
     await waitForBrowserPaint();
@@ -746,7 +751,7 @@ export default function ModelingLabClient(): React.ReactElement {
     setStatus('Running holdout backtest across native roster.');
     try {
       const split = holdoutSplit(table, timestampCol, targetCol, seriesCol, horizon);
-      const roster = modelOptions.filter((option) => option.value !== 'kriging' || hasCoordinateColumns(table.columns));
+      const roster = modelOptions.filter((option) => forecastModelCanRun(option, table.columns));
       setRunProgress({label: 'Running holdout backtest', current: 0, total: roster.length});
       appendRunLog(`Started holdout backtest with ${roster.length.toLocaleString()} models.`);
       await waitForBrowserPaint();
@@ -1589,7 +1594,6 @@ function ForecastModelSettings({
 
 function forecastSettingsProfile(selectedModel?: ModelOption) {
   const value = selectedModel?.value ?? '';
-  const group = selectedModel?.group ?? '';
   const seasonalModels = new Set([
     'auto_forecast',
     'cartoboost_lag',
@@ -1614,8 +1618,15 @@ function forecastSettingsProfile(selectedModel?: ModelOption) {
     'arima',
     'piecewise_linear_seasonal',
   ]);
-  const needsCoordinates = value === 'kriging' || group === 'spatial';
+  const needsCoordinates = forecastModelNeedsCoordinates(selectedModel);
   if (needsCoordinates) {
+    if (isSpatialPiecewiseKrigingModel(value)) {
+      return {
+        needsCoordinates,
+        showSeasonality: true,
+        notice: 'Spatial piecewise kriging uses stable coordinates, the piecewise seasonal base, and optional numeric spatial regressors.',
+      };
+    }
     return {
       needsCoordinates,
       showSeasonality: false,
@@ -1634,6 +1645,14 @@ function forecastSettingsProfile(selectedModel?: ModelOption) {
     showSeasonality: true,
     notice: '',
   };
+}
+
+function forecastModelNeedsCoordinates(option?: ModelOption) {
+  return option?.value === 'kriging' || option?.value === 'spatial_piecewise_kriging' || option?.group === 'spatial';
+}
+
+function forecastModelCanRun(option: ModelOption, columns: string[]) {
+  return !forecastModelNeedsCoordinates(option) || hasCoordinateColumns(columns);
 }
 
 function shouldShowSparseFeatures(modelingMode: string) {
@@ -3592,6 +3611,13 @@ function GeoDatasetVisualization({table, targetCol, seriesCol}: {table: ParsedTa
 }
 
 function ForecastTable({records}: {records: ForecastRecord[]}) {
+  const hasSpatialDetails = records.some(
+    (record) =>
+      typeof record.base_mean === 'number' ||
+      typeof record.spatial_correction === 'number' ||
+      typeof record.kriging_variance === 'number' ||
+      Array.isArray(record.selected_neighbors),
+  );
   return (
     <div className={styles.tableScroller}>
       <table>
@@ -3601,6 +3627,10 @@ function ForecastTable({records}: {records: ForecastRecord[]}) {
             <th>timestamp</th>
             <th>horizon</th>
             <th>prediction</th>
+            {hasSpatialDetails && <th>base_mean</th>}
+            {hasSpatialDetails && <th>spatial_correction</th>}
+            {hasSpatialDetails && <th>kriging_variance</th>}
+            {hasSpatialDetails && <th>neighbors</th>}
           </tr>
         </thead>
         <tbody>
@@ -3610,6 +3640,10 @@ function ForecastTable({records}: {records: ForecastRecord[]}) {
               <td>{record.timestamp}</td>
               <td>{record.horizon}</td>
               <td>{formatMetric(record.prediction)}</td>
+              {hasSpatialDetails && <td>{typeof record.base_mean === 'number' ? formatMetric(record.base_mean) : '-'}</td>}
+              {hasSpatialDetails && <td>{typeof record.spatial_correction === 'number' ? formatMetric(record.spatial_correction) : '-'}</td>}
+              {hasSpatialDetails && <td>{typeof record.kriging_variance === 'number' ? formatMetric(record.kriging_variance) : '-'}</td>}
+              {hasSpatialDetails && <td>{Array.isArray(record.selected_neighbors) ? record.selected_neighbors.length : '-'}</td>}
             </tr>
           ))}
         </tbody>
@@ -4845,11 +4879,7 @@ function buildSuggestedConfig({
   const targetingProfile = buildTargetingProfile(table, targetCol, timestampCol, seriesCol, featureCols, sparseFeatureCols, modelOptions);
   const rankedFeatures = rankFeatureRoles(table, targetCol, timestampCol, seriesCol, featureCols, sparseFeatureCols).slice(0, 20);
   const opportunityTargets = rankTargetOpportunities(table, targetCol, timestampCol, seriesCol, 20);
-  const modelSpecificOptions = isPiecewiseForecastModel(model)
-    ? piecewiseForecastOptions(table, targetCol, seriesCol, [], horizon)
-    : isThetaForecastModel(model)
-      ? {thetaSeasonality: 'additive'}
-      : {};
+  const modelSpecificOptions = browserForecastModelOptions(model, table, timestampCol, targetCol, seriesCol, horizon);
   return {
     cartoboostConfigVersion: 1,
     source: {
@@ -5002,21 +5032,33 @@ function numericCovariates(row: Record<string, string>, excludedColumns: string[
   );
 }
 
+function normalizedForecastModel(model: string) {
+  return model.trim().toLowerCase().replace(/-/g, '_');
+}
+
 function isPiecewiseForecastModel(model: string) {
-  return model.trim().toLowerCase().replace(/-/g, '_') === 'piecewise_linear_seasonal';
+  return normalizedForecastModel(model) === 'piecewise_linear_seasonal';
+}
+
+function isSpatialPiecewiseKrigingModel(model: string) {
+  return normalizedForecastModel(model) === 'spatial_piecewise_kriging';
 }
 
 function isThetaForecastModel(model: string) {
-  return ['theta', 'optimized_theta'].includes(model.trim().toLowerCase().replace(/-/g, '_'));
+  return ['theta', 'optimized_theta'].includes(normalizedForecastModel(model));
 }
 
 function browserForecastModelOptions(
   model: string,
   table: ParsedTable,
+  timestampCol: string,
   targetCol: string,
   seriesCol: string,
   horizon: number,
 ) {
+  if (isSpatialPiecewiseKrigingModel(model)) {
+    return spatialPiecewiseKrigingForecastOptions(table, timestampCol, targetCol, seriesCol, horizon);
+  }
   if (isPiecewiseForecastModel(model)) {
     return piecewiseForecastOptions(table, targetCol, seriesCol, [], horizon);
   }
@@ -5058,6 +5100,50 @@ function piecewiseForecastOptions(
     includeQuantiles: true,
     ...inferLogisticBoundRegressors(table, targetCol, covariateColumns),
   };
+}
+
+function spatialPiecewiseKrigingForecastOptions(
+  table: ParsedTable,
+  timestampCol: string,
+  targetCol: string,
+  seriesCol: string,
+  horizon: number,
+) {
+  const spatialRegressors = spatialRegressorColumns(table, [timestampCol, targetCol, seriesCol]);
+  return {
+    ...piecewiseForecastOptions(table, targetCol, seriesCol, [], horizon),
+    spatialKrigingMode: spatialRegressors.length > 0 ? 'hybrid' : 'residual_kriging',
+    spatialRegressors,
+    residualShrinkage: 1.0,
+    allowNeighborFallback: true,
+  };
+}
+
+function spatialRegressorColumns(table: ParsedTable, excludedColumns: string[]) {
+  return numericCovariateColumns(table, excludedColumns)
+    .filter((column) => !isSpatialCoordinateColumn(column) && !isIdentifierColumn(column))
+    .slice(0, 8);
+}
+
+function isSpatialCoordinateColumn(column: string) {
+  const normalized = column.toLowerCase();
+  return (
+    normalized.includes('latitude') ||
+    normalized.includes('longitude') ||
+    normalized === 'lat' ||
+    normalized === 'lon' ||
+    normalized === 'lng' ||
+    normalized.endsWith('_lat') ||
+    normalized.endsWith('_lon') ||
+    normalized.endsWith('_lng') ||
+    normalized.endsWith('_x') ||
+    normalized.endsWith('_y')
+  );
+}
+
+function isIdentifierColumn(column: string) {
+  const normalized = column.toLowerCase();
+  return normalized === 'id' || normalized.endsWith('_id') || normalized.endsWith('id');
 }
 
 function numericCovariateColumns(table: ParsedTable, excludedColumns: string[]) {
@@ -5278,11 +5364,7 @@ async function runBrowserForecast({
   model: string;
   seasonLength: number;
 }) {
-  const modelSpecificOptions = isPiecewiseForecastModel(model)
-    ? piecewiseForecastOptions(table, targetCol, seriesCol, [], horizon)
-    : isThetaForecastModel(model)
-      ? {thetaSeasonality: 'additive'}
-      : {};
+  const modelSpecificOptions = browserForecastModelOptions(model, table, timestampCol, targetCol, seriesCol, horizon);
   const browserAutoOptions = model === 'auto_forecast' ? {maxAutoCandidateCount: 4} : {};
   const request = {
     rows: table.rows.map((row) => ({

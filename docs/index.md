@@ -103,7 +103,8 @@ be transformed trip duration, fare amount, or future pickup-zone demand.
   regression, forecasting, validation, baselines, and artifacts.
 - [Choose A Model](user-guide/model-types.md): task-first router for the
   tabular regressor, local forecasting models, CartoBoost lag forecasting,
-  kriging, neural embedding models, graph models, and utilities.
+  kriging, spatial piecewise kriging, neural embedding models, graph models,
+  and utilities.
 - [Classification Quickstart](user-guide/classification-quickstart.md):
   binary and multiclass logloss workflows with probability diagnostics.
 - [Ranking Quickstart](user-guide/ranking-quickstart.md): grouped
@@ -140,8 +141,8 @@ be transformed trip duration, fare amount, or future pickup-zone demand.
   feature-generation workflows.
 - [Forecasting Model Guides](user-guide/forecasting-models/index.md): per-model examples
   for naive, seasonal naive, theta, ETS, ARIMA, AutoARIMA, Kalman, piecewise
-  linear seasonal, kriging, CartoBoost lag, AutoForecaster, and weighted
-  ensembles.
+  linear seasonal, kriging, spatial piecewise kriging, CartoBoost lag,
+  AutoForecaster, and weighted ensembles.
 - [Plotting](plotting.md): diagnostics, forecast figures, report bundles, and
   `prophet.plot.plot`-style rendering for Prophet-shaped outputs.
 

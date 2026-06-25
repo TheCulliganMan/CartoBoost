@@ -14,9 +14,11 @@ modeling.
 - Modeling Lab page: ./src/pages/modeling-lab.tsx
 - Modeling Lab client: ./src/components/ModelingLabClient/index.tsx
 - Modeling Lab forecast debugger: browser-local WASM piecewise linear seasonal
-  forecasts use Prophet-style modeling aliases, request component and
-  history-component payloads, and render Prophet-style trend, fitted, residual,
-  movement, and every numeric component key emitted by the Rust payload.
+  forecasts use Prophet-style modeling aliases, expose
+  `spatial_piecewise_kriging` for coordinate-bearing taxi panels, request
+  component and history-component payloads, and render Prophet-style trend,
+  fitted, residual, movement, spatial diagnostic columns, and every numeric
+  component key emitted by the Rust payload.
 - Modeling Lab samples: ./static/samples/yellow_taxi_2024-01-single-lane-5000.parquet
   and ./static/samples/yellow_taxi_2024-01-varied-routes-2500.parquet
 - Docs theme stylesheet: ./src/css/custom.css
@@ -55,6 +57,7 @@ modeling.
   RMSE, MAE, WAPE, fit/predict timing, and baseline deltas.
 - AutoForecaster guide: ./docs/user-guide/forecasting-models/auto-forecaster.md
 - Piecewise linear seasonal guide: ./docs/user-guide/forecasting-models/piecewise-linear-seasonal.md
+- Spatial piecewise kriging guide: ./docs/user-guide/forecasting-models/spatial-piecewise-kriging.md
 - ARIMA and AutoARIMA guide: ./docs/user-guide/forecasting-models/arima.md
 - Python API reference: ./docs/reference/python-api.md
 - Plotting: ./docs/plotting.md

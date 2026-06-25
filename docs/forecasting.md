@@ -6,8 +6,8 @@ CartoBoost forecasting is organized around two docs surfaces:
   and benchmark evidence rules;
 - the [forecasting model guides](user-guide/forecasting-models/index.md), for
   choosing an individual model type such as naive, theta, ETS, ARIMA, Kalman,
-  piecewise linear seasonal, kriging, CartoBoost lag, AutoForecaster, or fixed
-  weighted ensembles.
+  piecewise linear seasonal, kriging, spatial piecewise kriging, CartoBoost
+  lag, AutoForecaster, or fixed weighted ensembles.
 
 The Python forecasting package is intentionally a wrapper layer. It gives users
 dataframe ergonomics, explicit configuration, CLI entry points, and artifact
@@ -181,6 +181,7 @@ Use the model guides for modeling decisions:
 | Noisy latent level and trend | [Kalman](user-guide/forecasting-models/kalman.md) |
 | Interpretable trend, changepoints, seasonalities, events, and regressors | [Piecewise Linear Seasonal](user-guide/forecasting-models/piecewise-linear-seasonal) |
 | Coordinate-aware panel borrowing | [Kriging](user-guide/forecasting-models/kriging.md) |
+| Temporal components plus spatial residual or regressor kriging | [Spatial Piecewise Kriging](user-guide/forecasting-models/spatial-piecewise-kriging.md) |
 | Shared supervised lag features across many panels | [CartoBoost Lag](user-guide/forecasting-models/cartoboost-lag.md) |
 | Guarded default selector over native candidates | [AutoForecaster](user-guide/forecasting-models/auto-forecaster.md) |
 | Fixed combinations of fitted native models | [Weighted Ensembles](user-guide/forecasting-models/ensembles.md) |
