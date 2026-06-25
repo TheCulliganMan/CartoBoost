@@ -183,7 +183,7 @@ Interpretation:
 | Parameter | Applies to | Notes |
 | --- | --- | --- |
 | `season_length` | `SeasonalNaiveForecaster` | Required positive integer. Use `24` for hourly daily seasonality and `168` for hourly weekly seasonality. |
-| `prediction_interval_levels` | Both wrappers | Validated as values between `0` and `1`; interval support depends on the native model output. |
+| `prediction_interval_levels` | Both wrappers | Validated as values between `0` and `1`; interval support depends on the model output. |
 
 ## Choosing `season_length`
 

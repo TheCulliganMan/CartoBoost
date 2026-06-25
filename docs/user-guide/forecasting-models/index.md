@@ -25,7 +25,7 @@ it on the same rolling-origin split as the simpler baselines.
 | `CrostonForecaster`, `SbaForecaster`, `TsbForecaster` | Forecast sparse non-negative taxi-demand series with fixed intermittent-demand methods. | Use when zeros are meaningful no-pickup periods rather than missing rows. |
 | [AutoForecaster](auto-forecaster.md) | Use the guarded default selector over lag, direct, residual-corrected, intermittent, and classical candidates. | Includes diagrams for validation, gating, prediction, and metadata inspection. |
 | N-BEATS / N-HiTS wrappers | Train deterministic neural forecasting experts from regular panels. | Public Python classes are `NBeatsForecaster` and `NHiTSForecaster`; use them when windowed neural extrapolation is the model being tested. |
-| [Weighted Ensembles](ensembles.md) | Combine fitted native forecasters with explicit weights. | Components and weights must be named explicitly. |
+| [Weighted Ensembles](ensembles.md) | Combine fitted forecasters with explicit weights. | Components and weights must be named explicitly. |
 
 ## Scientific Choice Criteria
 

@@ -21,7 +21,7 @@ against simpler baselines under the same split before interpreting a gain.
 | Should nearby coordinates borrow signal for a forecast panel? | `KrigingForecaster` | [Kriging](forecasting-models/kriging.md) |
 | Should temporal changepoints and seasonality be fused with cutoff-safe spatial kriging? | `SpatialPiecewiseKrigingForecaster` | [Spatial Piecewise Kriging](forecasting-models/spatial-piecewise-kriging.md) |
 | Should a deterministic neural forecasting expert learn from regular taxi-demand windows? | `NBeatsForecaster` or `NHiTSForecaster` | [Forecasting Model Guides](forecasting-models/index.md) |
-| Do you need a fixed combination of fitted native forecasters? | `WeightedEnsembleForecaster` | [Weighted Ensembles](forecasting-models/ensembles.md) |
+| Do you need a fixed combination of fitted forecasters? | `WeightedEnsembleForecaster` | [Weighted Ensembles](forecasting-models/ensembles.md) |
 | Are stable pickup zones, dropoff zones, or pairs themselves the learned artifact? | `NeuralEmbeddingStandaloneRegressor` | [Neural Features](../neural-features.md) |
 | Is the relationship network the object being modeled? | Graph standalone regressors or link predictors | [Graph Features](../graph-features.md) |
 | Do graph or neural embeddings only need to become columns for another estimator? | `GraphFeatureTransformer`, `NeuralEmbeddingFeatures`, or `NeuralEmbeddingRegressor` | [Graph Features](../graph-features.md), [Neural Features](../neural-features.md) |
@@ -224,7 +224,7 @@ Forecasting has two documentation layers:
 | Layer | Covers | Start here |
 | --- | --- | --- |
 | Forecasting wrapper | `ForecastFrame`, dataframe conversion, rolling-origin backtesting, forecast metrics, artifacts, CLI workflows, and leakage checks | [Forecasting](../forecasting.md) |
-| Forecasting model guides | Model-specific examples and tuning notes for native forecasting classes | [Forecasting Model Guides](forecasting-models/index.md) |
+| Forecasting model guides | Model-specific examples, interactive lab links, and tuning notes for forecasting classes | [Forecasting Model Guides](forecasting-models/index.md) |
 
 Use `ForecastFrame.from_pandas` for production taxi demand or fare-duration
 workflows because it validates timestamps, frequency, duplicate rows, target
@@ -259,9 +259,9 @@ Choose the model guide by series structure:
 | Piecewise temporal structure plus spatial residual or regressor kriging | [Spatial Piecewise Kriging](forecasting-models/spatial-piecewise-kriging.md) |
 | Shared supervised lag model across many series | [CartoBoost Lag](forecasting-models/cartoboost-lag.md) |
 | Reusable statistical expert-bank selection | `AutoStatsBank` |
-| Guarded default selector over native candidates | [AutoForecaster](forecasting-models/auto-forecaster.md) |
+| Guarded default selector over forecast candidates | [AutoForecaster](forecasting-models/auto-forecaster.md) |
 | Windowed neural extrapolation | `NBeatsForecaster` or `NHiTSForecaster` |
-| Fixed-weight combinations of native forecasters | [Weighted Ensembles](forecasting-models/ensembles.md) |
+| Fixed-weight combinations of fitted forecasters | [Weighted Ensembles](forecasting-models/ensembles.md) |
 
 ## Graph And Neural Models
 

@@ -5,7 +5,7 @@
   "description": "CartoBoost documentation site.",
   "scripts": {
     "start": "docusaurus start",
-    "build:wasm": "node -e \"require('fs').rmSync('static/wasm/cartoboost', { recursive: true, force: true })\" && wasm-pack build crates/cartoboost-wasm --target web --out-dir ../../static/wasm/cartoboost --release",
+    "build:wasm": "node -e \"require('fs').rmSync('static/wasm/cartoboost', { recursive: true, force: true })\" && wasm-pack build crates/cartoboost-wasm --target web --out-dir ../../static/wasm/cartoboost --release --no-pack",
     "prebuild": "npm run build:wasm",
     "build": "docusaurus build",
     "serve": "docusaurus serve",

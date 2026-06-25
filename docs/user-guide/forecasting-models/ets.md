@@ -81,10 +81,9 @@ print(forecast.columns())
 print(forecast.predictions())
 ```
 
-The native forecast rows are `(series_id, timestamp, horizon, model, mean)`.
-When a plain Python list is used, the wrapper builds a single-series native
-frame. For production taxi data, prefer `ForecastFrame` so timestamps and
-series IDs stay explicit.
+Forecast rows are `(series_id, timestamp, horizon, model, mean)`. When a plain
+Python list is used, the wrapper builds a single-series frame. For production
+taxi data, prefer `ForecastFrame` so timestamps and series IDs stay explicit.
 
 ## ForecastFrame Example
 
@@ -204,9 +203,8 @@ fitted = model.fitted_values("132")
 residuals = model.residuals("132")
 ```
 
-These diagnostic arrays are produced by the native ETS fit and have one value
-per training observation. The visualization example plots them alongside the
-native forecast; Python only prepares data frames and Matplotlib output.
+These diagnostic arrays have one value per training observation. The
+visualization example plots them alongside the forecast.
 
 Visual interpretation:
 

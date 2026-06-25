@@ -146,7 +146,7 @@ uv run python examples/forecasting/arima_example_visualization.py \
 ```
 
 The output includes RMSE, MAE, bias, maximum absolute error, the selected
-AutoARIMA order, the top native candidate scores, and per-horizon residuals for
+AutoARIMA order, the top candidate scores, and per-horizon residuals for
 `PU132->DO138`. The plot has two panels:
 
 - observed pickup counts with the train/test split and both forecasts,
@@ -171,7 +171,7 @@ The compact JSON fields are the first values to inspect:
 ```
 
 Exact values can change if you pass different `--hours`, `--train-hours`, or
-`--horizon` settings. Use `auto_arima_top_candidates` to see whether the native
+`--horizon` settings. Use `auto_arima_top_candidates` to see whether the
 selected order was a clear fitted-residual winner, and use per-horizon
 `residuals` to check whether the held-out miss is directional or grows with
 horizon.

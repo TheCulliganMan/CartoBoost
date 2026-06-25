@@ -291,7 +291,7 @@ const fallbackModelOptions: ModelOption[] = [
 ];
 
 const forecastPipelineLabels: Record<string, string> = {
-  global: 'CartoBoost native and global',
+  global: 'CartoBoost global',
   transform: 'CartoBoost transformed',
   selection: 'Selector banks',
   demand: 'Sparse demand',
@@ -1756,7 +1756,7 @@ function ModelPicker({
   const groups = useMemo(() => forecastModelGroups(modelOptions), [modelOptions]);
   return (
     <div className={styles.modelPicker}>
-      <GroupedSelect label="Native model" value={value} onChange={onChange} groups={groups} />
+      <GroupedSelect label="Forecast model" value={value} onChange={onChange} groups={groups} />
     </div>
   );
 }
@@ -2358,7 +2358,7 @@ function TreeForestSvg({trees}: {trees: TreeBlueprint[]}) {
           </g>
         ))}
       </svg>
-      <figcaption>First {plottedTrees.length.toLocaleString()} trees, expanded from native wasm tree metadata</figcaption>
+      <figcaption>First {plottedTrees.length.toLocaleString()} trees, expanded from browser model metadata</figcaption>
     </figure>
   );
 }

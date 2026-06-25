@@ -199,9 +199,9 @@ happens to align with the same commute pattern.
 | `rolling_std_windows` | Complete rolling standard-deviation windows. |
 | `rolling_min_windows` | Complete rolling minimum windows. |
 | `rolling_max_windows` | Complete rolling maximum windows. |
-| `calendar_features=True` | Native calendar features. |
+| `calendar_features=True` | Calendar features. |
 | `CalendarFeatureConfig` | Supports `dayofweek`, `month`, and `day`. |
-| `trend_features=True` | Enables native lag-delta and rolling-trend features. |
+| `trend_features=True` | Enables lag-delta and rolling-trend features. |
 | `target_mode` | Supports `level`, `delta_from_last`, and explicit seasonal modes such as `seasonal_delta_7`. |
 | `regressor_params` | Supports `n_estimators`, `learning_rate`, `max_depth`, `min_samples_leaf`, `min_gain`, and `splitters`. |
 

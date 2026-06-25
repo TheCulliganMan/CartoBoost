@@ -1,11 +1,10 @@
 # Kalman
 
-CartoBoost exposes Rust Kalman forecasters for both level-only and
-local-linear-trend state-space models. Use `LocalLevelKalmanForecaster` when
-the series has a noisy stable level, `KalmanForecaster` when the latent level
-also has a slowly changing trend, and the `Auto*` variants when you want a
-deterministic native variance-grid search before refitting on all training
-rows.
+CartoBoost exposes Kalman forecasters for both level-only and local-linear-trend
+state-space models. Use `LocalLevelKalmanForecaster` when the series has a
+noisy stable level, `KalmanForecaster` when the latent level also has a slowly
+changing trend, and the `Auto*` variants when you want a deterministic
+variance-grid search before refitting on all training rows.
 
 ## Try It In The Modeling Lab
 

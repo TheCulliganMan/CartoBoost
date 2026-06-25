@@ -44,32 +44,32 @@ forecast = model.fit(frame).predict(12)
 metadata = model.metadata_
 ```
 
-The model name emitted by native predictions is `cartoboost_auto_forecast`.
-`fit` requires a `ForecastFrame`; plain lists or arrays should use one of the
-local forecasters instead. `predict(horizon)` requires a positive integer
-horizon and returns the native `ForecastResult` shape.
+The prediction rows use the model name `cartoboost_auto_forecast`. `fit`
+requires a `ForecastFrame`; plain lists or arrays should use one of the local
+forecasters instead. `predict(horizon)` requires a positive integer horizon and
+returns the standard `ForecastResult` shape.
 
-The Python wrapper is intentionally thin:
+Important configuration behavior:
 
-- `ForecastFrame.static_covariates` are passed into the native lag feature
-  spine by default.
+- `ForecastFrame.static_covariates` are passed into the lag feature spine by
+  default.
 - `covariate_features=[]` explicitly disables automatic static covariate use.
 - `covariate_features=[...]` overrides the frame static-covariate list.
 - `known_future_covariates` and `historical_covariates` remain part of the
   experiment contract but are not silently promoted into recursive lag features.
 - `seed`, `quantiles`, `n_threads`, and the wrapper's no-hyperopt policy are
-  recorded for API consistency; the current native auto path is deterministic
-  and does not run stochastic tuning.
+  recorded for API consistency; the current auto path is deterministic and does
+  not run stochastic tuning.
 
 ## Fit Lifecycle
 
-The native model makes every selection from trailing rolling-origin validation,
-then refits only the selected members on the full frame.
+The model makes every selection from trailing rolling-origin validation, then
+refits only the selected members on the full frame.
 
 ```mermaid
 flowchart TD
     A["ForecastFrame<br/>taxi zones or lanes"] --> B["Python AutoForecaster<br/>normalizes config"]
-    B --> C["Native AutoForecastModel"]
+    B --> C["AutoForecastModel"]
     C --> D["Choose validation_window<br/>configured or min_history / 5 clamped to 1..8"]
     D --> E["Choose validation_origin_count<br/>configured count capped by available history"]
     E --> F["Build non-overlapping trailing rolling-origin splits"]
@@ -148,15 +148,15 @@ The default lag spine starts with:
 | Rolling mean windows | `7, 14, 28` plus configured `season_length` from the Python wrapper. |
 | Rolling standard deviation windows | `7, 14, 28` plus configured `season_length`. |
 | Rolling min and max windows | `7, 14, 28` plus configured `season_length`. |
-| Difference lags | `2, 3, 7, 14, 28` by native default, or lag values greater than `1` when PyO3 builds trend defaults. |
-| Rolling trend windows | `7, 14, 28` by native default, or rolling windows greater than `1` when PyO3 builds trend defaults. |
+| Difference lags | `2, 3, 7, 14, 28` by default, or lag values greater than `1` when trend defaults are built from user lags. |
+| Rolling trend windows | `7, 14, 28` by default, or rolling windows greater than `1` when trend defaults are built from user windows. |
 | Calendar features | Day of week, month, and day by default. |
 | Rich calendar features | Optional lower-cost yearly, elapsed, Fourier, and month-phase features. |
 | Partial rolling means | Empty by default; opt in with `partial_rolling_mean_windows=[...]`. |
 | EWM target means | Empty by default; opt in with `ewm_alpha_percents=[...]`, while the `ewm_lag` candidate adds `90`. |
 
-Before validation scoring, Rust expands the effective lag configuration with
-supported multiples of `season_length`. It adds `season_length * 1` through
+Before validation scoring, the model expands the effective lag configuration
+with supported multiples of `season_length`. It adds `season_length * 1` through
 `season_length * 4` to lag, rolling, trend, and difference features only when
 the shortest training history can support those windows. The final effective
 lag config is sorted, deduplicated, and saved in metadata.
@@ -165,16 +165,15 @@ lag config is sorted, deduplicated, and saved in metadata.
 
 Each candidate is fitted on each validation split and predicts the validation
 horizon for that split. Predictions are clamped to zero before scoring when the
-entire training frame is nonnegative. Rust computes forecast metrics, then
-extracts the configured objective value.
+entire training frame is nonnegative. Forecast metrics are computed first, then
+the configured objective value is extracted.
 
-Supported objective names are parsed by the native `ForecastObjective` surface.
-The default is `rmse_wape`, which blends normalized RMSE and WAPE so selection
-is sensitive to both scale-aware squared error and aggregate absolute error.
-Other objective strings such as `rmse`, `mae`, or `wape` can be used when that
-metric is the scientific target for the taxi panel.
+The default objective is `rmse_wape`, which blends normalized RMSE and WAPE so
+selection is sensitive to both scale-aware squared error and aggregate absolute
+error. Other objective strings such as `rmse`, `mae`, or `wape` can be used
+when that metric is the scientific target for the taxi panel.
 
-For each candidate, the native scorer emits:
+For each candidate, the scorer emits:
 
 - a global score across all validation predictions;
 - horizon scores for each validation horizon;
@@ -294,7 +293,7 @@ WAPE, training time, and prediction time.
 | --- | --- | --- |
 | `season_length` | `None`, passed as `7` when omitted | Adds seasonal lag/window candidates and configures seasonal-delta, lag-plus, classical-bank, and recency windows. |
 | `objective` | `"rmse_wape"` | Metric used for candidate scoring and gating. |
-| `validation_window` | `None` | Configured trailing validation window, or native automatic window. |
+| `validation_window` | `None` | Configured trailing validation window, or automatic window. |
 | `validation_origin_count` | `2` | Number of trailing validation origins to average when history supports them. |
 | `baseline_displacement_gain` | `0.03` | Required relative improvement over `cartoboost_lag` before baseline displacement. |
 | `hard_winner_relative_gain` | `0.05` | Required best-vs-second relative improvement for single-winner routing. |
@@ -302,11 +301,11 @@ WAPE, training time, and prediction time.
 | `max_blend_weight` | `0.85` | Upper bound for close-race blend weights. |
 | `max_direct_horizon` | `28` | Full-frame refit horizon for direct and rectified-recursive members; validation scoring uses each split horizon. |
 | `covariate_features` | `None` | `None` uses frame static covariates; `[]` disables them; a list overrides them. |
-| `covariate_calendar_interactions` | `False` | Allows configured covariates to interact with calendar features in native lag features. |
-| `rich_calendar_features` | `False` | Enables the richer native calendar feature set. |
+| `covariate_calendar_interactions` | `False` | Allows configured covariates to interact with calendar features in lag features. |
+| `rich_calendar_features` | `False` | Enables the richer calendar feature set. |
 | `ewm_alpha_percents` | `()` | Adds explicit EWM target-mean features to the lag config. Values must be unique integers in `1..=100`. |
 | `partial_rolling_mean_windows` | `()` | Adds partial rolling-mean windows. Values must be unique positive integers. |
-| `n_estimators`, `learning_rate`, `max_depth`, `min_samples_leaf`, `min_gain`, `splitters` | Native booster defaults | Passed into the CartoBoost booster config used by tree-based candidates. |
+| `n_estimators`, `learning_rate`, `max_depth`, `min_samples_leaf`, `min_gain`, `splitters` | Booster defaults | Passed into the CartoBoost booster config used by tree-based candidates. |
 | `target_mode` | `"level"` | Base lag target mode before auto candidates add delta and seasonal-delta alternatives. |
 
 The PyO3 binding rejects `recursive=False`; the current auto model uses

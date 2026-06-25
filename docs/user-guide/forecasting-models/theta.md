@@ -56,7 +56,7 @@ those patterns as evidence about model mismatch, not as reasons to tune by eye.
 | Model | Use when |
 | --- | --- |
 | `ThetaForecaster` | You want to set `theta` and smoothing `alpha` directly. |
-| `OptimizedThetaForecaster` | You want deterministic native grid search over theta and alpha values. |
+| `OptimizedThetaForecaster` | You want deterministic grid search over theta and alpha values. |
 
 ## Example
 

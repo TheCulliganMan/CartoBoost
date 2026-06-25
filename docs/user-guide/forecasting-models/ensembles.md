@@ -1,8 +1,8 @@
 # Weighted Ensembles
 
-`WeightedEnsembleForecaster` combines native CartoBoost forecasting wrappers
-with explicit fixed weights. The ensemble is intentionally simple: each member
-is fitted, each member predicts the same horizon, and the final forecast is the
+`WeightedEnsembleForecaster` combines CartoBoost forecasting models with
+explicit fixed weights. The ensemble is intentionally simple: each member is
+fitted, each member predicts the same horizon, and the final forecast is the
 weighted average of aligned predictions.
 
 ## Try Candidate Members In The Modeling Lab
@@ -34,8 +34,7 @@ mechanisms make complementary errors under the same validation design.
 
 Choose it when validation shows that no single component dominates all horizons
 or all taxi zones, and when the selected weights can be explained. The weights
-are part of the model claim; they are not learned automatically by the native
-ensemble wrapper.
+are part of the model claim; they are not learned automatically by the ensemble.
 
 ## Assumptions And Failure Modes
 
@@ -82,8 +81,7 @@ print(ensemble.get_metadata())
 print(forecast.predictions())
 ```
 
-Weights are normalized by the native ensemble, so `{1.0, 3.0}` becomes
-`{0.25, 0.75}` in metadata.
+Weights are normalized, so `{1.0, 3.0}` becomes `{0.25, 0.75}` in metadata.
 
 ## ForecastFrame Example
 
@@ -200,12 +198,11 @@ hard to explain.
 | --- | --- |
 | At least one model is required | Empty `models` raises `ValueError`. |
 | Weights must match model names exactly | Missing or extra names raise `ValueError`. |
-| Components must be native wrappers | Arbitrary Python estimators are not accepted. |
+| Components must be supported CartoBoost forecasters | Arbitrary Python estimators are not accepted. |
 | Prediction intervals are not supported yet | Interval arguments raise `NotImplementedError`. |
 
-Supported native ensemble members currently include naive, seasonal naive,
-theta, optimized theta, ETS, ARIMA, AutoARIMA, Kalman, and
-`CartoBoostLagForecaster`.
+Supported ensemble members currently include naive, seasonal naive, theta,
+optimized theta, ETS, ARIMA, AutoARIMA, Kalman, and `CartoBoostLagForecaster`.
 
 ## Visual Diagnostics
 
