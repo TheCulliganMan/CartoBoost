@@ -1,3 +1,5 @@
+import {ForecastModelExample} from '@site/src/components/ModelingLabClient';
+
 # AutoForecaster
 
 `AutoForecaster` is CartoBoost's guarded default forecasting model for taxi
@@ -10,13 +12,9 @@ Use it when you want one reproducible default for pickup-zone, dropoff-zone, or
 pickup-to-dropoff lane demand forecasting and you still want to inspect which
 candidate models earned forecast weight.
 
-## Try It In The Modeling Lab
+## Interactive Example
 
-Open the browser-local example with the bundled varied-route taxi sample:
-[AutoForecaster holdout](/modeling-lab?sample=varied&model=auto_forecast&run=backtest).
-The lab runs the same holdout split across the browser model roster, so the
-default selector can be compared against seasonal, local, lag, and spatial
-alternatives before you commit to a production workflow.
+<ForecastModelExample title="AutoForecaster coordinate-panel forecast" model="auto_forecast" sample="spatial" />
 
 ## Public Contract
 
@@ -84,7 +82,7 @@ flowchart TD
 Validation is time ordered. For each series, the model cuts one or more
 trailing windows from the end of the history. Each origin trains only on rows
 before the validation window and scores predictions against the held-out rows.
-If `validation_window` is omitted, Rust uses the shortest series history:
+If `validation_window` is omitted, the selector uses the shortest series history:
 
 ```text
 effective_validation_window = clamp(floor(min_series_history / 5), 1, 8)
@@ -227,7 +225,8 @@ series-level routing decisions from too little evidence.
 
 ## Prediction Flow
 
-After gating, Rust refits only the selected members on the full input frame.
+After gating, the selector refits only the selected members on the full input
+frame.
 During `predict`, each selected member forecasts the requested horizon. The
 auto model checks that every member returns the same forecast index, then
 combines means with the most specific available weight.
@@ -265,8 +264,8 @@ global weights unless series weights are present.
 
 ## Metadata To Inspect
 
-`model.metadata_` combines native metadata with Python wrapper configuration.
-The native section records the fitted selector state:
+`model.metadata_` combines fitted selector metadata with Python configuration.
+The selector section records the fitted state:
 
 ```python
 metadata = model.metadata_

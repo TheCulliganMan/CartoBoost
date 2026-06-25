@@ -1,16 +1,15 @@
+import {ForecastModelExample} from '@site/src/components/ModelingLabClient';
+
 # ETS
 
-`ETSForecaster` is the Rust exponential smoothing forecaster for level,
-additive trend, and optional additive seasonality. It is a good fit when a taxi
-series has a stable seasonal pattern and recent observations should update the
-state smoothly instead of forcing abrupt step changes.
+`ETSForecaster` is the exponential smoothing forecaster for level, additive
+trend, and optional additive seasonality. It is a good fit when a taxi series
+has a stable seasonal pattern and recent observations should update the state
+smoothly instead of forcing abrupt step changes.
 
-## Try It In The Modeling Lab
+## Interactive Example
 
-Open the browser-local example with the bundled taxi lane sample:
-[Auto ETS forecast](/modeling-lab?sample=lane&model=auto_ets&run=forecast).
-Use the model selector to switch between `ETS`, `Seasonal ETS`, and `Auto ETS`
-while keeping the same timestamp, target, series, horizon, and season length.
+<ForecastModelExample title="Auto ETS taxi-lane forecast" model="auto_ets" />
 
 ## When To Use
 
@@ -43,7 +42,7 @@ model is explaining a stable cycle or merely smoothing over missing causes.
 
 ## Assumptions And Failure Modes
 
-The current native ETS surface is additive. It assumes seasonal effects add or
+The current ETS surface is additive. It assumes seasonal effects add or
 subtract roughly fixed amounts from the level, not fixed percentages. It also
 requires enough complete seasonal cycles to estimate the seasonal state.
 
@@ -132,7 +131,7 @@ CartoBoost's ETS forecast is additive:
 forecast(t + h) = level(t) + h * trend(t) + seasonal((t + h) mod season_length)
 ```
 
-During fitting, the Rust model updates state with the observed taxi count,
+During fitting, the model updates state with the observed taxi count,
 the current seasonal slot, and the previous level/trend:
 
 ```text

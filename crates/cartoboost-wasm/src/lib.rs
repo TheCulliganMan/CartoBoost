@@ -674,14 +674,12 @@ struct BrowserForecastModel {
 
 #[wasm_bindgen(js_name = runForecast)]
 pub fn run_forecast(request: JsValue) -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
     let request: BrowserForecastRequest = serde_wasm_bindgen::from_value(request)
         .map_err(|error| JsValue::from_str(&format!("invalid forecast request: {error}")))?;
     let response =
         run_forecast_request(request).map_err(|error| JsValue::from_str(&error.to_string()))?;
-    let serializer = serde_wasm_bindgen::Serializer::json_compatible();
-    response
-        .serialize(&serializer)
-        .map_err(|error| JsValue::from_str(&format!("could not encode forecast response: {error}")))
+    serialize_json_response(&response, "forecast response")
 }
 
 #[wasm_bindgen(js_name = fitPiecewiseLinearSeasonalArtifact)]
@@ -1456,7 +1454,7 @@ fn run_forecast_request(request: BrowserForecastRequest) -> Result<BrowserForeca
                 "input": frame.metadata_value(),
                 "modelMetadata": forecaster.metadata(),
             })),
-            forecast: forecast.to_json_value(),
+            forecast: js_safe_json_value(forecast.to_json_value()),
             components,
             history_components,
             samples,
@@ -1496,7 +1494,7 @@ fn forecast_response(
     }
     BrowserForecastResponse {
         metadata: js_safe_json_value(metadata),
-        forecast: forecast.to_json_value(),
+        forecast: js_safe_json_value(forecast.to_json_value()),
         components: None,
         history_components: None,
         samples: None,
@@ -1576,7 +1574,7 @@ fn predict_piecewise_linear_seasonal_artifact_request(
             "model": forecaster.model_name(),
             "modelMetadata": metadata,
         })),
-        forecast: forecast.to_json_value(),
+        forecast: js_safe_json_value(forecast.to_json_value()),
         components,
         history_components,
         samples,
@@ -1670,6 +1668,16 @@ fn js_safe_json_value(value: Value) -> Value {
         }
         other => other,
     }
+}
+
+fn serialize_json_response<T: Serialize>(
+    response: &T,
+    context: &str,
+) -> std::result::Result<JsValue, JsValue> {
+    let json = serde_json::to_string(response)
+        .map_err(|error| JsValue::from_str(&format!("could not encode {context}: {error}")))?;
+    js_sys::JSON::parse(&json)
+        .map_err(|error| JsValue::from_str(&format!("could not parse {context}: {error:?}")))
 }
 
 fn run_regression_request(request: BrowserRegressionRequest) -> Result<BrowserRegressionResponse> {

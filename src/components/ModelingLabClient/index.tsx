@@ -290,6 +290,224 @@ const fallbackModelOptions: ModelOption[] = [
   {value: 'naive', label: 'Naive', group: 'local'},
 ];
 
+export function ForecastModelExample({
+  model,
+  title,
+  sample = 'lane',
+  horizon = 8,
+}: ForecastModelExampleProps): React.ReactElement {
+  const wasmJsUrl = useBaseUrl('/wasm/cartoboost/cartoboost_wasm.js');
+  const wasmBinaryUrl = useBaseUrl('/wasm/cartoboost/cartoboost_wasm_bg.wasm');
+  const [status, setStatus] = useState('Ready to run in this page.');
+  const [isRunning, setIsRunning] = useState(false);
+  const [result, setResult] = useState<ForecastResponse | null>(null);
+  const frequency = sample === 'spatial' ? 'daily' : 'hourly';
+  const seasonLength = sample === 'spatial' ? 7 : 24;
+  const table = useMemo(() => embeddedForecastExampleTable(sample, frequency), [frequency, sample]);
+  const selectedModel = normalizedForecastModel(model);
+
+  const runExample = useCallback(async () => {
+    setIsRunning(true);
+    setStatus('Running forecast in this page.');
+    try {
+      const response = await runBrowserForecast({
+        wasmJsUrl,
+        wasmBinaryUrl,
+        table,
+        timestampCol: 'timestamp',
+        targetCol: 'target',
+        seriesCol: 'series_id',
+        frequency,
+        horizon,
+        model: selectedModel,
+        seasonLength,
+      });
+      setResult(response);
+      setStatus(`Forecast complete with ${response.forecast.records.length.toLocaleString()} rows.`);
+    } catch (error) {
+      setResult(null);
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsRunning(false);
+    }
+  }, [frequency, horizon, seasonLength, selectedModel, table, wasmBinaryUrl, wasmJsUrl]);
+
+  const records = result?.forecast.records.slice(0, 6) ?? [];
+  const hasSpatialCorrection = records.some((record) => typeof record.spatial_correction === 'number');
+  return (
+    <section
+      style={{
+        border: '1px solid var(--ifm-color-emphasis-300)',
+        borderRadius: 8,
+        padding: '1rem',
+        margin: '1rem 0',
+      }}
+    >
+      <div style={{display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap'}}>
+        <div>
+          <strong>{title}</strong>
+          <p style={{margin: '0.25rem 0 0'}}>
+            Runs <code>{selectedModel}</code> against a bundled taxi-style {sample === 'spatial' ? 'coordinate panel' : 'lane'} sample.
+          </p>
+        </div>
+        <button className="button button--primary" type="button" disabled={isRunning} onClick={() => void runExample()}>
+          {isRunning ? 'Running' : 'Run forecast'}
+        </button>
+      </div>
+      <p style={{margin: '0.75rem 0'}}>{status}</p>
+      {records.length > 0 && (
+        <div style={{overflowX: 'auto'}}>
+          <table>
+            <thead>
+              <tr>
+                <th>series_id</th>
+                <th>timestamp</th>
+                <th>horizon</th>
+                <th>prediction</th>
+                {hasSpatialCorrection && <th>spatial_correction</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {records.map((record) => (
+                <tr key={`${record.series_id}-${record.timestamp}-${record.horizon}`}>
+                  <td>{record.series_id}</td>
+                  <td>{record.timestamp}</td>
+                  <td>{record.horizon}</td>
+                  <td>{formatMetric(record.prediction)}</td>
+                  {hasSpatialCorrection && <td>{typeof record.spatial_correction === 'number' ? formatMetric(record.spatial_correction) : '-'}</td>}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+export function ForecastModelRosterExample(): React.ReactElement {
+  const wasmJsUrl = useBaseUrl('/wasm/cartoboost/cartoboost_wasm.js');
+  const wasmBinaryUrl = useBaseUrl('/wasm/cartoboost/cartoboost_wasm_bg.wasm');
+  const [models, setModels] = useState<ModelOption[]>(fallbackModelOptions);
+  const [model, setModel] = useState('auto_forecast');
+  const [status, setStatus] = useState('Choose any forecast model and run the same taxi-style example.');
+  const [isRunning, setIsRunning] = useState(false);
+  const [result, setResult] = useState<ForecastResponse | null>(null);
+  const selectedModel = normalizedForecastModel(model);
+  const sample = docsExampleSample(selectedModel);
+  const frequency = sample === 'spatial' ? 'daily' : 'hourly';
+  const seasonLength = sample === 'spatial' ? 7 : 24;
+  const table = useMemo(() => embeddedForecastExampleTable(sample, frequency), [frequency, sample]);
+
+  useEffect(() => {
+    let cancelled = false;
+    getForecastModelOptions(wasmJsUrl, wasmBinaryUrl)
+      .then((options) => {
+        if (!cancelled && options.length > 0) {
+          setModels(options);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setStatus(error instanceof Error ? error.message : String(error));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [wasmBinaryUrl, wasmJsUrl]);
+
+  const runExample = useCallback(async () => {
+    setIsRunning(true);
+    setStatus(`Running ${selectedModel} in this page.`);
+    try {
+      const response = await runBrowserForecast({
+        wasmJsUrl,
+        wasmBinaryUrl,
+        table,
+        timestampCol: 'timestamp',
+        targetCol: 'target',
+        seriesCol: 'series_id',
+        frequency,
+        horizon: 6,
+        model: selectedModel,
+        seasonLength,
+      });
+      setResult(response);
+      setStatus(`${modelLabel(models, selectedModel)} complete with ${response.forecast.records.length.toLocaleString()} rows.`);
+    } catch (error) {
+      setResult(null);
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsRunning(false);
+    }
+  }, [frequency, models, seasonLength, selectedModel, table, wasmBinaryUrl, wasmJsUrl]);
+
+  const records = result?.forecast.records.slice(0, 5) ?? [];
+  return (
+    <section
+      style={{
+        border: '1px solid var(--ifm-color-emphasis-300)',
+        borderRadius: 8,
+        padding: '1rem',
+        margin: '1rem 0',
+      }}
+    >
+      <div style={{display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'end'}}>
+        <label style={{display: 'grid', gap: '0.25rem', minWidth: 260}}>
+          <span>Forecast model</span>
+          <select value={model} onChange={(event) => setModel(event.target.value)} disabled={isRunning}>
+            {models.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button className="button button--primary" type="button" disabled={isRunning} onClick={() => void runExample()}>
+          {isRunning ? 'Running' : 'Run selected model'}
+        </button>
+      </div>
+      <p style={{margin: '0.75rem 0'}}>{status}</p>
+      <p style={{margin: '0 0 0.75rem'}}>
+        This control reads the available model list and runs the selected model against a bundled taxi-style {sample === 'spatial' ? 'coordinate panel' : 'lane'} sample.
+      </p>
+      {records.length > 0 && (
+        <div style={{overflowX: 'auto'}}>
+          <table>
+            <thead>
+              <tr>
+                <th>series_id</th>
+                <th>timestamp</th>
+                <th>horizon</th>
+                <th>prediction</th>
+              </tr>
+            </thead>
+            <tbody>
+              {records.map((record) => (
+                <tr key={`${record.series_id}-${record.timestamp}-${record.horizon}`}>
+                  <td>{record.series_id}</td>
+                  <td>{record.timestamp}</td>
+                  <td>{record.horizon}</td>
+                  <td>{formatMetric(record.prediction)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function docsExampleSample(model: string): 'lane' | 'spatial' {
+  return ['auto_forecast', 'cartoboost_lag', 'kriging', 'spatial_piecewise_kriging'].includes(model) ? 'spatial' : 'lane';
+}
+
+function modelLabel(models: ModelOption[], value: string) {
+  return models.find((option) => option.value === value)?.label ?? value;
+}
+
 const forecastPipelineLabels: Record<string, string> = {
   global: 'CartoBoost global',
   transform: 'CartoBoost transformed',
@@ -314,6 +532,13 @@ type ActiveModelingSurface = 'forecast' | 'model' | 'neural';
 type PendingLabRun = {
   action: 'forecast' | 'compare' | 'backtest';
   model: string;
+};
+
+type ForecastModelExampleProps = {
+  model: string;
+  title: string;
+  sample?: 'lane' | 'spatial';
+  horizon?: number;
 };
 const TAXI_LANE_SAMPLE_ROWS = 5000;
 const TAXI_VARIED_ROUTE_SAMPLE_ROWS = 2500;
@@ -662,7 +887,7 @@ export default function ModelingLabClient(): React.ReactElement {
     }
     setIsRunning(true);
     setRunProgress({label: 'Fitting forecast'});
-    setStatus('Fitting the forecast locally in the browser.');
+    setStatus('Fitting the forecast in this page.');
     try {
       const response = await runBrowserForecast({
         wasmJsUrl,
@@ -908,7 +1133,7 @@ export default function ModelingLabClient(): React.ReactElement {
     setBacktestResults([]);
     setRegressionResult(null);
     setNeuralResult(null);
-    setStatus('Fitting CartoBoost regression locally in the browser.');
+    setStatus('Fitting CartoBoost regression in this page.');
     try {
       await waitForBrowserPaint();
       const response = await runBrowserRegression({
@@ -951,7 +1176,7 @@ export default function ModelingLabClient(): React.ReactElement {
     setBacktestResults([]);
     setRegressionResult(null);
     setNeuralResult(null);
-    setStatus(`Fitting ${neuralPipelineLabels[neuralPipeline] ?? neuralPipeline} locally in the browser.`);
+    setStatus(`Fitting ${neuralPipelineLabels[neuralPipeline] ?? neuralPipeline} in this page.`);
     try {
       await waitForBrowserPaint();
       const response = await runBrowserNeural({
@@ -1061,10 +1286,10 @@ export default function ModelingLabClient(): React.ReactElement {
       <section className={styles.header}>
         <div>
           <span className={styles.eyebrow}>Browser-local modeling lab</span>
-          <h1>Model taxi demand, routes, and neural signals in the browser</h1>
+          <h1>Model taxi demand, routes, and neural signals interactively</h1>
           <p>
             Run CartoBoost forecasts, regression, graph models, and neural signals on taxi data.
-            Load a bundled sample or upload your own file; no dataset leaves the browser.
+            Load a bundled sample or upload your own file for an interactive check.
           </p>
         </div>
         <div className={styles.headerActions}>
@@ -2358,7 +2583,7 @@ function TreeForestSvg({trees}: {trees: TreeBlueprint[]}) {
           </g>
         ))}
       </svg>
-      <figcaption>First {plottedTrees.length.toLocaleString()} trees, expanded from browser model metadata</figcaption>
+      <figcaption>First {plottedTrees.length.toLocaleString()} trees, expanded from model metadata</figcaption>
     </figure>
   );
 }
@@ -3839,6 +4064,49 @@ function sortBacktestRows(a: BacktestResult, b: BacktestResult) {
   return a.rmse - b.rmse;
 }
 
+function embeddedForecastExampleTable(sample: 'lane' | 'spatial', frequency: 'daily' | 'hourly'): ParsedTable {
+  const spatialSeries =
+    sample === 'spatial'
+      ? [
+          {series_id: 'PU186-DO48', base: 24, longitude: -73.991, latitude: 40.748, queue: 1.0},
+          {series_id: 'PU237-DO230', base: 20, longitude: -73.966, latitude: 40.769, queue: 0.6},
+          {series_id: 'PU79-DO263', base: 18, longitude: -73.986, latitude: 40.728, queue: 0.2},
+        ]
+      : [{series_id: 'PU132-DO236', base: 34, longitude: -73.787, latitude: 40.647, queue: 1.2}];
+  const rows: ParsedTable['rows'] = [];
+  const start = Date.UTC(2024, 0, 1, 0, 0, 0);
+  const rowCount = frequency === 'daily' ? 56 : 96;
+  const stepMs = frequency === 'daily' ? 24 * 60 * 60 * 1000 : 60 * 60 * 1000;
+  for (let index = 0; index < rowCount; index += 1) {
+    const timestamp = new Date(start + index * stepMs).toISOString().slice(0, 19);
+    const hour = frequency === 'daily' ? 12 : index % 24;
+    const dayOfWeek = frequency === 'daily' ? index % 7 : Math.floor(index / 24) % 7;
+    const commute = hour >= 7 && hour <= 9 ? 4 : hour >= 16 && hour <= 18 ? 3 : 0;
+    const overnight = hour <= 5 ? -5 : 0;
+    const dailyWave = Math.sin((hour / 24) * Math.PI * 2) * 2.5;
+    const weeklyWave = Math.sin((dayOfWeek / 7) * Math.PI * 2) * 1.8;
+    for (const series of spatialSeries) {
+      const trend = index * (frequency === 'daily' ? 0.08 : 0.035);
+      const target = series.base + commute + overnight + dailyWave + weeklyWave + trend + series.queue * Math.cos(index / 8);
+      rows.push({
+        timestamp,
+        series_id: series.series_id,
+        target: target.toFixed(3),
+        hour: String(hour),
+        day_of_week: String(dayOfWeek),
+        longitude: String(series.longitude),
+        latitude: String(series.latitude),
+        airport_queue_pressure: series.queue.toFixed(2),
+      });
+    }
+  }
+  return {
+    fileName: sample === 'spatial' ? 'embedded-spatial-taxi-panel.csv' : 'embedded-taxi-lane.csv',
+    columns: ['timestamp', 'series_id', 'target', 'hour', 'day_of_week', 'longitude', 'latitude', 'airport_queue_pressure'],
+    rows,
+  };
+}
+
 function formatMetric(value: unknown) {
   return formatFixed(value, 3);
 }
@@ -5197,6 +5465,9 @@ function spatialPiecewiseKrigingForecastOptions(
   return {
     ...piecewiseForecastOptions(table, targetCol, seriesCol, [], horizon),
     ...coordinateForecastOptions(table),
+    includeHistoryComponents: false,
+    includeQuantiles: false,
+    uncertaintySamples: 0,
     spatialKrigingMode: spatialRegressors.length > 0 ? 'hybrid' : 'residual_kriging',
     spatialRegressors,
     residualShrinkage: 1.0,
@@ -5374,7 +5645,7 @@ async function importExternalModule(url: string) {
   const response = await fetch(url, {cache: 'no-store'});
   const contentType = response.headers.get('content-type') ?? '';
   if (!response.ok || contentType.includes('text/html')) {
-    throw new Error('CartoBoost WebAssembly bundle is not available from this dev server.');
+    throw new Error('CartoBoost interactive model bundle is not available from this dev server.');
   }
   const blobUrl = URL.createObjectURL(
     new Blob([await response.text()], {type: contentType.includes('javascript') ? contentType : 'text/javascript'}),
@@ -5390,7 +5661,7 @@ async function ensureJavaScriptModule(url: string) {
   const response = await fetch(url, {method: 'HEAD', cache: 'no-store'});
   const contentType = response.headers.get('content-type') ?? '';
   if (!response.ok || contentType.includes('text/html')) {
-    throw new Error('CartoBoost WebAssembly bundle is not available from this dev server.');
+    throw new Error('CartoBoost interactive model bundle is not available from this dev server.');
   }
 }
 
@@ -5565,7 +5836,7 @@ async function getWasmModule(wasmJsUrl, wasmBinaryUrl) {
     const response = await fetch(wasmJsUrl, {cache: 'no-store'});
     const contentType = response.headers.get('content-type') || '';
     if (!response.ok || contentType.includes('text/html')) {
-      throw new Error('CartoBoost WebAssembly bundle is not available from this dev server.');
+      throw new Error('CartoBoost interactive model bundle is not available from this dev server.');
     }
     const blobUrl = URL.createObjectURL(
       new Blob([await response.text()], {type: contentType.includes('javascript') ? contentType : 'text/javascript'}),

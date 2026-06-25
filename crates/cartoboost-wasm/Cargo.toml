@@ -13,10 +13,12 @@ crate-type = ["cdylib", "rlib"]
 cartoboost-core = { path = "../cartoboost-core" }
 cartoboost-neural = { path = "../cartoboost-neural" }
 chrono.workspace = true
+console_error_panic_hook = "0.1"
 serde.workspace = true
 serde_json.workspace = true
 wasm-bindgen = "0.2"
 serde-wasm-bindgen = "0.6"
+js-sys = "0.3"
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"

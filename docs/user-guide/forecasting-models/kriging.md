@@ -1,7 +1,9 @@
+import {ForecastModelExample} from '@site/src/components/ModelingLabClient';
+
 # Kriging
 
-`KrigingForecaster` is a Rust ordinary-kriging panel forecaster. It borrows
-signal across series using explicit coordinates keyed by series id.
+`KrigingForecaster` is an ordinary-kriging panel forecaster. It borrows signal
+across series using explicit coordinates keyed by series id.
 
 Kriging is most useful when the thing being forecast has spatial structure:
 pickup counts near JFK should be related to other airport-area pickup counts,
@@ -10,13 +12,9 @@ zones, and route midpoint aggregates can share signal with nearby corridors.
 CartoBoost exposes both the panel forecaster and lower-level utilities for
 one-off interpolation, variogram fitting, and residual diagnostics.
 
-## Try It In The Modeling Lab
+## Interactive Example
 
-Open the browser-local example with the bundled varied-route taxi sample:
-[Kriging forecast](/modeling-lab?sample=varied&model=kriging&run=forecast).
-The varied-route sample includes stable route coordinates, so the lab can show
-whether coordinate borrowing adds useful signal before you move to a Python
-panel workflow.
+<ForecastModelExample title="Kriging coordinate-panel forecast" model="kriging" sample="spatial" />
 
 ## When To Use
 
@@ -214,8 +212,8 @@ For the committed run, the selected example variogram is Gaussian with range `1.
 nugget `9.0`, and sill `520.0`.
 
 The script is deterministic and does not download data. It is designed as a
-documentation and smoke-test example for using the Rust utilities from Python,
-not as a public benchmark claim.
+documentation and smoke-test example for the Python kriging utilities, not as a
+public benchmark claim.
 
 ### Interpolation Surface
 
@@ -284,7 +282,7 @@ that regenerated images can be compared with the committed documentation assets.
 | `variogram_model` | `exponential`, `gaussian`, `spherical`, or `linear`. |
 | `drift` | `ordinary` for constant mean or `linear` for universal kriging with x/y drift. |
 | `anisotropy_angle_degrees`, `anisotropy_scaling` | Rotate and stretch the spatial distance metric for directional taxi corridors. |
-| `max_neighbors`, `min_neighbors`, `max_distance` | Optional local neighbor controls. When no local neighbor controls are set, Rust caches the fixed kriging system and reuses it across targets. |
+| `max_neighbors`, `min_neighbors`, `max_distance` | Optional local neighbor controls. When no local neighbor controls are set, the forecaster caches the fixed kriging system and reuses it across targets. |
 
 ## Choosing Settings
 

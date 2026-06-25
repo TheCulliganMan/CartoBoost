@@ -45,8 +45,8 @@ flowchart LR
 ## Standalone Neural Model
 
 `NeuralEmbeddingStandaloneRegressor` accepts row IDs, a target, and optional
-dense row features. It trains and scores through one standalone native model and
-supports `fit`, `predict`, `score`, `save`, and `load`.
+dense row features. It trains and scores as a standalone model and supports
+`fit`, `predict`, `score`, `save`, and `load`.
 
 ```python
 import numpy as np

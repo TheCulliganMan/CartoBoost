@@ -1,16 +1,14 @@
+import {ForecastModelExample} from '@site/src/components/ModelingLabClient';
+
 # CartoBoost Lag
 
 `CartoBoostLagForecaster` is the global supervised forecasting model. It builds
 leakage-safe lag, rolling, calendar, and trend features, then fits a CartoBoost
 regressor to forecast future horizons.
 
-## Try It In The Modeling Lab
+## Interactive Example
 
-Open the browser-local example with the bundled varied-route taxi sample:
-[CartoBoost Lag holdout](/modeling-lab?sample=varied&model=cartoboost_lag&run=backtest).
-The lab keeps the same holdout split for the roster, so you can compare the
-global lag model against local and spatial models before exporting a Python
-configuration.
+<ForecastModelExample title="CartoBoost lag coordinate-panel forecast" model="cartoboost_lag" sample="spatial" />
 
 ## When To Use
 
@@ -83,7 +81,7 @@ forecast = model.predict(24)
 
 The dataframe must contain `time_col`, `target_col`, and all `panel_cols`.
 Timestamps must be unique within each panel. The wrapper sorts by panel columns
-and timestamp before building the native frame.
+and timestamp before building the forecast frame.
 
 ## Config Object Example
 

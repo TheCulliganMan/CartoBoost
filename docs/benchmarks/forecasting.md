@@ -37,11 +37,11 @@ Read: the current scalable synthetic checks favor CartoBoost.
 
 ## CartoBoost Piecewise Local Diagnostics
 
-The `piecewise` roster runs only CartoBoost's Rust-native
+The `piecewise` roster runs only CartoBoost's
 `cartoboost_piecewise_linear_seasonal` model. This is the local Prophet-style
-tool: trend, changepoints, Fourier seasonality, events, regressors, fitted
-artifacts, and component decomposition are implemented in Rust and surfaced as
-`piecewise_linear_seasonal` in Python and WASM.
+tool for trend, changepoints, Fourier seasonality, events, regressors, fitted
+artifacts, and component decomposition, surfaced as
+`piecewise_linear_seasonal` in Python and the interactive docs examples.
 
 This synthetic suite run uses four taxi-shaped daily demand problem families, 4
 pickup/dropoff lanes per problem, 120 daily observations, two rolling-origin

@@ -17,7 +17,7 @@ classification, ranking, forecasting, graph, and neural-embedding modeling.
   `spatial_piecewise_kriging` for coordinate-bearing taxi panels, request
   component and history-component payloads, and render Prophet-style trend,
   fitted, residual, movement, spatial diagnostic columns, and every numeric
-  component key returned by the browser model. The same browser bundle exposes
+  component key returned by the interactive model. The same model surface exposes
   `runGeotemporalDiagnostics` for quantile diagnostics, residual-state
   correction, regime-aware interval adjustment, and probability calibration.
 - Modeling Lab samples: ./static/samples/yellow_taxi_2024-01-single-lane-5000.parquet
@@ -27,6 +27,9 @@ classification, ranking, forecasting, graph, and neural-embedding modeling.
 - Getting started: ./docs/getting-started.md
 - Choose a model: ./docs/user-guide/model-types.md
 - Model guides: ./docs/user-guide/forecasting-models/index.md
+- Forecasting model guide pages include Python code and interactive examples
+  from ./src/components/ModelingLabClient/index.tsx so readers can run each
+  supported forecast model directly in the docs.
 - Piecewise linear seasonal forecasting is exposed through
   `cartoboost.forecasting.PiecewiseLinearSeasonalForecaster` and the browser
   `piecewise_linear_seasonal` forecast model, including fitted artifact

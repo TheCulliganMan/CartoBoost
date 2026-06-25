@@ -19,7 +19,7 @@ neural-embedding workflows.
 - [Parameters](user-guide/parameters.md)
 - [Forecasting](forecasting.md)
 - [Forecasting Model Guides](user-guide/forecasting-models/index.md)
-- [Geotemporal Rust/WASM primitives](forecasting.md#advanced-behavior)
+- [Geotemporal diagnostics](forecasting.md#advanced-behavior)
 - [Plotting](plotting.md)
 - [Objectives](objectives.md)
 - [Constraints](constraints.md)
@@ -85,10 +85,9 @@ cartoboost predict --model model.json --input test.csv --predictions-out predict
 Use the Python API for sparse-set, neural embedding, and graph-derived feature
 pipelines.
 
-The browser WebAssembly bundle also exposes
-`runGeotemporalDiagnostics(request)` for Rust-core quantile diagnostics,
-residual-state correction, regime-aware interval adjustment, and probability
-calibration from JSON-compatible browser payloads.
+Interactive examples use `runGeotemporalDiagnostics(request)` for quantile
+diagnostics, residual-state correction, regime-aware interval adjustment, and
+probability calibration from JSON-compatible payloads.
 
 ## Site Presentation
 

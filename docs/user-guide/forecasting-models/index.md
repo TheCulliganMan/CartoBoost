@@ -1,3 +1,5 @@
+import {ForecastModelRosterExample} from '@site/src/components/ModelingLabClient';
+
 # Forecasting Model Guides
 
 These guides explain the forecasting model classes. Use this section when you
@@ -8,6 +10,10 @@ rolling-origin backtesting, artifacts, CLI workflows, or shared evidence rules.
 Start with the model whose assumptions match the forecast question, then prove
 it on the same rolling-origin split as the simpler baselines.
 
+## Run Any Forecast Model
+
+<ForecastModelRosterExample />
+
 ## Pick A Guide
 
 | Model guide | Best first use | Notes |
@@ -17,9 +23,9 @@ it on the same rolling-origin split as the simpler baselines.
 | [ETS](ets.md) | Model additive level, trend, and seasonality. | Useful when the series has smooth components and repeatable seasonal structure. |
 | [ARIMA And AutoARIMA](arima.md) | Use differencing and autocorrelation in a bounded search. | Covers fixed-order ARIMA, AutoARIMA candidate selection, visual smoke checks, and benchmark notes. |
 | [Kalman](kalman.md) | Track noisy local level and local trend over time. | Includes state diagnostics and visualization examples. |
-| [Piecewise Linear Seasonal](/docs/user-guide/forecasting-models/piecewise-linear-seasonal) | Fit interpretable trend, changepoint, seasonality, event, and regressor components. | Also available in the browser Modeling Lab as `piecewise_linear_seasonal`. |
+| [Piecewise Linear Seasonal](/docs/user-guide/forecasting-models/piecewise-linear-seasonal) | Fit interpretable trend, changepoint, seasonality, event, and regressor components. | Includes an interactive example for `piecewise_linear_seasonal`. |
 | [Kriging](kriging.md) | Borrow signal across pickup-zone or route coordinates. | Useful for coordinate-aware panel forecasting. |
-| [Spatial Piecewise Kriging](spatial-piecewise-kriging.md) | Combine interpretable temporal components with spatial borrowing. | Residual kriging, kriged-regressor, and hybrid modes; also available in Modeling Lab as `spatial_piecewise_kriging`. |
+| [Spatial Piecewise Kriging](spatial-piecewise-kriging.md) | Combine interpretable temporal components with spatial borrowing. | Includes an interactive coordinate-panel example for `spatial_piecewise_kriging`. |
 | [CartoBoost Lag](cartoboost-lag.md) | Learn one supervised lag model across many related series. | Use for pickup-zone, dropoff-zone, and lane-level panels. |
 | `AutoStatsBank` | Validate a deterministic statistical expert bank. | Useful when a local statistical selector is the model being tested. |
 | `CrostonForecaster`, `SbaForecaster`, `TsbForecaster` | Forecast sparse non-negative taxi-demand series with fixed intermittent-demand methods. | Use when zeros are meaningful no-pickup periods rather than missing rows. |
@@ -46,7 +52,7 @@ Choose the model whose assumptions match the signal you can defend:
 | Pickup demand is sparse with many true zero periods. | Croston, SBA, or TSB | Uses intermittent-demand smoothing instead of generic trend extrapolation. |
 | A local statistical bank should choose among reusable non-benchmark candidates. | AutoStatsBank | Runs validation over a deterministic statistical expert bank. |
 | A production taxi-demand panel needs a deterministic guarded default with auditable candidate weights. | AutoForecaster | Validates a fixed roster, protects the lag baseline, and stores global, horizon, and series weights. |
-| Validated models capture complementary errors. | Weighted ensemble | Averages explicit native components after each member proves useful. |
+| Validated models capture complementary errors. | Weighted ensemble | Averages explicit components after each member proves useful. |
 
 Do not choose a richer model only because it is available. A scientist should
 be able to say which mechanism the model represents, what it ignores, and which
@@ -96,9 +102,8 @@ claim depends on inspectable local structure: growth, changepoints, Fourier
 seasonalities, event windows, known future regressors, uncertainty intervals,
 quantiles, trend-belief adjustments, residual shock propagation, forecast
 component contributions, and fitted historical trend/seasonality diagnostics.
-The same model is available in the browser Modeling Lab as
-`piecewise_linear_seasonal` for interactive checks before writing a Python
-workflow.
+The guide includes an interactive example for `piecewise_linear_seasonal`
+so you can run a small taxi-lane forecast before writing a Python workflow.
 
 Use [Spatial Piecewise Kriging](spatial-piecewise-kriging.md) when that Prophet-shaped CartoBoost
 base should borrow spatial signal across stable taxi coordinates. Configure
@@ -132,7 +137,7 @@ coordinate maps.
 
 ## Shared Result Shape
 
-Native forecasting models return a `ForecastResult` object. Use
+Forecasting models return a `ForecastResult` object. Use
 `predictions()` for row tuples:
 
 ```python

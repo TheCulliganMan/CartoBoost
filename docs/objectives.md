@@ -49,7 +49,7 @@ Accepted names:
 `quantile_alpha` must be in `(0, 1)`. Quantile loss currently requires
 constant leaves.
 
-The Rust core also includes reusable quantile math primitives for calibrated
+CartoBoost also includes reusable quantile math primitives for calibrated
 forecasting workflows:
 
 | Primitive | Purpose |
@@ -58,7 +58,7 @@ forecasting workflows:
 | `HuberQuantileLoss` | Smooth pinball-style loss near zero residuals with asymmetric tails. |
 | `CompositeQuantileLoss` | Aggregates multiple quantile losses for a shared forecast grid. |
 | `DEFAULT_QUANTILE_LEVELS` | Standard p10, p25, p50, p75, and p90 forecast levels. |
-| `QuantileRegressorSet` | Fits one Rust `Booster` per requested quantile and emits repaired non-crossing rows. |
+| `QuantileRegressorSet` | Fits one booster per requested quantile and emits repaired non-crossing rows. |
 | `interval_coverage` | Inclusive empirical interval coverage. |
 | `mean_interval_width` | Mean upper-minus-lower interval width. |
 | `crossing_rate` | Share of rows with decreasing quantile predictions. |
@@ -66,12 +66,12 @@ forecasting workflows:
 
 Use `repair_non_crossing_quantiles` before interval reporting when separately
 trained quantile models produce crossed rows. `QuantileRegressorSetConfig`
-defaults to the p10, p25, p50, p75, and p90 grid for native forecast bundles.
+defaults to the p10, p25, p50, p75, and p90 grid for forecast bundles.
 
 ## Count Objective Helpers
 
-The Rust core includes finite-difference-friendly helpers for count-style
-objectives used by native modeling experiments and forecasting work. These
+CartoBoost includes finite-difference-friendly helpers for count-style
+objectives used by modeling experiments and forecasting work. These
 helpers expose objective value, gradient, and Hessian with respect to the raw
 score. Count means use a log link, so `mean = exp(raw_score)` after internal
 finite clipping.
@@ -91,13 +91,12 @@ metrics.
 
 ## Probability Calibration
 
-CartoBoost's Rust core exposes reusable probability primitives for binary event
-forecasting:
+CartoBoost exposes reusable probability primitives for binary event forecasting:
 
 | Primitive | Purpose |
 | --- | --- |
 | `LogisticBoostingObjective` | Binary logistic objective alias for probability boosting. |
-| `ProbabilityBooster` | Rust-native classifier alias for boosted probability models. |
+| `ProbabilityBooster` | Classifier alias for boosted probability models. |
 | `SigmoidCalibrator` | Platt-style sigmoid calibration from raw scores or margins. |
 | `TemperatureCalibrator` | Single-temperature scaling for overconfident or underconfident margins. |
 | `IsotonicCalibrator` | Monotone nonparametric calibration using pool adjacent violators. |

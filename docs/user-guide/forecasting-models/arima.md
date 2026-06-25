@@ -1,3 +1,5 @@
+import {ForecastModelExample} from '@site/src/components/ModelingLabClient';
+
 # ARIMA And AutoARIMA
 
 ARIMA models are useful when a taxi demand series is mostly explained by recent
@@ -10,13 +12,9 @@ CartoBoost exposes bounded, non-seasonal ARIMA models:
 - `cartoboost.arima_forecast` and `cartoboost.auto_arima_forecast` provide the
   same model behavior for quick single-series utility calls.
 
-## Try It In The Modeling Lab
+## Interactive Example
 
-Open the browser-local example with the bundled taxi lane sample:
-[Auto ARIMA forecast](/modeling-lab?sample=lane&model=auto_arima&run=forecast).
-Use the model selector to switch to fixed `ARIMA`, then run the holdout
-backtest to see whether the selected order actually beats simpler baselines on
-the held-out tail.
+<ForecastModelExample title="Auto ARIMA taxi-lane forecast" model="auto_arima" />
 
 ## When To Use It
 

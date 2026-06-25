@@ -1,3 +1,5 @@
+import {ForecastModelExample} from '@site/src/components/ModelingLabClient';
+
 # Kalman
 
 CartoBoost exposes Kalman forecasters for both level-only and local-linear-trend
@@ -6,12 +8,9 @@ noisy stable level, `KalmanForecaster` when the latent level also has a slowly
 changing trend, and the `Auto*` variants when you want a deterministic
 variance-grid search before refitting on all training rows.
 
-## Try It In The Modeling Lab
+## Interactive Example
 
-Open the browser-local example with the bundled taxi lane sample:
-[Auto Kalman forecast](/modeling-lab?sample=lane&model=auto_kalman&run=forecast).
-Use the same page to compare `Local Level Kalman`, `Kalman`, and `Auto Kalman`
-against seasonal naive and theta on a fixed holdout.
+<ForecastModelExample title="Auto Kalman taxi-lane forecast" model="auto_kalman" />
 
 ## When To Use
 
@@ -167,9 +166,9 @@ model.fit(zone_236_readings)
 print(model.metadata_["validation_scores"])
 ```
 
-The auto forecasters use a deterministic time-ordered tail validation window
-inside Rust, choose the lowest-MSE candidate with deterministic tie-breaking,
-then refit the selected model on all training rows.
+The auto forecasters use a deterministic time-ordered tail validation window,
+choose the lowest-MSE candidate with deterministic tie-breaking, then refit the
+selected model on all training rows.
 
 ## Validation Notes
 

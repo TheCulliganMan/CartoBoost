@@ -9,11 +9,11 @@ CartoBoost forecasting is organized around two docs surfaces:
   piecewise linear seasonal, kriging, spatial piecewise kriging, CartoBoost
   lag, AutoForecaster, or fixed weighted ensembles.
 
-The Python forecasting package is intentionally a wrapper layer. It gives users
-dataframe ergonomics, explicit configuration, CLI entry points, and artifact
-handling. Behavior that affects model results lives in Rust under `crates/`:
-fitting, prediction, backtesting, metric evaluation, leakage checks, feature
-generation, intervals, reconciliation, and serialization contracts. Python does
+The Python forecasting package gives users dataframe ergonomics, explicit
+configuration, CLI entry points, and artifact handling. Model behavior is shared
+across Python, CLI, and interactive examples: fitting, prediction, backtesting,
+metric evaluation, leakage checks, feature generation, intervals,
+reconciliation, and serialization contracts follow the same rules. Python does
 not provide fallback forecasting algorithms.
 
 ## Workflow
@@ -67,7 +67,7 @@ from rows before the forecast origin.
 When raw taxi observations have multiple rows at the same timestamp, aggregate
 them before modeling or pass a positive `sample_weight_col`. With
 `sample_weight_col`, CartoBoost collapses each duplicate series/timestamp group
-into one native forecast row: the target and numeric covariates become weighted
+into one forecast row: the target and numeric covariates become weighted
 means, and the weight column becomes the total weight for that timestamp.
 
 ```python
@@ -82,13 +82,12 @@ frame = ForecastFrame.from_pandas(
 )
 ```
 
-If five taxi trips share the same lane and `pickup_hour`, the native
-forecasting model sees one hourly lane row. With `trip_count` as the weight, the
+If five taxi trips share the same lane and `pickup_hour`, the forecasting model
+sees one hourly lane row. With `trip_count` as the weight, the
 hourly target is the trip-count-weighted mean fare, `trip_distance` is the
 trip-count-weighted mean distance, and `trip_count` is the sum of the five
 weights. Without `sample_weight_col`, those five rows still fail as duplicate
-timestamps because the Rust forecasting core requires one target per
-series/timestamp.
+timestamps because forecasting requires one target per series/timestamp.
 
 ## Results And Metrics
 
@@ -99,7 +98,7 @@ candidates:
 | --- | --- |
 | `series_id` | Single-series id or panel id. |
 | `timestamp` | Forecasted timestamp. |
-| `model` | Native model name or benchmark alias. |
+| `model` | Model name or benchmark alias. |
 | `horizon` | One-based horizon from the forecast origin. |
 | `forecast` | Point forecast. |
 | `lower_*`, `upper_*` | Optional interval bounds when the model emitted them. |
@@ -164,7 +163,7 @@ python scripts/forecast.py fit \
 | `backtest` | Runs deterministic time-ordered validation and writes JSON metrics. |
 | `compare` | Scores multiple model names on the same holdout. |
 
-Invalid configs, missing columns, unknown model names, unavailable native
+Invalid configs, missing columns, unknown model names, unavailable optional
 bindings, and missing artifacts should fail clearly instead of silently changing
 the algorithm.
 
@@ -183,23 +182,23 @@ Use the model guides for modeling decisions:
 | Coordinate-aware panel borrowing | [Kriging](user-guide/forecasting-models/kriging.md) |
 | Temporal components plus spatial residual or regressor kriging | [Spatial Piecewise Kriging](user-guide/forecasting-models/spatial-piecewise-kriging.md) |
 | Shared supervised lag features across many panels | [CartoBoost Lag](user-guide/forecasting-models/cartoboost-lag.md) |
-| Guarded default selector over native candidates | [AutoForecaster](user-guide/forecasting-models/auto-forecaster.md) |
-| Fixed combinations of fitted native models | [Weighted Ensembles](user-guide/forecasting-models/ensembles.md) |
+| Guarded default selector over reusable candidates | [AutoForecaster](user-guide/forecasting-models/auto-forecaster.md) |
+| Fixed combinations of fitted models | [Weighted Ensembles](user-guide/forecasting-models/ensembles.md) |
 
 Benchmark scripts expose stable aliases such as `cartoboost_lag` and
 `cartoboost_auto_forecast` for reproducible evidence tables. Keep competition or
 benchmark-specific aliases in benchmark orchestration, not in generic model
 names.
 
-Rust ETS is additive-only in this version. Rust AutoARIMA searches bounded
-ARIMA(p,d,q) candidates with residual-lag moving-average terms; seasonal
-AutoARIMA is rejected explicitly. Weighted ensembles require explicit native
-component models. Neural forecasting wrappers require compiled native bindings
-and should not be used for quality claims without real benchmark evidence.
+ETS is additive-only in this version. AutoARIMA searches bounded ARIMA(p,d,q)
+candidates with residual-lag moving-average terms; seasonal AutoARIMA is
+rejected explicitly. Weighted ensembles require explicit component models.
+Neural forecasting wrappers should not be used for quality claims without real
+benchmark evidence.
 
 ## Advanced Behavior
 
-Several advanced behaviors are Rust-core utilities rather than separate public
+Several advanced behaviors are reusable utilities rather than separate public
 docs pages:
 
 | Behavior | Where it belongs |
@@ -207,26 +206,26 @@ docs pages:
 | Direct and rectified-recursive supervised strategies | Internal candidates for [AutoForecaster](user-guide/forecasting-models/auto-forecaster.md) and shared lag forecasting. |
 | STL/MSTL decomposition hybrids | Model roster entries described from the model guide index when exposed, with benchmark claims kept in [Forecasting Benchmarks](benchmarks/forecasting.md). |
 | Hierarchical reconciliation | Forecast artifact metadata and benchmark orchestration when pickup, dropoff, lane, or total demand must be coherent. |
-| Quantiles and conformal intervals | `QuantileLoss`, `HuberQuantileLoss`, `CompositeQuantileLoss`, `QuantileRegressorSet`, non-crossing repair, interval coverage, interval width, crossing-rate diagnostics, and serializable conformal calibration live in the Rust core. |
+| Quantiles and conformal intervals | `QuantileLoss`, `HuberQuantileLoss`, `CompositeQuantileLoss`, `QuantileRegressorSet`, non-crossing repair, interval coverage, interval width, crossing-rate diagnostics, and serializable conformal calibration. |
 | Temporal residual correction | `KalmanResidualCorrector`, `StateFilter`, and `StateCorrectedBooster` apply predict-before-update residual states by origin, destination, corridor, segment, entity family, target family, or time bucket. |
 | Regime-aware uncertainty | `CUSUM`, `PageHinkley`, EWMA volatility, rolling median residuals, rolling MAD residuals, and `RegimeIntervalPolicy` can widen intervals, raise process variance, or lower confidence during detected shifts. |
 | Calibrated forecast events | Probability calibration helpers turn threshold, horizon, failure-risk, or escalation-risk events into bounded probability forecasts with Brier score, log loss, ECE, calibration buckets, and reliability-curve data. |
 | Rank probability score helpers | Metrics and interval evaluation; competition-specific scoring stays in benchmark adapters. |
-| Neural forecasting experts | Optional native-bound wrappers with no public quality claim unless a real benchmark run records commands, settings, timing, and metrics. |
+| Neural forecasting experts | Optional neural wrappers with no public quality claim unless a real benchmark run records commands, settings, timing, and metrics. |
 
 These primitives are generic. A taxi lane forecast may call the state dimensions
-pickup zone, dropoff zone, and pickup-dropoff corridor, but the Rust APIs keep
-the reusable names origin, destination, corridor, segment, entity family, target
-family, and time bucket. Benchmark-specific labels and competition scoring stay
-in benchmark orchestration.
+pickup zone, dropoff zone, and pickup-dropoff corridor, while the reusable names
+stay origin, destination, corridor, segment, entity family, target family, and
+time bucket. Benchmark-specific labels and competition scoring stay in
+benchmark orchestration.
 
-The browser/WASM bundle exposes the same primitive families through
+The interactive examples use the same primitive families through
 `runGeotemporalDiagnostics(request)`. The request can include any combination of
 `quantiles`, `residualCorrection`, `regime`, and `calibration` sections. The
-response is JSON-compatible and returns only Rust-computed values: repaired
-quantiles, pinball loss, interval diagnostics, Kalman residual-state
-corrections, CUSUM/Page-Hinkley/EWMA regime signals, regime-adjusted intervals,
-calibration metrics, calibrated probabilities, and probability event labels.
+response is JSON-compatible and returns repaired quantiles, pinball loss,
+interval diagnostics, Kalman residual-state corrections, CUSUM/Page-Hinkley/EWMA
+regime signals, regime-adjusted intervals, calibration metrics, calibrated
+probabilities, and probability event labels.
 
 ## Evidence Standard
 

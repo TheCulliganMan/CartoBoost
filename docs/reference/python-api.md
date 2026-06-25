@@ -69,7 +69,7 @@ CartoBoostRegressor(
 dataframe-style objects. Install `cartoboost[duckdb]` to pass DuckDB relations
 directly, or `cartoboost[polars]` for Polars inputs.
 
-Dense inputs may include native categorical columns. Pandas categorical,
+Dense inputs may include categorical columns. Pandas categorical,
 string, or object columns are encoded during fit, and columns can be marked
 explicitly with `FeatureKind.CATEGORICAL` or `FeatureKind.ORDINAL` in
 `feature_schema`. The fitted artifact stores the category mapping so
@@ -109,18 +109,18 @@ CartoBoostClassifier(
 `objective="auto"` selects binary logloss for two labels and multiclass
 logloss for three or more labels. Python accepts arbitrary JSON-serializable
 class labels, preserves their first-seen order in `classes_`, maps them to
-native class ids for Rust training, and restores labels on `predict`. Use
-`class_weight="balanced"` or a label-to-weight dict to weight native gradients.
+training ids, and restores labels on `predict`. Use `class_weight="balanced"`
+or a label-to-weight dict to weight gradients.
 
 ### Methods
 
 | Method | Returns | Notes |
 | --- | --- | --- |
-| `fit(X, y, sample_weight=None, feature_schema=None, sparse_sets=None)` | `self` | Fits native Rust binary or multiclass logloss. |
+| `fit(X, y, sample_weight=None, feature_schema=None, sparse_sets=None)` | `self` | Fits binary or multiclass logloss. |
 | `predict(X, sparse_sets=None)` | `numpy.ndarray` | Returns original class labels. |
 | `predict_proba(X, sparse_sets=None)` | `numpy.ndarray` | Columns follow `classes_`. |
 | `decision_function(X, sparse_sets=None)` | `numpy.ndarray` | Binary returns one raw margin per row; multiclass returns class margins. |
-| `save(path)` | `None` | Writes native classifier artifact plus Python class-label metadata. |
+| `save(path)` | `None` | Writes classifier artifact plus Python class-label metadata. |
 | `save_weights(path, format="auto")` | raises `NotImplementedError` | Classifier portable weights and ONNX export are intentionally unsupported. |
 | `CartoBoostClassifier.load(path)` | estimator | Loads classifier artifacts. |
 | `get_params(deep=True)` | `dict` | sklearn-compatible parameter inspection. |
@@ -156,14 +156,14 @@ CartoBoostRanker(
 )
 ```
 
-The ranker trains native Rust pairwise objectives over contiguous query groups.
+The ranker trains pairwise objectives over contiguous query groups.
 Use `objective="pairwise_logit"` for unweighted pairwise logistic gradients or
 `objective="lambdarank"` for NDCG-delta weighted gradients. Pass `groups` to
 `fit` as group sizes whose positive entries sum to the row count, or as one
 contiguous query id per row when the values do not form a valid size vector.
 Set `group_col` to remove a query-id column from `X` and use those row-level
 values for grouping. When `group_col` is used, the matching dense
-`feature_schema` entry is removed before categorical encoding and native
+`feature_schema` entry is removed before categorical encoding and model
 training.
 
 ### Methods
@@ -173,7 +173,7 @@ training.
 | `fit(X, y, groups=None, group_col=None, sample_weight=None, feature_schema=None, sparse_sets=None)` | `self` | Requires group sizes, row-level query ids, or `group_col`. |
 | `predict(X, sparse_sets=None)` | `numpy.ndarray` | Returns one relevance score per row; accepts full frames with `group_col` or already-dropped feature matrices. |
 | `score_groups(X, y, groups=None, group_col=None, sparse_sets=None)` | `dict` | Returns `ndcg`, `map`, and `mrr`. |
-| `save(path)` | `None` | Writes native ranker state plus Python grouping and categorical metadata. |
+| `save(path)` | `None` | Writes ranker state plus Python grouping and categorical metadata. |
 | `save_weights(path, format="auto")` | raises `NotImplementedError` | Ranker portable weights and ONNX export are intentionally unsupported. |
 | `CartoBoostRanker.load(path)` | estimator | Loads ranker artifacts. |
 | `get_params(deep=True)` | `dict` | sklearn-compatible parameter inspection. |
@@ -203,7 +203,7 @@ Core schema:
 
 `ForecastFrame.from_pandas(..., sample_weight_col="trip_count")` is the
 opt-in path for duplicate taxi observations at one timestamp. Duplicate
-series/timestamp rows are collapsed before native validation: targets and
+series/timestamp rows are collapsed before forecast validation: targets and
 numeric covariates are weighted means, while the weight column is summed and
 kept as a historical covariate.
 
@@ -215,25 +215,25 @@ Forecasters:
 | `SeasonalNaiveForecaster(season_length)` | Repeats the last seasonal cycle. |
 | `ThetaForecaster(season_length=None, prediction_interval_levels=())` | Local theta method with optional seasonality and residual intervals. |
 | `OptimizedThetaForecaster` | Deterministically selects theta/alpha from a validation grid. |
-| `ETSForecaster` | Rust-native additive ETS with optional additive seasonality. |
-| `AutoARIMAForecaster` | Rust-native AutoARIMA over bounded ARIMA(p,d,q) candidates. |
-| `LocalLevelKalmanForecaster` | Rust-native local-level Kalman model for noisy level-only series. |
-| `KalmanForecaster` | Rust-native local-linear-trend Kalman model for noisy level and trend series. |
-| `AutoLocalLevelKalmanForecaster` | Rust-native deterministic grid search over local-level process/observation variances; metadata includes `selected_params` and `validation_scores`. |
-| `AutoKalmanForecaster` | Rust-native deterministic grid search over local-linear level/trend/observation variances; metadata includes `selected_params` and `validation_scores`. |
-| `AutoStatsBank` | Rust-native validation bank over statistical forecasting candidates. |
-| `CrostonForecaster` | Rust-native fixed Croston intermittent-demand forecaster for sparse non-negative taxi demand. |
-| `SbaForecaster` | Rust-native fixed SBA intermittent-demand forecaster with Croston bias adjustment. |
-| `TsbForecaster` | Rust-native fixed TSB intermittent-demand forecaster with separate demand and occurrence smoothing. |
-| `KrigingForecaster` | Coordinate-aware Rust-native panel forecaster using stable series coordinates and variogram controls. |
-| `SpatialPiecewiseKrigingForecaster` | Rust-native Prophet-shaped CartoBoost base fused with cutoff-safe kriged regressors, residual kriging, or hybrid spatial correction; result JSON includes base mean, correction, variance, neighbors, components, and metadata. |
-| `PiecewiseLinearSeasonalForecaster` | Rust-native piecewise linear seasonal local model with linear, flat, or logistic growth, automatic or explicit changepoints, Prophet-shaped holiday tables and optional country holiday calendars normalized into native event windows, Fourier seasonalities, conditional custom seasonalities, events, automatic extra-regressor standardization, per-component regularization, residual intervals, deterministic sampled trend uncertainty, external trend adjustments, residual shock propagation, fitted JSON round-trips, `components()` / `components_json()` forecast decomposition, and `history_components()` / `history_components_frame()` / `history_components_json()` fitted trend, movement, seasonality, event, and regressor diagnostics; browser/WASM exposes matching fitted artifact prediction and component helpers. |
+| `ETSForecaster` | Additive ETS with optional additive seasonality. |
+| `AutoARIMAForecaster` | AutoARIMA over bounded ARIMA(p,d,q) candidates. |
+| `LocalLevelKalmanForecaster` | Local-level Kalman model for noisy level-only series. |
+| `KalmanForecaster` | Local-linear-trend Kalman model for noisy level and trend series. |
+| `AutoLocalLevelKalmanForecaster` | Deterministic grid search over local-level process/observation variances; metadata includes `selected_params` and `validation_scores`. |
+| `AutoKalmanForecaster` | Deterministic grid search over local-linear level/trend/observation variances; metadata includes `selected_params` and `validation_scores`. |
+| `AutoStatsBank` | Validation bank over statistical forecasting candidates. |
+| `CrostonForecaster` | Fixed Croston intermittent-demand forecaster for sparse non-negative taxi demand. |
+| `SbaForecaster` | Fixed SBA intermittent-demand forecaster with Croston bias adjustment. |
+| `TsbForecaster` | Fixed TSB intermittent-demand forecaster with separate demand and occurrence smoothing. |
+| `KrigingForecaster` | Coordinate-aware panel forecaster using stable series coordinates and variogram controls. |
+| `SpatialPiecewiseKrigingForecaster` | Prophet-shaped CartoBoost base fused with cutoff-safe kriged regressors, residual kriging, or hybrid spatial correction; result JSON includes base mean, correction, variance, neighbors, components, and metadata. |
+| `PiecewiseLinearSeasonalForecaster` | Piecewise linear seasonal local model with linear, flat, or logistic growth, automatic or explicit changepoints, Prophet-shaped holiday tables and optional country holiday calendars normalized into event windows, Fourier seasonalities, conditional custom seasonalities, events, automatic extra-regressor standardization, per-component regularization, residual intervals, deterministic sampled trend uncertainty, external trend adjustments, residual shock propagation, fitted JSON round-trips, `components()` / `components_json()` forecast decomposition, and `history_components()` / `history_components_frame()` / `history_components_json()` fitted trend, movement, seasonality, event, and regressor diagnostics; interactive examples expose matching fitted artifact prediction and component helpers. |
 | `CartoBoostLagForecaster` | Global recursive forecaster using leakage-safe lag, rolling, calendar, static, and known-future features with `CartoBoostRegressor`. |
-| `AutoForecaster` | Guarded Rust-native model selector over reusable internal forecasting candidates with validation metadata and fitted artifacts. |
-| `NBeatsForecaster` | Rust-native deterministic N-BEATS style forecasting expert for regular forecast windows. |
-| `NHiTSForecaster` | Rust-native deterministic N-HiTS style forecasting expert with pooled history windows. |
+| `AutoForecaster` | Guarded model selector over reusable internal forecasting candidates with validation metadata and fitted artifacts. |
+| `NBeatsForecaster` | Deterministic N-BEATS style forecasting expert for regular forecast windows. |
+| `NHiTSForecaster` | Deterministic N-HiTS style forecasting expert with pooled history windows. |
 | `WeightedEnsembleForecaster` | Combines aligned component forecasts with fixed weights. |
-| `BacktestWeightedEnsembleForecaster` | Reserved; raises clearly until Rust backtest-weight learning is implemented. |
+| `BacktestWeightedEnsembleForecaster` | Reserved; raises clearly until backtest-weight learning is implemented. |
 
 `PiecewiseLinearSeasonalForecaster` accepts `growth`, `component_mode`,
 changepoint controls including `n_changepoints`, `changepoint_prior_scale`,
@@ -250,7 +250,7 @@ CartoBoost uses `changepoint_range=1.0` by default so short-horizon lane
 backtests can fit recent trend movement across the full training window. Set
 `changepoint_range=0.8` for Prophet's stricter default placement.
 Fitted models serialize with `to_json()` / `from_json()` and prediction results
-preserve interval columns through native JSON round-trips.
+preserve interval columns through JSON round-trips.
 
 Evaluation and persistence:
 
@@ -264,7 +264,7 @@ Evaluation and persistence:
 | `ForecastingConfig` | Strict TOML config parsing for forecast runs. |
 
 `ForecastRegistry.defaults()` contains only constructible public forecast
-models with Rust-backed fit/predict behavior: `naive`, `seasonal_naive`,
+models with fit/predict behavior: `naive`, `seasonal_naive`,
 `theta`, `optimized_theta`, `piecewise_linear_seasonal`, `ets`, `arima`,
 `auto_arima`, `autostats_bank`, `croston`, `sba`, `tsb`, `kalman`,
 `local_level_kalman`, `auto_kalman`, `auto_local_level_kalman`,
@@ -310,7 +310,7 @@ Sequence primitives:
 
 | Entry point | Notes |
 | --- | --- |
-| `SequenceSeries`, `SequenceRow`, `ReferenceSignal` | Generic sequence and reference-axis containers for Rust-backed utilities. |
+| `SequenceSeries`, `SequenceRow`, `ReferenceSignal` | Generic sequence and reference-axis containers for sequence utilities. |
 | `SequenceStateSpaceConfig` | Process and observation noise configuration for sequence EKF/UKF/RTS routines. |
 | `ReferencePathConfig` | Robust emission scale, Student-t degrees of freedom, transition penalty, and start-axis penalty for discrete reference-path inference. |
 | `validate_sequence_frame` | Hard-fails on unordered positions, empty known prefixes, empty prediction suffixes, duplicate reference axes, and target leakage into prediction rows. |
@@ -361,7 +361,7 @@ generalization.
 
 ## General Utilities
 
-Rust-backed utilities independent of the regressor and forecasting model APIs:
+Utilities independent of the regressor and forecasting model APIs:
 
 See [General Utilities](../general_utilities.md) for complete examples.
 These helpers are useful for diagnostics and baselines, but quality claims
@@ -370,7 +370,7 @@ main model comparison.
 
 | Entry point | Purpose |
 | --- | --- |
-| `cartoboost.naive_forecast(values, horizon)` and related `seasonal_naive_forecast`, `theta_forecast`, `optimized_theta_forecast`, `ets_forecast`, `arima_forecast`, `auto_arima_forecast` | Rust-backed single-series forecasts for plain numeric sequences. |
+| `cartoboost.naive_forecast(values, horizon)` and related `seasonal_naive_forecast`, `theta_forecast`, `optimized_theta_forecast`, `ets_forecast`, `arima_forecast`, `auto_arima_forecast` | Single-series forecasts for plain numeric sequences. |
 | `cartoboost.local_level_kalman_filter(values, ..., horizon=0, interval_z=...)` | Local-level Kalman filtering for numeric sequences. Returns final level and variance, fixed-interval smoothed states, per-step estimates with fitted/residual/gain/likelihood diagnostics, residual summary metrics, optional flat forecast means, and optional forecast distributions with normal bounds. |
 | `cartoboost.local_level_kalman_forecast(values, horizon, ...)` | Local-level Kalman forecast utility. |
 | `cartoboost.kalman_filter(values, level_process_variance=..., trend_process_variance=..., observation_variance=..., horizon=0, interval_z=...)` | Local-linear Kalman filtering for numeric sequences. Returns final state/covariance, fixed-interval smoothed states, per-step estimates with fitted/residual/covariance/gain/likelihood diagnostics, residual summary metrics, optional forecast means, and optional forecast distributions with normal bounds. |
@@ -381,7 +381,7 @@ main model comparison.
 | `cartoboost.empirical_variogram(observations, ...)` | Binned empirical semivariogram with lag ranges, mean lag distances, semivariances, and pair counts. |
 | `cartoboost.fit_ordinary_kriging_variogram(observations, ...)` | Weighted least-squares variogram fitting over model/range/nugget/sill candidate grids. |
 | `cartoboost.ordinary_kriging_leave_one_out_diagnostics(observations, ...)` | Leave-one-out predictions plus residual metrics such as bias, MAE, RMSE, standardized residuals, interval coverage, and average kriging variance. |
-| `cartoboost.forecasting.sequence.*` | Rust-backed sequence reference utilities for known-prefix continuation, reference path inference, leakage-safe OOF row generation and validation, group metrics, and aligned candidate blending. |
+| `cartoboost.forecasting.sequence.*` | Sequence reference utilities for known-prefix continuation, reference path inference, leakage-safe OOF row generation and validation, group metrics, and aligned candidate blending. |
 
 ## Direct Graph Encoders
 
@@ -597,4 +597,4 @@ These helpers return `sparse_sets` dictionaries suitable for
 `CartoBoostRegressor.fit(..., sparse_sets=...)`. H3 auto-encoding requires the
 optional `h3` package; S2 auto-encoding requires `s2sphere`. Deterministic
 normalization, coordinate/level validation, scaffold expansion, and sparse-row
-assembly are delegated to the Rust native extension.
+assembly are handled by CartoBoost.

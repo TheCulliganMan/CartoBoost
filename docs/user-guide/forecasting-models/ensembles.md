@@ -1,3 +1,5 @@
+import {ForecastModelExample} from '@site/src/components/ModelingLabClient';
+
 # Weighted Ensembles
 
 `WeightedEnsembleForecaster` combines CartoBoost forecasting models with
@@ -5,13 +7,13 @@ explicit fixed weights. The ensemble is intentionally simple: each member is
 fitted, each member predicts the same horizon, and the final forecast is the
 weighted average of aligned predictions.
 
-## Try Candidate Members In The Modeling Lab
+## Interactive Example
 
-Open the browser-local roster comparison with the bundled taxi lane sample:
-[Candidate roster comparison](/modeling-lab?sample=lane&model=seasonal_naive&run=compare).
-The browser lab does not expose a fixed-weight ensemble as a separate model;
-use it to compare candidate members such as seasonal naive, theta, ETS, ARIMA,
-and Kalman on the same data before choosing ensemble weights in Python.
+<ForecastModelExample title="Seasonal member forecast for ensemble design" model="seasonal_naive" />
+
+Use the embedded examples on the seasonal naive, theta, ETS, ARIMA, and Kalman
+pages to inspect candidate members before choosing fixed ensemble weights in
+Python.
 
 ## When To Use
 

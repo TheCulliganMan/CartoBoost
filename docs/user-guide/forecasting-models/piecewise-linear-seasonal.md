@@ -1,3 +1,5 @@
+import {ForecastModelExample} from '@site/src/components/ModelingLabClient';
+
 # Piecewise Linear Seasonal
 
 `PiecewiseLinearSeasonalForecaster` is the local model for interpretable trend,
@@ -27,13 +29,14 @@ Prefer seasonal naive, theta, ETS, ARIMA, or Kalman when the question is only a
 small local baseline. Prefer `CartoBoostLagForecaster` or `AutoForecaster` when
 many related zones or lanes should share supervised lag features.
 
-## Try It In The Modeling Lab
+## Interactive Example
 
-Open the browser-local example with the bundled taxi lane sample:
-[Piecewise Linear Seasonal forecast](/modeling-lab?sample=lane&model=piecewise_linear_seasonal&run=forecast).
-The lab plots the forecast, fitted history diagnostics, residuals, trend
-movement, and named components so you can inspect the component story before
-moving to Python.
+<ForecastModelExample title="Piecewise linear seasonal taxi-lane forecast" model="piecewise_linear_seasonal" />
+
+The embedded example runs in this page and returns forecast rows from the
+interactive example. Use the full Python API when you need to persist component
+decomposition, fitted history diagnostics, residuals, trend movement, and named
+components for a report.
 
 ## Scientific Role
 
@@ -108,7 +111,7 @@ Prophet-style
 `changepoint_prior_scale`, `seasonality_prior_scale`, `seasonality_mode`, and
 `holidays_mode` aliases map to changepoint penalty, seasonality penalty,
 component mode, and event mode fields.
-The browser Modeling Lab accepts the same modeling aliases in camelCase:
+The interactive forecast example accepts the same modeling aliases in camelCase:
 `nChangepoints`, `changepointPriorScale`, `seasonalityPriorScale`,
 `holidaysPriorScale`, `seasonalityMode`, `holidaysMode`, `intervalWidth`, and
 Prophet-shaped `holidays` rows with `holiday`, `ds`, `lowerWindow`,
@@ -280,8 +283,8 @@ one-week-ahead lane nowcasts where the most recent movement carries the holdout.
 Use `changepoint_range=0.8` only when you intentionally want Prophet's stricter
 placement window for an apples-to-apples tuning probe.
 
-The browser Modeling Lab exposes `piecewise_linear_seasonal` as an interactive
-example. It requests forecast components and fitted history diagnostics, then
-plots trend, fitted values, residuals, built-in seasonalities, custom
-seasonalities, event windows, regressors, aggregate non-trend totals, fitted
-movement, and trend movement without requiring a separate Python plotting step.
+The embedded example exposes `piecewise_linear_seasonal` for a quick
+forecast run. The full plotting workflow can request forecast components and
+fitted history diagnostics, then plot trend, fitted values, residuals, built-in
+seasonalities, custom seasonalities, event windows, regressors, aggregate
+non-trend totals, fitted movement, and trend movement.

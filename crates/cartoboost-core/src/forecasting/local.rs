@@ -4369,7 +4369,10 @@ impl FittedKrigingState {
 
 impl FittedSpatialPiecewiseKrigingState {
     fn from_frame(frame: &ForecastFrame, config: &SpatialPiecewiseKrigingConfig) -> Result<Self> {
+        #[cfg(not(target_arch = "wasm32"))]
         let started = std::time::Instant::now();
+        #[cfg(target_arch = "wasm32")]
+        let started = ();
         let piecewise_config = spatial_piecewise_base_config(config);
         let modeled_frame = if config.uses_kriged_regressors() {
             kriged_regressor_frame(frame, config)?
@@ -4414,7 +4417,7 @@ impl FittedSpatialPiecewiseKrigingState {
                 (series_id.clone(), timestamp.format("%Y-%m-%dT%H:%M:%S").to_string())
             }).collect::<BTreeMap<_, _>>(),
             "residual_rmse": residual_rmse,
-            "runtime_seconds": started.elapsed().as_secs_f64(),
+            "runtime_seconds": spatial_piecewise_runtime_seconds(&started),
         });
         Ok(Self {
             frame: modeled_frame,
@@ -4534,6 +4537,16 @@ impl FittedSpatialPiecewiseKrigingState {
             })
             .collect())
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn spatial_piecewise_runtime_seconds(started: &std::time::Instant) -> f64 {
+    started.elapsed().as_secs_f64()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn spatial_piecewise_runtime_seconds(_: &()) -> f64 {
+    0.0
 }
 
 impl FittedETSSeries {

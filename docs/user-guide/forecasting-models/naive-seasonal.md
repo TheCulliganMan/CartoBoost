@@ -1,15 +1,13 @@
+import {ForecastModelExample} from '@site/src/components/ModelingLabClient';
+
 # Naive And Seasonal Naive
 
 Naive and seasonal naive models are the first baselines to run for forecasting.
 They are intentionally simple and make leakage problems easier to spot.
 
-## Try It In The Modeling Lab
+## Interactive Example
 
-Open the browser-local example with the bundled taxi lane sample:
-[Seasonal Naive forecast](/modeling-lab?sample=lane&model=seasonal_naive&run=forecast).
-Use the model selector to switch to `Naive`, then run the same forecast or
-holdout backtest. The point is to see whether persistence or yesterday's
-same-hour demand is the stronger baseline before trying richer models.
+<ForecastModelExample title="Seasonal naive taxi-lane forecast" model="seasonal_naive" />
 
 ## When To Use
 

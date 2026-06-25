@@ -1,3 +1,5 @@
+import {ForecastModelExample} from '@site/src/components/ModelingLabClient';
+
 # Spatial Piecewise Kriging
 
 `SpatialPiecewiseKrigingForecaster` is for taxi panels that need both
@@ -5,9 +7,8 @@ inspectable temporal structure and spatial borrowing. It fits a piecewise
 linear seasonal base, then uses ordinary kriging to add cutoff-safe spatial
 signal from stable pickup, dropoff, zone, or route coordinates.
 
-The browser [Modeling Lab](/modeling-lab) exposes the same model as
-`Spatial Piecewise Kriging` when the uploaded table has pickup/dropoff or
-longitude/latitude columns.
+The interactive example below runs the same model when the sample table
+has stable `longitude` and `latitude` columns.
 
 ## When To Use
 
@@ -98,13 +99,11 @@ Use these fields before making quality claims. A lower aggregate RMSE is weaker
 evidence if the correction is dominated by distant neighbors, large kriging
 variance, or unstable coordinates.
 
-## Modeling Lab
+## Interactive Example
 
-Open the preset browser-local example:
-[Spatial Piecewise Kriging forecast](/modeling-lab?sample=varied&model=spatial_piecewise_kriging&run=forecast).
-You can also open `/modeling-lab`, load the varied-route taxi sample or upload a
-table with pickup/dropoff latitude and longitude columns, then choose
-`Spatial Piecewise Kriging` from the Geographic group. The forecast table shows
+<ForecastModelExample title="Spatial piecewise kriging coordinate-panel forecast" model="spatial_piecewise_kriging" sample="spatial" />
+
+The embedded example uses stable `longitude` and `latitude` columns and shows
 spatial diagnostic columns when the model returns them: base forecast, spatial
 correction, kriging variance, and neighbor count.
 
@@ -112,16 +111,8 @@ The lab automatically avoids using coordinate and id columns as spatial
 regressors. If it finds other numeric columns, it uses `hybrid`; otherwise it
 uses `residual_kriging`.
 
-For a quick interactive check:
-
-1. Load the varied-route yellow taxi sample.
-2. Keep `pickup_hour` as the timestamp and the pickup-count target selected by
-   the lab.
-3. Select `Spatial Piecewise Kriging`.
-4. Run the forecast and inspect whether the spatial correction is small,
-   directional, or dominated by high kriging variance.
-5. Run the roster comparison and confirm the same holdout split is used for the
-   simpler baselines.
+For a quick interactive check, run the embedded forecast and inspect whether the
+spatial correction is small, directional, or dominated by high kriging variance.
 
 ## Benchmark Check
 
