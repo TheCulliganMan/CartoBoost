@@ -5140,6 +5140,9 @@ function browserForecastModelOptions(
   if (isSpatialPiecewiseKrigingModel(model)) {
     return spatialPiecewiseKrigingForecastOptions(table, timestampCol, targetCol, seriesCol, horizon);
   }
+  if (normalizedForecastModel(model) === 'kriging') {
+    return coordinateForecastOptions(table);
+  }
   if (isPiecewiseForecastModel(model)) {
     return piecewiseForecastOptions(table, targetCol, seriesCol, [], horizon);
   }
@@ -5193,11 +5196,29 @@ function spatialPiecewiseKrigingForecastOptions(
   const spatialRegressors = spatialRegressorColumns(table, [timestampCol, targetCol, seriesCol]);
   return {
     ...piecewiseForecastOptions(table, targetCol, seriesCol, [], horizon),
+    ...coordinateForecastOptions(table),
     spatialKrigingMode: spatialRegressors.length > 0 ? 'hybrid' : 'residual_kriging',
     spatialRegressors,
     residualShrinkage: 1.0,
     allowNeighborFallback: true,
   };
+}
+
+function coordinateForecastOptions(table: ParsedTable) {
+  const coordinateX = inferCoordinateColumn(table.columns, ['longitude', 'lon', 'lng', 'x']);
+  const coordinateY = inferCoordinateColumn(table.columns, ['latitude', 'lat', 'y']);
+  return {
+    ...(coordinateX ? {coordinateX} : {}),
+    ...(coordinateY ? {coordinateY} : {}),
+  };
+}
+
+function inferCoordinateColumn(columns: string[], candidates: string[]) {
+  const normalizedCandidates = new Set(candidates.map((candidate) => candidate.toLowerCase()));
+  return (
+    columns.find((column) => normalizedCandidates.has(column.toLowerCase())) ??
+    columns.find((column) => candidates.some((candidate) => column.toLowerCase().includes(candidate)))
+  );
 }
 
 function spatialRegressorColumns(table: ParsedTable, excludedColumns: string[]) {
