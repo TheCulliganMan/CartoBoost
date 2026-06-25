@@ -25,6 +25,14 @@ type ForecastRecord = {
   selected_neighbors?: string[];
 };
 
+type ForecastChartPoint = {
+  kind: 'actual' | 'forecast';
+  label: string;
+  timestamp: string;
+  value: number;
+  horizon?: number;
+};
+
 type ForecastComponentRecord = {
   series_id: string;
   timestamp: string;
@@ -355,6 +363,7 @@ export function ForecastModelExample({
         </button>
       </div>
       <p style={{margin: '0.75rem 0'}}>{status}</p>
+      {result && <ForecastExampleChart records={result.forecast.records} table={table} />}
       {records.length > 0 && (
         <div style={{overflowX: 'auto'}}>
           <table>
@@ -472,6 +481,7 @@ export function ForecastModelRosterExample(): React.ReactElement {
       <p style={{margin: '0 0 0.75rem'}}>
         This control reads the available model list and runs the selected model against a bundled taxi-style {sample === 'spatial' ? 'coordinate panel' : 'lane'} sample.
       </p>
+      {result && <ForecastExampleChart records={result.forecast.records} table={table} />}
       {records.length > 0 && (
         <div style={{overflowX: 'auto'}}>
           <table>
@@ -498,6 +508,133 @@ export function ForecastModelRosterExample(): React.ReactElement {
       )}
     </section>
   );
+}
+
+function ForecastExampleChart({records, table}: {records: ForecastRecord[]; table: ParsedTable}): React.ReactElement | null {
+  const [hovered, setHovered] = useState<ForecastChartPoint | null>(null);
+  const points = useMemo(() => forecastChartPoints(records, table), [records, table]);
+  if (points.length < 2) {
+    return null;
+  }
+  const width = 720;
+  const height = 260;
+  const padding = {top: 22, right: 18, bottom: 44, left: 54};
+  const innerWidth = width - padding.left - padding.right;
+  const innerHeight = height - padding.top - padding.bottom;
+  const values = points.map((point) => point.value);
+  const minValue = Math.min(...values);
+  const maxValue = Math.max(...values);
+  const valuePadding = Math.max((maxValue - minValue) * 0.12, 1);
+  const yMin = minValue - valuePadding;
+  const yMax = maxValue + valuePadding;
+  const xFor = (index: number) => padding.left + (points.length === 1 ? innerWidth / 2 : (index / (points.length - 1)) * innerWidth);
+  const yFor = (value: number) => padding.top + (1 - (value - yMin) / (yMax - yMin)) * innerHeight;
+  const actualPoints = points.filter((point) => point.kind === 'actual');
+  const forecastPoints = points.filter((point) => point.kind === 'forecast');
+  const pointIndex = new Map(points.map((point, index) => [point, index]));
+  const actualPath = chartPath(actualPoints, pointIndex, xFor, yFor);
+  const forecastPath = chartPath(forecastPoints, pointIndex, xFor, yFor);
+  const joinPath =
+    actualPoints.length > 0 && forecastPoints.length > 0
+      ? `M ${xFor(pointIndex.get(actualPoints[actualPoints.length - 1]) ?? 0)} ${yFor(actualPoints[actualPoints.length - 1].value)} L ${xFor(pointIndex.get(forecastPoints[0]) ?? 0)} ${yFor(forecastPoints[0].value)}`
+      : '';
+  const tooltip = hovered ?? points[points.length - 1];
+
+  return (
+    <figure style={{margin: '1rem 0'}}>
+      <figcaption style={{fontWeight: 600, marginBottom: '0.35rem'}}>Forecast graph</figcaption>
+      <div style={{overflowX: 'auto'}}>
+        <svg
+          role="img"
+          aria-label="Recent actual values and forecast path"
+          viewBox={`0 0 ${width} ${height}`}
+          style={{width: '100%', minWidth: 520, maxWidth: width, display: 'block'}}
+        >
+          <line x1={padding.left} x2={width - padding.right} y1={height - padding.bottom} y2={height - padding.bottom} stroke="var(--ifm-color-emphasis-400)" />
+          <line x1={padding.left} x2={padding.left} y1={padding.top} y2={height - padding.bottom} stroke="var(--ifm-color-emphasis-400)" />
+          {[0, 0.5, 1].map((tick) => {
+            const value = yMin + (yMax - yMin) * tick;
+            const y = yFor(value);
+            return (
+              <g key={tick}>
+                <line x1={padding.left} x2={width - padding.right} y1={y} y2={y} stroke="var(--ifm-color-emphasis-200)" />
+                <text x={padding.left - 8} y={y + 4} textAnchor="end" fontSize="12" fill="var(--ifm-font-color-base)">
+                  {formatMetric(value)}
+                </text>
+              </g>
+            );
+          })}
+          {actualPath && <path d={actualPath} fill="none" stroke="var(--ifm-color-primary)" strokeWidth="3" />}
+          {joinPath && <path d={joinPath} fill="none" stroke="var(--ifm-color-primary)" strokeWidth="2" strokeDasharray="4 4" />}
+          {forecastPath && <path d={forecastPath} fill="none" stroke="#c2410c" strokeWidth="3" />}
+          {points.map((point, index) => (
+            <circle
+              key={`${point.kind}-${point.timestamp}-${index}`}
+              cx={xFor(index)}
+              cy={yFor(point.value)}
+              r={hovered === point ? 6 : 4}
+              fill={point.kind === 'actual' ? 'var(--ifm-color-primary)' : '#c2410c'}
+              stroke="white"
+              strokeWidth="1.5"
+              onPointerEnter={() => setHovered(point)}
+              onPointerLeave={() => setHovered(null)}
+            />
+          ))}
+          <text x={padding.left} y={height - 14} fontSize="12" fill="var(--ifm-font-color-base)">
+            Actual
+          </text>
+          <circle cx={padding.left + 42} cy={height - 18} r="4" fill="var(--ifm-color-primary)" />
+          <text x={padding.left + 64} y={height - 14} fontSize="12" fill="var(--ifm-font-color-base)">
+            Forecast
+          </text>
+          <circle cx={padding.left + 120} cy={height - 18} r="4" fill="#c2410c" />
+        </svg>
+      </div>
+      <p style={{margin: '0.35rem 0 0'}}>
+        {tooltip.kind === 'forecast' ? `Horizon ${tooltip.horizon}: ` : 'Actual: '}
+        <strong>{formatMetric(tooltip.value)}</strong> at <code>{tooltip.timestamp}</code>
+      </p>
+    </figure>
+  );
+}
+
+function forecastChartPoints(records: ForecastRecord[], table: ParsedTable): ForecastChartPoint[] {
+  const firstSeries = records[0]?.series_id;
+  if (!firstSeries) {
+    return [];
+  }
+  const actuals = table.rows
+    .filter((row) => row.series_id === firstSeries)
+    .map((row) => ({
+      kind: 'actual' as const,
+      label: 'Actual',
+      timestamp: row.timestamp,
+      value: Number(row.target),
+    }))
+    .filter((point) => Number.isFinite(point.value))
+    .slice(-18);
+  const forecasts = records
+    .filter((record) => record.series_id === firstSeries)
+    .map((record) => ({
+      kind: 'forecast' as const,
+      label: 'Forecast',
+      timestamp: record.timestamp,
+      value: record.prediction,
+      horizon: record.horizon,
+    }))
+    .filter((point) => Number.isFinite(point.value));
+  return [...actuals, ...forecasts];
+}
+
+function chartPath(
+  points: ForecastChartPoint[],
+  pointIndex: Map<ForecastChartPoint, number>,
+  xFor: (index: number) => number,
+  yFor: (value: number) => number,
+) {
+  return points
+    .map((point, index) => `${index === 0 ? 'M' : 'L'} ${xFor(pointIndex.get(point) ?? 0)} ${yFor(point.value)}`)
+    .join(' ');
 }
 
 function docsExampleSample(model: string): 'lane' | 'spatial' {
