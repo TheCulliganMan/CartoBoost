@@ -7,7 +7,7 @@
 [![Release](https://github.com/TheCulliganMan/CartoBoost/actions/workflows/release-version.yml/badge.svg)](https://github.com/TheCulliganMan/CartoBoost/actions/workflows/release-version.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-CartoBoost is a Rust-backed Python spatial boosting toolkit for regression,
+CartoBoost is a Python spatial boosting toolkit for regression,
 classification, grouped ranking, and forecasting problems where place, time,
 and movement structure matter. It is aimed at scientific and applied modeling
 workflows such as NYC taxi trip duration, fare estimation, airport-trip
@@ -67,13 +67,13 @@ CartoBoost supports:
   workflows for high-cardinality IDs.
 - node2vec, GraphSAGE, heterogeneous GraphSAGE, and typed-schema HinSAGE graph
   regressors, link predictors, and graph feature encoders.
-- Rust-native forecasting APIs for geographic and temporal single-series or
-  panel taxi demand, including rolling-origin backtests, naive/seasonal
+- Forecasting APIs for geographic and temporal single-series or panel taxi
+  demand, including rolling-origin backtests, naive/seasonal
   naive/theta/optimized-theta/ETS/AutoARIMA models, supervised CartoBoost lag
   forecasting, weighted ensembles, CLI runs, and portable forecast artifacts.
-- General Rust-backed utilities outside the forecasting API, including
-  single-series forecast helpers, local-level/local-linear Kalman filters,
-  Croston/SBA/TSB intermittent demand, and ordinary kriging.
+- General utilities outside the forecasting API, including single-series
+  forecast helpers, local-level/local-linear Kalman filters, Croston/SBA/TSB
+  intermittent demand, and ordinary kriging.
 
 ## Install
 

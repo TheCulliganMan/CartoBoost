@@ -3,10 +3,10 @@
 CartoBoost is published on PyPI as `cartoboost`.
 
 Install CartoBoost when you need to compare temporal-spatial regressors,
-native forecasting models, graph/neural variants, or reproducible benchmark
+forecasting models, graph/neural variants, or reproducible benchmark
 workflows in a Python environment. The core package is enough for NumPy and
 pandas-style modeling; optional extras add integrations without changing the
-Rust-backed modeling contracts.
+modeling contracts.
 
 ## Install From PyPI
 
@@ -43,7 +43,7 @@ uv add "cartoboost[visualization]"
 | --- | --- | --- |
 | `explain` | SHAP explanations. | You need feature-attribution diagnostics for a fitted regressor. |
 | `h3` | Optional H3 latitude/longitude encoder. | Spatial cells are part of the tested feature design. |
-| `holidays` | Country holiday calendar expansion for the Rust-native piecewise linear seasonal forecaster. | You need Prophet-style `add_country_holidays` behavior. |
+| `holidays` | Country holiday calendar expansion for the piecewise linear seasonal forecaster. | You need Prophet-style `add_country_holidays` behavior. |
 | `s2` | Optional S2 latitude/longitude encoder. | S2 cells match the existing geography pipeline. |
 | `duckdb` | DuckDB relation/query-result input support. | Taxi training data already lives in DuckDB queries. |
 | `optuna` | Hyperparameter tuning examples and workflows. | You are tuning under a fixed validation protocol. |

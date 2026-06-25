@@ -336,6 +336,21 @@ contract. A `CsrGraph` stores sparse non-negative relations, `GraphLaplacian`
 scores roughness across connected observations, and `GraphSmoother` can smooth
 residual or leaf vectors against that graph.
 
+The generic Rust surface covers row graphs, symbolic relation groups, and split
+constraints:
+
+| Primitive | Purpose |
+| --- | --- |
+| `CsrGraph` | Sparse supplied graph with deterministic validation and non-negative edge weights. |
+| `GraphLaplacian` | Scores the graph roughness term `f' L f` for connected predictions. |
+| `GraphSmoother` | Smooths residuals or update vectors over the supplied graph. |
+| `GraphRegularizedBooster` | Booster wrapper for ordinary loss plus a graph smoothness penalty. |
+| `GraphSplitRegularization` | Penalizes split candidates that create rough row-level updates across graph edges. |
+| `GraphLeafSmoothing` | Aggregates a row graph to a leaf graph and smooths constant leaf values. |
+| `SymbolicRelationSet` | Stores origin adjacency, destination adjacency, corridor similarity, reverse-edge similarity, neighbor-zone similarity, segment similarity, entity similarity, hierarchy parent/child, smooth-group, and no-smooth-group relations. |
+| `RuleCompiler` | Compiles supplied relation groups, reverse edges, hierarchies, and violations into deterministic numeric features and penalties. |
+| `MonotoneConstraintSet` and `InteractionConstraintSet` | Enforce split-search constraints for domain assumptions that must hold during training. |
+
 `GraphSplitRegularization` adjusts candidate split gain by penalizing rough
 row-level updates across supplied graph edges. `GraphLeafSmoothing` applies the
 same graph contract after each fitted constant-leaf tree: training rows are
@@ -345,6 +360,27 @@ leaf updates are smoothed before prediction updates are added.
 Both options require a graph whose node count matches the training row count.
 Leaf smoothing is intentionally limited to hard-routed constant leaves so the
 leaf graph and update vector have a single unambiguous interpretation.
+
+Graph penalties are explicit model features, not hidden fallbacks. If the graph
+is missing, malformed, has the wrong node count, or contains invalid weights,
+the Rust path rejects it instead of silently training an unregularized model.
+
+## Network Embedding Primitives
+
+Node2Vec can also be used as a lower-level deterministic feature pipeline. The
+Rust primitives are:
+
+| Primitive | Purpose |
+| --- | --- |
+| `AliasSampler` | Seeded weighted sampling for graph transitions and negative examples. |
+| `RandomWalkGenerator` | Directed and weighted second-order walks with fixed-seed deterministic output. |
+| `Node2VecTrainer` | Skip-gram negative-sampling trainer over the generated walk contexts. |
+| `EdgeEmbeddingModel` | Combines source and target node vectors into edge-level representations. |
+| `EmbeddingFeatureTransformer` | Emits dense origin, destination, reverse-similarity, dot-product, neighborhood-density, and local-context columns for booster matrices. |
+
+Use these when you need network context as explicit columns for a downstream
+model or an ablation, rather than a standalone graph regressor artifact. Fixed
+seeds are expected to reproduce the same embedding features.
 
 ## Directed Metapaths
 

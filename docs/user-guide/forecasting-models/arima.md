@@ -2,18 +2,21 @@
 
 ARIMA models are useful when a taxi demand series is mostly explained by recent
 values, recent forecast errors, and one or two rounds of differencing.
-CartoBoost exposes bounded, non-seasonal ARIMA implementations through Rust
-native bindings:
+CartoBoost exposes bounded, non-seasonal ARIMA models:
 
 - `ArimaForecaster` fits one fixed `(p, d, q)` order.
 - `AutoARIMAForecaster` searches a bounded deterministic grid of `(p, d, q)`
   candidates and refits the selected order.
 - `cartoboost.arima_forecast` and `cartoboost.auto_arima_forecast` provide the
-  same Rust-backed behavior for quick single-series utility calls.
+  same model behavior for quick single-series utility calls.
 
-The Python classes are thin wrappers. Model fitting, prediction, differencing,
-candidate scoring, backtesting execution, and validation-critical behavior live
-in Rust.
+## Try It In The Modeling Lab
+
+Open the browser-local example with the bundled taxi lane sample:
+[Auto ARIMA forecast](/modeling-lab?sample=lane&model=auto_arima&run=forecast).
+Use the model selector to switch to fixed `ARIMA`, then run the holdout
+backtest to see whether the selected order actually beats simpler baselines on
+the held-out tail.
 
 ## When To Use It
 
@@ -126,8 +129,7 @@ print(forecast.predictions()[:3])
 ```
 
 `ForecastFrame` validates the regular hourly timestamps, duplicate
-series/timestamp pairs, finite pickup counts, and panel ids before the native
-fit starts.
+series/timestamp pairs, finite pickup counts, and panel ids before fitting.
 
 ## Visualization Example
 
@@ -245,8 +247,8 @@ Order meaning:
 - `d`: differencing order, currently `0`, `1`, or `2`.
 - `q`: moving-average lags from recent fitted residuals.
 
-Bounds are intentionally small (`p <= 8`, `d <= 2`, `q <= 8`) so the native
-solver stays deterministic and fast for repeated local-model workflows.
+Bounds are intentionally small (`p <= 8`, `d <= 2`, `q <= 8`) so repeated
+local-model workflows stay deterministic and fast.
 
 ## Model-Order Interpretation
 
@@ -275,9 +277,9 @@ print(metadata["selected_order"])
 print(sorted(metadata["validation_scores"], key=lambda score: score["mse"])[:5])
 ```
 
-Those scores are native mean squared fitted residuals after each candidate's
-lag warm-up. They explain the deterministic order choice, but final model
-selection should come from held-out or rolling-origin metrics.
+Those scores are mean squared fitted residuals after each candidate's lag
+warm-up. They explain the deterministic order choice, but final model selection
+should come from held-out or rolling-origin metrics.
 
 ## AutoARIMA
 
@@ -299,10 +301,9 @@ print(metadata["selected_order"])
 print(metadata["validation_scores"][:5])
 ```
 
-Candidate selection is deterministic. Scores are mean squared fitted residuals
-from the native fitted states, excluding the warm-up rows required by each
-candidate's AR/MA lags. If two candidates tie, the stable ordering keeps
-selection reproducible.
+Candidate selection is deterministic. Scores are mean squared fitted residuals,
+excluding the warm-up rows required by each candidate's AR/MA lags. If two
+candidates tie, the stable ordering keeps selection reproducible.
 
 Read AutoARIMA metadata as an audit trail, not as a deployment decision. In the
 visualization example, the selected order can have the best fitted residual
@@ -334,14 +335,10 @@ For many lanes, use a rolling-origin backtest and compare against seasonal
 naive, ETS, Theta, and `CartoBoostLagForecaster`. Do not claim a production
 winner from the synthetic examples on this page.
 
-## GIL Behavior
+## Many Local Series
 
-ARIMA and AutoARIMA fit/predict are native Rust operations. The PyO3 binding
-releases the Python GIL around the full native fit and prediction call. The
-single-series utility path also releases the GIL around native fit+predict.
-
-This means independent local forecasts can be scheduled from Python threads
-without serializing the Rust compute section on the Python interpreter lock:
+When each lane should be modeled independently, schedule one local forecast per
+lane and keep the evaluation table keyed by lane, horizon, and timestamp:
 
 ```python
 from concurrent.futures import ThreadPoolExecutor
@@ -362,9 +359,10 @@ with ThreadPoolExecutor(max_workers=2) as pool:
     forecasts = dict(zip(lanes, pool.map(forecast_lane, lanes.values())))
 ```
 
-Threading is useful for independent local series. For one large
-`ForecastFrame`, native Rust uses Rayon internally where the implementation can
-parallelize panel work.
+Use this pattern for small batches of important lanes where each local order is
+audited separately. For a large regular panel, also compare against
+`CartoBoostLagForecaster`, which can share calendar and lag signal across
+lanes instead of treating every lane as isolated.
 
 ## Parameters
 
@@ -427,7 +425,7 @@ from real or clearly labeled benchmark data.
 
 ## Benchmark Notes
 
-The repository includes a focused Criterion benchmark for native ARIMA paths:
+The repository includes a focused Criterion benchmark for ARIMA runtime paths:
 
 ```bash
 cargo bench -p cartoboost-core --bench forecasting
@@ -435,7 +433,6 @@ cargo bench -p cartoboost-core --bench forecasting
 
 The benchmark uses deterministic synthetic taxi pickup/dropoff lane demand and
 measures fixed ARIMA fit+predict and bounded AutoARIMA fit+predict. Treat those
-numbers as implementation speed checks, not modeling-quality evidence. Public
-quality claims should come from rolling-origin backtests with fixed splits,
-recorded RMSE/MAE/R2, and serious baselines on real or clearly labeled
-benchmark data.
+numbers as runtime checks, not modeling-quality evidence. Public quality claims
+should come from rolling-origin backtests with fixed splits, recorded
+RMSE/MAE/R2, and serious baselines on real or clearly labeled benchmark data.

@@ -46,8 +46,7 @@ See [Python API Reference](reference/python-api.md),
 ## Classification And Ranking Estimators
 
 `cartoboost.CartoBoostClassifier` and `cartoboost.CartoBoostRanker` extend the
-same Rust-backed tree construction to discrete labels and grouped relevance
-labels.
+same tree modeling structure to discrete labels and grouped relevance labels.
 
 | Feature | Public surface | Modeling use |
 | --- | --- | --- |
@@ -112,8 +111,8 @@ raise a clear install error when the extra is missing.
 | pandas/dataframe-style inputs | Dataframe columns in estimator and forecasting helpers | Core package. |
 | DuckDB relation inputs | Dense relation/query-result support | `cartoboost[duckdb]`. |
 | Polars inputs | Dataframe support where documented | `cartoboost[polars]`. |
-| H3 encoding | `latlng_to_h3_id`, `encode_h3_cells`, `build_h3_sparse_sets`, `h3_parent_id`, `normalize_h3_id` | `cartoboost[h3]`; validation, ID normalization, scaffold expansion, and row assembly are Rust-backed. |
-| S2 encoding | `latlng_to_s2_id`, `encode_s2_cells`, `build_s2_sparse_sets`, `s2_parent_id`, `normalize_s2_id` | `cartoboost[s2]`; validation, ID normalization, and row assembly are Rust-backed. |
+| H3 encoding | `latlng_to_h3_id`, `encode_h3_cells`, `build_h3_sparse_sets`, `h3_parent_id`, `normalize_h3_id` | `cartoboost[h3]`; validation, ID normalization, scaffold expansion, and row assembly. |
+| S2 encoding | `latlng_to_s2_id`, `encode_s2_cells`, `build_s2_sparse_sets`, `s2_parent_id`, `normalize_s2_id` | `cartoboost[s2]`; validation, ID normalization, and row assembly. |
 | Geographic sparse helpers | `build_geo_sparse_sets`, `build_zip_sparse_sets`, `coerce_geo_to_feature_id`, `coerce_zip_to_feature_id` | Core package. |
 | SHAP explanations | `make_shap_explainer`, `explain_shap` | `cartoboost[explain]`. |
 | Optuna workflows | Tuning examples/workflows | `cartoboost[optuna]`. |
@@ -164,7 +163,7 @@ See [Graph Models And Features](graph-features.md).
 
 ## General Utilities, Evaluation, And Forecasting
 
-General utilities include Rust-backed single-series forecasts, Kalman filters,
+General utilities include single-series forecasts, Kalman filters,
 intermittent-demand methods, sequence reference utilities, and ordinary
 kriging. Kalman support includes frame-based local-level, local-linear, and
 self-tuning forecasters plus diagnostic filter utilities. Sequence utilities
@@ -179,11 +178,10 @@ policies; rolling median and MAD residuals; leakage-safe Kalman residual state
 correction; residual Moran's I; spatial CV gap; jitter volatility; and
 conformal residual helpers.
 
-Forecasting is Rust-native. Python classes validate data and delegate model
-training, prediction, rolling-origin backtesting, metrics, and artifact behavior
-to `cartoboost._native`. The Prophet-style piecewise linear seasonal model also
-supports native external trend multipliers and recent residual shock
-propagation for market-belief adjustments.
+Forecasting classes validate data, train models, run rolling-origin backtests,
+compute metrics, and preserve artifacts. The Prophet-style piecewise linear
+seasonal model also supports external trend multipliers and recent residual
+shock propagation for market-belief adjustments.
 
 See [General Utilities](general_utilities.md), [Forecasting](forecasting.md),
 and the [forecasting model guides](user-guide/forecasting-models/index.md).

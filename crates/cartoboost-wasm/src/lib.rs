@@ -1,24 +1,33 @@
 use cartoboost_core::booster::BoosterConfig;
 use cartoboost_core::data::{Dataset, FeatureKind, FeatureSchema, SparseSetColumn};
 use cartoboost_core::forecasting::{
-    AutoARIMAForecaster, AutoETSForecaster, AutoForecastConfig, AutoForecastModel,
-    AutoKalmanForecaster, AutoLocalLevelKalmanForecaster, AutoStatsBank, CalendarFeature,
-    CartoBoostDirectForecaster, CartoBoostLagForecaster, ClassicalExpertBank, ETSForecaster,
-    ForecastFrame, ForecastFrameMetadata, ForecastFrequency, ForecastResult, Forecaster,
-    IntermittentDemandConfig, IntermittentDemandForecaster, KalmanForecaster, KrigingForecaster,
+    crossing_rate, default_quantile_levels, interval_diagnostics, pinball_loss,
+    regime_adjusted_intervals, repair_non_crossing_quantiles, rolling_mad_residual,
+    rolling_median_residual, AutoARIMAForecaster, AutoETSForecaster, AutoForecastConfig,
+    AutoForecastModel, AutoKalmanForecaster, AutoLocalLevelKalmanForecaster, AutoStatsBank,
+    CalendarFeature, CartoBoostDirectForecaster, CartoBoostLagForecaster, ClassicalExpertBank,
+    CusumConfig, ETSForecaster, EwmaVolatility, EwmaVolatilityConfig, ForecastFrame,
+    ForecastFrameMetadata, ForecastFrequency, ForecastResult, Forecaster, IntermittentDemandConfig,
+    IntermittentDemandForecaster, KalmanForecaster, KalmanResidualCorrector, KrigingForecaster,
     LagFeatureConfig, LagPlusConfig, LagPlusForecaster, LocalLevelKalmanForecaster,
     LocalStandardScaledForecaster, Log1pForecaster, MSTLCartoBoostForecaster, NaiveForecaster,
-    OptimizedThetaForecaster, PiecewiseLinearComponentMode, PiecewiseLinearEvent,
-    PiecewiseLinearFitLoss, PiecewiseLinearGrowth, PiecewiseLinearSeasonalConfig,
-    PiecewiseLinearSeasonalForecaster, PiecewiseLinearSeasonality, RectifiedRecursiveForecaster,
-    ReferencePathConfig, ReferenceSignal, STLCartoBoostForecaster, SeasonalNaiveForecaster,
+    OptimizedThetaForecaster, PageHinkley, PageHinkleyConfig, PiecewiseLinearComponentMode,
+    PiecewiseLinearEvent, PiecewiseLinearFitLoss, PiecewiseLinearGrowth,
+    PiecewiseLinearSeasonalConfig, PiecewiseLinearSeasonalForecaster, PiecewiseLinearSeasonality,
+    RectifiedRecursiveForecaster, ReferencePathConfig, ReferenceSignal, RegimeIntervalPolicy,
+    ResidualStateKey, STLCartoBoostForecaster, SeasonalNaiveForecaster,
     SeasonalWindowAverageForecaster, SequenceCandidate, SequenceCandidateEnsemble,
     SequenceCandidatePrediction, SequenceFrame, SequenceGroupPrediction, SequenceOofCandidateRow,
     SequenceOofFold, SequenceSeries, SequenceStateSpaceConfig, SpatialPiecewiseKrigingConfig,
-    SpatialPiecewiseKrigingForecaster, SpatialPiecewiseKrigingMode, ThetaForecaster,
-    ThetaSeasonality, WindowAverageForecaster,
+    SpatialPiecewiseKrigingForecaster, SpatialPiecewiseKrigingMode, StateFilter, StateObservation,
+    ThetaForecaster, ThetaSeasonality, WindowAverageForecaster, CUSUM,
 };
 use cartoboost_core::loss::{HuberLossConfig, LogL2LossConfig, LossConfig, QuantileLossConfig};
+use cartoboost_core::objectives::{
+    calibration_improvement, calibration_metrics, escalation_risk_event, event_within_horizon,
+    failure_risk_event, success_within_threshold, IsotonicCalibrator, ProbabilityCalibrator,
+    SigmoidCalibrator, TemperatureCalibrator,
+};
 use cartoboost_core::tree::{Node, Split, SplitterKind};
 use cartoboost_core::Booster;
 use cartoboost_core::{CartoBoostError, Result};
@@ -165,6 +174,92 @@ struct BrowserForecastOptions {
     floor: Option<f64>,
     cap_regressor: Option<String>,
     floor_regressor: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserGeotemporalDiagnosticsRequest {
+    quantiles: Option<BrowserQuantileDiagnosticsRequest>,
+    residual_correction: Option<BrowserResidualCorrectionRequest>,
+    regime: Option<BrowserRegimeDiagnosticsRequest>,
+    calibration: Option<BrowserCalibrationRequest>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserQuantileDiagnosticsRequest {
+    values: Option<Vec<f64>>,
+    actual: Option<Vec<f64>>,
+    prediction: Option<Vec<f64>>,
+    quantile: Option<f64>,
+    lower: Option<Vec<f64>>,
+    upper: Option<Vec<f64>>,
+    quantile_rows: Option<Vec<Vec<f64>>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserResidualCorrectionRequest {
+    process_variance: f64,
+    observation_variance: f64,
+    observations: Vec<BrowserResidualObservation>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserResidualObservation {
+    key: BrowserResidualStateKey,
+    structural_prediction: f64,
+    observed: Option<f64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserResidualStateKey {
+    origin: Option<String>,
+    destination: Option<String>,
+    corridor: Option<String>,
+    segment: Option<String>,
+    entity_family: Option<String>,
+    target_family: Option<String>,
+    time_bucket: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserRegimeDiagnosticsRequest {
+    residuals: Vec<f64>,
+    cusum: Option<CusumConfig>,
+    page_hinkley: Option<PageHinkleyConfig>,
+    ewma: Option<EwmaVolatilityConfig>,
+    lower: Option<Vec<f64>>,
+    upper: Option<Vec<f64>>,
+    policy: Option<RegimeIntervalPolicy>,
+    rolling_window: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserCalibrationRequest {
+    scores: Option<Vec<f64>>,
+    labels: Vec<f64>,
+    probabilities: Option<Vec<f64>>,
+    before_probabilities: Option<Vec<f64>>,
+    method: Option<String>,
+    bucket_count: Option<usize>,
+    event: Option<BrowserCalibrationEventRequest>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserCalibrationEventRequest {
+    kind: String,
+    actual: Vec<f64>,
+    prediction: Option<Vec<f64>>,
+    threshold: Option<f64>,
+    horizon: Option<f64>,
+    warning_threshold: Option<f64>,
+    critical_threshold: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -686,6 +781,20 @@ pub fn run_sequence(request: JsValue) -> std::result::Result<JsValue, JsValue> {
         .map_err(|error| JsValue::from_str(&format!("could not encode sequence response: {error}")))
 }
 
+#[wasm_bindgen(js_name = runGeotemporalDiagnostics)]
+pub fn run_geotemporal_diagnostics(request: JsValue) -> std::result::Result<JsValue, JsValue> {
+    let request: BrowserGeotemporalDiagnosticsRequest = serde_wasm_bindgen::from_value(request)
+        .map_err(|error| JsValue::from_str(&format!("invalid geotemporal request: {error}")))?;
+    let response = run_geotemporal_diagnostics_request(request)
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    let serializer = serde_wasm_bindgen::Serializer::json_compatible();
+    response.serialize(&serializer).map_err(|error| {
+        JsValue::from_str(&format!(
+            "could not encode geotemporal diagnostics response: {error}"
+        ))
+    })
+}
+
 #[wasm_bindgen(js_name = availableForecastModels)]
 pub fn available_forecast_models() -> std::result::Result<JsValue, JsValue> {
     let serializer = serde_wasm_bindgen::Serializer::json_compatible();
@@ -847,6 +956,289 @@ fn forecast_model_registry() -> Vec<BrowserForecastModel> {
             pipeline: "local",
         },
     ]
+}
+
+fn run_geotemporal_diagnostics_request(
+    request: BrowserGeotemporalDiagnosticsRequest,
+) -> Result<Value> {
+    let mut response = serde_json::Map::new();
+    response.insert("surface".to_string(), json!("rust_geotemporal_diagnostics"));
+    if let Some(quantiles) = request.quantiles {
+        response.insert(
+            "quantiles".to_string(),
+            run_browser_quantile_diagnostics(quantiles)?,
+        );
+    }
+    if let Some(residual_correction) = request.residual_correction {
+        response.insert(
+            "residualCorrection".to_string(),
+            run_browser_residual_correction(residual_correction)?,
+        );
+    }
+    if let Some(regime) = request.regime {
+        response.insert(
+            "regime".to_string(),
+            run_browser_regime_diagnostics(regime)?,
+        );
+    }
+    if let Some(calibration) = request.calibration {
+        response.insert(
+            "calibration".to_string(),
+            run_browser_calibration(calibration)?,
+        );
+    }
+    Ok(Value::Object(response))
+}
+
+fn run_browser_quantile_diagnostics(request: BrowserQuantileDiagnosticsRequest) -> Result<Value> {
+    let mut response = serde_json::Map::new();
+    response.insert(
+        "defaultLevels".to_string(),
+        json!(default_quantile_levels()),
+    );
+    if let Some(values) = request.values.as_deref() {
+        response.insert(
+            "repairedValues".to_string(),
+            json!(repair_non_crossing_quantiles(values)?),
+        );
+    }
+    if let (Some(actual), Some(prediction), Some(quantile)) = (
+        request.actual.as_deref(),
+        request.prediction.as_deref(),
+        request.quantile,
+    ) {
+        response.insert(
+            "pinballLoss".to_string(),
+            json!(pinball_loss(actual, prediction, quantile)?),
+        );
+    }
+    if let (Some(actual), Some(lower), Some(upper), Some(quantile_rows)) = (
+        request.actual.as_deref(),
+        request.lower.as_deref(),
+        request.upper.as_deref(),
+        request.quantile_rows.as_deref(),
+    ) {
+        response.insert(
+            "intervalDiagnostics".to_string(),
+            serde_json::to_value(interval_diagnostics(actual, lower, upper, quantile_rows)?)?,
+        );
+    } else if let Some(quantile_rows) = request.quantile_rows.as_deref() {
+        response.insert(
+            "crossingRate".to_string(),
+            json!(crossing_rate(quantile_rows)?),
+        );
+    }
+    Ok(Value::Object(response))
+}
+
+fn run_browser_residual_correction(request: BrowserResidualCorrectionRequest) -> Result<Value> {
+    let default_filter = StateFilter::new(request.process_variance, request.observation_variance)?;
+    let mut corrector = KalmanResidualCorrector::new(default_filter);
+    let observations = request
+        .observations
+        .into_iter()
+        .map(|observation| StateObservation {
+            key: browser_residual_key(observation.key),
+            structural_prediction: observation.structural_prediction,
+            observed: observation.observed,
+        })
+        .collect::<Vec<_>>();
+    let corrections = corrector.apply_sequence(&observations)?;
+    let states = corrector
+        .states
+        .iter()
+        .map(|(key, filter)| json!({ "key": key, "filter": filter }))
+        .collect::<Vec<_>>();
+    Ok(json!({
+        "corrections": corrections,
+        "stateCount": corrector.states.len(),
+        "states": states,
+    }))
+}
+
+fn browser_residual_key(key: BrowserResidualStateKey) -> ResidualStateKey {
+    ResidualStateKey::new(
+        key.origin.unwrap_or_default(),
+        key.destination.unwrap_or_default(),
+        key.corridor.unwrap_or_default(),
+        key.segment.unwrap_or_default(),
+        key.entity_family.unwrap_or_default(),
+        key.target_family.unwrap_or_default(),
+        key.time_bucket.unwrap_or_default(),
+    )
+}
+
+fn run_browser_regime_diagnostics(request: BrowserRegimeDiagnosticsRequest) -> Result<Value> {
+    let rolling_window = request.rolling_window.unwrap_or(5);
+    let mut response = serde_json::Map::new();
+    response.insert(
+        "rollingMedianResidual".to_string(),
+        json!(rolling_median_residual(&request.residuals, rolling_window)?),
+    );
+    response.insert(
+        "rollingMadResidual".to_string(),
+        json!(rolling_mad_residual(&request.residuals, rolling_window)?),
+    );
+    if let Some(config) = request.cusum {
+        let mut detector = CUSUM::new(config)?;
+        response.insert(
+            "cusum".to_string(),
+            serde_json::to_value(detector.scan(&request.residuals)?)?,
+        );
+    }
+    let page_hinkley_signals = if let Some(config) = request.page_hinkley {
+        let mut detector = PageHinkley::new(config)?;
+        let signals = detector.scan(&request.residuals)?;
+        response.insert("pageHinkley".to_string(), serde_json::to_value(&signals)?);
+        Some(signals)
+    } else {
+        None
+    };
+    let volatilities = if let Some(config) = request.ewma {
+        let mut volatility = EwmaVolatility::new(config)?;
+        let values = volatility.scan(&request.residuals)?;
+        response.insert("ewmaVolatility".to_string(), json!(&values));
+        Some(values)
+    } else {
+        None
+    };
+    if let (Some(lower), Some(upper), Some(signals), Some(volatilities), Some(policy)) = (
+        request.lower.as_deref(),
+        request.upper.as_deref(),
+        page_hinkley_signals.as_deref(),
+        volatilities.as_deref(),
+        request.policy,
+    ) {
+        response.insert(
+            "regimeAdjustedIntervals".to_string(),
+            serde_json::to_value(regime_adjusted_intervals(
+                lower,
+                upper,
+                signals,
+                volatilities,
+                policy,
+            )?)?,
+        );
+    }
+    Ok(Value::Object(response))
+}
+
+fn run_browser_calibration(request: BrowserCalibrationRequest) -> Result<Value> {
+    let bucket_count = request.bucket_count.unwrap_or(10);
+    let mut response = serde_json::Map::new();
+    if let Some(event) = request.event {
+        response.insert(
+            "eventLabels".to_string(),
+            json!(browser_event_labels(event)?),
+        );
+    }
+    if let Some(probabilities) = request.probabilities.as_deref() {
+        response.insert(
+            "metrics".to_string(),
+            serde_json::to_value(calibration_metrics(
+                &request.labels,
+                probabilities,
+                bucket_count,
+            )?)?,
+        );
+    }
+    if let (Some(scores), Some(method)) = (request.scores.as_deref(), request.method.as_deref()) {
+        let calibrated = match method {
+            "sigmoid" | "platt" => {
+                let calibrator = SigmoidCalibrator::fit(scores, &request.labels)?;
+                response.insert("calibrator".to_string(), serde_json::to_value(calibrator)?);
+                calibrator.predict(scores)?
+            }
+            "temperature" => {
+                let calibrator = TemperatureCalibrator::fit(scores, &request.labels)?;
+                response.insert("calibrator".to_string(), serde_json::to_value(calibrator)?);
+                calibrator.predict(scores)?
+            }
+            "isotonic" => {
+                let calibrator = IsotonicCalibrator::fit(scores, &request.labels)?;
+                response.insert("calibrator".to_string(), serde_json::to_value(&calibrator)?);
+                calibrator.predict(scores)?
+            }
+            other => {
+                return Err(CartoBoostError::InvalidInput(format!(
+                    "unknown calibration method '{other}'"
+                )));
+            }
+        };
+        response.insert("calibratedProbabilities".to_string(), json!(&calibrated));
+        response.insert(
+            "calibratedMetrics".to_string(),
+            serde_json::to_value(calibration_metrics(
+                &request.labels,
+                &calibrated,
+                bucket_count,
+            )?)?,
+        );
+        if let Some(before) = request
+            .before_probabilities
+            .as_deref()
+            .or(request.probabilities.as_deref())
+        {
+            response.insert(
+                "improvement".to_string(),
+                serde_json::to_value(calibration_improvement(
+                    &request.labels,
+                    before,
+                    &calibrated,
+                    bucket_count,
+                )?)?,
+            );
+        }
+    }
+    Ok(Value::Object(response))
+}
+
+fn browser_event_labels(request: BrowserCalibrationEventRequest) -> Result<Vec<f64>> {
+    match request.kind.as_str() {
+        "success_within_threshold" | "successWithinThreshold" => {
+            let prediction = request.prediction.as_deref().ok_or_else(|| {
+                CartoBoostError::InvalidInput(
+                    "success_within_threshold event requires prediction".to_string(),
+                )
+            })?;
+            let threshold = request.threshold.ok_or_else(|| {
+                CartoBoostError::InvalidInput(
+                    "success_within_threshold event requires threshold".to_string(),
+                )
+            })?;
+            success_within_threshold(&request.actual, prediction, threshold)
+        }
+        "event_within_horizon" | "eventWithinHorizon" => {
+            let horizon = request.horizon.ok_or_else(|| {
+                CartoBoostError::InvalidInput(
+                    "event_within_horizon event requires horizon".to_string(),
+                )
+            })?;
+            event_within_horizon(&request.actual, horizon)
+        }
+        "failure_risk" | "failureRisk" => {
+            let threshold = request.threshold.ok_or_else(|| {
+                CartoBoostError::InvalidInput("failure_risk event requires threshold".to_string())
+            })?;
+            failure_risk_event(&request.actual, threshold)
+        }
+        "escalation_risk" | "escalationRisk" => {
+            let warning_threshold = request.warning_threshold.ok_or_else(|| {
+                CartoBoostError::InvalidInput(
+                    "escalation_risk event requires warningThreshold".to_string(),
+                )
+            })?;
+            let critical_threshold = request.critical_threshold.ok_or_else(|| {
+                CartoBoostError::InvalidInput(
+                    "escalation_risk event requires criticalThreshold".to_string(),
+                )
+            })?;
+            escalation_risk_event(&request.actual, warning_threshold, critical_threshold)
+        }
+        other => Err(CartoBoostError::InvalidInput(format!(
+            "unknown calibration event kind '{other}'"
+        ))),
+    }
 }
 
 fn run_sequence_request(request: BrowserSequenceRequest) -> Result<Value> {
@@ -3684,6 +4076,111 @@ mod tests {
         );
         let unique = names.iter().copied().collect::<BTreeSet<_>>();
         assert_eq!(unique.len(), names.len());
+    }
+
+    #[test]
+    fn browser_geotemporal_diagnostics_runs_rust_primitives() {
+        let response = run_geotemporal_diagnostics_request(BrowserGeotemporalDiagnosticsRequest {
+            quantiles: Some(BrowserQuantileDiagnosticsRequest {
+                values: Some(vec![10.0, 9.0, 11.0]),
+                actual: Some(vec![9.0, 10.0, 12.0]),
+                prediction: Some(vec![8.5, 10.5, 12.5]),
+                quantile: Some(0.5),
+                lower: Some(vec![8.0, 9.0, 10.0]),
+                upper: Some(vec![10.0, 12.0, 13.0]),
+                quantile_rows: Some(vec![vec![8.0, 9.0, 10.0], vec![9.0, 8.5, 12.0]]),
+            }),
+            residual_correction: Some(BrowserResidualCorrectionRequest {
+                process_variance: 0.05,
+                observation_variance: 1.0,
+                observations: vec![
+                    BrowserResidualObservation {
+                        key: BrowserResidualStateKey {
+                            origin: Some("PU1".to_string()),
+                            destination: Some("DO2".to_string()),
+                            corridor: Some("PU1_DO2".to_string()),
+                            ..BrowserResidualStateKey::default()
+                        },
+                        structural_prediction: 10.0,
+                        observed: Some(12.0),
+                    },
+                    BrowserResidualObservation {
+                        key: BrowserResidualStateKey {
+                            origin: Some("PU1".to_string()),
+                            destination: Some("DO2".to_string()),
+                            corridor: Some("PU1_DO2".to_string()),
+                            ..BrowserResidualStateKey::default()
+                        },
+                        structural_prediction: 11.0,
+                        observed: None,
+                    },
+                ],
+            }),
+            regime: Some(BrowserRegimeDiagnosticsRequest {
+                residuals: vec![0.0, 0.1, 0.0, 4.0, 4.2],
+                cusum: Some(CusumConfig {
+                    reference_mean: 0.0,
+                    drift: 0.05,
+                    threshold: 2.0,
+                }),
+                page_hinkley: Some(PageHinkleyConfig {
+                    delta: 0.01,
+                    threshold: 1.0,
+                }),
+                ewma: Some(EwmaVolatilityConfig { alpha: 0.5 }),
+                lower: Some(vec![-1.0; 5]),
+                upper: Some(vec![1.0; 5]),
+                policy: Some(RegimeIntervalPolicy {
+                    widening_multiplier: 0.5,
+                    active_window: 2,
+                }),
+                rolling_window: Some(3),
+            }),
+            calibration: Some(BrowserCalibrationRequest {
+                scores: Some(vec![-2.0, -0.5, 0.5, 2.0]),
+                labels: vec![0.0, 0.0, 1.0, 1.0],
+                probabilities: Some(vec![0.2, 0.4, 0.6, 0.8]),
+                before_probabilities: None,
+                method: Some("sigmoid".to_string()),
+                bucket_count: Some(4),
+                event: Some(BrowserCalibrationEventRequest {
+                    kind: "failureRisk".to_string(),
+                    actual: vec![1.0, 3.0, 5.0],
+                    prediction: None,
+                    threshold: Some(2.0),
+                    horizon: None,
+                    warning_threshold: None,
+                    critical_threshold: None,
+                }),
+            }),
+        })
+        .expect("geotemporal diagnostics");
+
+        assert_eq!(
+            response["surface"].as_str(),
+            Some("rust_geotemporal_diagnostics")
+        );
+        assert_eq!(
+            response["quantiles"]["repairedValues"].as_array().unwrap()[1].as_f64(),
+            Some(10.0)
+        );
+        assert_eq!(
+            response["residualCorrection"]["stateCount"].as_u64(),
+            Some(1)
+        );
+        assert!(response["regime"]["regimeAdjustedIntervals"]
+            .as_array()
+            .expect("intervals")
+            .iter()
+            .any(|row| row["confidence"].as_f64().unwrap() < 1.0));
+        assert_eq!(
+            response["calibration"]["eventLabels"]
+                .as_array()
+                .expect("event labels")
+                .len(),
+            3
+        );
+        assert!(response["calibration"]["calibratedProbabilities"].is_array());
     }
 
     #[test]

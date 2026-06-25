@@ -73,6 +73,7 @@ type WasmModule = {
   runRegressionModel: (request: unknown) => RegressionResponse;
   runNeuralModel: (request: unknown) => RegressionResponse;
   runSequence?: (request: unknown) => unknown;
+  runGeotemporalDiagnostics?: (request: unknown) => unknown;
   availableForecastModels?: () => WasmModelMetadata[];
 };
 
@@ -309,6 +310,11 @@ const neuralPipelineLabels: Record<string, string> = {
 
 const graphNeuralPipelines = new Set(['node2vec', 'graphsage', 'hetero_graphsage', 'hinsage']);
 type ActiveModelingSurface = 'forecast' | 'model' | 'neural';
+
+type PendingLabRun = {
+  action: 'forecast' | 'compare' | 'backtest';
+  model: string;
+};
 const TAXI_LANE_SAMPLE_ROWS = 5000;
 const TAXI_VARIED_ROUTE_SAMPLE_ROWS = 2500;
 const VISUALIZED_MODEL_MAX_ROWS = 800;
@@ -409,6 +415,8 @@ export default function ModelingLabClient(): React.ReactElement {
   const [runProgress, setRunProgress] = useState<RunProgress | null>(null);
   const [runLog, setRunLog] = useState<RunLogEntry[]>([]);
   const [modelOptions, setModelOptions] = useState<ModelOption[]>(fallbackModelOptions);
+  const presetAppliedRef = useRef(false);
+  const [pendingLabRun, setPendingLabRun] = useState<PendingLabRun | null>(null);
 
   const previewRows = table?.rows.slice(0, 6) ?? [];
   const selectedForecastModel = modelOptions.find((option) => option.value === model) ?? modelOptions[0];
@@ -598,6 +606,44 @@ export default function ModelingLabClient(): React.ReactElement {
     }
   }, [applyTaxiTable, taxiVariedRouteSampleUrl]);
 
+  useEffect(() => {
+    if (presetAppliedRef.current) {
+      return;
+    }
+    const params = new URLSearchParams(window.location.search);
+    const requestedModel = normalizedForecastModel(params.get('model') ?? '');
+    const requestedAction = params.get('run')?.trim().toLowerCase() ?? '';
+    const requestedSample = params.get('sample')?.trim().toLowerCase() ?? '';
+    if (!requestedModel && !requestedAction && !requestedSample) {
+      return;
+    }
+
+    presetAppliedRef.current = true;
+    const modelValue = modelOptions.some((option) => option.value === requestedModel)
+      ? requestedModel
+      : modelOptions[0]?.value ?? 'auto_forecast';
+    const sample =
+      requestedSample ||
+      (modelValue === 'kriging' || modelValue === 'spatial_piecewise_kriging' ? 'varied' : 'lane');
+    const action =
+      requestedAction === 'compare' || requestedAction === 'backtest' || requestedAction === 'forecast'
+        ? requestedAction
+        : null;
+
+    void (async () => {
+      if (sample === 'varied' || sample === 'routes' || sample === 'spatial') {
+        await loadTaxiVariedRouteSample();
+      } else if (sample === 'lane' || sample === 'single' || sample === 'taxi') {
+        await loadTaxiLaneSample();
+      }
+      setModel(modelValue);
+      setActiveModelingSurface('forecast');
+      if (action) {
+        setPendingLabRun({action, model: modelValue});
+      }
+    })();
+  }, [loadTaxiLaneSample, loadTaxiVariedRouteSample, modelOptions]);
+
   const onDrop = useCallback(
     async (event: React.DragEvent<HTMLLabelElement>) => {
       event.preventDefault();
@@ -616,7 +662,7 @@ export default function ModelingLabClient(): React.ReactElement {
     }
     setIsRunning(true);
     setRunProgress({label: 'Fitting forecast'});
-    setStatus('Loading CartoBoost WebAssembly and fitting the forecast.');
+    setStatus('Fitting the forecast locally in the browser.');
     try {
       const response = await runBrowserForecast({
         wasmJsUrl,
@@ -663,16 +709,16 @@ export default function ModelingLabClient(): React.ReactElement {
       return;
     }
     setIsRunning(true);
-    setRunProgress({label: 'Preparing native roster', current: 0, total: modelOptions.length});
+    setRunProgress({label: 'Preparing model roster', current: 0, total: modelOptions.length});
     setResult(null);
     setBacktestResults([]);
     setRegressionResult(null);
     setNeuralResult(null);
     setComparisonResults([]);
     setRunLog([]);
-    setStatus('Running native model roster.');
+    setStatus('Running model roster.');
     const roster = modelOptions.filter((option) => forecastModelCanRun(option, table.columns));
-    setRunProgress({label: 'Running native roster', current: 0, total: roster.length});
+    setRunProgress({label: 'Running model roster', current: 0, total: roster.length});
     appendRunLog(`Started roster comparison with ${roster.length.toLocaleString()} models.`);
     await waitForBrowserPaint();
     const nextResults: ComparisonResult[] = [];
@@ -748,7 +794,7 @@ export default function ModelingLabClient(): React.ReactElement {
     setRegressionResult(null);
     setNeuralResult(null);
     setRunLog([]);
-    setStatus('Running holdout backtest across native roster.');
+    setStatus('Running holdout backtest across the model roster.');
     try {
       const split = holdoutSplit(table, timestampCol, targetCol, seriesCol, horizon);
       const roster = modelOptions.filter((option) => forecastModelCanRun(option, table.columns));
@@ -822,6 +868,34 @@ export default function ModelingLabClient(): React.ReactElement {
     wasmJsUrl,
   ]);
 
+  useEffect(() => {
+    if (!pendingLabRun || !table || !selectedColumnsReady || isLoadingTaxiSample || isRunning) {
+      return;
+    }
+    if (model !== pendingLabRun.model) {
+      return;
+    }
+    setPendingLabRun(null);
+    if (pendingLabRun.action === 'compare') {
+      scheduleRun(runComparison);
+    } else if (pendingLabRun.action === 'backtest') {
+      scheduleRun(runBacktest);
+    } else {
+      scheduleRun(runForecast);
+    }
+  }, [
+    isLoadingTaxiSample,
+    isRunning,
+    model,
+    pendingLabRun,
+    runBacktest,
+    runComparison,
+    runForecast,
+    scheduleRun,
+    selectedColumnsReady,
+    table,
+  ]);
+
   const runRegression = useCallback(async () => {
     if (!table || !selectedColumnsReady || featureCols.length === 0) {
       setStatus('Choose a target and at least one numeric feature before running modeling.');
@@ -834,7 +908,7 @@ export default function ModelingLabClient(): React.ReactElement {
     setBacktestResults([]);
     setRegressionResult(null);
     setNeuralResult(null);
-    setStatus('Fitting CartoBoost regression in WebAssembly.');
+    setStatus('Fitting CartoBoost regression locally in the browser.');
     try {
       await waitForBrowserPaint();
       const response = await runBrowserRegression({
@@ -877,7 +951,7 @@ export default function ModelingLabClient(): React.ReactElement {
     setBacktestResults([]);
     setRegressionResult(null);
     setNeuralResult(null);
-    setStatus(`Fitting ${neuralPipelineLabels[neuralPipeline] ?? neuralPipeline} in WebAssembly.`);
+    setStatus(`Fitting ${neuralPipelineLabels[neuralPipeline] ?? neuralPipeline} locally in the browser.`);
     try {
       await waitForBrowserPaint();
       const response = await runBrowserNeural({
@@ -986,11 +1060,11 @@ export default function ModelingLabClient(): React.ReactElement {
     <main className={styles.shell}>
       <section className={styles.header}>
         <div>
-          <span className={styles.eyebrow}>WebAssembly modeling lab</span>
+          <span className={styles.eyebrow}>Browser-local modeling lab</span>
           <h1>Model taxi demand, routes, and neural signals in the browser</h1>
           <p>
-            This page runs CartoBoost's Rust forecasting, regression, graph, and neural modeling cores
-            locally through WebAssembly. No dataset leaves the browser.
+            Run CartoBoost forecasts, regression, graph models, and neural signals on taxi data.
+            Load a bundled sample or upload your own file; no dataset leaves the browser.
           </p>
         </div>
         <div className={styles.headerActions}>
@@ -4891,7 +4965,14 @@ function buildSuggestedConfig({
     browserWasm: {
       page: '/modeling-lab',
       crate: 'cartoboost-wasm',
-      entrypoints: ['runForecast', 'runRegressionModel', 'runNeuralModel', 'runSequence', 'availableForecastModels'],
+      entrypoints: [
+        'runForecast',
+        'runRegressionModel',
+        'runNeuralModel',
+        'runSequence',
+        'runGeotemporalDiagnostics',
+        'availableForecastModels',
+      ],
     },
     geography: {
       enabled: true,

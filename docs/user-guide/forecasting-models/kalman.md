@@ -7,6 +7,13 @@ also has a slowly changing trend, and the `Auto*` variants when you want a
 deterministic native variance-grid search before refitting on all training
 rows.
 
+## Try It In The Modeling Lab
+
+Open the browser-local example with the bundled taxi lane sample:
+[Auto Kalman forecast](/modeling-lab?sample=lane&model=auto_kalman&run=forecast).
+Use the same page to compare `Local Level Kalman`, `Kalman`, and `Auto Kalman`
+against seasonal naive and theta on a fixed holdout.
+
 ## When To Use
 
 Use Kalman forecasting for taxi demand or fare aggregates when recent
@@ -69,7 +76,7 @@ full taxi-zone panel.
 | --- | --- | --- |
 | A JFK pickup sensor is noisy but the true demand level is stable. | `LocalLevelKalmanForecaster` or `cartoboost.local_level_kalman_filter` | One latent level is enough; there is no explicit slope. |
 | Airport pickup demand is drifting upward through the evening rush. | `KalmanForecaster` or `cartoboost.kalman_filter` | The local-linear model estimates both a level and a trend. |
-| You want the model to choose variance settings from a small grid. | `AutoLocalLevelKalmanForecaster` or `AutoKalmanForecaster` | The Rust core scores candidates on a time-ordered tail window and refits the winner. |
+| You want the model to choose variance settings from a small grid. | `AutoLocalLevelKalmanForecaster` or `AutoKalmanForecaster` | Candidate settings are scored on a time-ordered tail window and the winner is refit. |
 | You need a normal forecast band for a dashboard. | `forecast_distribution` from either utility | It returns mean, variance, lower, and upper for each horizon. |
 | You need to explain why a point looked unusual. | Per-step estimates and `diagnostics` | Innovations, standardized innovations, gains, and log likelihood show how surprising the observation was. |
 

@@ -5,9 +5,8 @@ model surfaces, and the right entry point depends on the scientific structure
 in the data: row-level place/time effects, regular time series, shared panels,
 direct graph structure, or learned ID embeddings.
 
-Most behavior is implemented in Rust and surfaced through thin Python wrappers.
-Python handles dataframe ergonomics, validation, sklearn compatibility where
-appropriate, and artifact helpers.
+Use the model whose assumptions match the unit being predicted. Then compare it
+against simpler baselines under the same split before interpreting a gain.
 
 ## Start With The Scientific Unit
 
@@ -26,7 +25,7 @@ appropriate, and artifact helpers.
 | Are stable pickup zones, dropoff zones, or pairs themselves the learned artifact? | `NeuralEmbeddingStandaloneRegressor` | [Neural Features](../neural-features.md) |
 | Is the relationship network the object being modeled? | Graph standalone regressors or link predictors | [Graph Features](../graph-features.md) |
 | Do graph or neural embeddings only need to become columns for another estimator? | `GraphFeatureTransformer`, `NeuralEmbeddingFeatures`, or `NeuralEmbeddingRegressor` | [Graph Features](../graph-features.md), [Neural Features](../neural-features.md) |
-| Do you need one-off Rust-backed forecast or spatial utilities? | Functions such as `theta_forecast`, `kalman_filter`, or `ordinary_kriging_predict` | [General Utilities](../general_utilities.md) |
+| Do you need one-off forecast or spatial utilities? | Functions such as `theta_forecast`, `kalman_filter`, or `ordinary_kriging_predict` | [General Utilities](../general_utilities.md) |
 
 ## When CartoBoostRegressor Fits
 
@@ -125,11 +124,10 @@ encoding and evaluate on the same split.
 
 Use `CartoBoostClassifier` when each row has a discrete taxi-domain label and
 the decision boundary may depend on pickup/dropoff coordinates, hour, route
-memberships, or sparse zone signals. The native Rust objective layer fits
-binary logistic loss for two classes and multiclass logistic loss for three or
-more classes. Python keeps sklearn-style label handling, `predict`,
-`predict_proba`, `decision_function`, `class_weight`, and save/load label
-metadata.
+memberships, or sparse zone signals. The classifier fits binary logistic loss
+for two classes and multiclass logistic loss for three or more classes, with
+sklearn-style label handling, `predict`, `predict_proba`, `decision_function`,
+`class_weight`, and save/load label metadata.
 
 ```python
 from cartoboost import CartoBoostClassifier
@@ -155,9 +153,9 @@ CartoBoost gain.
 
 Use `CartoBoostRanker` when rows are only comparable within a query group:
 candidate dropoff zones for one pickup, route alternatives for one shipment,
-or ranked taxi-zone actions for one planning context. The native Rust trainer
-uses pairwise logistic or LambdaRank objectives and reports NDCG, MAP, and MRR
-from grouped predictions.
+or ranked taxi-zone actions for one planning context. The ranker uses pairwise
+logistic or LambdaRank objectives and reports NDCG, MAP, and MRR from grouped
+predictions.
 
 ```python
 from cartoboost import CartoBoostRanker
@@ -210,17 +208,14 @@ distances.
 
 Use the [Modeling Lab](../../modeling-lab) when you want to inspect a fitted
 CartoBoost model in the browser before moving to a Python or CLI workflow. The
-lab runs the Rust WebAssembly core locally, loads bundled single-lane or
-varied-route yellow taxi samples, and renders the fitted tree structure without
-sending data to a server.
+lab runs locally, loads bundled single-lane or varied-route yellow taxi samples,
+and renders the fitted tree structure without sending data to a server.
 
-The visualizer is opt-in metadata on the WebAssembly regression and neural
-model calls. It summarizes the boosted trees, split kinds, top splitter rules,
-depth profile, and largest holdout residuals after fitting; regular prediction
-paths do not pay the traversal cost unless visualization is requested. This is
-the best place to confirm whether axis, diagonal spatial, Gaussian spatial,
-periodic, sparse-set, or fuzzy splitters are actually used on taxi pickup,
-dropoff, route, fare, distance, duration, and demand features.
+The visualizer summarizes the boosted trees, split kinds, top splitter rules,
+depth profile, and largest holdout residuals after fitting. This is the best
+place to confirm whether axis, diagonal spatial, Gaussian spatial, periodic,
+sparse-set, or fuzzy splitters are actually used on taxi pickup, dropoff, route,
+fare, distance, duration, and demand features.
 
 ## Forecasting
 

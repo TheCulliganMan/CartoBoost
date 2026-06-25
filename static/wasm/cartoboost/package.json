@@ -1,0 +1,21 @@
+{
+  "name": "cartoboost-wasm",
+  "type": "module",
+  "description": "WebAssembly bindings for browser-based CartoBoost forecasting.",
+  "version": "0.2.0",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/theculliganman/cartoboost"
+  },
+  "files": [
+    "cartoboost_wasm_bg.wasm",
+    "cartoboost_wasm.js",
+    "cartoboost_wasm.d.ts"
+  ],
+  "main": "cartoboost_wasm.js",
+  "types": "cartoboost_wasm.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

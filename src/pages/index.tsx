@@ -8,7 +8,7 @@ import styles from './index.module.css';
 const paths = [
   {
     title: 'Train a tabular model',
-    detail: 'Fit a Rust-backed regressor for taxi duration, fare, demand, or residual targets.',
+    detail: 'Fit a structured regressor for taxi duration, fare, demand, or residual targets.',
     href: '/docs/getting-started',
   },
   {
@@ -18,7 +18,7 @@ const paths = [
   },
   {
     title: 'Model in the browser',
-    detail: 'Drag in a taxi dataset and run Rust-native forecasts, regression, graph, and neural modeling.',
+    detail: 'Drag in a taxi dataset and run forecasts, regression, graph, and neural modeling locally.',
     href: '/modeling-lab',
   },
   {
@@ -32,7 +32,7 @@ const capabilities = [
   'Periodic time splitters',
   'Spatial and route-aware trees',
   'Sparse zone memberships',
-  'Native forecasting models',
+  'Forecasting models',
   'Graph and neural surfaces',
   'Portable model artifacts',
 ];
@@ -41,7 +41,7 @@ function HomepageHeader() {
   return (
     <header className={styles.hero}>
       <div className={styles.heroText}>
-        <span className={styles.eyebrow}>Rust-backed Python modeling</span>
+        <span className={styles.eyebrow}>Temporal-spatial Python modeling</span>
         <Heading as="h1" className={styles.heroTitle}>
           CartoBoost
         </Heading>

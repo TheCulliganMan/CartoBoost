@@ -5,7 +5,7 @@ inspectable temporal structure and spatial borrowing. It fits a piecewise
 linear seasonal base, then uses ordinary kriging to add cutoff-safe spatial
 signal from stable pickup, dropoff, zone, or route coordinates.
 
-The browser [Modeling Lab](../../modeling-lab) exposes the same model as
+The browser [Modeling Lab](/modeling-lab) exposes the same model as
 `Spatial Piecewise Kriging` when the uploaded table has pickup/dropoff or
 longitude/latitude columns.
 
@@ -100,8 +100,10 @@ variance, or unstable coordinates.
 
 ## Modeling Lab
 
-Open `/modeling-lab`, load the varied-route taxi sample or upload a table with
-pickup/dropoff latitude and longitude columns, then choose
+Open the preset browser-local example:
+[Spatial Piecewise Kriging forecast](/modeling-lab?sample=varied&model=spatial_piecewise_kriging&run=forecast).
+You can also open `/modeling-lab`, load the varied-route taxi sample or upload a
+table with pickup/dropoff latitude and longitude columns, then choose
 `Spatial Piecewise Kriging` from the Geographic group. The forecast table shows
 spatial diagnostic columns when the model returns them: base forecast, spatial
 correction, kriging variance, and neighbor count.

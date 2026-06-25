@@ -5,6 +5,14 @@ with explicit fixed weights. The ensemble is intentionally simple: each member
 is fitted, each member predicts the same horizon, and the final forecast is the
 weighted average of aligned predictions.
 
+## Try Candidate Members In The Modeling Lab
+
+Open the browser-local roster comparison with the bundled taxi lane sample:
+[Candidate roster comparison](/modeling-lab?sample=lane&model=seasonal_naive&run=compare).
+The browser lab does not expose a fixed-weight ensemble as a separate model;
+use it to compare candidate members such as seasonal naive, theta, ETS, ARIMA,
+and Kalman on the same data before choosing ensemble weights in Python.
+
 ## When To Use
 
 Use an ensemble when different models capture different parts of a taxi demand

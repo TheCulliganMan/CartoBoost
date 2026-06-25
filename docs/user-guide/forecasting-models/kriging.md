@@ -7,8 +7,16 @@ Kriging is most useful when the thing being forecast has spatial structure:
 pickup counts near JFK should be related to other airport-area pickup counts,
 Midtown zones should borrow more from nearby Midtown zones than from far-away
 zones, and route midpoint aggregates can share signal with nearby corridors.
-CartoBoost exposes both the panel forecaster and lower-level Rust utilities for
+CartoBoost exposes both the panel forecaster and lower-level utilities for
 one-off interpolation, variogram fitting, and residual diagnostics.
+
+## Try It In The Modeling Lab
+
+Open the browser-local example with the bundled varied-route taxi sample:
+[Kriging forecast](/modeling-lab?sample=varied&model=kriging&run=forecast).
+The varied-route sample includes stable route coordinates, so the lab can show
+whether coordinate borrowing adds useful signal before you move to a Python
+panel workflow.
 
 ## When To Use
 

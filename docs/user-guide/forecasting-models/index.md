@@ -1,13 +1,12 @@
 # Forecasting Model Guides
 
-These guides explain the native forecasting model classes. Use this section
-when you need to pick, configure, or compare a model. Use
+These guides explain the forecasting model classes. Use this section when you
+need to pick, configure, or compare a model. Use
 [Forecasting](../../forecasting.md) when you need `ForecastFrame`,
 rolling-origin backtesting, artifacts, CLI workflows, or shared evidence rules.
 
-Every class is a thin Python wrapper over Rust behavior exposed through
-`cartoboost._native`. Python does not compute fallback forecasts for unsupported
-model modes.
+Start with the model whose assumptions match the forecast question, then prove
+it on the same rolling-origin split as the simpler baselines.
 
 ## Pick A Guide
 
@@ -15,17 +14,17 @@ model modes.
 | --- | --- | --- |
 | [Naive And Seasonal Naive](naive-seasonal.md) | Establish transparent last-value and last-season baselines. | Start here for every forecast comparison. |
 | [Theta](theta.md) | Extrapolate level and trend with a lightweight deterministic model. | Includes manual and optimized theta examples. |
-| [ETS](ets.md) | Model additive level, trend, and seasonality. | Uses Rust-native additive ETS state updates. |
-| [ARIMA And AutoARIMA](arima.md) | Use differencing and autocorrelation in a bounded search. | Covers fixed-order ARIMA, AutoARIMA candidate selection, visual smoke checks, GIL behavior, and benchmark notes. |
+| [ETS](ets.md) | Model additive level, trend, and seasonality. | Useful when the series has smooth components and repeatable seasonal structure. |
+| [ARIMA And AutoARIMA](arima.md) | Use differencing and autocorrelation in a bounded search. | Covers fixed-order ARIMA, AutoARIMA candidate selection, visual smoke checks, and benchmark notes. |
 | [Kalman](kalman.md) | Track noisy local level and local trend over time. | Includes state diagnostics and visualization examples. |
-| [Piecewise Linear Seasonal](/docs/user-guide/forecasting-models/piecewise-linear-seasonal) | Fit interpretable trend, changepoint, seasonality, event, and regressor components without Stan. | Rust-native API exposed through Python and WASM as `piecewise_linear_seasonal`. |
+| [Piecewise Linear Seasonal](/docs/user-guide/forecasting-models/piecewise-linear-seasonal) | Fit interpretable trend, changepoint, seasonality, event, and regressor components. | Also available in the browser Modeling Lab as `piecewise_linear_seasonal`. |
 | [Kriging](kriging.md) | Borrow signal across pickup-zone or route coordinates. | Useful for coordinate-aware panel forecasting. |
-| [Spatial Piecewise Kriging](spatial-piecewise-kriging.md) | Fuse Prophet-shaped CartoBoost temporal structure with spatial kriging. | Rust-native residual kriging, kriged-regressor, and hybrid modes; also exposed in Modeling Lab as `spatial_piecewise_kriging`. |
+| [Spatial Piecewise Kriging](spatial-piecewise-kriging.md) | Combine interpretable temporal components with spatial borrowing. | Residual kriging, kriged-regressor, and hybrid modes; also available in Modeling Lab as `spatial_piecewise_kriging`. |
 | [CartoBoost Lag](cartoboost-lag.md) | Learn one supervised lag model across many related series. | Use for pickup-zone, dropoff-zone, and lane-level panels. |
-| `AutoStatsBank` | Validate a deterministic Rust-native statistical expert bank. | Public wrapper for generic statistical candidate selection; benchmark labels stay in benchmark harnesses. |
+| `AutoStatsBank` | Validate a deterministic statistical expert bank. | Useful when a local statistical selector is the model being tested. |
 | `CrostonForecaster`, `SbaForecaster`, `TsbForecaster` | Forecast sparse non-negative taxi-demand series with fixed intermittent-demand methods. | Use when zeros are meaningful no-pickup periods rather than missing rows. |
-| [AutoForecaster](auto-forecaster.md) | Use the guarded Rust-native default selector over lag, direct, residual-corrected, intermittent, and classical candidates. | Includes diagrams for validation, gating, prediction, and metadata inspection. |
-| N-BEATS / N-HiTS wrappers | Train deterministic Rust-native neural forecasting experts from regular panels. | Public Python classes are `NBeatsForecaster` and `NHiTSForecaster`; use them when windowed neural extrapolation is the model being tested. |
+| [AutoForecaster](auto-forecaster.md) | Use the guarded default selector over lag, direct, residual-corrected, intermittent, and classical candidates. | Includes diagrams for validation, gating, prediction, and metadata inspection. |
+| N-BEATS / N-HiTS wrappers | Train deterministic neural forecasting experts from regular panels. | Public Python classes are `NBeatsForecaster` and `NHiTSForecaster`; use them when windowed neural extrapolation is the model being tested. |
 | [Weighted Ensembles](ensembles.md) | Combine fitted native forecasters with explicit weights. | Components and weights must be named explicitly. |
 
 ## Scientific Choice Criteria
@@ -39,14 +38,14 @@ Choose the model whose assumptions match the signal you can defend:
 | Level and trend are smooth, with optional simple seasonality. | Theta or ETS | Estimates a low-dimensional local structure that is easy to inspect. |
 | Recent autocorrelation and differencing explain the series. | ARIMA or AutoARIMA | Models local serial dependence after bounded non-seasonal differencing. |
 | The measured series is noisy and the latent level/trend should update gradually. | Kalman | Separates observation noise from latent state movement. |
-| You need interpretable changepoints, Fourier seasonalities, event windows, known future regressors, quantiles, and component decomposition in one local model. | [Piecewise linear seasonal](/docs/user-guide/forecasting-models/piecewise-linear-seasonal) | Estimates the additive or multiplicative component path in Rust, keeps fitting deterministic and fast, and avoids Stan/CmdStan runtime costs. |
+| You need interpretable changepoints, Fourier seasonalities, event windows, known future regressors, quantiles, and component decomposition in one local model. | [Piecewise linear seasonal](/docs/user-guide/forecasting-models/piecewise-linear-seasonal) | Estimates additive or multiplicative component paths and keeps the result inspectable. |
 | You need a forecast figure that matches Prophet's plotting surface for a Prophet-shaped result. | [Plotting](../../plotting.md) | Uses the same observed-point, forecast-line, capacity, floor, interval, axis, and legend behavior as `prophet.plot.plot`. |
 | Nearby zones, route midpoints, or residual surfaces should be spatially related. | Kriging | Uses coordinate distance and a variogram to borrow cross-series signal. |
-| Pickup/dropoff zones have both temporal changepoints and spatial residual structure. | [Spatial Piecewise Kriging](spatial-piecewise-kriging.md) | Fits the Rust-native piecewise seasonal base, kriges cutoff-safe residual or regressor surfaces, and returns base mean, correction, kriging variance, neighbors, metadata, and components in result JSON. |
+| Pickup/dropoff zones have both temporal changepoints and spatial residual structure. | [Spatial Piecewise Kriging](spatial-piecewise-kriging.md) | Separates the temporal forecast, spatial correction, kriging variance, neighbors, metadata, and components so the spatial claim can be checked. |
 | Many related zones or lanes share lag, rolling, calendar, or trend structure. | CartoBoost lag | Learns one supervised model from many aligned panel examples. |
-| Pickup demand is sparse with many true zero periods. | Croston, SBA, or TSB | Uses fixed Rust-native intermittent-demand smoothing instead of generic trend extrapolation. |
-| A local statistical bank should choose among reusable non-benchmark candidates. | AutoStatsBank | Runs Rust-native validation over a deterministic statistical expert bank. |
-| A production taxi-demand panel needs a deterministic guarded default with auditable candidate weights. | AutoForecaster | Validates a fixed Rust-native roster, protects the lag baseline, and stores global, horizon, and series weights. |
+| Pickup demand is sparse with many true zero periods. | Croston, SBA, or TSB | Uses intermittent-demand smoothing instead of generic trend extrapolation. |
+| A local statistical bank should choose among reusable non-benchmark candidates. | AutoStatsBank | Runs validation over a deterministic statistical expert bank. |
+| A production taxi-demand panel needs a deterministic guarded default with auditable candidate weights. | AutoForecaster | Validates a fixed roster, protects the lag baseline, and stores global, horizon, and series weights. |
 | Validated models capture complementary errors. | Weighted ensemble | Averages explicit native components after each member proves useful. |
 
 Do not choose a richer model only because it is available. A scientist should
@@ -83,24 +82,23 @@ frame = ForecastFrame.from_pandas(
 `ForecastFrame` validates timestamps, duplicate rows within each series, finite
 targets, regular frequency, panel ids, and covariate role metadata.
 
-## Advanced Native Candidates
+## Advanced Candidates
 
 `AutoStatsBank` is a public wrapper for the reusable statistical expert bank.
-`AutoForecaster` can also validate internal direct, rectified-recursive,
-intermittent-demand, classical-expert, and decomposition-style candidates when
-those candidates are exposed by the compiled Rust core. Treat those as roster
-members of guarded selectors unless a separate Python class is part of the
-public API. Keep benchmark-specific names and competition scoring labels in
-benchmark harnesses and reports.
+`AutoForecaster` can also validate direct, rectified-recursive,
+intermittent-demand, classical-expert, and decomposition-style candidates. Treat
+those as roster members of guarded selectors unless a separate Python class is
+part of the public API. Keep benchmark-specific names and competition scoring
+labels in benchmark harnesses and reports.
 
 Use [Piecewise Linear Seasonal](/docs/user-guide/forecasting-models/piecewise-linear-seasonal) when the forecast
 claim depends on inspectable local structure: growth, changepoints, Fourier
 seasonalities, event windows, known future regressors, uncertainty intervals,
 quantiles, trend-belief adjustments, residual shock propagation, forecast
 component contributions, and fitted historical trend/seasonality diagnostics.
-The implementation is Rust-native and is also exposed to the browser through
-the `piecewise_linear_seasonal` WASM model. There is no `prophet` alias in
-reusable CartoBoost APIs.
+The same model is available in the browser Modeling Lab as
+`piecewise_linear_seasonal` for interactive checks before writing a Python
+workflow.
 
 Use [Spatial Piecewise Kriging](spatial-piecewise-kriging.md) when that Prophet-shaped CartoBoost
 base should borrow spatial signal across stable taxi coordinates. Configure
@@ -108,11 +106,10 @@ base should borrow spatial signal across stable taxi coordinates. Configure
 cutoff-safe residuals by series, and krige residual corrections for each
 horizon. Use `mode="kriged_regressors"` when known spatial covariates such as
 pickup-zone traffic density should be interpolated into piecewise seasonal
-regressor columns. Use `mode="hybrid"` for both mechanisms. The Rust result
-JSON includes `prediction`, `base_mean`, `spatial_correction`,
-`kriging_variance`, `selected_neighbors`, component decomposition, and metadata
-with cutoffs and variogram settings. This is Prophet-shaped CartoBoost
-modeling; it does not fork Prophet, call Stan, or provide Prophet compatibility.
+regressor columns. Use `mode="hybrid"` for both mechanisms. The result includes
+`prediction`, `base_mean`, `spatial_correction`, `kriging_variance`,
+`selected_neighbors`, component decomposition, and metadata with cutoffs and
+variogram settings.
 
 Deterministic synthetic benchmark example:
 
@@ -147,8 +144,7 @@ for series_id, timestamp, horizon, model_name, mean in rows:
 ```
 
 The tuple columns are also available from `forecast.columns()`. Use
-`forecast.to_json()` and `cartoboost._native.ForecastResult.from_json(...)` for
-native JSON roundtrips.
+`forecast.to_json()` for portable artifact roundtrips and downstream reporting.
 
 ## Validation Order
 

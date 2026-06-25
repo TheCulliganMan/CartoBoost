@@ -7,7 +7,7 @@
 [![Release](https://github.com/TheCulliganMan/CartoBoost/actions/workflows/release-version.yml/badge.svg)](https://github.com/TheCulliganMan/CartoBoost/actions/workflows/release-version.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/TheCulliganMan/CartoBoost/blob/main/LICENSE)
 
-CartoBoost is a Rust-backed Python modeling toolkit for temporal-spatial
+CartoBoost is a Python modeling toolkit for temporal-spatial
 regression, classification, ranking, and forecasting problems where place and
 time are part of the signal, not just columns in a table. It is designed for
 work such as NYC taxi trip duration, fare amount, pickup-zone classification,
@@ -117,7 +117,9 @@ be transformed trip duration, fare amount, or future pickup-zone demand.
   sparse sets, fuzzy routing, and blocked evaluation.
 - [Forecasting](forecasting.md): `ForecastFrame`, rolling-origin backtests,
   leakage checks, CLI runs, portable forecast artifacts, and links to the
-  individual forecasting model guides.
+  individual forecasting model guides. It also maps the Rust-core quantile,
+  residual-correction, regime-uncertainty, and probability-calibration
+  primitives that support geotemporal forecasting workflows.
 - [Benchmarks](benchmarks/index.md): reproducible comparison reports,
   acceptance checks, and claim limits.
 - [Benchmark Methodology](benchmarks/methodology.md): evidence fields and v0.2
@@ -135,7 +137,9 @@ be transformed trip duration, fare amount, or future pickup-zone demand.
   splitters.
 - [Graph Models And Features](graph-features.md): standalone graph regressors,
   standalone link predictors, Node2Vec, GraphSAGE, HeteroGraphSAGE, HinSAGE,
-  directed source-target features, metapaths, and graph feature bundles.
+  deterministic network embeddings, graph regularization, symbolic relation
+  rules, split constraints, directed source-target features, metapaths, and
+  graph feature bundles.
 - [Neural Embedding Models And Features](neural-features.md): standalone ID
   embedding regression, neural artifacts, fallback behavior, and optional
   feature-generation workflows.
@@ -159,7 +163,9 @@ be transformed trip duration, fare amount, or future pickup-zone demand.
 - Versioned JSON model and weights artifacts.
 - Forecasting workflows for pickup-zone, dropoff-zone, and lane-level demand,
   including deterministic forecast tables, leakage-safe rolling-origin
-  evaluation, and geographic-temporal benchmark fixtures.
+  evaluation, calibrated quantile intervals, residual-state correction,
+  regime-aware uncertainty widening, calibrated probability events, and
+  geographic-temporal benchmark fixtures.
 - Optional SHAP explanations, Optuna tuning, Polars input support, and ONNX
   export for the supported dense axis-tree subset.
 - Neural embedding features.

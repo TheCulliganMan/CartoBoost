@@ -1,10 +1,9 @@
 # Piecewise Linear Seasonal
 
-`PiecewiseLinearSeasonalForecaster` is the Rust-native local model for
-interpretable trend, changepoints, seasonalities, events, extra regressors, and
-component decomposition. It gives CartoBoost a Prophet-style modeling surface
-without making Stan, CmdStan, or Python fitting code part of the forecasting
-contract.
+`PiecewiseLinearSeasonalForecaster` is the local model for interpretable trend,
+changepoints, seasonalities, events, extra regressors, and component
+decomposition. Use it when the forecast needs to show which named components
+move the prediction, not just the final point estimate.
 
 ## When To Use
 
@@ -27,6 +26,14 @@ scientist needs to inspect the trend and seasonal contribution separately.
 Prefer seasonal naive, theta, ETS, ARIMA, or Kalman when the question is only a
 small local baseline. Prefer `CartoBoostLagForecaster` or `AutoForecaster` when
 many related zones or lanes should share supervised lag features.
+
+## Try It In The Modeling Lab
+
+Open the browser-local example with the bundled taxi lane sample:
+[Piecewise Linear Seasonal forecast](/modeling-lab?sample=lane&model=piecewise_linear_seasonal&run=forecast).
+The lab plots the forecast, fitted history diagnostics, residuals, trend
+movement, and named components so you can inspect the component story before
+moving to Python.
 
 ## Scientific Role
 
@@ -86,21 +93,22 @@ history_frame = model.history_components_frame()
 ```
 
 Prophet-shaped holiday and changepoint inputs are accepted as configuration
-ergonomics over the same Rust-native model. The default automatic changepoint
-count is 25, matching Prophet's public default. CartoBoost's default
+ergonomics for users migrating existing component-model workflows. The default
+automatic changepoint count is 25, matching Prophet's public default.
+CartoBoost's default
 `changepoint_range` is 1.0 so lane-level nowcasts can place trend breaks across
 the full training window when recent demand is moving; set
 `changepoint_range=0.8` when you need Prophet's stricter default placement.
 Use `n_changepoints` for automatic changepoint placement, pass explicit dates
 through `changepoints=[...]` or `changepoint_timestamps=[...]`, and pass a
 Prophet-style `holidays` table with `holiday`, `ds`, optional `lower_window`,
-`upper_window`, and `prior_scale` columns. Holidays are normalized into native
-event windows, and prior scales are translated into per-event L2 penalties
-before fitting. Prophet-style
+`upper_window`, and `prior_scale` columns. Holidays become named event windows,
+and prior scales become per-event regularization settings before fitting.
+Prophet-style
 `changepoint_prior_scale`, `seasonality_prior_scale`, `seasonality_mode`, and
-`holidays_mode` aliases map to the native changepoint penalty, seasonality
-penalty, component mode, and event mode fields.
-The WebAssembly forecast API accepts the same modeling aliases in camelCase:
+`holidays_mode` aliases map to changepoint penalty, seasonality penalty,
+component mode, and event mode fields.
+The browser Modeling Lab accepts the same modeling aliases in camelCase:
 `nChangepoints`, `changepointPriorScale`, `seasonalityPriorScale`,
 `holidaysPriorScale`, `seasonalityMode`, `holidaysMode`, `intervalWidth`, and
 Prophet-shaped `holidays` rows with `holiday`, `ds`, `lowerWindow`,
@@ -111,11 +119,6 @@ Built-in country holiday calendars are available before fitting through
 `country_holidays="US"`. This path requires the optional `holidays` package:
 install `cartoboost[holidays]` when country calendars are needed. Explicit
 `holidays` dataframes do not require that extra.
-
-The Python class validates configuration and delegates fitting, prediction,
-component extraction, fitted artifact serialization, and forecast rows to the
-native binding. Python should not reimplement component math or fallback
-prediction behavior.
 
 ## Prophet-Style Plotting
 
@@ -182,8 +185,8 @@ recent residual carry-forward.
 
 Use `history_components()` after fitting when rolling-origin backtests need to
 explain why a cutoff won or lost. Use `history_components_frame()` when the
-same Rust-computed records should be flattened into plottable pandas columns
-such as `components.seasonal_total`, `components.weekly`, or
+same fitted records should be flattened into plottable pandas columns such as
+`components.seasonal_total`, `components.weekly`, or
 `components.events.airport_surge`. The methods return one row for every
 training observation and are computed from the fitted coefficients and the
 original covariates. Each row includes:
@@ -277,9 +280,8 @@ one-week-ahead lane nowcasts where the most recent movement carries the holdout.
 Use `changepoint_range=0.8` only when you intentionally want Prophet's stricter
 placement window for an apples-to-apples tuning probe.
 
-The browser Modeling Lab uses the same WASM modeling aliases for
-`piecewise_linear_seasonal` fits and requests the same `components` and
-`historyComponents` payloads. Its Prophet-style debugger flattens every numeric
-component key emitted by Rust, so built-in seasonalities, custom seasonalities,
-event windows, regressors, aggregate non-trend totals, fitted movement, trend
-movement, and residuals are available without a separate Python plotting step.
+The browser Modeling Lab exposes `piecewise_linear_seasonal` as an interactive
+example. It requests forecast components and fitted history diagnostics, then
+plots trend, fitted values, residuals, built-in seasonalities, custom
+seasonalities, event windows, regressors, aggregate non-trend totals, fitted
+movement, and trend movement without requiring a separate Python plotting step.

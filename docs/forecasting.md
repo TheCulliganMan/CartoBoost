@@ -207,8 +207,26 @@ docs pages:
 | Direct and rectified-recursive supervised strategies | Internal candidates for [AutoForecaster](user-guide/forecasting-models/auto-forecaster.md) and shared lag forecasting. |
 | STL/MSTL decomposition hybrids | Model roster entries described from the model guide index when exposed, with benchmark claims kept in [Forecasting Benchmarks](benchmarks/forecasting.md). |
 | Hierarchical reconciliation | Forecast artifact metadata and benchmark orchestration when pickup, dropoff, lane, or total demand must be coherent. |
-| Quantiles, conformal intervals, and rank probability score helpers | Metrics and interval evaluation; competition-specific scoring stays in benchmark adapters. |
+| Quantiles and conformal intervals | `QuantileLoss`, `HuberQuantileLoss`, `CompositeQuantileLoss`, `QuantileRegressorSet`, non-crossing repair, interval coverage, interval width, crossing-rate diagnostics, and serializable conformal calibration live in the Rust core. |
+| Temporal residual correction | `KalmanResidualCorrector`, `StateFilter`, and `StateCorrectedBooster` apply predict-before-update residual states by origin, destination, corridor, segment, entity family, target family, or time bucket. |
+| Regime-aware uncertainty | `CUSUM`, `PageHinkley`, EWMA volatility, rolling median residuals, rolling MAD residuals, and `RegimeIntervalPolicy` can widen intervals, raise process variance, or lower confidence during detected shifts. |
+| Calibrated forecast events | Probability calibration helpers turn threshold, horizon, failure-risk, or escalation-risk events into bounded probability forecasts with Brier score, log loss, ECE, calibration buckets, and reliability-curve data. |
+| Rank probability score helpers | Metrics and interval evaluation; competition-specific scoring stays in benchmark adapters. |
 | Neural forecasting experts | Optional native-bound wrappers with no public quality claim unless a real benchmark run records commands, settings, timing, and metrics. |
+
+These primitives are generic. A taxi lane forecast may call the state dimensions
+pickup zone, dropoff zone, and pickup-dropoff corridor, but the Rust APIs keep
+the reusable names origin, destination, corridor, segment, entity family, target
+family, and time bucket. Benchmark-specific labels and competition scoring stay
+in benchmark orchestration.
+
+The browser/WASM bundle exposes the same primitive families through
+`runGeotemporalDiagnostics(request)`. The request can include any combination of
+`quantiles`, `residualCorrection`, `regime`, and `calibration` sections. The
+response is JSON-compatible and returns only Rust-computed values: repaired
+quantiles, pinball loss, interval diagnostics, Kalman residual-state
+corrections, CUSUM/Page-Hinkley/EWMA regime signals, regime-adjusted intervals,
+calibration metrics, calibrated probabilities, and probability event labels.
 
 ## Evidence Standard
 

@@ -5,6 +5,13 @@ additive trend, and optional additive seasonality. It is a good fit when a taxi
 series has a stable seasonal pattern and recent observations should update the
 state smoothly instead of forcing abrupt step changes.
 
+## Try It In The Modeling Lab
+
+Open the browser-local example with the bundled taxi lane sample:
+[Auto ETS forecast](/modeling-lab?sample=lane&model=auto_ets&run=forecast).
+Use the model selector to switch between `ETS`, `Seasonal ETS`, and `Auto ETS`
+while keeping the same timestamp, target, series, horizon, and season length.
+
 ## When To Use
 
 Use ETS for hourly pickup counts, fare totals, duration aggregates, or trip

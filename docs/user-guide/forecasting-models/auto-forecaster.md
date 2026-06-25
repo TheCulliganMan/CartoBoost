@@ -2,13 +2,21 @@
 
 `AutoForecaster` is CartoBoost's guarded default forecasting model for taxi
 demand panels. It is not a black-box hyperparameter search. The Python class
-normalizes user-facing configuration, builds a native `AutoForecastModel`, and
-delegates fitting, candidate validation, gating, member refit, prediction, and
-metadata to Rust.
+normalizes user-facing configuration, fits a fixed candidate roster, validates
+members on trailing origins, gates fragile candidates, refits selected members,
+and records prediction metadata.
 
 Use it when you want one reproducible default for pickup-zone, dropoff-zone, or
 pickup-to-dropoff lane demand forecasting and you still want to inspect which
 candidate models earned forecast weight.
+
+## Try It In The Modeling Lab
+
+Open the browser-local example with the bundled varied-route taxi sample:
+[AutoForecaster holdout](/modeling-lab?sample=varied&model=auto_forecast&run=backtest).
+The lab runs the same holdout split across the browser model roster, so the
+default selector can be compared against seasonal, local, lag, and spatial
+alternatives before you commit to a production workflow.
 
 ## Public Contract
 

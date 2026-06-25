@@ -1,8 +1,16 @@
 # CartoBoost Lag
 
 `CartoBoostLagForecaster` is the global supervised forecasting model. It builds
-leakage-safe lag, rolling, calendar, and trend features in Rust, then fits a
-CartoBoost regressor to forecast future horizons.
+leakage-safe lag, rolling, calendar, and trend features, then fits a CartoBoost
+regressor to forecast future horizons.
+
+## Try It In The Modeling Lab
+
+Open the browser-local example with the bundled varied-route taxi sample:
+[CartoBoost Lag holdout](/modeling-lab?sample=varied&model=cartoboost_lag&run=backtest).
+The lab keeps the same holdout split for the roster, so you can compare the
+global lag model against local and spatial models before exporting a Python
+configuration.
 
 ## When To Use
 

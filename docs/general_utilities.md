@@ -1,14 +1,14 @@
 # General Utilities
 
-CartoBoost includes Rust-backed numerical utilities that can be used without
-building a `CartoBoostRegressor` or a forecasting `ForecastFrame`. Use these
-when you have a plain Python sequence, a small spatial interpolation problem, or
-an intermittent-demand sequence and want a direct result.
+CartoBoost includes numerical utilities that can be used without building a
+`CartoBoostRegressor` or a forecasting `ForecastFrame`. Use these when you have
+a plain Python sequence, a small spatial interpolation problem, or an
+intermittent-demand sequence and want a direct result.
 
 These functions are useful for scientific checks and ablations: they let you
-compare a full estimator or forecasting wrapper against the same Rust-native
-building block on a simple taxi-zone sequence, route panel, or coordinate
-interpolation problem.
+compare a full estimator or forecasting wrapper against the same underlying
+method on a simple taxi-zone sequence, route panel, or coordinate interpolation
+problem.
 
 ```python
 import cartoboost as cb
@@ -45,7 +45,7 @@ filtered = forward_ekf(series, reference)
 path = reference_path_viterbi(series, reference)
 ```
 
-Available Rust-backed entry points:
+Available entry points:
 
 | Entry point | Purpose |
 | --- | --- |
@@ -408,8 +408,8 @@ Inputs must be finite and non-negative. The output is a `list[float]` of length
 
 ## Single-Series Forecast Utilities
 
-The same Rust-native local models used by forecasting wrappers can be called on
-plain numeric sequences:
+The same local models used by forecasting wrappers can be called on plain
+numeric sequences:
 
 ```python
 import cartoboost as cb
@@ -447,3 +447,24 @@ forecast = cb.series_forecast(
 | Spatial interpolation from coordinate samples | `ordinary_kriging_predict` |
 | Sparse non-negative demand | `sba_forecast` or `tsb_forecast` |
 | Quick local time-series baseline | `series_forecast` or the named forecast helpers |
+
+## Geotemporal Forecast Utilities
+
+CartoBoost also exposes reusable utilities for geotemporal model diagnostics
+and uncertainty control. These are lower-level primitives for model authors and
+benchmark harnesses when a workflow needs calibrated intervals, residual-state
+correction, regime detection, or probability calibration.
+
+| Primitive family | Use |
+| --- | --- |
+| `QuantileLoss`, `HuberQuantileLoss`, `CompositeQuantileLoss`, `QuantileRegressorSet` | Fit and score calibrated p10/p25/p50/p75/p90-style quantile bundles with non-crossing repair, pinball loss, interval width, coverage, and crossing-rate diagnostics. |
+| `ConformalCalibrator` | Serializable split-conformal residual calibration for interval coverage. |
+| `KalmanResidualCorrector`, `StateFilter`, `StateCorrectedBooster` | Add leakage-safe residual-state corrections after structural booster predictions, using predict-before-update ordering and optional origin, destination, corridor, segment, entity-family, target-family, and time-bucket state keys. |
+| `CUSUM`, `PageHinkley`, `EwmaVolatility`, rolling median residuals, rolling MAD residuals | Detect mean shifts or volatility changes and feed regime-aware interval policies. |
+| `RegimeIntervalPolicy` | Widen intervals, raise process variance, or lower confidence during detected shifts. |
+| `SigmoidCalibrator`, `TemperatureCalibrator`, `IsotonicCalibrator` | Calibrate binary event probabilities with bounded outputs, Brier score, log loss, ECE, calibration buckets, and reliability-curve data. |
+
+Supported event helpers include success within a threshold, event within a
+horizon, failure risk, and escalation risk. Use them when the forecasting
+question needs a calibrated probability such as "pickup demand exceeds this
+threshold within the next six hours" rather than only a point forecast.

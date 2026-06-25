@@ -4,6 +4,13 @@ Theta models provide lightweight trend extrapolation for local forecasting.
 They are useful when taxi demand has a clear local level and drift, but you do
 not need the larger ARIMA or lag-model surface.
 
+## Try It In The Modeling Lab
+
+Open the browser-local example with the bundled taxi lane sample:
+[Optimized Theta forecast](/modeling-lab?sample=lane&model=optimized_theta&run=forecast).
+Run a holdout backtest from the same page to compare theta against seasonal
+naive, ETS, ARIMA, Kalman, and lag models under one split.
+
 ## When To Use
 
 Use theta forecasting for pickup counts, fares, trip duration, or trip distance
@@ -79,7 +86,7 @@ print(optimized_forecast.predictions())
 ## ForecastFrame Example
 
 Use a `ForecastFrame` for taxi panels. Each `PULocationID` is fit as its own
-local series by the Rust forecasting core.
+local series.
 
 ```python
 from cartoboost.forecasting import ForecastFrame, OptimizedThetaForecaster
