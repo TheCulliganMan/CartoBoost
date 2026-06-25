@@ -16,9 +16,12 @@ from cartoboost.forecasting import (
     CartoBoostLagForecaster,
     ForecastFrame,
     ForecastMetricSet,
+    KrigingForecaster,
     NaiveForecaster,
     OptimizedThetaForecaster,
+    PiecewiseLinearSeasonalForecaster,
     SeasonalNaiveForecaster,
+    SpatialPiecewiseKrigingForecaster,
     ThetaForecaster,
     WeightedEnsembleForecaster,
 )
@@ -48,7 +51,7 @@ def main() -> int:
         raise ValueError("--folds must be positive")
 
     datasets = _fixtures(days=args.days, panel_series=args.panel_series)
-    model_names = list(_models().keys())
+    model_names = sorted({name for dataset in datasets for name in _models(dataset.frame).keys()})
     payload: dict[str, Any] = {
         "created_at": datetime.now(timezone.utc).isoformat(),
         "cartoboost_version": __version__,
@@ -140,6 +143,14 @@ def _fixtures(days: int, panel_series: int) -> list[BenchmarkDataset]:
             _noisy_panel_fixture(days, panel_series),
             "Panel demand with deterministic bursts, lane heterogeneity, and structured noise.",
         ),
+        BenchmarkDataset(
+            "spatial_piecewise_kriging_panel",
+            _spatial_piecewise_kriging_fixture(days, panel_series),
+            (
+                "Taxi lane panel with temporal trend, known spatial pressure, "
+                "and coordinate-structured residuals."
+            ),
+        ),
     ]
 
 
@@ -213,6 +224,40 @@ def _noisy_panel_fixture(days: int, series_count: int) -> ForecastFrame:
     )
 
 
+def _spatial_piecewise_kriging_fixture(days: int, series_count: int) -> ForecastFrame:
+    rows = []
+    grid_width = int(np.ceil(np.sqrt(series_count)))
+    for idx in range(series_count):
+        x = float(idx % grid_width)
+        y = float(idx // grid_width)
+        lane = f"PULocationID_{140 + idx}->DOLocationID_{220 + idx}"
+        spatial_residual = 1.8 * x - 1.1 * y + 0.7 * np.sin(x + y)
+        for day in range(days):
+            weekly = 2.5 * np.sin(2.0 * np.pi * (day + idx % 3) / 7.0)
+            zone_pressure = 4.0 + 0.15 * x + 0.05 * y + 0.6 * np.sin(2.0 * np.pi * day / 14.0)
+            rows.append(
+                {
+                    "lane_id": lane,
+                    "date": pd.Timestamp("2024-01-01") + pd.Timedelta(days=day),
+                    "loads": float(
+                        40.0 + 0.08 * day + weekly + 1.2 * zone_pressure + spatial_residual
+                    ),
+                    "longitude": -73.99 + x * 0.015,
+                    "latitude": 40.70 + y * 0.015,
+                    "zone_pressure": float(zone_pressure),
+                }
+            )
+    return ForecastFrame.from_pandas(
+        pd.DataFrame(rows),
+        timestamp_col="date",
+        target_col="loads",
+        series_id_col="lane_id",
+        freq="D",
+        static_covariates=["longitude", "latitude"],
+        known_future_covariates=["zone_pressure"],
+    )
+
+
 def _score_dataset(
     frame: ForecastFrame,
     *,
@@ -260,6 +305,9 @@ def _score_split(frame: ForecastFrame, *, cutoff: pd.Timestamp, horizon: int) ->
         target_col=frame.target_col,
         series_id_col=frame.series_id_col,
         freq=frame.freq,
+        static_covariates=frame.static_covariates,
+        known_future_covariates=frame.known_future_covariates,
+        historical_covariates=frame.historical_covariates,
     )
     actual = test.copy()
     actual["series_id"] = (
@@ -275,7 +323,7 @@ def _score_split(frame: ForecastFrame, *, cutoff: pd.Timestamp, horizon: int) ->
         "test_min_timestamp": test[frame.timestamp_col].min().strftime("%Y-%m-%d"),
         "models": {},
     }
-    for name, model in _models().items():
+    for name, model in _models(frame).items():
         split_payload["models"][name] = _score_model(
             name,
             model,
@@ -284,6 +332,11 @@ def _score_split(frame: ForecastFrame, *, cutoff: pd.Timestamp, horizon: int) ->
             train[frame.target_col],
             horizon,
         )
+    _add_split_baseline_delta_metadata(
+        split_payload["models"],
+        baseline="piecewise_linear_seasonal",
+    )
+    _add_split_baseline_delta_metadata(split_payload["models"], baseline="seasonal_naive")
     return split_payload
 
 
@@ -303,6 +356,7 @@ def _score_model(
         predict_started = perf_counter()
         forecast = _forecast_to_frame(model.predict(horizon))
         predict_seconds = perf_counter() - predict_started
+        model_metadata = _model_metadata(model)
         merged = actual[["series_id", "timestamp", "horizon", "actual"]].merge(
             forecast[["series_id", "timestamp", "horizon", "mean"]],
             on=["series_id", "timestamp", "horizon"],
@@ -325,6 +379,7 @@ def _score_model(
             "predict_seconds": predict_seconds,
             "total_seconds": perf_counter() - started,
             "n_predictions": int(len(merged)),
+            "metadata": model_metadata,
             **{
                 metric: float(metrics[metric])
                 for metric in ("mae", "rmse", "mase", "wape", "smape", "bias")
@@ -341,7 +396,7 @@ def _score_model(
         }
 
 
-def _models() -> dict[str, Any]:
+def _models(frame: ForecastFrame | None = None) -> dict[str, Any]:
     cartoboost = CartoBoostLagForecaster(
         lags=[1, 2, 7, 14, 28],
         rolling_windows=[7, 14, 28],
@@ -357,9 +412,14 @@ def _models() -> dict[str, Any]:
             "splitters": ["axis"],
         },
     )
-    return {
+    models: dict[str, Any] = {
         "naive": NaiveForecaster(),
         "seasonal_naive": SeasonalNaiveForecaster(season_length=7),
+        "piecewise_linear_seasonal": PiecewiseLinearSeasonalForecaster(
+            weekly_fourier_order=3,
+            auto_yearly_seasonality=False,
+            auto_daily_seasonality=False,
+        ),
         "theta": ThetaForecaster(season_length=7),
         "optimized_theta": OptimizedThetaForecaster(season_length=7),
         "cartoboost_lag": cartoboost,
@@ -368,6 +428,66 @@ def _models() -> dict[str, Any]:
             weights={"theta": 0.7, "naive": 0.3},
         ),
     }
+    coordinates = _coordinates_from_frame(frame)
+    if coordinates:
+        models["kriging"] = KrigingForecaster(
+            coordinates=coordinates,
+            range=1.0,
+            nugget=1.0e-6,
+        )
+        models["spatial_piecewise_kriging_hybrid"] = SpatialPiecewiseKrigingForecaster(
+            coordinates=coordinates,
+            mode="hybrid",
+            spatial_regressors=["zone_pressure"]
+            if frame is not None and "zone_pressure" in frame.known_future_covariates
+            else (),
+            range=1.0,
+            nugget=1.0e-6,
+            residual_shrinkage=1.0,
+        )
+    return models
+
+
+def _coordinates_from_frame(frame: ForecastFrame | None) -> dict[str, tuple[float, float]]:
+    if frame is None or frame.series_id_col is None:
+        return {}
+    if not {"longitude", "latitude"} <= set(frame.static_covariates):
+        return {}
+    data = frame.to_pandas()
+    coordinates = {}
+    for series_id, group in data.groupby(frame.series_id_col, sort=True):
+        first = group.iloc[0]
+        coordinates[str(series_id)] = (float(first["longitude"]), float(first["latitude"]))
+    return coordinates
+
+
+def _model_metadata(model: Any) -> dict[str, Any]:
+    try:
+        metadata = model.get_metadata()
+    except Exception:
+        return {}
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def _add_split_baseline_delta_metadata(
+    models: dict[str, dict[str, Any]],
+    *,
+    baseline: str,
+) -> None:
+    baseline_metrics = models.get(baseline)
+    if not baseline_metrics or baseline_metrics.get("status") != "ok":
+        return
+    for model_name, metrics in models.items():
+        if model_name == baseline or metrics.get("status") != "ok":
+            continue
+        deltas = {}
+        for metric in ("rmse", "mae", "wape"):
+            if metric in metrics and metric in baseline_metrics:
+                deltas[metric] = float(metrics[metric] - baseline_metrics[metric])
+        if deltas:
+            metadata = metrics.setdefault("metadata", {})
+            baseline_deltas = metadata.setdefault("baseline_deltas", {})
+            baseline_deltas[baseline] = deltas
 
 
 def _forecast_to_frame(result: Any) -> pd.DataFrame:
@@ -388,6 +508,11 @@ def _model_settings() -> dict[str, Any]:
     return {
         "naive": {},
         "seasonal_naive": {"season_length": 7},
+        "piecewise_linear_seasonal": {
+            "weekly_fourier_order": 3,
+            "auto_yearly_seasonality": False,
+            "auto_daily_seasonality": False,
+        },
         "theta": {"season_length": 7},
         "optimized_theta": {"season_length": 7, "default_grid": True},
         "cartoboost_lag": {
@@ -405,6 +530,14 @@ def _model_settings() -> dict[str, Any]:
             },
         },
         "weighted_ensemble": {"weights": {"theta": 0.7, "naive": 0.3}},
+        "kriging": {"range": 1.0, "nugget": 1.0e-6},
+        "spatial_piecewise_kriging_hybrid": {
+            "mode": "hybrid",
+            "spatial_regressors": ["zone_pressure"],
+            "range": 1.0,
+            "nugget": 1.0e-6,
+            "residual_shrinkage": 1.0,
+        },
     }
 
 
@@ -431,7 +564,23 @@ def _aggregate_dataset_scores(split_results: dict[str, Any]) -> dict[str, Any]:
             )
             if any(metric in row for row in rows)
         }
+    _add_baseline_deltas(aggregate, baseline="piecewise_linear_seasonal")
+    _add_baseline_deltas(aggregate, baseline="seasonal_naive")
     return aggregate
+
+
+def _add_baseline_deltas(aggregate: dict[str, dict[str, float]], *, baseline: str) -> None:
+    baseline_metrics = aggregate.get(baseline)
+    if not baseline_metrics:
+        return
+    for model, metrics in aggregate.items():
+        if model == baseline:
+            continue
+        for metric in ("rmse", "mae", "wape"):
+            if metric in metrics and metric in baseline_metrics:
+                metrics[f"{metric}_delta_vs_{baseline}"] = float(
+                    metrics[metric] - baseline_metrics[metric]
+                )
 
 
 def _summary(payload: dict[str, Any]) -> dict[str, Any]:

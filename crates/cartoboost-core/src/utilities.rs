@@ -1,5 +1,6 @@
 use crate::{CartoBoostError, Result};
 use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy)]
 pub struct LocalLinearKalmanConfig {
@@ -120,7 +121,7 @@ pub enum IntermittentDemandMethod {
     Tsb,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct OrdinaryKrigingConfig {
     pub range: f64,
     pub nugget: f64,
@@ -189,7 +190,7 @@ pub struct OrdinaryKrigingSystem {
     drift_terms: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum KrigingVariogramModel {
     Exponential,
     Gaussian,
@@ -197,7 +198,7 @@ pub enum KrigingVariogramModel {
     Linear,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum KrigingDrift {
     Ordinary,
     Linear,

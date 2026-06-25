@@ -29,11 +29,11 @@ tabular, temporal, spatial, and sparse-set regression.
 | L1 regression | `loss="l1"`, `"mae"`, or `"absolute_error"` | Robust median-like fits with constant leaves. |
 | Huber regression | `loss="huber"`, `huber_delta=...` | Robust squared-error compromise with constant leaves. |
 | Log-L2 regression | `loss="log_l2"`, `log_offset=1.0` | Positive skewed taxi targets such as fare or duration. |
-| Quantile regression | `loss="quantile"` or `"pinball"`, `quantile_alpha=...` | Conditional quantiles for delay or fare-risk analysis. |
+| Quantile regression | `loss="quantile"` or `"pinball"`, `quantile_alpha=...`; Rust `QuantileRegressorSet` for p10-p90 bundles | Conditional quantiles for delay or fare-risk analysis. |
 | Constant leaves | `leaf_predictor="constant"` | Default tree leaf behavior. |
 | Linear leaves | `leaf_predictor="linear"`, `linear_leaf_features=[...]` | Local linear residual trends inside tree regions. |
 | Sample weights | `fit(..., sample_weight=...)` | Weighted studies, rebalancing, or survey-style emphasis. |
-| Monotonic constraints | `monotonic_constraints=[-1, 0, 1, ...]` | Enforce known directional effects in supported fits. |
+| Monotonic and interaction constraints | `monotonic_constraints=[-1, 0, 1, ...]`; Rust `BoosterConfig.interaction_constraints` | Enforce known directional effects and allowed branch-level feature families in supported fits. |
 | Additive values | `predict_additive_values(...)` | Per-tree additive contributions whose row sum matches prediction. |
 | sklearn compatibility | `get_params`, `set_params`, `clone`, `Pipeline`, `GridSearchCV` | Standard estimator workflows. |
 | Artifacts | `save`, `load`, `save_weights`, `load_weights` | Versioned model and weights artifacts. |
@@ -146,7 +146,7 @@ relationships are part of the model, especially directed pickup-dropoff effects.
 
 | Feature | Public surface | Notes |
 | --- | --- | --- |
-| Node2Vec encoder | `Node2VecEncoder`, `Node2VecFeatureEncoder`, `Node2VecConfig` | Directed/weighted random-walk embeddings with p/q transition bias. |
+| Node2Vec encoder | `Node2VecEncoder`, `Node2VecFeatureEncoder`, `Node2VecConfig`, `AliasSampler`, `RandomWalkGenerator`, `Node2VecTrainer`, `EdgeEmbeddingModel`, `EmbeddingFeatureTransformer` | Directed/weighted random-walk embeddings with p/q transition bias, alias sampling, deterministic Rayon-backed seeded walks, skip-gram training, and edge-row embedding features. |
 | GraphSAGE encoder | `GraphSageEncoder`, `GraphSageFeatureEncoder`, `GraphSageConfig` | Homogeneous graph embeddings with node attributes. |
 | HeteroGraphSAGE encoder | `HeteroGraphSageEncoder`, `HeteroGraphSageFeatureEncoder`, `HeteroGraphSageConfig` | Typed-edge graph embeddings. |
 | HinSAGE encoder | `HinSageEncoder`, `HinSageFeatureEncoder`, `HinSageConfig` | Typed-node and typed-relation graph surface with schema validation. |
@@ -158,6 +158,7 @@ relationships are part of the model, especially directed pickup-dropoff effects.
 | Standalone link predictors | `Node2VecLinkPredictor`, `GraphSageLinkPredictor`, `HeteroGraphSageLinkPredictor`, `HinSageLinkPredictor` | Link scoring plus reports. |
 | Link metrics | `binary_auc`, `binary_average_precision`, `top_k_metrics`, `mean_reciprocal_rank`, `link_prediction_report` | Ranking and binary link-prediction diagnostics. |
 | Directional features | `DirectionalFeature`, `DirectionalityConfig` | Preserves `source -> target` semantics and reverse-flow contrasts. |
+| Graph regularization and rules | `CsrGraph`, `GraphLaplacian`, `GraphSmoother`, `GraphRegularizedBooster`, `GraphSplitRegularization`, `GraphLeafSmoothing`, `SymbolicRelationSet`, `RuleCompiler`, `MonotoneConstraintSet`, `InteractionConstraintSet` | Supplied sparse graphs, symbolic relation penalties, row-graph split scoring, graph-smoothed constant leaves, deterministic rule features, and split constraint checks for smoothing residuals, leaf values, and graph-aware predictions. |
 
 See [Graph Models And Features](graph-features.md).
 
@@ -173,8 +174,10 @@ aligned candidate blending. Evaluation helpers include out-of-time, temporal
 blocked, spatial blocked, spatial buffered, environmental blocked, spatial
 grouped, and grouped blocked splits; pinball loss; logloss; ROC-AUC; PR-AUC;
 Brier score; ECE calibration error; NDCG; MAP; MRR; interval diagnostics;
-residual Moran's I; spatial CV gap; jitter volatility; and conformal residual
-helpers.
+CUSUM and Page-Hinkley regime signals; EWMA volatility; regime interval
+policies; rolling median and MAD residuals; leakage-safe Kalman residual state
+correction; residual Moran's I; spatial CV gap; jitter volatility; and
+conformal residual helpers.
 
 Forecasting is Rust-native. Python classes validate data and delegate model
 training, prediction, rolling-origin backtesting, metrics, and artifact behavior

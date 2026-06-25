@@ -20,6 +20,7 @@ model modes.
 | [Kalman](kalman.md) | Track noisy local level and local trend over time. | Includes state diagnostics and visualization examples. |
 | [Piecewise Linear Seasonal](/docs/user-guide/forecasting-models/piecewise-linear-seasonal) | Fit interpretable trend, changepoint, seasonality, event, and regressor components without Stan. | Rust-native API exposed through Python and WASM as `piecewise_linear_seasonal`. |
 | [Kriging](kriging.md) | Borrow signal across pickup-zone or route coordinates. | Useful for coordinate-aware panel forecasting. |
+| `SpatialPiecewiseKrigingForecaster` | Fuse Prophet-shaped CartoBoost temporal structure with spatial kriging. | Rust-native residual kriging, kriged-regressor, and hybrid modes; not external Prophet compatibility. |
 | [CartoBoost Lag](cartoboost-lag.md) | Learn one supervised lag model across many related series. | Use for pickup-zone, dropoff-zone, and lane-level panels. |
 | `AutoStatsBank` | Validate a deterministic Rust-native statistical expert bank. | Public wrapper for generic statistical candidate selection; benchmark labels stay in benchmark harnesses. |
 | `CrostonForecaster`, `SbaForecaster`, `TsbForecaster` | Forecast sparse non-negative taxi-demand series with fixed intermittent-demand methods. | Use when zeros are meaningful no-pickup periods rather than missing rows. |
@@ -41,6 +42,7 @@ Choose the model whose assumptions match the signal you can defend:
 | You need interpretable changepoints, Fourier seasonalities, event windows, known future regressors, quantiles, and component decomposition in one local model. | [Piecewise linear seasonal](/docs/user-guide/forecasting-models/piecewise-linear-seasonal) | Estimates the additive or multiplicative component path in Rust, keeps fitting deterministic and fast, and avoids Stan/CmdStan runtime costs. |
 | You need a forecast figure that matches Prophet's plotting surface for a Prophet-shaped result. | [Plotting](../../plotting.md) | Uses the same observed-point, forecast-line, capacity, floor, interval, axis, and legend behavior as `prophet.plot.plot`. |
 | Nearby zones, route midpoints, or residual surfaces should be spatially related. | Kriging | Uses coordinate distance and a variogram to borrow cross-series signal. |
+| Pickup/dropoff zones have both temporal changepoints and spatial residual structure. | `SpatialPiecewiseKrigingForecaster` | Fits the Rust-native piecewise seasonal base, kriges cutoff-safe residual or regressor surfaces, and returns base mean, correction, kriging variance, neighbors, metadata, and components in result JSON. |
 | Many related zones or lanes share lag, rolling, calendar, or trend structure. | CartoBoost lag | Learns one supervised model from many aligned panel examples. |
 | Pickup demand is sparse with many true zero periods. | Croston, SBA, or TSB | Uses fixed Rust-native intermittent-demand smoothing instead of generic trend extrapolation. |
 | A local statistical bank should choose among reusable non-benchmark candidates. | AutoStatsBank | Runs Rust-native validation over a deterministic statistical expert bank. |
@@ -99,6 +101,37 @@ component contributions, and fitted historical trend/seasonality diagnostics.
 The implementation is Rust-native and is also exposed to the browser through
 the `piecewise_linear_seasonal` WASM model. There is no `prophet` alias in
 reusable CartoBoost APIs.
+
+Use `SpatialPiecewiseKrigingForecaster` when that Prophet-shaped CartoBoost
+base should borrow spatial signal across stable taxi coordinates. Configure
+`mode="residual_kriging"` to fit the temporal base, compute in-sample
+cutoff-safe residuals by series, and krige residual corrections for each
+horizon. Use `mode="kriged_regressors"` when known spatial covariates such as
+pickup-zone traffic density should be interpolated into piecewise seasonal
+regressor columns. Use `mode="hybrid"` for both mechanisms. The Rust result
+JSON includes `prediction`, `base_mean`, `spatial_correction`,
+`kriging_variance`, `selected_neighbors`, component decomposition, and metadata
+with cutoffs and variogram settings. This is Prophet-shaped CartoBoost
+modeling; it does not fork Prophet, call Stan, or provide Prophet compatibility.
+
+Deterministic synthetic benchmark example:
+
+```bash
+uv run --group dev python scripts/forecasting_benchmark.py \
+  --days 180 \
+  --horizon 7 \
+  --folds 1 \
+  --panel-series 6 \
+  --output target/spatial_piecewise_kriging_benchmark.json
+```
+
+The `spatial_piecewise_kriging_panel` run compares Naive, SeasonalNaive,
+PiecewiseLinearSeasonal, KrigingForecaster, and the hybrid under the same
+rolling-origin split. Use the artifact's `aggregate` table for RMSE, MAE, WAPE,
+fit time, prediction time, and baseline deltas. Use the forecast result JSON
+columns `selected_neighbors`, `kriging_variance`, and `component_decomposition`
+for spatial and component diagnostics before plotting metric comparisons or
+coordinate maps.
 
 ## Shared Result Shape
 

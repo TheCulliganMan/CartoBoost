@@ -31,7 +31,11 @@ pub use graphsage::{
     HeteroGraphSageEncoderArtifact, HeteroTypedEdge, HinSageConfig, HinSageEncoder,
     HinSageEncoderArtifact, HinSageGraph, HomogeneousGraph,
 };
-pub use node2vec::{Node2VecConfig, Node2VecEncoder, Node2VecEncoderArtifact, Node2VecLoss};
+pub use node2vec::{
+    AliasSampler, EdgeEmbeddingFeatures, EdgeEmbeddingModel, EmbeddingFeatureTransformer,
+    Node2VecConfig, Node2VecEncoder, Node2VecEncoderArtifact, Node2VecLoss, Node2VecTrainer,
+    RandomWalkGenerator,
+};
 pub use standalone::{
     GraphRegressionMode, GraphSageLinkPredictor, GraphSageLinkPredictorArtifact,
     GraphSageRegressor, GraphSageRegressorArtifact, HeteroGraphSageLinkPredictor,

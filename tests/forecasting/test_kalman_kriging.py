@@ -1,3 +1,7 @@
+import importlib.util
+import sys
+from pathlib import Path
+
 import pytest
 from cartoboost.forecasting import AutoKalmanForecaster as PublicAutoKalmanForecaster
 from cartoboost.forecasting import (
@@ -8,12 +12,16 @@ from cartoboost.forecasting import KrigingForecaster as PublicKrigingForecaster
 from cartoboost.forecasting import (
     LocalLevelKalmanForecaster as PublicLocalLevelKalmanForecaster,
 )
+from cartoboost.forecasting import (
+    SpatialPiecewiseKrigingForecaster as PublicSpatialPiecewiseKrigingForecaster,
+)
 from cartoboost.forecasting.local import (
     AutoKalmanForecaster,
     AutoLocalLevelKalmanForecaster,
     KalmanForecaster,
     KrigingForecaster,
     LocalLevelKalmanForecaster,
+    SpatialPiecewiseKrigingForecaster,
 )
 
 
@@ -23,6 +31,7 @@ def test_models_are_public_forecasting_imports():
     assert PublicKalmanForecaster is KalmanForecaster
     assert PublicLocalLevelKalmanForecaster is LocalLevelKalmanForecaster
     assert PublicKrigingForecaster is KrigingForecaster
+    assert PublicSpatialPiecewiseKrigingForecaster is SpatialPiecewiseKrigingForecaster
 
 
 def test_kalman_converts_panel_and_delegates_to_native(install_fake_native):
@@ -277,3 +286,130 @@ def test_kriging_rejects_bad_mapping_coordinate_shape(install_fake_native):
 
     with pytest.raises(ValueError, match="series_id to \\(x, y\\)"):
         KrigingForecaster(coordinates={"pickup_1": (0.0, 0.0, 1.0)})
+
+
+def test_spatial_piecewise_kriging_delegates_to_native(install_fake_native):
+    native = install_fake_native("SpatialPiecewiseKrigingForecaster")
+
+    result = (
+        SpatialPiecewiseKrigingForecaster(
+            coordinates={"pickup_1": (0.0, 0.0), "pickup_2": (1.0, 0.0)},
+            mode="hybrid",
+            spatial_regressors=["traffic_density"],
+            range=2.0,
+            nugget=0.05,
+            residual_shrinkage=0.8,
+        )
+        .fit({"pickup_1": [10, 11], "pickup_2": [20, 21]})
+        .predict(1)
+    )
+
+    assert result == {"args": (1,), "kwargs": {}}
+    assert native.calls[0] == (
+        "init",
+        {
+            "coordinates": [("pickup_1", 0.0, 0.0), ("pickup_2", 1.0, 0.0)],
+            "mode": "hybrid",
+            "spatial_regressors": ["traffic_density"],
+            "range": 2.0,
+            "nugget": 0.05,
+            "sill": 1.0,
+            "variogram_model": "exponential",
+            "drift": "ordinary",
+            "anisotropy_angle_degrees": 0.0,
+            "anisotropy_scaling": 1.0,
+            "max_neighbors": None,
+            "min_neighbors": 1,
+            "max_distance": None,
+            "residual_shrinkage": 0.8,
+            "allow_neighbor_fallback": False,
+            "piecewise_config_json": None,
+        },
+    )
+
+
+def test_spatial_piecewise_benchmark_reports_required_roster_and_deltas():
+    script_path = Path(__file__).resolve().parents[2] / "scripts" / "forecasting_benchmark.py"
+    spec = importlib.util.spec_from_file_location("forecasting_benchmark", script_path)
+    assert spec is not None and spec.loader is not None
+    forecasting_benchmark = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = forecasting_benchmark
+    spec.loader.exec_module(forecasting_benchmark)
+
+    frame = forecasting_benchmark._spatial_piecewise_kriging_fixture(days=60, series_count=4)
+    required = {
+        "naive",
+        "seasonal_naive",
+        "piecewise_linear_seasonal",
+        "kriging",
+        "spatial_piecewise_kriging_hybrid",
+    }
+    assert required <= set(forecasting_benchmark._models(frame))
+    assert forecasting_benchmark._coordinates_from_frame(frame)
+
+    aggregate = forecasting_benchmark._aggregate_dataset_scores(
+        {
+            "rolling_origin_1": {
+                "models": {
+                    "piecewise_linear_seasonal": {
+                        "status": "ok",
+                        "rmse": 2.0,
+                        "mae": 1.5,
+                        "wape": 0.03,
+                        "fit_seconds": 0.1,
+                        "predict_seconds": 0.01,
+                    },
+                    "seasonal_naive": {
+                        "status": "ok",
+                        "rmse": 3.0,
+                        "mae": 2.0,
+                        "wape": 0.04,
+                        "fit_seconds": 0.01,
+                        "predict_seconds": 0.01,
+                    },
+                    "spatial_piecewise_kriging_hybrid": {
+                        "status": "ok",
+                        "rmse": 1.8,
+                        "mae": 1.3,
+                        "wape": 0.025,
+                        "fit_seconds": 0.2,
+                        "predict_seconds": 0.02,
+                    },
+                }
+            }
+        }
+    )
+    hybrid = aggregate["spatial_piecewise_kriging_hybrid"]
+    assert hybrid["rmse"] < aggregate["piecewise_linear_seasonal"]["rmse"]
+    assert "rmse_delta_vs_piecewise_linear_seasonal" in hybrid
+    assert "fit_seconds" in hybrid
+    assert "predict_seconds" in hybrid
+
+    split_models = {
+        "piecewise_linear_seasonal": {
+            "status": "ok",
+            "rmse": 2.0,
+            "mae": 1.5,
+            "wape": 0.03,
+            "metadata": {},
+        },
+        "spatial_piecewise_kriging_hybrid": {
+            "status": "ok",
+            "rmse": 1.8,
+            "mae": 1.3,
+            "wape": 0.025,
+            "metadata": {},
+        },
+    }
+    forecasting_benchmark._add_split_baseline_delta_metadata(
+        split_models,
+        baseline="piecewise_linear_seasonal",
+    )
+    baseline_deltas = split_models["spatial_piecewise_kriging_hybrid"]["metadata"][
+        "baseline_deltas"
+    ]["piecewise_linear_seasonal"]
+    assert baseline_deltas == {
+        "rmse": pytest.approx(-0.2),
+        "mae": pytest.approx(-0.2),
+        "wape": pytest.approx(-0.005),
+    }

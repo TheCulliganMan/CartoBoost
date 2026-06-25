@@ -152,6 +152,8 @@ impl Classifier {
             fuzzy_kernel: self.config.fuzzy_kernel,
             loss: LossConfig::L2,
             monotonic_constraints: Vec::new(),
+            interaction_constraints: Vec::new(),
+            graph_split_regularization: None,
         };
         let fit_context = builder.fit_context(x);
 
@@ -517,6 +519,9 @@ impl From<&ClassifierConfig> for ClassifierTrainingConfigMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::objectives::{
+        LogisticBoostingObjective, ObjectiveTask, PredictionTransformKind, ProbabilityBooster,
+    };
 
     #[test]
     fn binary_classifier_learns_separable_boundary_and_roundtrips() {
@@ -545,6 +550,49 @@ mod tests {
         let loaded = ClassifierModel::load(&path).unwrap();
 
         assert_eq!(loaded.predict(&x).unwrap(), y);
+    }
+
+    #[test]
+    fn probability_booster_alias_returns_bounded_binary_probabilities() {
+        let objective = LogisticBoostingObjective::default();
+        assert_eq!(objective.task(), ObjectiveTask::BinaryClassification);
+        assert_eq!(
+            objective.prediction_transform(),
+            PredictionTransformKind::Sigmoid
+        );
+
+        let x = Dataset::from_rows(vec![
+            vec![0.0],
+            vec![0.5],
+            vec![1.0],
+            vec![2.0],
+            vec![2.5],
+            vec![3.0],
+        ])
+        .unwrap();
+        let y = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+        let booster = ProbabilityBooster::new(ClassifierConfig {
+            n_estimators: 10,
+            learning_rate: 0.4,
+            max_depth: 1,
+            min_samples_leaf: 1,
+            min_gain: 0.0,
+            splitters: vec![SplitterKind::Axis],
+            ..ClassifierConfig::default()
+        });
+
+        let model = booster.fit(&x, &y, None).unwrap();
+        let probabilities = model.predict_proba(&x).unwrap();
+
+        assert_eq!(probabilities.len(), y.len());
+        assert!(probabilities.iter().all(|row| {
+            row.len() == 2
+                && row
+                    .iter()
+                    .all(|probability| (0.0..=1.0).contains(probability))
+                && (row[0] + row[1] - 1.0).abs() < 1.0e-12
+        }));
+        assert!(probabilities[0][1] < probabilities[5][1]);
     }
 
     #[test]

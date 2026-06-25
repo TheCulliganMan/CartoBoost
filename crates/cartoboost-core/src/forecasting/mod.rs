@@ -32,6 +32,7 @@ mod quantiles;
 mod rank_probability;
 mod reconciliation;
 mod registry;
+mod residual_correction;
 mod result;
 mod schema;
 mod sequence;
@@ -54,7 +55,12 @@ pub use classical_bank::{
 pub use config::{ForecastModelConfig, ForecastingConfig};
 pub use conformal::{ConformalCalibrator, ConformalInterval};
 pub use decomposition::{MSTLCartoBoostForecaster, STLCartoBoostForecaster};
-pub use diagnostics::{ForecastDiagnostics, SeriesDiagnostics};
+pub use diagnostics::{
+    regime_adjusted_intervals, rolling_mad_residual, rolling_median_residual,
+    widen_interval_for_regime, CusumConfig, EwmaVolatility, EwmaVolatilityConfig,
+    ForecastDiagnostics, PageHinkley, PageHinkleyConfig, RegimeIntervalAdjustment,
+    RegimeIntervalPolicy, RegimeSignal, SeriesDiagnostics, CUSUM,
+};
 pub use direct::{
     CartoBoostDirectForecaster, DirectForecastStrategy, RectifiedRecursiveForecaster,
 };
@@ -93,7 +99,9 @@ pub use local::{
     PiecewiseLinearGrowth, PiecewiseLinearRegressorStandardization, PiecewiseLinearSeasonalConfig,
     PiecewiseLinearSeasonalForecaster, PiecewiseLinearSeasonality,
     PiecewiseLinearTrendUncertaintyPolicy, SeasonalNaiveForecaster,
-    SeasonalWindowAverageForecaster, ThetaForecaster, ThetaSeasonality, WindowAverageForecaster,
+    SeasonalWindowAverageForecaster, SpatialPiecewiseKrigingConfig,
+    SpatialPiecewiseKrigingForecaster, SpatialPiecewiseKrigingMode, ThetaForecaster,
+    ThetaSeasonality, WindowAverageForecaster,
 };
 pub use metrics::{
     evaluate_forecast, evaluate_forecast_with_training, evaluate_m_competition_metrics,
@@ -101,12 +109,25 @@ pub use metrics::{
 };
 pub use mstl::MSTLDecomposition;
 pub use objective::ForecastObjective;
-pub use probabilistic::{ProbabilisticDirectForecaster, ProbabilisticForecaster};
-pub use quantiles::{pinball_loss, repair_non_crossing_quantiles, QuantileForecast};
+pub use probabilistic::{
+    ProbabilisticDirectForecaster, ProbabilisticForecaster, QuantileRegressorSet,
+    QuantileRegressorSetConfig,
+};
+pub use quantiles::{
+    crossing_rate, default_quantile_levels, interval_coverage, interval_diagnostics,
+    mean_interval_width, pinball_loss, repair_non_crossing_quantiles, IntervalDiagnostics,
+    QuantileForecast, DEFAULT_QUANTILE_LEVELS,
+};
 pub use rank_probability::{rank_probability_score, RankProbabilityForecast};
 pub use reconciliation::{proportional_total_reconciliation, Reconciler, ReconciliationMethod};
 pub use registry::{ForecastModelSpec, ForecastRegistry, RegisterMode, RegisteredForecastModel};
-pub use result::{ForecastIntervalPrediction, ForecastPrediction, ForecastResult};
+pub use residual_correction::{
+    KalmanResidualCorrector, ResidualStateKey, StateCorrectedBooster, StateCorrection, StateFilter,
+    StateObservation, StatePrediction,
+};
+pub use result::{
+    ForecastIntervalPrediction, ForecastPrediction, ForecastPredictionDetail, ForecastResult,
+};
 pub use schema::{ForecastFrame, ForecastFrameMetadata, ForecastRow, SINGLE_SERIES_ID};
 pub use sequence::{
     forward_ekf, generate_group_oof_candidate_rows, missing_target_continuation,

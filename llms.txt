@@ -38,6 +38,21 @@ modeling.
   `history_components_json()` to inspect fitted historical trend, trend
   movement, seasonality, event, regressor, and residual values before
   rolling-origin holdouts.
+- `cartoboost.forecasting.SpatialPiecewiseKrigingForecaster` is Rust-native
+  Prophet-shaped CartoBoost modeling fused with ordinary kriging. Use it for
+  taxi pickup/dropoff panels with stable coordinates when piecewise seasonal
+  base forecasts need cutoff-safe kriged regressors, residual kriging, or the
+  hybrid mode. Result JSON includes final prediction, base mean, spatial
+  correction, kriging variance, selected neighbors, components, and metadata;
+  it is not external Prophet compatibility and does not use Stan.
+- Spatial piecewise kriging benchmark evidence is produced by
+  `uv run --group dev python scripts/forecasting_benchmark.py --days 180
+  --horizon 7 --folds 1 --panel-series 6 --output
+  target/spatial_piecewise_kriging_benchmark.json`; the
+  `spatial_piecewise_kriging_panel` aggregate compares Naive, SeasonalNaive,
+  PiecewiseLinearSeasonal, KrigingForecaster, and
+  `spatial_piecewise_kriging_hybrid` under the same rolling-origin split with
+  RMSE, MAE, WAPE, fit/predict timing, and baseline deltas.
 - AutoForecaster guide: ./docs/user-guide/forecasting-models/auto-forecaster.md
 - Piecewise linear seasonal guide: ./docs/user-guide/forecasting-models/piecewise-linear-seasonal.md
 - ARIMA and AutoARIMA guide: ./docs/user-guide/forecasting-models/arima.md

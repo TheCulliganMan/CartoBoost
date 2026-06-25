@@ -35,6 +35,7 @@ from .local import (
     PiecewiseLinearSeasonalForecaster,
     SbaForecaster,
     SeasonalNaiveForecaster,
+    SpatialPiecewiseKrigingForecaster,
     ThetaForecaster,
     TsbForecaster,
 )
@@ -119,6 +120,7 @@ __all__ = [
     "SequenceStateSpaceConfig",
     "SingleSeriesForecasterMixin",
     "SlidingWindowSplitter",
+    "SpatialPiecewiseKrigingForecaster",
     "ThetaForecaster",
     "TsbForecaster",
     "forward_ekf",

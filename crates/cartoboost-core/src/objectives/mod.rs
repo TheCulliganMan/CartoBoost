@@ -1,6 +1,7 @@
 mod hurdle;
 mod negative_binomial;
 mod poisson;
+mod probability;
 mod tweedie;
 
 use crate::loss::{weighted_quantile, HuberLoss, L1Loss, L2Loss, Loss, LossConfig};
@@ -9,7 +10,20 @@ use crate::{CartoBoostError, Result};
 pub use hurdle::{HurdleDerivatives, HurdleObjective};
 pub use negative_binomial::NegativeBinomialObjective;
 pub use poisson::PoissonObjective;
+pub use probability::{
+    calibration_improvement, calibration_metrics, escalation_risk_event, event_within_horizon,
+    failure_risk_event, pool_adjacent_violators, success_within_threshold, CalibrationBucket,
+    CalibrationImprovement, CalibrationMetrics, EscalationRiskEvent, FailureRiskEvent,
+    IsotonicCalibrator, ProbabilityCalibrator, SigmoidCalibrator, TemperatureCalibrator,
+    ThresholdEvent,
+};
 pub use tweedie::TweedieObjective;
+
+/// Logistic boosting objective for binary probability forecasting.
+pub type LogisticBoostingObjective = BinaryLogLossObjective;
+
+/// Binary probability booster using CartoBoost's Rust-native classifier.
+pub type ProbabilityBooster = crate::booster::Classifier;
 
 const PROBABILITY_EPSILON: f64 = 1.0e-15;
 const LOGIT_EPSILON: f64 = 1.0e-12;

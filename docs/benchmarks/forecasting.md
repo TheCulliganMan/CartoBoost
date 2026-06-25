@@ -89,6 +89,54 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 uv run --no-sync --group dev --group bench pyth
   --plot-dir docs/assets/nyc_taxi_benchmarks/piecewise_local_plots
 ```
 
+## Spatial Piecewise Kriging Diagnostic
+
+The deterministic `spatial_piecewise_kriging_panel` check exercises the
+Prophet-shaped CartoBoost base with ordinary kriging fusion. It uses 6
+pickup/dropoff lanes, 180 daily observations per lane, a 7-day rolling-origin
+holdout, fixed model settings, and no hyperparameter search. The split rule is
+strictly time ordered: train timestamps end on 2024-06-21 and validation starts
+on 2024-06-22.
+
+The roster includes Naive, SeasonalNaive, PiecewiseLinearSeasonal,
+KrigingForecaster, and `spatial_piecewise_kriging_hybrid` under the same split.
+The hybrid row uses `zone_pressure` as a known future spatial regressor and
+residual kriging over stable lane coordinates. The artifact also records fit
+time, prediction time, model metadata, cutoffs, variogram config, and RMSE/MAE
+/ WAPE deltas against `piecewise_linear_seasonal` and `seasonal_naive`.
+
+| Model | RMSE | MAE | WAPE | Fit seconds | Predict seconds | RMSE delta vs piecewise |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `cartoboost_lag` | 0.045793 | 0.038338 | 0.000633 | 0.353398 | 0.002575 | -1.989170 |
+| `seasonal_naive` | 0.949291 | 0.821293 | 0.013561 | 0.001032 | 0.001104 | -1.085673 |
+| `spatial_piecewise_kriging_hybrid` | 1.016571 | 0.902431 | 0.014900 | 0.050765 | 0.006882 | -1.018393 |
+| `theta` | 1.849915 | 1.661433 | 0.027432 | 0.002872 | 0.001364 | -0.185048 |
+| `weighted_ensemble` | 1.910406 | 1.690188 | 0.027907 | 0.003623 | 0.001746 | -0.124558 |
+| `piecewise_linear_seasonal` | 2.034964 | 1.843295 | 0.030435 | 0.009016 | 0.002114 | 0.000000 |
+| `optimized_theta` | 2.142322 | 1.762496 | 0.029101 | 0.026523 | 0.001979 | 0.107359 |
+| `kriging` | 2.237221 | 1.857257 | 0.030666 | 0.002341 | 0.001685 | 0.202257 |
+| `naive` | 2.237221 | 1.857259 | 0.030666 | 0.001030 | 0.001261 | 0.202258 |
+
+Read: the hybrid improves RMSE, MAE, and WAPE versus the base
+`piecewise_linear_seasonal` row by using the kriged `zone_pressure` regressor
+and residual correction on this synthetic spatial residual task. It is not the
+best row overall: `cartoboost_lag` and `seasonal_naive` are stronger on this
+deterministic panel. Treat the run as implementation and leakage-check evidence
+for spatial fusion, not as a production taxi-demand quality claim.
+
+Rerun command:
+
+```bash
+uv run --group dev python scripts/forecasting_benchmark.py \
+  --days 180 \
+  --horizon 7 \
+  --folds 1 \
+  --panel-series 6 \
+  --output target/spatial_piecewise_kriging_benchmark.json
+```
+
+The run above writes `target/spatial_piecewise_kriging_benchmark.json`.
+
 ## M4 Sample
 
 The current M4 sample scores the first 96 series from each M4 frequency group.

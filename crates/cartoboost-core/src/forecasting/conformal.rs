@@ -1,8 +1,9 @@
 use crate::{CartoBoostError, Result};
+use serde::{Deserialize, Serialize};
 
 use super::quantiles::{validate_finite_values, validate_quantile, validate_same_non_empty};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConformalInterval {
     pub lower: Vec<f64>,
     pub upper: Vec<f64>,
@@ -10,7 +11,7 @@ pub struct ConformalInterval {
     pub alpha: f64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConformalSplitOrder {
     pub train_end_exclusive: usize,
     pub calibration_start: usize,
@@ -44,7 +45,7 @@ impl ConformalSplitOrder {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConformalCalibrator {
     alpha: f64,
     residual_quantile: Option<f64>,
@@ -152,5 +153,98 @@ impl ConformalCalibrator {
             residual_quantile,
             alpha: self.alpha,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::forecasting::quantiles::interval_coverage;
+
+    fn heteroscedastic_fixture() -> (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>) {
+        let calibration_prediction = vec![100.0; 100];
+        let test_prediction = vec![100.0; 100];
+        let calibration_actual = (0..100)
+            .map(|idx| {
+                let scale = 1.0 + (idx % 10) as f64;
+                let magnitude = ((idx / 10) + 1) as f64;
+                let sign = if idx % 2 == 0 { 1.0 } else { -1.0 };
+                100.0 + sign * scale * magnitude
+            })
+            .collect::<Vec<_>>();
+        let test_actual = (0..100)
+            .map(|idx| {
+                let scale = 1.0 + ((99 - idx) % 10) as f64;
+                let magnitude = (((99 - idx) / 10) + 1) as f64;
+                let sign = if idx % 2 == 0 { -1.0 } else { 1.0 };
+                100.0 + sign * scale * magnitude
+            })
+            .collect::<Vec<_>>();
+        (
+            calibration_actual,
+            calibration_prediction,
+            test_actual,
+            test_prediction,
+        )
+    }
+
+    #[test]
+    fn conformal_intervals_cover_heteroscedastic_synthetic_at_80_and_90_percent() {
+        let (calibration_actual, calibration_prediction, test_actual, test_prediction) =
+            heteroscedastic_fixture();
+
+        for (alpha, expected) in [(0.2, 0.8), (0.1, 0.9)] {
+            let mut calibrator = ConformalCalibrator::new(alpha).unwrap();
+            calibrator
+                .fit_with_strict_ordering(
+                    &calibration_actual,
+                    &calibration_prediction,
+                    50,
+                    50,
+                    150,
+                    150,
+                )
+                .unwrap();
+            let interval = calibrator.predict_interval(&test_prediction, 150).unwrap();
+            let coverage =
+                interval_coverage(&test_actual, &interval.lower, &interval.upper).unwrap();
+
+            assert!(
+                coverage >= expected,
+                "coverage {coverage} did not reach {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn fitted_conformal_calibrator_and_interval_round_trip_exactly() {
+        let (calibration_actual, calibration_prediction, _test_actual, test_prediction) =
+            heteroscedastic_fixture();
+        let mut calibrator = ConformalCalibrator::new(0.1).unwrap();
+        calibrator
+            .fit_with_strict_ordering(
+                &calibration_actual,
+                &calibration_prediction,
+                50,
+                50,
+                150,
+                150,
+            )
+            .unwrap();
+        let interval = calibrator.predict_interval(&test_prediction, 150).unwrap();
+
+        let decoded_calibrator: ConformalCalibrator =
+            serde_json::from_str(&serde_json::to_string(&calibrator).unwrap()).unwrap();
+        let decoded_interval: ConformalInterval =
+            serde_json::from_str(&serde_json::to_string(&interval).unwrap()).unwrap();
+
+        assert_eq!(decoded_calibrator, calibrator);
+        assert_eq!(decoded_interval, interval);
+        assert_eq!(
+            decoded_calibrator
+                .predict_interval(&test_prediction, 150)
+                .unwrap(),
+            interval
+        );
     }
 }

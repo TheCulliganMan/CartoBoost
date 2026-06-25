@@ -14,8 +14,9 @@ use cartoboost_core::forecasting::{
     ReferencePathConfig, ReferenceSignal, STLCartoBoostForecaster, SeasonalNaiveForecaster,
     SeasonalWindowAverageForecaster, SequenceCandidate, SequenceCandidateEnsemble,
     SequenceCandidatePrediction, SequenceFrame, SequenceGroupPrediction, SequenceOofCandidateRow,
-    SequenceOofFold, SequenceSeries, SequenceStateSpaceConfig, ThetaForecaster, ThetaSeasonality,
-    WindowAverageForecaster,
+    SequenceOofFold, SequenceSeries, SequenceStateSpaceConfig, SpatialPiecewiseKrigingConfig,
+    SpatialPiecewiseKrigingForecaster, SpatialPiecewiseKrigingMode, ThetaForecaster,
+    ThetaSeasonality, WindowAverageForecaster,
 };
 use cartoboost_core::loss::{HuberLossConfig, LogL2LossConfig, LossConfig, QuantileLossConfig};
 use cartoboost_core::tree::{Node, Split, SplitterKind};
@@ -102,6 +103,10 @@ struct BrowserForecastOptions {
     coordinate_y: Option<String>,
     kriging_range: Option<f64>,
     kriging_nugget: Option<f64>,
+    spatial_kriging_mode: Option<String>,
+    spatial_regressors: Option<Vec<String>>,
+    residual_shrinkage: Option<f64>,
+    allow_neighbor_fallback: Option<bool>,
     changepoints: Option<usize>,
     n_changepoints: Option<usize>,
     changepoint_range: Option<f64>,
@@ -824,6 +829,11 @@ fn forecast_model_registry() -> Vec<BrowserForecastModel> {
         BrowserForecastModel {
             name: "kriging",
             label: "Kriging",
+            pipeline: "spatial",
+        },
+        BrowserForecastModel {
+            name: "spatial_piecewise_kriging",
+            label: "Spatial Piecewise Kriging",
             pipeline: "spatial",
         },
         BrowserForecastModel {
@@ -2999,6 +3009,20 @@ fn build_forecaster(
             options.kriging_range.unwrap_or(1.0),
             options.kriging_nugget.unwrap_or(1e-6),
         )?)),
+        "spatial_piecewise_kriging" => Ok(Box::new(SpatialPiecewiseKrigingForecaster::new(
+            SpatialPiecewiseKrigingConfig {
+                coordinates: coordinates_from_frame(frame, options)?,
+                mode: spatial_piecewise_kriging_mode(options)?,
+                piecewise_config: piecewise_linear_seasonal_config(options)?,
+                kriging_config: cartoboost_core::utilities::OrdinaryKrigingConfig::new(
+                    options.kriging_range.unwrap_or(1.0),
+                    options.kriging_nugget.unwrap_or(1e-6),
+                )?,
+                spatial_regressors: options.spatial_regressors.clone().unwrap_or_default(),
+                residual_shrinkage: options.residual_shrinkage.unwrap_or(1.0),
+                allow_neighbor_fallback: options.allow_neighbor_fallback.unwrap_or(false),
+            },
+        )?)),
         "piecewise_linear_seasonal" => Ok(Box::new(PiecewiseLinearSeasonalForecaster::new(
             piecewise_linear_seasonal_config(options)?,
         )?)),
@@ -3174,6 +3198,26 @@ fn is_piecewise_linear_seasonal_model(model: &str) -> bool {
         model.trim().to_ascii_lowercase().replace('-', "_").as_str(),
         "piecewise_linear_seasonal"
     )
+}
+
+fn spatial_piecewise_kriging_mode(
+    options: &BrowserForecastOptions,
+) -> Result<SpatialPiecewiseKrigingMode> {
+    let value = options
+        .spatial_kriging_mode
+        .as_deref()
+        .unwrap_or("residual_kriging")
+        .trim()
+        .to_ascii_lowercase()
+        .replace('-', "_");
+    match value.as_str() {
+        "kriged_regressors" | "regressors" => Ok(SpatialPiecewiseKrigingMode::KrigedRegressors),
+        "residual_kriging" | "residual" => Ok(SpatialPiecewiseKrigingMode::ResidualKriging),
+        "hybrid" => Ok(SpatialPiecewiseKrigingMode::Hybrid),
+        other => Err(CartoBoostError::InvalidInput(format!(
+            "unsupported spatial_piecewise_kriging mode {other:?}"
+        ))),
+    }
 }
 
 fn piecewise_linear_seasonal_config(
@@ -5199,6 +5243,40 @@ mod tests {
                 model.name
             );
         }
+    }
+
+    #[test]
+    fn browser_spatial_piecewise_kriging_reports_spatial_details() {
+        let response = run_forecast_request(BrowserForecastRequest {
+            rows: sample_panel_rows(),
+            frequency: "daily".to_string(),
+            horizon: 2,
+            model: "spatial_piecewise_kriging".to_string(),
+            options: BrowserForecastOptions {
+                coordinate_x: Some("longitude".to_string()),
+                coordinate_y: Some("latitude".to_string()),
+                kriging_range: Some(1.0),
+                kriging_nugget: Some(1.0e-6),
+                spatial_kriging_mode: Some("residual_kriging".to_string()),
+                ..BrowserForecastOptions::default()
+            },
+            metadata: BrowserForecastMetadata {
+                timestamp_col: Some("timestamp".to_string()),
+                target_col: Some("target".to_string()),
+                series_id_col: Some("series_id".to_string()),
+            },
+        })
+        .expect("spatial piecewise kriging run");
+        let records = response
+            .forecast
+            .get("records")
+            .and_then(Value::as_array)
+            .expect("forecast records");
+        assert_eq!(records.len(), 6);
+        assert!(records[0].get("base_mean").is_some());
+        assert!(records[0].get("spatial_correction").is_some());
+        assert!(records[0].get("kriging_variance").is_some());
+        assert!(records[0].get("selected_neighbors").is_some());
     }
 
     #[test]

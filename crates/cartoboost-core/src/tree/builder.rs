@@ -1,11 +1,13 @@
 use super::{sse, FuzzyKernel, Node, Split, Tree};
 use crate::data::{Dataset, FeatureKind};
+use crate::graph_regularization::GraphSplitRegularization;
 use crate::loss::{
     absolute_loss, pinball_loss, weighted_absolute_loss, weighted_pinball_loss, weighted_quantile,
     LossConfig,
 };
 use crate::predictors::LinearLeafPredictor;
 use crate::profile;
+use crate::Result;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -25,6 +27,8 @@ pub struct TreeBuilder {
     pub fuzzy_kernel: FuzzyKernel,
     pub loss: LossConfig,
     pub monotonic_constraints: Vec<i8>,
+    pub interaction_constraints: Vec<Vec<usize>>,
+    pub graph_split_regularization: Option<GraphSplitRegularization>,
 }
 
 #[derive(Debug, Clone)]
@@ -265,6 +269,7 @@ impl TreeBuilder {
                 None,
                 f64::NEG_INFINITY,
                 f64::INFINITY,
+                &[],
             ),
         }
     }
@@ -300,6 +305,7 @@ impl TreeBuilder {
             None,
             f64::NEG_INFINITY,
             f64::INFINITY,
+            &[],
         );
         (Tree { root }, updates)
     }
@@ -318,6 +324,7 @@ impl TreeBuilder {
         node_stats: Option<CandidateStats>,
         lower_bound: f64,
         upper_bound: f64,
+        active_features: &[usize],
     ) -> Node {
         let leaf = |updates: Option<&mut [f64]>| {
             let started = profile::ProfileTimer::start();
@@ -404,6 +411,7 @@ impl TreeBuilder {
             node_histogram_stats,
             depth + 1 < self.max_depth,
             updates.as_deref_mut(),
+            active_features,
         ) else {
             return leaf(updates);
         };
@@ -446,6 +454,7 @@ impl TreeBuilder {
             );
         let left_node;
         let right_node;
+        let child_active_features = self.child_active_features(x, active_features, &split);
         if let (Some(left_direct_node), Some(right_direct_node)) =
             (left_direct_node, right_direct_node)
         {
@@ -464,6 +473,7 @@ impl TreeBuilder {
                 left_node_stats,
                 left_lower_bound,
                 left_upper_bound,
+                &child_active_features,
             );
             right_node = self.build_node_inner(
                 x,
@@ -477,6 +487,7 @@ impl TreeBuilder {
                 right_node_stats,
                 right_lower_bound,
                 right_upper_bound,
+                &child_active_features,
             );
         } else {
             let (built_left, built_right) = rayon::join(
@@ -493,6 +504,7 @@ impl TreeBuilder {
                         left_node_stats,
                         left_lower_bound,
                         left_upper_bound,
+                        &child_active_features,
                     )
                 },
                 || {
@@ -508,6 +520,7 @@ impl TreeBuilder {
                         right_node_stats,
                         right_lower_bound,
                         right_upper_bound,
+                        &child_active_features,
                     )
                 },
             );
@@ -534,6 +547,7 @@ impl TreeBuilder {
         node_histogram_stats: Option<&[CandidateStats]>,
         build_child_histograms: bool,
         terminal_updates: Option<&mut [f64]>,
+        active_features: &[usize],
     ) -> Option<BestSplit> {
         let mut best: Option<BestSplit> = None;
 
@@ -547,6 +561,7 @@ impl TreeBuilder {
             && self.leaf_predictor == LeafPredictorKind::Constant
             && self.uses_l2_split_score()
             && self.monotonic_constraints.is_empty()
+            && self.graph_split_regularization.is_none()
         {
             terminal_updates
         } else {
@@ -560,23 +575,49 @@ impl TreeBuilder {
             })
         };
         if splitters.is_empty() {
-            self.axis_candidates(x, target, weights, indices, parent_sse, context, &mut best);
+            self.axis_candidates(
+                x,
+                target,
+                weights,
+                indices,
+                parent_sse,
+                context,
+                active_features,
+                &mut best,
+            );
             return best;
         }
         for splitter in splitters {
             match splitter {
                 SplitterKind::Axis => profile::timed(profile::AXIS, || {
                     self.axis_candidates(
-                        x, target, weights, indices, parent_sse, context, &mut best,
+                        x,
+                        target,
+                        weights,
+                        indices,
+                        parent_sse,
+                        context,
+                        active_features,
+                        &mut best,
                     )
                 }),
                 SplitterKind::Auto => profile::timed(profile::AXIS, || {
                     self.axis_candidates(
-                        x, target, weights, indices, parent_sse, context, &mut best,
+                        x,
+                        target,
+                        weights,
+                        indices,
+                        parent_sse,
+                        context,
+                        active_features,
+                        &mut best,
                     )
                 }),
                 SplitterKind::AxisHistogram { bins } => {
-                    if self.uses_l2_split_score() && self.monotonic_constraints.is_empty() {
+                    if self.uses_l2_split_score()
+                        && self.monotonic_constraints.is_empty()
+                        && self.graph_split_regularization.is_none()
+                    {
                         self.axis_histogram_candidates(
                             x,
                             target,
@@ -588,27 +629,67 @@ impl TreeBuilder {
                             node_histogram_stats,
                             build_child_histograms,
                             terminal_histogram_updates.as_deref_mut(),
+                            active_features,
                             &mut best,
                         )
                     } else {
                         self.axis_histogram_exact_candidates(
-                            x, target, weights, indices, parent_sse, *bins, context, &mut best,
+                            x,
+                            target,
+                            weights,
+                            indices,
+                            parent_sse,
+                            *bins,
+                            context,
+                            active_features,
+                            &mut best,
                         )
                     }
                 }
                 SplitterKind::Diagonal2D => profile::timed(profile::DIAGONAL, || {
-                    self.diagonal_candidates(x, target, weights, indices, parent_sse, &mut best)
+                    self.diagonal_candidates(
+                        x,
+                        target,
+                        weights,
+                        indices,
+                        parent_sse,
+                        active_features,
+                        &mut best,
+                    )
                 }),
                 SplitterKind::Gaussian2D => profile::timed(profile::GAUSSIAN, || {
-                    self.gaussian_candidates(x, target, weights, indices, parent_sse, &mut best)
+                    self.gaussian_candidates(
+                        x,
+                        target,
+                        weights,
+                        indices,
+                        parent_sse,
+                        active_features,
+                        &mut best,
+                    )
                 }),
                 SplitterKind::Periodic { period } => profile::timed(profile::PERIODIC, || {
                     self.periodic_candidates(
-                        x, target, weights, indices, parent_sse, *period, &mut best,
+                        x,
+                        target,
+                        weights,
+                        indices,
+                        parent_sse,
+                        *period,
+                        active_features,
+                        &mut best,
                     )
                 }),
                 SplitterKind::SparseSet => profile::timed(profile::SPARSE_SET, || {
-                    self.sparse_set_candidates(x, target, weights, indices, parent_sse, &mut best)
+                    self.sparse_set_candidates(
+                        x,
+                        target,
+                        weights,
+                        indices,
+                        parent_sse,
+                        active_features,
+                        &mut best,
+                    )
                 }),
             }
             if split_objective_is_saturated(parent_sse, best.as_ref()) {
@@ -632,6 +713,7 @@ impl TreeBuilder {
         node_histogram_stats: Option<&[CandidateStats]>,
         build_child_histograms: bool,
         mut terminal_updates: Option<&mut [f64]>,
+        active_features: &[usize],
         best: &mut Option<BestSplit>,
     ) {
         let bins = bins.clamp(2, 1024);
@@ -696,6 +778,9 @@ impl TreeBuilder {
                     .histogram_feature_indices
                     .par_iter()
                     .filter_map(|&feature| {
+                        if !self.interaction_split_allowed(active_features, &[feature]) {
+                            return None;
+                        }
                         self.best_histogram_candidate_for_feature(
                             feature,
                             bins,
@@ -748,6 +833,9 @@ impl TreeBuilder {
         let mut stats = vec![CandidateStats::default(); bins];
         let mut histogram_candidate: Option<BestHistogramCandidate> = None;
         for feature in 0..x.n_cols() {
+            if !self.interaction_split_allowed(active_features, &[feature]) {
+                continue;
+            }
             if !dense_feature_allows_axis(x, feature) {
                 continue;
             }
@@ -1084,14 +1172,49 @@ impl TreeBuilder {
         indices: &[usize],
         parent_sse: f64,
         context: &FitContext,
+        active_features: &[usize],
         best: &mut Option<BestSplit>,
     ) {
-        if !self.uses_l2_split_score() || !self.monotonic_constraints.is_empty() {
-            self.axis_candidates_exact(x, target, weights, indices, parent_sse, context, best);
+        if !self.interaction_constraints.is_empty() {
+            self.axis_candidates_exact(
+                x,
+                target,
+                weights,
+                indices,
+                parent_sse,
+                context,
+                active_features,
+                best,
+            );
+            return;
+        }
+        if !self.uses_l2_split_score()
+            || !self.monotonic_constraints.is_empty()
+            || self.graph_split_regularization.is_some()
+        {
+            self.axis_candidates_exact(
+                x,
+                target,
+                weights,
+                indices,
+                parent_sse,
+                context,
+                active_features,
+                best,
+            );
             return;
         }
         if !self.fuzzy || self.fuzzy_bandwidth <= 0.0 {
-            self.axis_candidates_prefix(x, target, weights, indices, parent_sse, context, best);
+            self.axis_candidates_prefix(
+                x,
+                target,
+                weights,
+                indices,
+                parent_sse,
+                context,
+                active_features,
+                best,
+            );
             return;
         }
 
@@ -1100,7 +1223,15 @@ impl TreeBuilder {
             .into_par_iter()
             .filter_map(|feature| {
                 self.best_axis_exact_candidate_for_feature(
-                    x, target, weights, indices, feature, parent_sse, context, &active,
+                    x,
+                    target,
+                    weights,
+                    indices,
+                    feature,
+                    parent_sse,
+                    context,
+                    &active,
+                    active_features,
                 )
             })
             .collect::<Vec<_>>();
@@ -1119,6 +1250,7 @@ impl TreeBuilder {
         indices: &[usize],
         parent_sse: f64,
         context: &FitContext,
+        active_features: &[usize],
         best: &mut Option<BestSplit>,
     ) {
         let active = active_row_mask(x.n_rows(), indices);
@@ -1126,7 +1258,15 @@ impl TreeBuilder {
             .into_par_iter()
             .filter_map(|feature| {
                 self.best_axis_exact_candidate_for_feature(
-                    x, target, weights, indices, feature, parent_sse, context, &active,
+                    x,
+                    target,
+                    weights,
+                    indices,
+                    feature,
+                    parent_sse,
+                    context,
+                    &active,
+                    active_features,
                 )
             })
             .collect::<Vec<_>>();
@@ -1147,7 +1287,11 @@ impl TreeBuilder {
         parent_sse: f64,
         context: &FitContext,
         active: &[bool],
+        active_features: &[usize],
     ) -> Option<(usize, BestSplit)> {
+        if !self.interaction_split_allowed(active_features, &[feature]) {
+            return None;
+        }
         if !dense_feature_allows_axis(x, feature) {
             return None;
         }
@@ -1192,6 +1336,7 @@ impl TreeBuilder {
         parent_sse: f64,
         bins: usize,
         context: &FitContext,
+        active_features: &[usize],
         best: &mut Option<BestSplit>,
     ) {
         let bins = bins.clamp(2, 1024);
@@ -1199,7 +1344,15 @@ impl TreeBuilder {
             .into_par_iter()
             .filter_map(|feature| {
                 self.best_axis_histogram_exact_candidate_for_feature(
-                    x, target, weights, indices, parent_sse, bins, context, feature,
+                    x,
+                    target,
+                    weights,
+                    indices,
+                    parent_sse,
+                    bins,
+                    context,
+                    feature,
+                    active_features,
                 )
             })
             .collect::<Vec<_>>();
@@ -1220,7 +1373,11 @@ impl TreeBuilder {
         bins: usize,
         context: &FitContext,
         feature: usize,
+        active_features: &[usize],
     ) -> Option<(usize, BestSplit)> {
+        if !self.interaction_split_allowed(active_features, &[feature]) {
+            return None;
+        }
         if !dense_feature_allows_axis(x, feature) {
             return None;
         }
@@ -1263,6 +1420,7 @@ impl TreeBuilder {
         indices: &[usize],
         parent_sse: f64,
         context: &FitContext,
+        active_features: &[usize],
         best: &mut Option<BestSplit>,
     ) {
         let active = active_row_mask(x.n_rows(), indices);
@@ -1270,6 +1428,9 @@ impl TreeBuilder {
         let mut candidates = (0..x.n_cols())
             .into_par_iter()
             .filter_map(|feature| {
+                if !self.interaction_split_allowed(active_features, &[feature]) {
+                    return None;
+                }
                 self.best_axis_prefix_candidate_for_feature(
                     x, target, weights, feature, parent_sse, context, &active,
                 )
@@ -1398,6 +1559,7 @@ impl TreeBuilder {
         candidate
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn diagonal_candidates(
         &self,
         x: &Dataset,
@@ -1405,6 +1567,7 @@ impl TreeBuilder {
         weights: &[f64],
         indices: &[usize],
         parent_sse: f64,
+        active_features: &[usize],
         best: &mut Option<BestSplit>,
     ) {
         if x.n_cols() < 2 {
@@ -1413,8 +1576,17 @@ impl TreeBuilder {
         if self.uses_l2_split_score()
             && (!self.fuzzy || self.fuzzy_bandwidth <= 0.0)
             && self.monotonic_constraints.is_empty()
+            && self.graph_split_regularization.is_none()
         {
-            self.diagonal_candidates_ordered(x, target, weights, indices, parent_sse, best);
+            self.diagonal_candidates_ordered(
+                x,
+                target,
+                weights,
+                indices,
+                parent_sse,
+                active_features,
+                best,
+            );
             return;
         }
         let spatial_features = spatial_feature_indices(x);
@@ -1439,8 +1611,17 @@ impl TreeBuilder {
             })
             .filter_map(|(x_feature, y_feature, normal_idx, normal_x, normal_y)| {
                 self.best_diagonal_candidate_for_projection(
-                    x, target, weights, indices, parent_sse, x_feature, y_feature, normal_idx,
-                    normal_x, normal_y,
+                    x,
+                    target,
+                    weights,
+                    indices,
+                    parent_sse,
+                    x_feature,
+                    y_feature,
+                    normal_idx,
+                    normal_x,
+                    normal_y,
+                    active_features,
                 )
             })
             .collect::<Vec<_>>();
@@ -1452,6 +1633,7 @@ impl TreeBuilder {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn diagonal_candidates_ordered(
         &self,
         x: &Dataset,
@@ -1459,6 +1641,7 @@ impl TreeBuilder {
         weights: &[f64],
         indices: &[usize],
         parent_sse: f64,
+        active_features: &[usize],
         best: &mut Option<BestSplit>,
     ) {
         let spatial_features = spatial_feature_indices(x);
@@ -1483,8 +1666,17 @@ impl TreeBuilder {
             })
             .filter_map(|(x_feature, y_feature, normal_idx, normal_x, normal_y)| {
                 self.best_diagonal_ordered_candidate_for_projection(
-                    x, target, weights, indices, parent_sse, x_feature, y_feature, normal_idx,
-                    normal_x, normal_y,
+                    x,
+                    target,
+                    weights,
+                    indices,
+                    parent_sse,
+                    x_feature,
+                    y_feature,
+                    normal_idx,
+                    normal_x,
+                    normal_y,
+                    active_features,
                 )
             })
             .collect::<Vec<_>>();
@@ -1519,7 +1711,11 @@ impl TreeBuilder {
         normal_idx: usize,
         normal_x: f64,
         normal_y: f64,
+        active_features: &[usize],
     ) -> Option<(usize, usize, usize, BestOrderedSplitCandidate)> {
+        if !self.interaction_split_allowed(active_features, &[x_feature, y_feature]) {
+            return None;
+        }
         if !dense_feature_allows_spatial(x, x_feature)
             || !dense_feature_allows_spatial(x, y_feature)
         {
@@ -1567,7 +1763,11 @@ impl TreeBuilder {
         normal_idx: usize,
         normal_x: f64,
         normal_y: f64,
+        active_features: &[usize],
     ) -> Option<(usize, usize, usize, BestSplit)> {
+        if !self.interaction_split_allowed(active_features, &[x_feature, y_feature]) {
+            return None;
+        }
         if !dense_feature_allows_spatial(x, x_feature)
             || !dense_feature_allows_spatial(x, y_feature)
         {
@@ -1605,6 +1805,7 @@ impl TreeBuilder {
         best.map(|best| (x_feature, y_feature, normal_idx, best))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn gaussian_candidates(
         &self,
         x: &Dataset,
@@ -1612,6 +1813,7 @@ impl TreeBuilder {
         weights: &[f64],
         indices: &[usize],
         parent_sse: f64,
+        active_features: &[usize],
         best: &mut Option<BestSplit>,
     ) {
         if x.n_cols() < 2 || indices.is_empty() {
@@ -1620,8 +1822,17 @@ impl TreeBuilder {
         if self.uses_l2_split_score()
             && (!self.fuzzy || self.fuzzy_bandwidth <= 0.0)
             && self.monotonic_constraints.is_empty()
+            && self.graph_split_regularization.is_none()
         {
-            self.gaussian_candidates_ordered(x, target, weights, indices, parent_sse, best);
+            self.gaussian_candidates_ordered(
+                x,
+                target,
+                weights,
+                indices,
+                parent_sse,
+                active_features,
+                best,
+            );
             return;
         }
         let spatial_features = spatial_feature_indices(x);
@@ -1641,7 +1852,14 @@ impl TreeBuilder {
             })
             .filter_map(|(x_feature, y_feature)| {
                 self.best_gaussian_candidate_for_pair(
-                    x, target, weights, indices, parent_sse, x_feature, y_feature,
+                    x,
+                    target,
+                    weights,
+                    indices,
+                    parent_sse,
+                    x_feature,
+                    y_feature,
+                    active_features,
                 )
             })
             .collect::<Vec<_>>();
@@ -1651,6 +1869,7 @@ impl TreeBuilder {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn gaussian_candidates_ordered(
         &self,
         x: &Dataset,
@@ -1658,6 +1877,7 @@ impl TreeBuilder {
         weights: &[f64],
         indices: &[usize],
         parent_sse: f64,
+        active_features: &[usize],
         best: &mut Option<BestSplit>,
     ) {
         let spatial_features = spatial_feature_indices(x);
@@ -1677,7 +1897,14 @@ impl TreeBuilder {
             })
             .filter_map(|(x_feature, y_feature)| {
                 self.best_gaussian_ordered_candidate_for_pair(
-                    x, target, weights, indices, parent_sse, x_feature, y_feature,
+                    x,
+                    target,
+                    weights,
+                    indices,
+                    parent_sse,
+                    x_feature,
+                    y_feature,
+                    active_features,
                 )
             })
             .collect::<Vec<_>>();
@@ -1707,7 +1934,11 @@ impl TreeBuilder {
         parent_sse: f64,
         x_feature: usize,
         y_feature: usize,
+        active_features: &[usize],
     ) -> Option<(usize, usize, BestOrderedSplitCandidate)> {
+        if !self.interaction_split_allowed(active_features, &[x_feature, y_feature]) {
+            return None;
+        }
         if !dense_feature_allows_spatial(x, x_feature)
             || !dense_feature_allows_spatial(x, y_feature)
         {
@@ -1759,7 +1990,11 @@ impl TreeBuilder {
         parent_sse: f64,
         x_feature: usize,
         y_feature: usize,
+        active_features: &[usize],
     ) -> Option<(usize, usize, BestSplit)> {
+        if !self.interaction_split_allowed(active_features, &[x_feature, y_feature]) {
+            return None;
+        }
         if !dense_feature_allows_spatial(x, x_feature)
             || !dense_feature_allows_spatial(x, y_feature)
         {
@@ -1951,10 +2186,23 @@ impl TreeBuilder {
         indices: &[usize],
         parent_sse: f64,
         period: f64,
+        active_features: &[usize],
         best: &mut Option<BestSplit>,
     ) {
-        if self.uses_l2_split_score() && (!self.fuzzy || self.fuzzy_bandwidth <= 0.0) {
-            self.periodic_candidates_grouped(x, target, weights, indices, parent_sse, period, best);
+        if self.uses_l2_split_score()
+            && (!self.fuzzy || self.fuzzy_bandwidth <= 0.0)
+            && self.graph_split_regularization.is_none()
+        {
+            self.periodic_candidates_grouped(
+                x,
+                target,
+                weights,
+                indices,
+                parent_sse,
+                period,
+                active_features,
+                best,
+            );
             return;
         }
 
@@ -1965,7 +2213,14 @@ impl TreeBuilder {
             .into_par_iter()
             .filter_map(|feature| {
                 self.best_periodic_candidate_for_feature(
-                    x, target, weights, indices, parent_sse, period, feature,
+                    x,
+                    target,
+                    weights,
+                    indices,
+                    parent_sse,
+                    period,
+                    feature,
+                    active_features,
                 )
             })
             .collect::<Vec<_>>();
@@ -1985,7 +2240,11 @@ impl TreeBuilder {
         parent_sse: f64,
         period: f64,
         feature: usize,
+        active_features: &[usize],
     ) -> Option<(usize, BestSplit)> {
+        if !self.interaction_split_allowed(active_features, &[feature]) {
+            return None;
+        }
         let feature_period = periodic_period_for_feature(x, indices, feature, period)?;
         let mut values = indices
             .iter()
@@ -2044,6 +2303,7 @@ impl TreeBuilder {
         indices: &[usize],
         parent_sse: f64,
         period: f64,
+        active_features: &[usize],
         best: &mut Option<BestSplit>,
     ) {
         if period <= 0.0 || !period.is_finite() {
@@ -2053,7 +2313,14 @@ impl TreeBuilder {
             .into_par_iter()
             .filter_map(|feature| {
                 self.best_periodic_grouped_candidate_for_feature(
-                    x, target, weights, indices, parent_sse, period, feature,
+                    x,
+                    target,
+                    weights,
+                    indices,
+                    parent_sse,
+                    period,
+                    feature,
+                    active_features,
                 )
             })
             .collect::<Vec<_>>();
@@ -2073,7 +2340,11 @@ impl TreeBuilder {
         parent_sse: f64,
         period: f64,
         feature: usize,
+        active_features: &[usize],
     ) -> Option<(usize, BestSplit)> {
+        if !self.interaction_split_allowed(active_features, &[feature]) {
+            return None;
+        }
         let feature_period = periodic_period_for_feature(x, indices, feature, period)?;
 
         let mut values = indices
@@ -2215,6 +2486,7 @@ impl TreeBuilder {
         ))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn sparse_set_candidates(
         &self,
         x: &Dataset,
@@ -2222,10 +2494,14 @@ impl TreeBuilder {
         weights: &[f64],
         indices: &[usize],
         parent_sse: f64,
+        active_features: &[usize],
         best: &mut Option<BestSplit>,
     ) {
-        if self.uses_l2_split_score() && (!self.fuzzy || self.fuzzy_bandwidth <= 0.0) {
-            self.sparse_set_candidates_grouped(x, target, weights, indices, best);
+        if self.uses_l2_split_score()
+            && (!self.fuzzy || self.fuzzy_bandwidth <= 0.0)
+            && self.graph_split_regularization.is_none()
+        {
+            self.sparse_set_candidates_grouped(x, target, weights, indices, active_features, best);
             return;
         }
 
@@ -2239,6 +2515,7 @@ impl TreeBuilder {
                     indices,
                     parent_sse,
                     sparse_feature,
+                    active_features,
                 )
             })
             .collect::<Vec<_>>();
@@ -2251,7 +2528,13 @@ impl TreeBuilder {
             .into_par_iter()
             .filter_map(|feature| {
                 self.best_dense_sparse_candidate_for_feature(
-                    x, target, weights, indices, parent_sse, feature,
+                    x,
+                    target,
+                    weights,
+                    indices,
+                    parent_sse,
+                    feature,
+                    active_features,
                 )
             })
             .collect::<Vec<_>>();
@@ -2270,7 +2553,11 @@ impl TreeBuilder {
         indices: &[usize],
         parent_sse: f64,
         sparse_feature: usize,
+        active_features: &[usize],
     ) -> Option<(usize, BestSplit)> {
+        if !self.interaction_split_allowed(active_features, &[x.n_cols() + sparse_feature]) {
+            return None;
+        }
         if !sparse_feature_allows_sparse_set(x, sparse_feature) {
             return None;
         }
@@ -2306,7 +2593,11 @@ impl TreeBuilder {
         indices: &[usize],
         parent_sse: f64,
         feature: usize,
+        active_features: &[usize],
     ) -> Option<(usize, BestSplit)> {
+        if !self.interaction_split_allowed(active_features, &[feature]) {
+            return None;
+        }
         if !dense_feature_allows_sparse_set(x, feature) {
             return None;
         }
@@ -2341,6 +2632,7 @@ impl TreeBuilder {
         target: &[f64],
         weights: &[f64],
         indices: &[usize],
+        active_features: &[usize],
         best: &mut Option<BestSplit>,
     ) {
         let total = candidate_stats(indices.iter().copied(), target, weights);
@@ -2355,6 +2647,7 @@ impl TreeBuilder {
                     indices,
                     &total,
                     sparse_feature,
+                    active_features,
                 )
             })
             .collect::<Vec<_>>();
@@ -2367,7 +2660,13 @@ impl TreeBuilder {
             .into_par_iter()
             .filter_map(|feature| {
                 self.best_dense_sparse_grouped_candidate_for_feature(
-                    x, target, weights, indices, &total, feature,
+                    x,
+                    target,
+                    weights,
+                    indices,
+                    &total,
+                    feature,
+                    active_features,
                 )
             })
             .collect::<Vec<_>>();
@@ -2404,6 +2703,7 @@ impl TreeBuilder {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn best_sparse_list_grouped_candidate_for_feature(
         &self,
         x: &Dataset,
@@ -2412,7 +2712,11 @@ impl TreeBuilder {
         indices: &[usize],
         total: &CandidateStats,
         sparse_feature: usize,
+        active_features: &[usize],
     ) -> Option<(usize, BestSplit)> {
+        if !self.interaction_split_allowed(active_features, &[x.n_cols() + sparse_feature]) {
+            return None;
+        }
         if !sparse_feature_allows_sparse_set(x, sparse_feature) {
             return None;
         }
@@ -2446,6 +2750,7 @@ impl TreeBuilder {
         candidate.map(|candidate| (sparse_feature, candidate))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn best_dense_sparse_grouped_candidate_for_feature(
         &self,
         x: &Dataset,
@@ -2454,7 +2759,11 @@ impl TreeBuilder {
         indices: &[usize],
         total: &CandidateStats,
         feature: usize,
+        active_features: &[usize],
     ) -> Option<(usize, BestSplit)> {
+        if !self.interaction_split_allowed(active_features, &[feature]) {
+            return None;
+        }
         if !dense_feature_allows_sparse_set(x, feature) {
             return None;
         }
@@ -2636,6 +2945,41 @@ impl TreeBuilder {
             .map(|direction| (feature, direction))
     }
 
+    fn interaction_split_allowed(
+        &self,
+        active_features: &[usize],
+        candidate_features: &[usize],
+    ) -> bool {
+        if self.interaction_constraints.is_empty() {
+            return true;
+        }
+        let mut features = active_features.to_vec();
+        features.extend(candidate_features.iter().copied());
+        features.sort_unstable();
+        features.dedup();
+        self.interaction_constraints.iter().any(|group| {
+            features
+                .iter()
+                .all(|feature| group.binary_search(feature).is_ok())
+        })
+    }
+
+    fn child_active_features(
+        &self,
+        x: &Dataset,
+        active_features: &[usize],
+        split: &Split,
+    ) -> Vec<usize> {
+        if self.interaction_constraints.is_empty() {
+            return Vec::new();
+        }
+        let mut features = active_features.to_vec();
+        features.extend(split_feature_indices(split, x.n_cols()));
+        features.sort_unstable();
+        features.dedup();
+        features
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn evaluate_split_candidate(
         &self,
@@ -2686,6 +3030,9 @@ impl TreeBuilder {
         let gain = parent_sse
             - self.node_loss(target, &left_weights, &left)
             - self.node_loss(target, &right_weights, &right);
+        let gain = self
+            .graph_adjusted_gain(gain, target, &left_weights, &right_weights, &left, &right)
+            .ok()?;
         Some(BestSplit {
             split: scoring_split,
             gain,
@@ -2700,6 +3047,33 @@ impl TreeBuilder {
             left_histogram_stats: None,
             right_histogram_stats: None,
         })
+    }
+
+    fn graph_adjusted_gain(
+        &self,
+        ordinary_gain: f64,
+        target: &[f64],
+        left_weights: &[f64],
+        right_weights: &[f64],
+        left: &[usize],
+        right: &[usize],
+    ) -> Result<f64> {
+        let Some(regularization) = &self.graph_split_regularization else {
+            return Ok(ordinary_gain);
+        };
+        if regularization.lambda == 0.0 {
+            return Ok(ordinary_gain);
+        }
+        let left_value = self.leaf_value(target, left_weights, left, None);
+        let right_value = self.leaf_value(target, right_weights, right, None);
+        let mut updates = vec![0.0; target.len()];
+        for &idx in left {
+            updates[idx] = left_value;
+        }
+        for &idx in right {
+            updates[idx] = right_value;
+        }
+        regularization.adjusted_gain(ordinary_gain, &updates)
     }
 }
 
@@ -2733,6 +3107,33 @@ fn active_row_mask(rows: usize, indices: &[usize]) -> Vec<bool> {
         active[idx] = true;
     }
     active
+}
+
+fn split_feature_indices(split: &Split, dense_feature_count: usize) -> Vec<usize> {
+    match split {
+        Split::Axis { feature, .. }
+        | Split::PeriodicInterval { feature, .. }
+        | Split::SparseSetContainsAny { feature, .. } => vec![*feature],
+        Split::Diagonal2D {
+            x_feature,
+            y_feature,
+            ..
+        }
+        | Split::Gaussian2D {
+            x_feature,
+            y_feature,
+            ..
+        } => {
+            let mut features = vec![*x_feature, *y_feature];
+            features.sort_unstable();
+            features.dedup();
+            features
+        }
+        Split::SparseListContainsAny { sparse_feature, .. } => {
+            vec![dense_feature_count + *sparse_feature]
+        }
+        Split::Fuzzy { base, .. } => split_feature_indices(base, dense_feature_count),
+    }
 }
 
 fn quantile_histogram_thresholds(mut values: Vec<f64>, bin_count: usize) -> Vec<f64> {
@@ -3629,6 +4030,8 @@ mod tests {
             fuzzy_kernel: FuzzyKernel::Linear,
             loss: crate::loss::LossConfig::L2,
             monotonic_constraints: Vec::new(),
+            interaction_constraints: Vec::new(),
+            graph_split_regularization: None,
         };
 
         let tree = builder.fit(&x, &y, &weights);
@@ -3685,6 +4088,8 @@ mod tests {
             fuzzy_kernel: FuzzyKernel::Linear,
             loss: crate::loss::LossConfig::L2,
             monotonic_constraints: Vec::new(),
+            interaction_constraints: Vec::new(),
+            graph_split_regularization: None,
         };
 
         let tree = builder.fit(&x, &y, &weights);
@@ -3718,6 +4123,8 @@ mod tests {
             fuzzy_kernel: FuzzyKernel::Linear,
             loss: crate::loss::LossConfig::L2,
             monotonic_constraints: Vec::new(),
+            interaction_constraints: Vec::new(),
+            graph_split_regularization: None,
         };
 
         let tree = builder.fit(&x, &y, &weights);
@@ -3766,6 +4173,8 @@ mod tests {
             fuzzy_kernel: FuzzyKernel::Linear,
             loss: crate::loss::LossConfig::L2,
             monotonic_constraints: Vec::new(),
+            interaction_constraints: Vec::new(),
+            graph_split_regularization: None,
         };
 
         let tree = builder.fit(&x, &y, &weights);
@@ -3810,6 +4219,8 @@ mod tests {
             fuzzy_kernel: FuzzyKernel::Linear,
             loss: crate::loss::LossConfig::L2,
             monotonic_constraints: Vec::new(),
+            interaction_constraints: Vec::new(),
+            graph_split_regularization: None,
         };
 
         let tree = builder.fit(&x, &y, &weights);
@@ -3859,6 +4270,8 @@ mod tests {
             fuzzy_kernel: FuzzyKernel::Linear,
             loss: crate::loss::LossConfig::L2,
             monotonic_constraints: Vec::new(),
+            interaction_constraints: Vec::new(),
+            graph_split_regularization: None,
         };
 
         let tree = builder.fit(&x, &y, &weights);
@@ -3898,6 +4311,8 @@ mod tests {
             fuzzy_kernel: FuzzyKernel::Linear,
             loss: crate::loss::LossConfig::L2,
             monotonic_constraints: Vec::new(),
+            interaction_constraints: Vec::new(),
+            graph_split_regularization: None,
         };
 
         let tree = builder.fit(&x, &y, &weights);

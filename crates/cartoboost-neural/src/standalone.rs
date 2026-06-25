@@ -68,6 +68,9 @@ impl StandaloneBoosterConfig {
             fuzzy_kernel: FuzzyKernel::Linear,
             loss: LossConfig::L2,
             monotonic_constraints: Vec::new(),
+            interaction_constraints: Vec::new(),
+            graph_split_regularization: None,
+            graph_leaf_smoothing: None,
         }
     }
 }

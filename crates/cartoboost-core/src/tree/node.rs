@@ -1,6 +1,7 @@
 use super::{LeafPredictorKind, SplitterKind};
 use crate::data::Dataset;
 use crate::data::FeatureSchema;
+use crate::graph_regularization::{GraphLeafSmoothing, GraphSplitRegularization};
 use crate::predictors::LinearLeafModel;
 use crate::{CartoBoostError, Result};
 use rayon::prelude::*;
@@ -57,6 +58,12 @@ pub struct TrainingConfigMetadata {
     pub loss: crate::loss::LossConfig,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub monotonic_constraints: Vec<i8>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub interaction_constraints: Vec<Vec<usize>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph_split_regularization: Option<GraphSplitRegularization>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph_leaf_smoothing: Option<GraphLeafSmoothing>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
@@ -1100,7 +1107,7 @@ impl Split {
         }
     }
 
-    fn hard_goes_left_dataset_row(&self, x: &Dataset, row: usize) -> bool {
+    pub(crate) fn hard_goes_left_dataset_row(&self, x: &Dataset, row: usize) -> bool {
         match self {
             Split::Axis {
                 feature,

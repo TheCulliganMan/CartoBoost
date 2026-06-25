@@ -1,4 +1,7 @@
 use crate::data::{validate_weights, Dataset};
+use crate::graph_regularization::{
+    CsrGraph, GraphLaplacian, GraphLeafSmoothing, GraphSplitRegularization,
+};
 use crate::loss::LossConfig;
 use crate::objectives::{initial_margin_for_loss, pseudo_residual_for_loss};
 use crate::profile;
@@ -27,6 +30,9 @@ pub struct BoosterConfig {
     pub fuzzy_kernel: FuzzyKernel,
     pub loss: LossConfig,
     pub monotonic_constraints: Vec<i8>,
+    pub interaction_constraints: Vec<Vec<usize>>,
+    pub graph_split_regularization: Option<GraphSplitRegularization>,
+    pub graph_leaf_smoothing: Option<GraphLeafSmoothing>,
 }
 
 #[derive(Debug, Clone)]
@@ -52,6 +58,9 @@ impl Default for BoosterConfig {
             fuzzy_kernel: FuzzyKernel::Linear,
             loss: LossConfig::L2,
             monotonic_constraints: Vec::new(),
+            interaction_constraints: Vec::new(),
+            graph_split_regularization: None,
+            graph_leaf_smoothing: None,
         }
     }
 }
@@ -90,7 +99,12 @@ impl Booster {
             }
         }
         let weights = validate_weights(sample_weight, y.len())?;
-        validate_training_config(&self.config, x.n_cols())?;
+        validate_training_config(
+            &self.config,
+            x.n_cols(),
+            x.n_cols() + x.n_sparse_sets(),
+            x.n_rows(),
+        )?;
         let resolved_splitters = resolve_splitters(&self.config, x);
         let transformed_y;
         let training_targets = match self.config.loss {
@@ -126,6 +140,8 @@ impl Booster {
             fuzzy_kernel: self.config.fuzzy_kernel,
             loss: self.config.loss.clone(),
             monotonic_constraints: self.config.monotonic_constraints.clone(),
+            interaction_constraints: self.config.interaction_constraints.clone(),
+            graph_split_regularization: self.config.graph_split_regularization.clone(),
         };
         let fit_context = profile::timed(profile::CONTEXT, || builder.fit_context(x));
 
@@ -151,8 +167,9 @@ impl Booster {
                 && matches!(self.config.leaf_predictor, LeafPredictorKind::Constant);
             let use_leaf_updates = use_leaf_updates
                 && matches!(self.config.loss, LossConfig::L2 | LossConfig::LogL2(_))
-                && self.config.monotonic_constraints.is_empty();
-            let tree = if use_leaf_updates {
+                && self.config.monotonic_constraints.is_empty()
+                && self.config.graph_leaf_smoothing.is_none();
+            let mut tree = if use_leaf_updates {
                 let (tree, updates) = profile::timed(profile::TREE_FIT, || {
                     builder.fit_with_leaf_updates_in_context(x, &residuals, &weights, &fit_context)
                 });
@@ -165,9 +182,14 @@ impl Booster {
                 });
                 tree
             } else {
-                let tree = profile::timed(profile::TREE_FIT, || {
+                profile::timed(profile::TREE_FIT, || {
                     builder.fit_in_context(x, &residuals, &weights, &fit_context)
-                });
+                })
+            };
+            if let Some(smoothing) = &self.config.graph_leaf_smoothing {
+                apply_graph_leaf_smoothing(&mut tree, x, smoothing)?;
+            }
+            if !use_leaf_updates || self.config.graph_leaf_smoothing.is_some() {
                 profile::timed(profile::PRED_UPDATE, || {
                     pred.par_iter_mut()
                         .enumerate()
@@ -176,8 +198,7 @@ impl Booster {
                                 self.config.learning_rate * tree.predict_dataset_row(x, row);
                         });
                 });
-                tree
-            };
+            }
             trees.push(tree);
         }
 
@@ -205,6 +226,9 @@ impl Booster {
                 fuzzy_kernel: self.config.fuzzy_kernel,
                 loss: self.config.loss.clone(),
                 monotonic_constraints: self.config.monotonic_constraints.clone(),
+                interaction_constraints: self.config.interaction_constraints.clone(),
+                graph_split_regularization: self.config.graph_split_regularization.clone(),
+                graph_leaf_smoothing: self.config.graph_leaf_smoothing.clone(),
             }),
             prediction_transform,
             trees,
@@ -214,7 +238,12 @@ impl Booster {
     }
 }
 
-fn validate_training_config(config: &BoosterConfig, feature_count: usize) -> Result<()> {
+fn validate_training_config(
+    config: &BoosterConfig,
+    feature_count: usize,
+    total_feature_count: usize,
+    row_count: usize,
+) -> Result<()> {
     match config.loss {
         LossConfig::L2 => {}
         LossConfig::L1 => {
@@ -298,6 +327,150 @@ fn validate_training_config(config: &BoosterConfig, feature_count: usize) -> Res
             ));
         }
     }
+    validate_interaction_constraints(&config.interaction_constraints, total_feature_count)?;
+    if let Some(graph_split_regularization) = &config.graph_split_regularization {
+        graph_split_regularization.validate_row_count(row_count)?;
+    }
+    if let Some(graph_leaf_smoothing) = &config.graph_leaf_smoothing {
+        graph_leaf_smoothing.validate_row_count(row_count)?;
+        if config.leaf_predictor != LeafPredictorKind::Constant {
+            return Err(CartoBoostError::InvalidInput(
+                "graph_leaf_smoothing requires constant leaves".to_string(),
+            ));
+        }
+        if config.fuzzy {
+            return Err(CartoBoostError::InvalidInput(
+                "graph_leaf_smoothing requires hard routing".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn apply_graph_leaf_smoothing(
+    tree: &mut crate::tree::Tree,
+    x: &Dataset,
+    smoothing: &GraphLeafSmoothing,
+) -> Result<()> {
+    smoothing.validate_row_count(x.n_rows())?;
+    if smoothing.lambda == 0.0 || smoothing.iterations == 0 {
+        return Ok(());
+    }
+    let mut leaf_values = Vec::new();
+    collect_leaf_values(&tree.root, &mut leaf_values);
+    if leaf_values.len() <= 1 {
+        return Ok(());
+    }
+    let row_leaf_ids = (0..x.n_rows())
+        .map(|row| leaf_id_for_row(&tree.root, x, row, 0))
+        .collect::<Vec<_>>();
+    let leaf_graph = leaf_graph_from_row_graph(&smoothing.graph, &row_leaf_ids, leaf_values.len())?;
+    let smoothed = smoothing
+        .smoother()
+        .smooth_leaf_values(&leaf_values, &GraphLaplacian::new(leaf_graph))?;
+    let mut next_leaf = 0usize;
+    assign_leaf_values(&mut tree.root, &smoothed, &mut next_leaf);
+    Ok(())
+}
+
+fn collect_leaf_values(node: &crate::tree::Node, values: &mut Vec<f64>) {
+    match node {
+        crate::tree::Node::Leaf { value, .. } => values.push(*value),
+        crate::tree::Node::LinearLeaf { .. } => {}
+        crate::tree::Node::Branch { left, right, .. } => {
+            collect_leaf_values(left, values);
+            collect_leaf_values(right, values);
+        }
+    }
+}
+
+fn assign_leaf_values(node: &mut crate::tree::Node, values: &[f64], next_leaf: &mut usize) {
+    match node {
+        crate::tree::Node::Leaf { value, .. } => {
+            if let Some(smoothed) = values.get(*next_leaf) {
+                *value = *smoothed;
+            }
+            *next_leaf += 1;
+        }
+        crate::tree::Node::LinearLeaf { .. } => {}
+        crate::tree::Node::Branch { left, right, .. } => {
+            assign_leaf_values(left, values, next_leaf);
+            assign_leaf_values(right, values, next_leaf);
+        }
+    }
+}
+
+fn leaf_id_for_row(node: &crate::tree::Node, x: &Dataset, row: usize, offset: usize) -> usize {
+    match node {
+        crate::tree::Node::Leaf { .. } | crate::tree::Node::LinearLeaf { .. } => offset,
+        crate::tree::Node::Branch {
+            split, left, right, ..
+        } => {
+            let left_count = leaf_count(left);
+            if split.hard_goes_left_dataset_row(x, row) {
+                leaf_id_for_row(left, x, row, offset)
+            } else {
+                leaf_id_for_row(right, x, row, offset + left_count)
+            }
+        }
+    }
+}
+
+fn leaf_count(node: &crate::tree::Node) -> usize {
+    match node {
+        crate::tree::Node::Leaf { .. } | crate::tree::Node::LinearLeaf { .. } => 1,
+        crate::tree::Node::Branch { left, right, .. } => leaf_count(left) + leaf_count(right),
+    }
+}
+
+fn leaf_graph_from_row_graph(
+    row_graph: &CsrGraph,
+    row_leaf_ids: &[usize],
+    leaf_count: usize,
+) -> Result<CsrGraph> {
+    if row_graph.node_count != row_leaf_ids.len() {
+        return Err(CartoBoostError::InvalidInput(
+            "row graph node_count must match row leaf assignment count".to_string(),
+        ));
+    }
+    let mut weights = std::collections::BTreeMap::<(usize, usize), f64>::new();
+    for left_row in 0..row_graph.node_count {
+        let left_leaf = row_leaf_ids[left_row];
+        for (right_row, weight) in row_graph.neighbors(left_row)? {
+            let right_leaf = row_leaf_ids[right_row];
+            if left_leaf != right_leaf {
+                *weights.entry((left_leaf, right_leaf)).or_insert(0.0) += weight;
+            }
+        }
+    }
+    let edges = weights
+        .into_iter()
+        .map(|((left, right), weight)| (left, right, weight))
+        .collect::<Vec<_>>();
+    CsrGraph::from_edges(leaf_count, &edges)
+}
+
+fn validate_interaction_constraints(
+    interaction_constraints: &[Vec<usize>],
+    feature_count: usize,
+) -> Result<()> {
+    for group in interaction_constraints {
+        if group.is_empty() {
+            return Err(CartoBoostError::InvalidInput(
+                "interaction constraint groups must not be empty".to_string(),
+            ));
+        }
+        if group.iter().any(|feature| *feature >= feature_count) {
+            return Err(CartoBoostError::InvalidInput(
+                "interaction constraint feature index out of range".to_string(),
+            ));
+        }
+        if group.windows(2).any(|window| window[0] >= window[1]) {
+            return Err(CartoBoostError::InvalidInput(
+                "interaction constraint groups must be sorted and deduplicated".to_string(),
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -331,6 +504,7 @@ fn should_use_histogram_auto(config: &BoosterConfig, x: &Dataset) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::graph_regularization::{CsrGraph, GraphLeafSmoothing, GraphSplitRegularization};
     use crate::loss::{L2Loss, LossConfig, QuantileLossConfig};
     use crate::tree::{Split, MODEL_ARTIFACT_VERSION};
 
@@ -593,6 +767,254 @@ mod tests {
                 .monotonic_constraints,
             vec![1]
         );
+    }
+
+    #[test]
+    fn interaction_constraints_gate_second_level_split_search() {
+        let x = Dataset::from_rows(vec![
+            vec![0.0, 0.0, 0.0],
+            vec![0.0, 1.0, 0.0],
+            vec![1.0, 0.0, 0.0],
+            vec![1.0, 1.0, 0.0],
+        ])
+        .unwrap();
+        let y = vec![0.0, 1.0, 10.0, 11.0];
+        let constrained = Booster::new(BoosterConfig {
+            n_estimators: 1,
+            learning_rate: 1.0,
+            max_depth: 2,
+            min_samples_leaf: 1,
+            min_gain: 0.0,
+            splitters: vec![SplitterKind::Axis],
+            interaction_constraints: vec![vec![0, 2]],
+            ..BoosterConfig::default()
+        })
+        .fit(&x, &y, None)
+        .unwrap();
+        let allowed = Booster::new(BoosterConfig {
+            n_estimators: 1,
+            learning_rate: 1.0,
+            max_depth: 2,
+            min_samples_leaf: 1,
+            min_gain: 0.0,
+            splitters: vec![SplitterKind::Axis],
+            interaction_constraints: vec![vec![0, 1]],
+            ..BoosterConfig::default()
+        })
+        .fit(&x, &y, None)
+        .unwrap();
+
+        assert!(tree_uses_feature(&constrained.trees[0].root, 0));
+        assert!(!tree_uses_feature(&constrained.trees[0].root, 1));
+        assert!(tree_uses_feature(&allowed.trees[0].root, 1));
+        assert_eq!(
+            constrained
+                .training_config
+                .as_ref()
+                .unwrap()
+                .interaction_constraints,
+            vec![vec![0, 2]]
+        );
+        assert!(
+            L2Loss.value(&y, &allowed.predict(&x)) < L2Loss.value(&y, &constrained.predict(&x))
+        );
+
+        let encoded = serde_json::to_string(&constrained).unwrap();
+        let decoded: Model = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(
+            decoded
+                .training_config
+                .as_ref()
+                .unwrap()
+                .interaction_constraints,
+            vec![vec![0, 2]]
+        );
+        assert_eq!(decoded.predict(&x), constrained.predict(&x));
+    }
+
+    #[test]
+    fn interaction_constraints_validate_sorted_in_range_groups() {
+        let x = Dataset::from_rows(vec![vec![0.0, 0.0], vec![1.0, 1.0]]).unwrap();
+        let y = vec![0.0, 1.0];
+        let unsorted = Booster::new(BoosterConfig {
+            interaction_constraints: vec![vec![1, 0]],
+            ..BoosterConfig::default()
+        })
+        .fit(&x, &y, None)
+        .unwrap_err();
+        assert!(unsorted.to_string().contains("sorted and deduplicated"));
+
+        let out_of_range = Booster::new(BoosterConfig {
+            interaction_constraints: vec![vec![2]],
+            ..BoosterConfig::default()
+        })
+        .fit(&x, &y, None)
+        .unwrap_err();
+        assert!(out_of_range.to_string().contains("out of range"));
+    }
+
+    #[test]
+    fn graph_split_regularization_lambda_zero_matches_baseline_predictions() {
+        let x = Dataset::from_rows(vec![
+            vec![0.0, 0.0],
+            vec![0.0, 1.0],
+            vec![1.0, 0.0],
+            vec![1.0, 1.0],
+        ])
+        .unwrap();
+        let y = vec![0.0, 10.0, 10.0, 10.0];
+        let graph =
+            CsrGraph::from_edges(4, &[(0, 2, 1.0), (2, 0, 1.0), (1, 3, 1.0), (3, 1, 1.0)]).unwrap();
+        let config = BoosterConfig {
+            n_estimators: 1,
+            learning_rate: 1.0,
+            max_depth: 1,
+            min_samples_leaf: 1,
+            min_gain: 0.0,
+            splitters: vec![SplitterKind::Axis],
+            ..BoosterConfig::default()
+        };
+        let baseline = Booster::new(config.clone()).fit(&x, &y, None).unwrap();
+        let regularized = Booster::new(BoosterConfig {
+            graph_split_regularization: Some(GraphSplitRegularization::new(graph, 0.0).unwrap()),
+            ..config
+        })
+        .fit(&x, &y, None)
+        .unwrap();
+
+        assert_eq!(regularized.predict(&x), baseline.predict(&x));
+        assert_eq!(
+            regularized
+                .training_config
+                .as_ref()
+                .unwrap()
+                .graph_split_regularization
+                .as_ref()
+                .unwrap()
+                .lambda,
+            0.0
+        );
+    }
+
+    #[test]
+    fn graph_split_regularization_penalizes_rough_candidate_updates() {
+        let x = Dataset::from_rows(vec![
+            vec![0.0, 0.0],
+            vec![0.0, 1.0],
+            vec![1.0, 0.0],
+            vec![1.0, 1.0],
+        ])
+        .unwrap();
+        let y = vec![0.0, 10.0, 10.0, 10.0];
+        let graph =
+            CsrGraph::from_edges(4, &[(0, 2, 1.0), (2, 0, 1.0), (1, 3, 1.0), (3, 1, 1.0)]).unwrap();
+        let baseline = Booster::new(BoosterConfig {
+            n_estimators: 1,
+            learning_rate: 1.0,
+            max_depth: 1,
+            min_samples_leaf: 1,
+            min_gain: 0.0,
+            splitters: vec![SplitterKind::Axis],
+            ..BoosterConfig::default()
+        })
+        .fit(&x, &y, None)
+        .unwrap();
+        let regularized = Booster::new(BoosterConfig {
+            n_estimators: 1,
+            learning_rate: 1.0,
+            max_depth: 1,
+            min_samples_leaf: 1,
+            min_gain: 0.0,
+            splitters: vec![SplitterKind::Axis],
+            graph_split_regularization: Some(GraphSplitRegularization::new(graph, 1.0).unwrap()),
+            ..BoosterConfig::default()
+        })
+        .fit(&x, &y, None)
+        .unwrap();
+
+        assert!(root_uses_axis_feature(&baseline, 0));
+        assert!(root_uses_axis_feature(&regularized, 1));
+
+        let encoded = serde_json::to_string(&regularized).unwrap();
+        let decoded: Model = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded.predict(&x), regularized.predict(&x));
+        assert!(decoded
+            .training_config
+            .as_ref()
+            .unwrap()
+            .graph_split_regularization
+            .is_some());
+    }
+
+    #[test]
+    fn graph_split_regularization_rejects_row_count_mismatch() {
+        let x = Dataset::from_rows(vec![vec![0.0], vec![1.0]]).unwrap();
+        let y = vec![0.0, 1.0];
+        let graph = CsrGraph::from_edges(3, &[(0, 1, 1.0)]).unwrap();
+        let err = Booster::new(BoosterConfig {
+            graph_split_regularization: Some(GraphSplitRegularization::new(graph, 1.0).unwrap()),
+            ..BoosterConfig::default()
+        })
+        .fit(&x, &y, None)
+        .unwrap_err();
+
+        assert!(err.to_string().contains("training row count"));
+    }
+
+    #[test]
+    fn graph_leaf_smoothing_lambda_zero_matches_baseline_predictions() {
+        let x = Dataset::from_rows(vec![vec![0.0], vec![1.0]]).unwrap();
+        let y = vec![0.0, 10.0];
+        let graph = CsrGraph::from_edges(2, &[(0, 1, 1.0), (1, 0, 1.0)]).unwrap();
+        let config = BoosterConfig {
+            n_estimators: 1,
+            learning_rate: 1.0,
+            max_depth: 1,
+            min_samples_leaf: 1,
+            min_gain: 0.0,
+            splitters: vec![SplitterKind::Axis],
+            ..BoosterConfig::default()
+        };
+        let baseline = Booster::new(config.clone()).fit(&x, &y, None).unwrap();
+        let smoothed = Booster::new(BoosterConfig {
+            graph_leaf_smoothing: Some(GraphLeafSmoothing::new(graph, 0.0, 4).unwrap()),
+            ..config
+        })
+        .fit(&x, &y, None)
+        .unwrap();
+
+        assert_eq!(smoothed.predict(&x), baseline.predict(&x));
+    }
+
+    #[test]
+    fn graph_leaf_smoothing_smooths_constant_leaf_updates() {
+        let x = Dataset::from_rows(vec![vec![0.0], vec![1.0]]).unwrap();
+        let y = vec![0.0, 10.0];
+        let graph = CsrGraph::from_edges(2, &[(0, 1, 1.0), (1, 0, 1.0)]).unwrap();
+        let model = Booster::new(BoosterConfig {
+            n_estimators: 1,
+            learning_rate: 1.0,
+            max_depth: 1,
+            min_samples_leaf: 1,
+            min_gain: 0.0,
+            splitters: vec![SplitterKind::Axis],
+            graph_leaf_smoothing: Some(GraphLeafSmoothing::new(graph, 1.0, 1).unwrap()),
+            ..BoosterConfig::default()
+        })
+        .fit(&x, &y, None)
+        .unwrap();
+
+        assert_predictions_close(&model.predict(&x), &[5.0, 5.0]);
+        assert!(model
+            .training_config
+            .as_ref()
+            .unwrap()
+            .graph_leaf_smoothing
+            .is_some());
+
+        let encoded = serde_json::to_string(&model).unwrap();
+        let decoded: Model = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded.predict(&x), model.predict(&x));
     }
 
     #[test]
@@ -881,5 +1303,60 @@ mod tests {
         ));
         assert_predictions_close(&model.predict(&x), &[1.25, 3.125, 6.875, 8.75]);
         assert_predictions_close(&[model.predict_one(&[1.5])], &[5.0]);
+    }
+
+    fn tree_uses_feature(node: &crate::tree::Node, feature: usize) -> bool {
+        match node {
+            crate::tree::Node::Branch {
+                split, left, right, ..
+            } => {
+                split_uses_feature(split, feature)
+                    || tree_uses_feature(left, feature)
+                    || tree_uses_feature(right, feature)
+            }
+            crate::tree::Node::Leaf { .. } | crate::tree::Node::LinearLeaf { .. } => false,
+        }
+    }
+
+    fn root_uses_axis_feature(model: &Model, feature: usize) -> bool {
+        matches!(
+            model.trees[0].root,
+            crate::tree::Node::Branch {
+                split: Split::Axis {
+                    feature: split_feature,
+                    ..
+                },
+                ..
+            } if split_feature == feature
+        )
+    }
+
+    fn split_uses_feature(split: &Split, feature: usize) -> bool {
+        match split {
+            Split::Axis {
+                feature: split_feature,
+                ..
+            }
+            | Split::PeriodicInterval {
+                feature: split_feature,
+                ..
+            }
+            | Split::SparseSetContainsAny {
+                feature: split_feature,
+                ..
+            } => *split_feature == feature,
+            Split::Diagonal2D {
+                x_feature,
+                y_feature,
+                ..
+            }
+            | Split::Gaussian2D {
+                x_feature,
+                y_feature,
+                ..
+            } => *x_feature == feature || *y_feature == feature,
+            Split::SparseListContainsAny { .. } => false,
+            Split::Fuzzy { base, .. } => split_uses_feature(base, feature),
+        }
     }
 }

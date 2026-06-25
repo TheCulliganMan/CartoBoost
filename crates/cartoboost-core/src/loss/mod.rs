@@ -3,8 +3,9 @@ mod quantile;
 
 pub use l2::{huber_irls_weights, HuberLoss, HuberLossConfig, L2Loss, LogL2LossConfig};
 pub use quantile::{
-    absolute_loss, pinball_loss, weighted_absolute_loss, weighted_pinball_loss, weighted_quantile,
-    L1Loss, QuantileLoss, QuantileLossConfig,
+    absolute_loss, huber_quantile_loss, pinball_loss, weighted_absolute_loss,
+    weighted_pinball_loss, weighted_quantile, CompositeQuantileLoss, CompositeQuantileLossConfig,
+    HuberQuantileLoss, HuberQuantileLossConfig, L1Loss, QuantileLoss, QuantileLossConfig,
 };
 use serde::{Deserialize, Serialize};
 

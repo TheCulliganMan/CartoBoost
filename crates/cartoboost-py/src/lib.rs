@@ -49,7 +49,10 @@ use cartoboost_core::forecasting::{
     SeasonalNaiveForecaster as CoreSeasonalNaiveForecaster, SequenceCandidate,
     SequenceCandidateEnsemble, SequenceCandidatePrediction, SequenceFrame, SequenceGroupPrediction,
     SequenceOofCandidateRow, SequenceOofFold, SequenceSeries, SequenceStateSpaceConfig,
-    ThetaForecaster as CoreThetaForecaster, ThetaSeasonality, TsbForecaster as CoreTsbForecaster,
+    SpatialPiecewiseKrigingConfig as CoreSpatialPiecewiseKrigingConfig,
+    SpatialPiecewiseKrigingForecaster as CoreSpatialPiecewiseKrigingForecaster,
+    SpatialPiecewiseKrigingMode, ThetaForecaster as CoreThetaForecaster, ThetaSeasonality,
+    TsbForecaster as CoreTsbForecaster,
     WeightedEnsembleForecaster as CoreWeightedEnsembleForecaster,
 };
 use cartoboost_core::geo::{
@@ -2519,6 +2522,103 @@ impl NativeKrigingForecaster {
     }
 }
 
+#[pyclass(name = "SpatialPiecewiseKrigingForecaster")]
+#[derive(Clone, Debug)]
+struct NativeSpatialPiecewiseKrigingForecaster {
+    model: CoreSpatialPiecewiseKrigingForecaster,
+}
+
+#[pymethods]
+impl NativeSpatialPiecewiseKrigingForecaster {
+    #[new]
+    #[pyo3(signature = (
+        coordinates,
+        mode="residual_kriging",
+        spatial_regressors=None,
+        range=1.0,
+        nugget=1.0e-6,
+        sill=1.0,
+        variogram_model="exponential",
+        drift="ordinary",
+        anisotropy_angle_degrees=0.0,
+        anisotropy_scaling=1.0,
+        max_neighbors=None,
+        min_neighbors=1,
+        max_distance=None,
+        residual_shrinkage=1.0,
+        allow_neighbor_fallback=false,
+        piecewise_config_json=None
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        coordinates: Vec<(String, f64, f64)>,
+        mode: &str,
+        spatial_regressors: Option<Vec<String>>,
+        range: f64,
+        nugget: f64,
+        sill: f64,
+        variogram_model: &str,
+        drift: &str,
+        anisotropy_angle_degrees: f64,
+        anisotropy_scaling: f64,
+        max_neighbors: Option<usize>,
+        min_neighbors: usize,
+        max_distance: Option<f64>,
+        residual_shrinkage: f64,
+        allow_neighbor_fallback: bool,
+        piecewise_config_json: Option<String>,
+    ) -> PyResult<Self> {
+        let coordinates = coordinates
+            .into_iter()
+            .map(|(series_id, x, y)| (series_id, (x, y)))
+            .collect::<BTreeMap<_, _>>();
+        let kriging_config = build_kriging_config(
+            range,
+            nugget,
+            sill,
+            variogram_model,
+            drift,
+            anisotropy_angle_degrees,
+            anisotropy_scaling,
+            max_neighbors,
+            min_neighbors,
+            max_distance,
+        )?;
+        let piecewise_config = match piecewise_config_json {
+            Some(payload) => CorePiecewiseLinearSeasonalForecaster::from_json_string(&payload)
+                .map_err(to_py_value_error)?
+                .config()
+                .clone(),
+            None => CorePiecewiseLinearSeasonalConfig::default(),
+        };
+        let config = CoreSpatialPiecewiseKrigingConfig {
+            coordinates,
+            mode: parse_spatial_piecewise_kriging_mode(mode)?,
+            piecewise_config,
+            kriging_config,
+            spatial_regressors: spatial_regressors.unwrap_or_default(),
+            residual_shrinkage,
+            allow_neighbor_fallback,
+        };
+        Ok(Self {
+            model: CoreSpatialPiecewiseKrigingForecaster::new(config).map_err(to_py_value_error)?,
+        })
+    }
+
+    fn fit(&mut self, py: Python<'_>, frame: &NativeForecastFrame) -> PyResult<()> {
+        fit_forecaster_py(py, &mut self.model, frame)
+    }
+
+    fn predict(&self, py: Python<'_>, horizon: usize) -> PyResult<NativeForecastResult> {
+        predict_forecaster_py(py, &self.model, horizon)
+    }
+
+    fn metadata_json(&self) -> PyResult<String> {
+        serde_json::to_string(&self.model.metadata())
+            .map_err(|err| PyRuntimeError::new_err(err.to_string()))
+    }
+}
+
 #[pyclass(name = "NBeatsForecaster")]
 struct NativeNBeatsForecaster {
     model: CoreNBeatsForecaster,
@@ -3081,6 +3181,19 @@ fn parse_kriging_drift(value: &str) -> PyResult<KrigingDrift> {
         "linear" | "universal_linear" | "universal" => Ok(KrigingDrift::Linear),
         other => Err(PyValueError::new_err(format!(
             "unsupported kriging drift {other:?}; expected ordinary or linear"
+        ))),
+    }
+}
+
+fn parse_spatial_piecewise_kriging_mode(value: &str) -> PyResult<SpatialPiecewiseKrigingMode> {
+    match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+        "kriged_regressors" | "regressors" => {
+            Ok(SpatialPiecewiseKrigingMode::KrigedRegressors)
+        }
+        "residual_kriging" | "residual" => Ok(SpatialPiecewiseKrigingMode::ResidualKriging),
+        "hybrid" => Ok(SpatialPiecewiseKrigingMode::Hybrid),
+        other => Err(PyValueError::new_err(format!(
+            "unsupported spatial piecewise kriging mode {other:?}; expected kriged_regressors, residual_kriging, or hybrid"
         ))),
     }
 }
@@ -3963,6 +4076,9 @@ impl NativeCartoBoostRegressor {
             fuzzy_bandwidth: self.fuzzy_bandwidth,
             fuzzy_kernel: parse_fuzzy_kernel(&self.fuzzy_kernel)?,
             monotonic_constraints: self.monotonic_constraints.clone(),
+            interaction_constraints: Vec::new(),
+            graph_split_regularization: None,
+            graph_leaf_smoothing: None,
         })
     }
 
@@ -8716,6 +8832,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<NativeAutoKalmanForecaster>()?;
     m.add_class::<NativeAutoLocalLevelKalmanForecaster>()?;
     m.add_class::<NativeKrigingForecaster>()?;
+    m.add_class::<NativeSpatialPiecewiseKrigingForecaster>()?;
     m.add_class::<NativeNBeatsForecaster>()?;
     m.add_class::<NativeNHiTSForecaster>()?;
     m.add_class::<NativeAutoForecastModel>()?;

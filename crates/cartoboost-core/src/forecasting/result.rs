@@ -18,6 +18,8 @@ pub struct ForecastResult {
     predictions: Vec<ForecastPrediction>,
     #[serde(default)]
     intervals: Vec<ForecastIntervalPrediction>,
+    #[serde(default)]
+    details: Vec<ForecastPredictionDetail>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -29,6 +31,26 @@ pub struct ForecastIntervalPrediction {
     pub level: f64,
     pub lower: f64,
     pub upper: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ForecastPredictionDetail {
+    pub series_id: String,
+    pub timestamp: NaiveDateTime,
+    pub horizon: usize,
+    pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_mean: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spatial_correction: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kriging_variance: Option<f64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selected_neighbors: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component_decomposition: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Value>,
 }
 
 impl ForecastResult {
@@ -60,6 +82,7 @@ impl ForecastResult {
         Ok(Self {
             predictions,
             intervals: Vec::new(),
+            details: Vec::new(),
         })
     }
 
@@ -86,6 +109,30 @@ impl ForecastResult {
         Ok(Self {
             predictions: result.predictions,
             intervals,
+            details: Vec::new(),
+        })
+    }
+
+    pub fn new_with_intervals_and_details(
+        predictions: Vec<ForecastPrediction>,
+        intervals: Vec<ForecastIntervalPrediction>,
+        mut details: Vec<ForecastPredictionDetail>,
+    ) -> Result<Self> {
+        let result = Self::new_with_intervals(predictions, intervals)?;
+        for detail in &details {
+            validate_prediction_detail(detail)?;
+        }
+        details.sort_by(|a, b| {
+            a.series_id
+                .cmp(&b.series_id)
+                .then_with(|| a.timestamp.cmp(&b.timestamp))
+                .then_with(|| a.horizon.cmp(&b.horizon))
+                .then_with(|| a.model.cmp(&b.model))
+        });
+        Ok(Self {
+            predictions: result.predictions,
+            intervals: result.intervals,
+            details,
         })
     }
 
@@ -95,6 +142,10 @@ impl ForecastResult {
 
     pub fn intervals(&self) -> &[ForecastIntervalPrediction] {
         &self.intervals
+    }
+
+    pub fn details(&self) -> &[ForecastPredictionDetail] {
+        &self.details
     }
 
     pub fn to_json_string(&self) -> Result<String> {
@@ -107,7 +158,7 @@ impl ForecastResult {
             return Self::from_record_values(records);
         }
         let result: Self = serde_json::from_value(value)?;
-        Self::new_with_intervals(result.predictions, result.intervals)
+        Self::new_with_intervals_and_details(result.predictions, result.intervals, result.details)
     }
 
     pub fn prediction_columns() -> Vec<&'static str> {
@@ -127,11 +178,26 @@ impl ForecastResult {
             columns.push(format!("prediction_lower_{suffix}"));
             columns.push(format!("prediction_upper_{suffix}"));
         }
+        if !self.details.is_empty() {
+            columns.extend(
+                [
+                    "base_mean",
+                    "spatial_correction",
+                    "kriging_variance",
+                    "selected_neighbors",
+                    "component_decomposition",
+                    "metadata",
+                ]
+                .into_iter()
+                .map(str::to_string),
+            );
+        }
         columns
     }
 
     pub fn to_json_value(&self) -> Value {
         let intervals_by_key = self.intervals_by_prediction_key();
+        let details_by_key = self.details_by_prediction_key();
         let records = self
             .predictions
             .iter()
@@ -148,6 +214,26 @@ impl ForecastResult {
                         let suffix = interval_suffix(interval.level);
                         record[format!("prediction_lower_{suffix}")] = json!(interval.lower);
                         record[format!("prediction_upper_{suffix}")] = json!(interval.upper);
+                    }
+                }
+                if let Some(detail) = details_by_key.get(&prediction_key(prediction)) {
+                    if let Some(base_mean) = detail.base_mean {
+                        record["base_mean"] = json!(base_mean);
+                    }
+                    if let Some(spatial_correction) = detail.spatial_correction {
+                        record["spatial_correction"] = json!(spatial_correction);
+                    }
+                    if let Some(kriging_variance) = detail.kriging_variance {
+                        record["kriging_variance"] = json!(kriging_variance);
+                    }
+                    if !detail.selected_neighbors.is_empty() {
+                        record["selected_neighbors"] = json!(detail.selected_neighbors);
+                    }
+                    if let Some(component_decomposition) = &detail.component_decomposition {
+                        record["component_decomposition"] = component_decomposition.clone();
+                    }
+                    if let Some(metadata) = &detail.metadata {
+                        record["metadata"] = metadata.clone();
                     }
                 }
                 record
@@ -177,6 +263,14 @@ impl ForecastResult {
                 .entry(interval_prediction_key(interval))
                 .or_default()
                 .push(interval);
+        }
+        by_key
+    }
+
+    fn details_by_prediction_key(&self) -> BTreeMap<String, &ForecastPredictionDetail> {
+        let mut by_key = BTreeMap::new();
+        for detail in &self.details {
+            by_key.insert(detail_key(detail), detail);
         }
         by_key
     }
@@ -232,9 +326,29 @@ fn validate_interval_prediction(interval: &ForecastIntervalPrediction) -> Result
     Ok(())
 }
 
+fn validate_prediction_detail(detail: &ForecastPredictionDetail) -> Result<()> {
+    if detail.horizon == 0 {
+        return Err(CartoBoostError::InvalidInput(
+            "forecast detail horizon values must be positive".to_string(),
+        ));
+    }
+    for (name, value) in [
+        ("base_mean", detail.base_mean),
+        ("spatial_correction", detail.spatial_correction),
+        ("kriging_variance", detail.kriging_variance),
+    ] {
+        if value.is_some_and(|value| !value.is_finite()) {
+            return Err(CartoBoostError::InvalidInput(format!(
+                "forecast detail {name} values must be finite"
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn prediction_key(prediction: &ForecastPrediction) -> String {
     format!(
-        "{}\u{1f}{}\u{1f}{}\u{1f}{}",
+        "{}\x1f{}\x1f{}\x1f{}",
         prediction.series_id,
         prediction.timestamp.format("%Y-%m-%dT%H:%M:%S"),
         prediction.horizon,
@@ -244,11 +358,21 @@ fn prediction_key(prediction: &ForecastPrediction) -> String {
 
 fn interval_prediction_key(interval: &ForecastIntervalPrediction) -> String {
     format!(
-        "{}\u{1f}{}\u{1f}{}\u{1f}{}",
+        "{}\x1f{}\x1f{}\x1f{}",
         interval.series_id,
         interval.timestamp.format("%Y-%m-%dT%H:%M:%S"),
         interval.horizon,
         interval.model
+    )
+}
+
+fn detail_key(detail: &ForecastPredictionDetail) -> String {
+    format!(
+        "{}\x1f{}\x1f{}\x1f{}",
+        detail.series_id,
+        detail.timestamp.format("%Y-%m-%dT%H:%M:%S"),
+        detail.horizon,
+        detail.model
     )
 }
 

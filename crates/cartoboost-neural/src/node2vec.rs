@@ -1,5 +1,6 @@
 use crate::error::{NeuralError, Result};
 use crate::graphsage::GraphSageEmbedding;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
@@ -61,9 +62,273 @@ pub struct Node2VecLoss {
     epoch_losses: Vec<f32>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AliasSampler {
+    probabilities: Vec<f32>,
+    aliases: Vec<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RandomWalkGenerator {
+    pub config: Node2VecConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Node2VecTrainer {
+    pub config: Node2VecConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EdgeEmbeddingFeatures {
+    pub values: Vec<Vec<f32>>,
+    pub feature_names: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EdgeEmbeddingModel {
+    pub node_count: usize,
+    pub embeddings: Vec<Vec<f32>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EmbeddingFeatureTransformer {
+    pub model: EdgeEmbeddingModel,
+}
+
 impl Node2VecLoss {
     pub fn values(&self) -> &[f32] {
         &self.epoch_losses
+    }
+}
+
+impl AliasSampler {
+    pub fn new(weights: &[f32]) -> Result<Self> {
+        if weights.is_empty() {
+            return Err(NeuralError::InvalidArgument(
+                "alias sampler requires at least one weight".to_string(),
+            ));
+        }
+        if weights
+            .iter()
+            .any(|weight| !weight.is_finite() || *weight < 0.0)
+        {
+            return Err(NeuralError::InvalidArgument(
+                "alias sampler weights must be finite and non-negative".to_string(),
+            ));
+        }
+        let total = weights.iter().sum::<f32>();
+        if total <= 0.0 {
+            return Err(NeuralError::InvalidArgument(
+                "alias sampler weights must have positive total mass".to_string(),
+            ));
+        }
+        let n = weights.len();
+        let mut scaled = weights
+            .iter()
+            .map(|weight| *weight * n as f32 / total)
+            .collect::<Vec<_>>();
+        let mut probabilities = vec![0.0; n];
+        let mut aliases = (0..n).collect::<Vec<_>>();
+        let mut small = Vec::new();
+        let mut large = Vec::new();
+        for (idx, &value) in scaled.iter().enumerate() {
+            if value < 1.0 {
+                small.push(idx);
+            } else {
+                large.push(idx);
+            }
+        }
+        while let (Some(less), Some(more)) = (small.pop(), large.pop()) {
+            probabilities[less] = scaled[less];
+            aliases[less] = more;
+            scaled[more] = scaled[more] + scaled[less] - 1.0;
+            if scaled[more] < 1.0 {
+                small.push(more);
+            } else {
+                large.push(more);
+            }
+        }
+        for idx in large.into_iter().chain(small) {
+            probabilities[idx] = 1.0;
+            aliases[idx] = idx;
+        }
+        Ok(Self {
+            probabilities,
+            aliases,
+        })
+    }
+
+    pub fn sample_many(&self, seed: u64, count: usize) -> Vec<usize> {
+        let mut rng = SplitMix64::from_seed(seed);
+        (0..count).map(|_| self.sample_with_rng(&mut rng)).collect()
+    }
+
+    fn sample_with_rng(&self, rng: &mut SplitMix64) -> usize {
+        let idx = rng.next_usize(self.probabilities.len());
+        if rng.next_unit() < self.probabilities[idx] {
+            idx
+        } else {
+            self.aliases[idx]
+        }
+    }
+}
+
+impl RandomWalkGenerator {
+    pub fn new(config: Node2VecConfig) -> Result<Self> {
+        validate_config(&config)?;
+        Ok(Self { config })
+    }
+
+    pub fn generate(
+        &self,
+        node_count: usize,
+        edges: &[(usize, usize)],
+        edge_weights: Option<&[f32]>,
+    ) -> Result<Vec<Vec<usize>>> {
+        validate_node_count(node_count)?;
+        let weights = validate_weights(edges.len(), edge_weights)?;
+        let graph = WeightedGraph::from_edges(node_count, edges, &weights)?;
+        Ok(generate_walks(&self.config, &graph))
+    }
+}
+
+impl Node2VecTrainer {
+    pub fn new(config: Node2VecConfig) -> Result<Self> {
+        validate_config(&config)?;
+        Ok(Self { config })
+    }
+
+    pub fn fit(
+        &self,
+        node_count: usize,
+        edges: &[(usize, usize)],
+        edge_weights: Option<&[f32]>,
+    ) -> Result<EdgeEmbeddingModel> {
+        let mut encoder = Node2VecEncoder::new(self.config.clone())?;
+        let embeddings = encoder.fit(node_count, edges, edge_weights)?;
+        EdgeEmbeddingModel::new(embeddings.into_inner())
+    }
+}
+
+impl EdgeEmbeddingModel {
+    pub fn new(embeddings: Vec<Vec<f32>>) -> Result<Self> {
+        if embeddings.is_empty() {
+            return Err(NeuralError::InvalidArgument(
+                "edge embedding model requires at least one node".to_string(),
+            ));
+        }
+        let width = embeddings[0].len();
+        if width == 0 {
+            return Err(NeuralError::InvalidArgument(
+                "edge embedding vectors must have positive width".to_string(),
+            ));
+        }
+        if embeddings
+            .iter()
+            .any(|row| row.len() != width || row.iter().any(|value| !value.is_finite()))
+        {
+            return Err(NeuralError::InvalidArgument(
+                "edge embedding rows must have consistent finite width".to_string(),
+            ));
+        }
+        Ok(Self {
+            node_count: embeddings.len(),
+            embeddings,
+        })
+    }
+
+    pub fn from_encoder(encoder: &Node2VecEncoder) -> Result<Self> {
+        Self::new(encoder.encode()?.into_inner())
+    }
+
+    pub fn transform_edges(
+        &self,
+        edges: &[(usize, usize)],
+        graph_edges: &[(usize, usize)],
+    ) -> Result<EdgeEmbeddingFeatures> {
+        EmbeddingFeatureTransformer::new(self.clone()).transform_edges(edges, graph_edges)
+    }
+}
+
+impl EmbeddingFeatureTransformer {
+    pub fn new(model: EdgeEmbeddingModel) -> Self {
+        Self { model }
+    }
+
+    pub fn transform_edges(
+        &self,
+        edges: &[(usize, usize)],
+        graph_edges: &[(usize, usize)],
+    ) -> Result<EdgeEmbeddingFeatures> {
+        let degrees = neighborhood_degrees(self.model.node_count, graph_edges)?;
+        let values = edges
+            .iter()
+            .map(|&(origin, destination)| {
+                if origin >= self.model.node_count || destination >= self.model.node_count {
+                    return Err(NeuralError::InvalidArgument(
+                        "edge feature endpoint must be in [0, node_count)".to_string(),
+                    ));
+                }
+                let origin_vec = &self.model.embeddings[origin];
+                let destination_vec = &self.model.embeddings[destination];
+                let reverse_similarity = cosine(origin_vec, destination_vec);
+                let dot_product = dot(origin_vec, destination_vec);
+                let origin_density = degrees[origin] as f32 / self.model.node_count.max(1) as f32;
+                let destination_density =
+                    degrees[destination] as f32 / self.model.node_count.max(1) as f32;
+                let local_context = 0.5 * (origin_density + destination_density);
+                let mut row = Vec::with_capacity(origin_vec.len() + destination_vec.len() + 5);
+                row.extend(origin_vec.iter().copied());
+                row.extend(destination_vec.iter().copied());
+                row.push(reverse_similarity);
+                row.push(dot_product);
+                row.push(origin_density);
+                row.push(destination_density);
+                row.push(local_context);
+                Ok(row)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut feature_names = Vec::with_capacity(self.model.embeddings[0].len() * 2 + 5);
+        for dim in 0..self.model.embeddings[0].len() {
+            feature_names.push(format!("origin_embedding_{dim}"));
+        }
+        for dim in 0..self.model.embeddings[0].len() {
+            feature_names.push(format!("destination_embedding_{dim}"));
+        }
+        feature_names.extend([
+            "edge_reverse_similarity".to_string(),
+            "edge_dot_product".to_string(),
+            "origin_neighborhood_density".to_string(),
+            "destination_neighborhood_density".to_string(),
+            "local_graph_context".to_string(),
+        ]);
+        Ok(EdgeEmbeddingFeatures {
+            values,
+            feature_names,
+        })
+    }
+
+    pub fn append_to_dense(
+        &self,
+        dense_rows: &[Vec<f32>],
+        edges: &[(usize, usize)],
+        graph_edges: &[(usize, usize)],
+    ) -> Result<Vec<Vec<f32>>> {
+        if dense_rows.len() != edges.len() {
+            return Err(NeuralError::InvalidArgument(
+                "dense row count must match edge row count".to_string(),
+            ));
+        }
+        let features = self.transform_edges(edges, graph_edges)?;
+        Ok(dense_rows
+            .iter()
+            .zip(features.values)
+            .map(|(dense, extra)| {
+                let mut row = dense.clone();
+                row.extend(extra);
+                row
+            })
+            .collect())
     }
 }
 
@@ -244,7 +509,8 @@ impl SkipGramState {
         if pairs.is_empty() {
             return vec![0.0; config.epochs];
         }
-        let negative_distribution = negative_distribution(graph);
+        let negative_distribution = AliasSampler::new(&negative_distribution(graph))
+            .expect("negative distribution is positive");
         let total_steps = (pairs.len() * config.epochs).max(1);
         let mut step = 0usize;
         let mut losses = Vec::with_capacity(config.epochs);
@@ -261,7 +527,7 @@ impl SkipGramState {
                     .max(config.learning_rate * (1.0 - progress));
                 epoch_loss += self.update_pair(source, target, 1.0, learning_rate, config);
                 for _ in 0..config.negative_samples {
-                    let negative = sample_distribution(&negative_distribution, &mut self.rng);
+                    let negative = negative_distribution.sample_with_rng(&mut self.rng);
                     if negative == target {
                         continue;
                     }
@@ -306,16 +572,20 @@ impl SkipGramState {
 }
 
 fn generate_walks(config: &Node2VecConfig, graph: &WeightedGraph) -> Vec<Vec<usize>> {
-    let mut rng = SplitMix64::from_seed(config.seed);
-    let mut nodes = (0..graph.outgoing.len()).collect::<Vec<_>>();
-    let mut walks = Vec::with_capacity(nodes.len() * config.walks_per_node);
-    for _ in 0..config.walks_per_node {
-        shuffle(&mut nodes, &mut rng);
-        for &start in &nodes {
-            walks.push(generate_walk(config, graph, start, &mut rng));
-        }
-    }
-    walks
+    let node_count = graph.outgoing.len();
+    let total = node_count * config.walks_per_node;
+    (0..total)
+        .into_par_iter()
+        .map(|walk_index| {
+            let start = walk_index % node_count;
+            let mut rng = SplitMix64::from_seed(
+                config.seed
+                    ^ 0xC0FF_EE77_D15A_5EED
+                    ^ (walk_index as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
+            );
+            generate_walk(config, graph, start, &mut rng)
+        })
+        .collect()
 }
 
 fn generate_walk(
@@ -348,25 +618,18 @@ fn sample_next(
     rng: &mut SplitMix64,
 ) -> usize {
     let neighbors = &graph.outgoing[current];
-    let total = neighbors
+    let weights = neighbors
         .iter()
         .map(|&(candidate, weight)| {
             let bias = previous.map_or(1.0, |prev| transition_bias(config, graph, prev, candidate));
             weight * bias
         })
-        .sum::<f32>();
-    if total <= 0.0 {
+        .collect::<Vec<_>>();
+    if weights.iter().sum::<f32>() <= 0.0 {
         return neighbors[rng.next_usize(neighbors.len())].0;
     }
-    let mut threshold = rng.next_unit() * total;
-    for &(candidate, weight) in neighbors {
-        let bias = previous.map_or(1.0, |prev| transition_bias(config, graph, prev, candidate));
-        threshold -= weight * bias;
-        if threshold <= 0.0 {
-            return candidate;
-        }
-    }
-    neighbors.last().expect("neighbors is non-empty").0
+    let sampler = AliasSampler::new(&weights).expect("positive transition weights");
+    neighbors[sampler.sample_with_rng(rng)].0
 }
 
 fn transition_bias(
@@ -417,17 +680,6 @@ fn negative_distribution(graph: &WeightedGraph) -> Vec<f32> {
         *value /= total;
     }
     values
-}
-
-fn sample_distribution(probabilities: &[f32], rng: &mut SplitMix64) -> usize {
-    let mut threshold = rng.next_unit();
-    for (index, probability) in probabilities.iter().enumerate() {
-        threshold -= probability;
-        if threshold <= 0.0 {
-            return index;
-        }
-    }
-    probabilities.len().saturating_sub(1)
 }
 
 fn finalize_embeddings(mut embeddings: Vec<Vec<f32>>, normalize: bool) -> Vec<Vec<f32>> {
@@ -549,6 +801,30 @@ fn dot(left: &[f32], right: &[f32]) -> f32 {
         .sum()
 }
 
+fn cosine(left: &[f32], right: &[f32]) -> f32 {
+    let left_norm = dot(left, left).sqrt();
+    let right_norm = dot(right, right).sqrt();
+    if left_norm == 0.0 || right_norm == 0.0 {
+        0.0
+    } else {
+        dot(left, right) / (left_norm * right_norm)
+    }
+}
+
+fn neighborhood_degrees(node_count: usize, edges: &[(usize, usize)]) -> Result<Vec<usize>> {
+    let mut degrees = vec![0usize; node_count];
+    for &(source, target) in edges {
+        if source >= node_count || target >= node_count {
+            return Err(NeuralError::InvalidArgument(
+                "graph edge endpoint must be in [0, node_count)".to_string(),
+            ));
+        }
+        degrees[source] += 1;
+        degrees[target] += 1;
+    }
+    Ok(degrees)
+}
+
 fn sigmoid(value: f32) -> f32 {
     if value >= 0.0 {
         let exp = (-value).exp();
@@ -633,6 +909,18 @@ mod tests {
     }
 
     #[test]
+    fn alias_sampler_is_seed_deterministic_and_weighted() {
+        let sampler = AliasSampler::new(&[0.0, 1.0, 3.0]).unwrap();
+
+        let left = sampler.sample_many(42, 16);
+        let right = sampler.sample_many(42, 16);
+
+        assert_eq!(left, right);
+        assert!(left.iter().all(|&idx| idx == 1 || idx == 2));
+        assert!(left.contains(&2));
+    }
+
+    #[test]
     fn deterministic_seed_reproduces_embeddings_and_loss() {
         let mut left = Node2VecEncoder::new(small_config()).unwrap();
         let mut right = Node2VecEncoder::new(small_config()).unwrap();
@@ -646,6 +934,53 @@ mod tests {
 
         assert_eq!(left_embeddings, right_embeddings);
         assert_eq!(left.loss_curve(), right.loss_curve());
+    }
+
+    #[test]
+    fn random_walk_generator_is_seed_deterministic() {
+        let generator = RandomWalkGenerator::new(small_config()).unwrap();
+        let left = generator
+            .generate(4, &[(0, 1), (1, 2), (2, 0), (2, 3)], None)
+            .unwrap();
+        let right = generator
+            .generate(4, &[(0, 1), (1, 2), (2, 0), (2, 3)], None)
+            .unwrap();
+
+        assert_eq!(left, right);
+    }
+
+    #[test]
+    fn random_walk_generator_parallel_order_is_stable() {
+        let generator = RandomWalkGenerator::new(Node2VecConfig {
+            walk_length: 3,
+            walks_per_node: 2,
+            ..small_config()
+        })
+        .unwrap();
+        let walks = generator
+            .generate(3, &[(0, 1), (1, 2), (2, 0)], None)
+            .unwrap();
+
+        assert_eq!(walks.len(), 6);
+        assert_eq!(
+            walks.iter().map(|walk| walk[0]).collect::<Vec<_>>(),
+            vec![0, 1, 2, 0, 1, 2]
+        );
+    }
+
+    #[test]
+    fn node2vec_trainer_builds_edge_embedding_model() {
+        let trainer = Node2VecTrainer::new(Node2VecConfig {
+            dim: 3,
+            ..small_config()
+        })
+        .unwrap();
+        let model = trainer
+            .fit(4, &[(0, 1), (1, 2), (2, 0), (2, 3)], None)
+            .unwrap();
+
+        assert_eq!(model.node_count, 4);
+        assert_eq!(model.embeddings[0].len(), 3);
     }
 
     #[test]
@@ -919,5 +1254,84 @@ mod tests {
         let restored = Node2VecEncoder::load_artifact_json(file.path()).unwrap();
 
         assert_eq!(restored.encode().unwrap(), encoder.encode().unwrap());
+    }
+
+    #[test]
+    fn edge_embedding_transformer_emits_context_features_and_appends_rows() {
+        let model =
+            EdgeEmbeddingModel::new(vec![vec![1.0, 0.0], vec![0.0, 1.0], vec![1.0, 1.0]]).unwrap();
+        let transformer = EmbeddingFeatureTransformer::new(model);
+        let features = transformer
+            .transform_edges(&[(0, 1), (1, 2)], &[(0, 1), (1, 0), (1, 2)])
+            .unwrap();
+
+        assert_eq!(
+            features.feature_names,
+            vec![
+                "origin_embedding_0",
+                "origin_embedding_1",
+                "destination_embedding_0",
+                "destination_embedding_1",
+                "edge_reverse_similarity",
+                "edge_dot_product",
+                "origin_neighborhood_density",
+                "destination_neighborhood_density",
+                "local_graph_context",
+            ]
+        );
+        assert_eq!(features.values.len(), 2);
+        assert_eq!(features.values[0].len(), 9);
+        assert_eq!(features.values[0][5], 0.0);
+
+        let appended = transformer
+            .append_to_dense(
+                &[vec![10.0], vec![20.0]],
+                &[(0, 1), (1, 2)],
+                &[(0, 1), (1, 0), (1, 2)],
+            )
+            .unwrap();
+        assert_eq!(appended[0].len(), 10);
+        assert_eq!(appended[0][0], 10.0);
+    }
+
+    #[test]
+    fn edge_embedding_transformer_rejects_mismatched_or_invalid_rows() {
+        let model =
+            EdgeEmbeddingModel::new(vec![vec![1.0, 0.0], vec![0.0, 1.0], vec![1.0, 1.0]]).unwrap();
+        let transformer = EmbeddingFeatureTransformer::new(model);
+
+        assert!(transformer
+            .transform_edges(&[(0, 3)], &[(0, 1), (1, 2)])
+            .is_err());
+        assert!(transformer.transform_edges(&[(0, 1)], &[(0, 3)]).is_err());
+        assert!(transformer
+            .append_to_dense(&[vec![1.0], vec![2.0]], &[(0, 1)], &[(0, 1)])
+            .is_err());
+    }
+
+    #[test]
+    fn embeddings_reload_and_append_to_booster_matrices() {
+        let mut encoder = Node2VecEncoder::new(Node2VecConfig {
+            dim: 2,
+            walk_length: 4,
+            walks_per_node: 2,
+            window_size: 1,
+            epochs: 1,
+            negative_samples: 1,
+            seed: 99,
+            ..Node2VecConfig::default()
+        })
+        .unwrap();
+        encoder.fit(3, &[(0, 1), (1, 2), (2, 0)], None).unwrap();
+        let artifact = encoder.to_artifact();
+        let restored = Node2VecEncoder::from_artifact(artifact).unwrap();
+        let model = EdgeEmbeddingModel::from_encoder(&restored).unwrap();
+        let appended = EmbeddingFeatureTransformer::new(model)
+            .append_to_dense(&[vec![1.0]], &[(0, 1)], &[(0, 1), (1, 2), (2, 0)])
+            .unwrap();
+
+        assert_eq!(appended.len(), 1);
+        assert_eq!(appended[0].len(), 1 + 2 + 2 + 5);
+        assert!(appended[0].iter().all(|value| value.is_finite()));
     }
 }

@@ -4,6 +4,7 @@ pub mod explain;
 pub mod finance;
 pub mod forecasting;
 pub mod geo;
+pub mod graph_regularization;
 pub mod loss;
 pub mod metrics;
 pub mod objectives;

@@ -142,6 +142,8 @@ impl Ranker {
             fuzzy_kernel: self.config.fuzzy_kernel,
             loss: LossConfig::L2,
             monotonic_constraints: Vec::new(),
+            interaction_constraints: Vec::new(),
+            graph_split_regularization: None,
         };
         let fit_context = builder.fit_context(x);
 

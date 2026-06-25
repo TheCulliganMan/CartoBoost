@@ -329,6 +329,23 @@ encoder family, directedness, relation mapping, and generated feature names.
 Persist that provenance with the downstream model metadata whenever graph
 columns are generated outside the final model fit.
 
+## Graph Regularization
+
+Use graph regularization when the row graph itself is part of the modeling
+contract. A `CsrGraph` stores sparse non-negative relations, `GraphLaplacian`
+scores roughness across connected observations, and `GraphSmoother` can smooth
+residual or leaf vectors against that graph.
+
+`GraphSplitRegularization` adjusts candidate split gain by penalizing rough
+row-level updates across supplied graph edges. `GraphLeafSmoothing` applies the
+same graph contract after each fitted constant-leaf tree: training rows are
+assigned to leaves, the row graph is aggregated to a leaf graph, and constant
+leaf updates are smoothed before prediction updates are added.
+
+Both options require a graph whose node count matches the training row count.
+Leaf smoothing is intentionally limited to hard-routed constant leaves so the
+leaf graph and update vector have a single unambiguous interpretation.
+
 ## Directed Metapaths
 
 Use typed directed metapaths when a relationship only makes sense in one

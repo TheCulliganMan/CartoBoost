@@ -2,12 +2,13 @@
 
 use crate::forecasting::{
     ForecastFrame, ForecastFrequency, ForecastIntervalPrediction, ForecastPrediction,
-    ForecastResult, ForecastRow, Forecaster,
+    ForecastPredictionDetail, ForecastResult, ForecastRow, Forecaster,
 };
 use crate::loss::huber_irls_weights;
 use crate::utilities::{
-    fit_local_level_kalman, fit_local_linear_kalman, ordinary_kriging_predict_many,
-    KrigingObservation, LocalLevelKalmanConfig, LocalLinearKalmanConfig, OrdinaryKrigingConfig,
+    fit_local_level_kalman, fit_local_linear_kalman, ordinary_kriging_predict,
+    ordinary_kriging_predict_many, KrigingObservation, LocalLevelKalmanConfig,
+    LocalLinearKalmanConfig, OrdinaryKrigingConfig,
 };
 use crate::{CartoBoostError, Result};
 use rayon::prelude::*;
@@ -144,6 +145,30 @@ pub struct KrigingForecaster {
     coordinates: BTreeMap<String, (f64, f64)>,
     config: OrdinaryKrigingConfig,
     fitted: Option<FittedKrigingState>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpatialPiecewiseKrigingForecaster {
+    config: SpatialPiecewiseKrigingConfig,
+    fitted: Option<FittedSpatialPiecewiseKrigingState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SpatialPiecewiseKrigingConfig {
+    pub coordinates: BTreeMap<String, (f64, f64)>,
+    pub mode: SpatialPiecewiseKrigingMode,
+    pub piecewise_config: PiecewiseLinearSeasonalConfig,
+    pub kriging_config: OrdinaryKrigingConfig,
+    pub spatial_regressors: Vec<String>,
+    pub residual_shrinkage: f64,
+    pub allow_neighbor_fallback: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SpatialPiecewiseKrigingMode {
+    KrigedRegressors,
+    ResidualKriging,
+    Hybrid,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -350,6 +375,22 @@ struct FittedLocalLevelKalmanSeries {
 struct FittedKrigingState {
     frame: ForecastFrame,
     levels: BTreeMap<String, f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct FittedSpatialPiecewiseKrigingState {
+    frame: ForecastFrame,
+    base: PiecewiseLinearSeasonalForecaster,
+    residual_levels: BTreeMap<String, f64>,
+    residual_observation_series: Vec<String>,
+    cutoff_timestamps: BTreeMap<String, chrono::NaiveDateTime>,
+    fit_metadata: Value,
+}
+
+#[derive(Debug, Clone)]
+struct SpatialKrigingCorrection {
+    prediction: crate::utilities::KrigingPrediction,
+    used_neighbor_fallback: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -954,6 +995,45 @@ impl PiecewiseLinearComponentMode {
     }
 }
 
+impl SpatialPiecewiseKrigingMode {
+    fn name(self) -> &'static str {
+        match self {
+            Self::KrigedRegressors => "kriged_regressors",
+            Self::ResidualKriging => "residual_kriging",
+            Self::Hybrid => "hybrid",
+        }
+    }
+}
+
+impl SpatialPiecewiseKrigingConfig {
+    fn uses_kriged_regressors(&self) -> bool {
+        matches!(
+            self.mode,
+            SpatialPiecewiseKrigingMode::KrigedRegressors | SpatialPiecewiseKrigingMode::Hybrid
+        )
+    }
+
+    fn uses_residual_kriging(&self) -> bool {
+        matches!(
+            self.mode,
+            SpatialPiecewiseKrigingMode::ResidualKriging | SpatialPiecewiseKrigingMode::Hybrid
+        )
+    }
+
+    fn piecewise_config_metadata(&self) -> Value {
+        let piecewise_config = spatial_piecewise_base_config(self);
+        json!({
+            "growth": piecewise_config.growth.name(),
+            "component_mode": piecewise_config.component_mode.name(),
+            "changepoints": piecewise_config.changepoints,
+            "weekly_fourier_order": piecewise_config.weekly_fourier_order,
+            "daily_fourier_order": piecewise_config.daily_fourier_order,
+            "yearly_fourier_order": piecewise_config.yearly_fourier_order,
+            "extra_regressors": piecewise_config.extra_regressors,
+        })
+    }
+}
+
 impl PiecewiseLinearFitLoss {
     fn name(self) -> &'static str {
         match self {
@@ -1532,6 +1612,20 @@ impl KrigingForecaster {
             config,
             fitted: None,
         })
+    }
+}
+
+impl SpatialPiecewiseKrigingForecaster {
+    pub fn new(config: SpatialPiecewiseKrigingConfig) -> Result<Self> {
+        validate_spatial_piecewise_kriging_config(&config)?;
+        Ok(Self {
+            config,
+            fitted: None,
+        })
+    }
+
+    pub fn config(&self) -> &SpatialPiecewiseKrigingConfig {
+        &self.config
     }
 }
 
@@ -2513,6 +2607,149 @@ impl Forecaster for KrigingForecaster {
             "min_neighbors": self.config.min_neighbors,
             "max_distance": self.config.max_distance,
             "series_count": self.coordinates.len(),
+        })
+    }
+}
+
+impl Forecaster for SpatialPiecewiseKrigingForecaster {
+    fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
+        validate_spatial_piecewise_frame(frame, &self.config)?;
+        self.fitted = Some(FittedSpatialPiecewiseKrigingState::from_frame(
+            frame,
+            &self.config,
+        )?);
+        Ok(())
+    }
+
+    fn predict(&self, horizon: usize) -> Result<ForecastResult> {
+        validate_horizon(horizon)?;
+        let fitted = self.fitted.as_ref().ok_or_else(not_fitted)?;
+        let mut base = fitted.base.clone();
+        if self.config.uses_kriged_regressors() {
+            let future_regressors = fitted.future_spatial_regressors(horizon, &self.config)?;
+            base.update_config(|config| {
+                for (series_id, regressors) in future_regressors {
+                    config
+                        .future_regressors_by_series
+                        .entry(series_id)
+                        .or_default()
+                        .extend(regressors);
+                }
+            })?;
+        }
+        let base_result = base.predict(horizon)?;
+        let corrections = if self.config.uses_residual_kriging() {
+            fitted.residual_kriging_predictions(&self.config)?
+        } else {
+            BTreeMap::new()
+        };
+        let component_records = base
+            .predict_components_json_value(horizon)
+            .ok()
+            .and_then(|value| value.get("records").and_then(Value::as_array).cloned())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|record| {
+                let key = component_record_key(&record);
+                (key, record)
+            })
+            .collect::<BTreeMap<_, _>>();
+        let mut predictions = Vec::with_capacity(base_result.predictions().len());
+        let mut details = Vec::with_capacity(base_result.predictions().len());
+        for base_prediction in base_result.predictions() {
+            let correction = corrections.get(&base_prediction.series_id);
+            let shrinkage = self
+                .config
+                .residual_shrinkage
+                .powi((base_prediction.horizon - 1) as i32);
+            let spatial_correction =
+                correction.map(|correction| correction.prediction.mean * shrinkage);
+            let final_mean = base_prediction.mean + spatial_correction.unwrap_or(0.0);
+            predictions.push(ForecastPrediction {
+                series_id: base_prediction.series_id.clone(),
+                timestamp: base_prediction.timestamp,
+                horizon: base_prediction.horizon,
+                model: self.model_name().to_string(),
+                mean: final_mean,
+            });
+            let selected_neighbors = correction
+                .map(|prediction| {
+                    prediction
+                        .prediction
+                        .neighbor_indices
+                        .iter()
+                        .filter_map(|idx| fitted.residual_observation_series.get(*idx).cloned())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let neighbor_count = selected_neighbors.len();
+            let kriging_variance = correction.map(|prediction| prediction.prediction.variance);
+            let correction_magnitude = spatial_correction.map(f64::abs);
+            let detail_key = prediction_lookup_key(
+                &base_prediction.series_id,
+                base_prediction.timestamp,
+                base_prediction.horizon,
+            );
+            details.push(ForecastPredictionDetail {
+                series_id: base_prediction.series_id.clone(),
+                timestamp: base_prediction.timestamp,
+                horizon: base_prediction.horizon,
+                model: self.model_name().to_string(),
+                base_mean: Some(base_prediction.mean),
+                spatial_correction,
+                kriging_variance,
+                selected_neighbors,
+                component_decomposition: component_records.get(&detail_key).cloned(),
+                metadata: Some(json!({
+                    "mode": self.config.mode.name(),
+                    "residual_shrinkage": self.config.residual_shrinkage,
+                    "neighbor_fallback": correction.is_some_and(|prediction| prediction.used_neighbor_fallback),
+                    "neighbor_count": neighbor_count,
+                    "correction_magnitude": correction_magnitude,
+                    "kriging_variance": kriging_variance,
+                    "fit_runtime_seconds": fitted.fit_metadata.get("runtime_seconds").cloned(),
+                    "cutoff": fitted.cutoff_timestamps.get(&base_prediction.series_id).map(|timestamp| {
+                        timestamp.format("%Y-%m-%dT%H:%M:%S").to_string()
+                    }),
+                })),
+            });
+        }
+        let intervals = base_result
+            .intervals()
+            .iter()
+            .map(|interval| ForecastIntervalPrediction {
+                series_id: interval.series_id.clone(),
+                timestamp: interval.timestamp,
+                horizon: interval.horizon,
+                model: self.model_name().to_string(),
+                level: interval.level,
+                lower: interval.lower,
+                upper: interval.upper,
+            })
+            .collect::<Vec<_>>();
+        ForecastResult::new_with_intervals_and_details(predictions, intervals, details)
+    }
+
+    fn model_name(&self) -> &'static str {
+        "spatial_piecewise_kriging"
+    }
+
+    fn metadata(&self) -> Value {
+        let fit_metadata = self
+            .fitted
+            .as_ref()
+            .map(|fitted| fitted.fit_metadata.clone())
+            .unwrap_or_else(|| json!({}));
+        json!({
+            "model": self.model_name(),
+            "mode": self.config.mode.name(),
+            "piecewise": self.config.piecewise_config_metadata(),
+            "variogram": kriging_config_metadata(self.config.kriging_config),
+            "spatial_regressors": self.config.spatial_regressors,
+            "series_count": self.config.coordinates.len(),
+            "residual_shrinkage": self.config.residual_shrinkage,
+            "allow_neighbor_fallback": self.config.allow_neighbor_fallback,
+            "fit": fit_metadata,
         })
     }
 }
@@ -4127,6 +4364,175 @@ impl FittedKrigingState {
             frame: frame.clone(),
             levels,
         })
+    }
+}
+
+impl FittedSpatialPiecewiseKrigingState {
+    fn from_frame(frame: &ForecastFrame, config: &SpatialPiecewiseKrigingConfig) -> Result<Self> {
+        let started = std::time::Instant::now();
+        let piecewise_config = spatial_piecewise_base_config(config);
+        let modeled_frame = if config.uses_kriged_regressors() {
+            kriged_regressor_frame(frame, config)?
+        } else {
+            frame.clone()
+        };
+        let mut base = PiecewiseLinearSeasonalForecaster::new(piecewise_config)?;
+        base.fit(&modeled_frame)?;
+        let base_fitted = base.fitted.as_ref().ok_or_else(not_fitted)?;
+        let local = FittedLocalState::from_frame(&modeled_frame);
+        let mut residual_levels = BTreeMap::new();
+        let mut residual_observation_series = Vec::new();
+        let mut cutoff_timestamps = BTreeMap::new();
+        for (series_id, history) in &local.history_by_series {
+            let fitted_series = base_fitted.series.get(series_id).ok_or_else(|| {
+                CartoBoostError::InvalidInput(format!(
+                    "missing fitted base series for spatial piecewise kriging series {series_id}"
+                ))
+            })?;
+            let last_residual = fitted_series.residuals.last().copied().ok_or_else(|| {
+                CartoBoostError::InvalidInput(format!(
+                    "series {series_id} has no residuals for residual kriging"
+                ))
+            })?;
+            if !last_residual.is_finite() {
+                return Err(CartoBoostError::InvalidInput(format!(
+                    "series {series_id} residual is not finite"
+                )));
+            }
+            let last_timestamp = history
+                .last()
+                .ok_or_else(|| CartoBoostError::InvalidInput("empty series history".to_string()))?
+                .timestamp;
+            residual_levels.insert(series_id.clone(), last_residual);
+            residual_observation_series.push(series_id.clone());
+            cutoff_timestamps.insert(series_id.clone(), last_timestamp);
+        }
+        residual_observation_series.sort();
+        let residual_rmse = base_fitted.root_mean_squared_residual();
+        let fit_metadata = json!({
+            "cutoffs": cutoff_timestamps.iter().map(|(series_id, timestamp)| {
+                (series_id.clone(), timestamp.format("%Y-%m-%dT%H:%M:%S").to_string())
+            }).collect::<BTreeMap<_, _>>(),
+            "residual_rmse": residual_rmse,
+            "runtime_seconds": started.elapsed().as_secs_f64(),
+        });
+        Ok(Self {
+            frame: modeled_frame,
+            base,
+            residual_levels,
+            residual_observation_series,
+            cutoff_timestamps,
+            fit_metadata,
+        })
+    }
+
+    fn residual_kriging_predictions(
+        &self,
+        config: &SpatialPiecewiseKrigingConfig,
+    ) -> Result<BTreeMap<String, SpatialKrigingCorrection>> {
+        let observations = self
+            .residual_observation_series
+            .iter()
+            .map(|series_id| {
+                let coord = config.coordinates.get(series_id).ok_or_else(|| {
+                    CartoBoostError::InvalidInput(format!(
+                        "missing spatial piecewise kriging coordinate for series {series_id}"
+                    ))
+                })?;
+                let value = self
+                    .residual_levels
+                    .get(series_id)
+                    .copied()
+                    .ok_or_else(|| {
+                        CartoBoostError::InvalidInput(format!(
+                            "missing residual kriging level for series {series_id}"
+                        ))
+                    })?;
+                Ok(KrigingObservation {
+                    x: coord.0,
+                    y: coord.1,
+                    value,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let series_ids = self.frame.series_ids();
+        let targets = series_ids
+            .iter()
+            .map(|series_id| {
+                config.coordinates.get(series_id).copied().ok_or_else(|| {
+                    CartoBoostError::InvalidInput(format!(
+                        "missing spatial piecewise kriging coordinate for series {series_id}"
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        if !config.allow_neighbor_fallback {
+            let predictions =
+                ordinary_kriging_predict_many(&observations, &targets, config.kriging_config)?;
+            return Ok(series_ids
+                .into_iter()
+                .zip(predictions)
+                .map(|(series_id, prediction)| {
+                    (
+                        series_id,
+                        SpatialKrigingCorrection {
+                            prediction,
+                            used_neighbor_fallback: false,
+                        },
+                    )
+                })
+                .collect());
+        }
+        let mut corrections = BTreeMap::new();
+        for (series_id, target) in series_ids.into_iter().zip(targets) {
+            let correction =
+                match ordinary_kriging_predict(&observations, target, config.kriging_config) {
+                    Ok(prediction) => SpatialKrigingCorrection {
+                        prediction,
+                        used_neighbor_fallback: false,
+                    },
+                    Err(error) if is_neighbor_rule_error(&error) => SpatialKrigingCorrection {
+                        prediction: crate::utilities::KrigingPrediction {
+                            x: target.0,
+                            y: target.1,
+                            mean: 0.0,
+                            variance: residual_level_variance(&self.residual_levels),
+                            weights: Vec::new(),
+                            neighbor_indices: Vec::new(),
+                        },
+                        used_neighbor_fallback: true,
+                    },
+                    Err(error) => return Err(error),
+                };
+            corrections.insert(series_id, correction);
+        }
+        Ok(corrections)
+    }
+
+    fn future_spatial_regressors(
+        &self,
+        horizon: usize,
+        config: &SpatialPiecewiseKrigingConfig,
+    ) -> Result<BTreeMap<String, BTreeMap<String, Vec<f64>>>> {
+        let mut latest_by_series: BTreeMap<String, BTreeMap<String, f64>> = BTreeMap::new();
+        for row in self.frame.rows() {
+            let entry = latest_by_series.entry(row.series_id.clone()).or_default();
+            for name in &config.spatial_regressors {
+                if let Some(value) = row.covariates.get(name) {
+                    entry.insert(name.clone(), *value);
+                }
+            }
+        }
+        Ok(latest_by_series
+            .into_iter()
+            .map(|(series_id, values)| {
+                let repeated = values
+                    .into_iter()
+                    .map(|(name, value)| (name, vec![value; horizon]))
+                    .collect::<BTreeMap<_, _>>();
+                (series_id, repeated)
+            })
+            .collect())
     }
 }
 
@@ -6936,6 +7342,233 @@ fn reseasonalize_value(
     }
 }
 
+fn validate_spatial_piecewise_kriging_config(config: &SpatialPiecewiseKrigingConfig) -> Result<()> {
+    if config.coordinates.is_empty() {
+        return Err(CartoBoostError::InvalidInput(
+            "spatial piecewise kriging coordinates must not be empty".to_string(),
+        ));
+    }
+    for (series_id, (x, y)) in &config.coordinates {
+        if series_id.is_empty() {
+            return Err(CartoBoostError::InvalidInput(
+                "spatial piecewise kriging series ids must not be empty".to_string(),
+            ));
+        }
+        if !x.is_finite() || !y.is_finite() {
+            return Err(CartoBoostError::InvalidInput(format!(
+                "spatial piecewise kriging coordinate for series {series_id} must be finite"
+            )));
+        }
+    }
+    if !config.residual_shrinkage.is_finite()
+        || config.residual_shrinkage < 0.0
+        || config.residual_shrinkage > 1.0
+    {
+        return Err(CartoBoostError::InvalidInput(
+            "residual_shrinkage must be finite and in [0, 1]".to_string(),
+        ));
+    }
+    if config.uses_kriged_regressors() && config.spatial_regressors.is_empty() {
+        return Err(CartoBoostError::InvalidInput(
+            "kriged_regressors and hybrid modes require at least one spatial_regressor".to_string(),
+        ));
+    }
+    let spatial_regressors = config
+        .spatial_regressors
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if spatial_regressors.len() != config.spatial_regressors.len() {
+        return Err(CartoBoostError::InvalidInput(
+            "spatial_regressors must not contain duplicates".to_string(),
+        ));
+    }
+    for regressor in &config.spatial_regressors {
+        if regressor.is_empty() {
+            return Err(CartoBoostError::InvalidInput(
+                "spatial_regressors must not contain empty names".to_string(),
+            ));
+        }
+        if config
+            .piecewise_config
+            .future_regressors
+            .contains_key(regressor)
+            || config
+                .piecewise_config
+                .future_regressors_by_series
+                .values()
+                .any(|values| values.contains_key(regressor))
+        {
+            return Err(CartoBoostError::InvalidInput(format!(
+                "future spatial regressor {regressor:?} would leak future observations"
+            )));
+        }
+    }
+    validate_piecewise_linear_seasonal_config(&config.piecewise_config)?;
+    Ok(())
+}
+
+fn validate_spatial_piecewise_frame(
+    frame: &ForecastFrame,
+    config: &SpatialPiecewiseKrigingConfig,
+) -> Result<()> {
+    for series_id in frame.series_ids() {
+        if !config.coordinates.contains_key(&series_id) {
+            return Err(CartoBoostError::InvalidInput(format!(
+                "missing spatial piecewise kriging coordinate for series {series_id}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn spatial_piecewise_base_config(
+    config: &SpatialPiecewiseKrigingConfig,
+) -> PiecewiseLinearSeasonalConfig {
+    let mut piecewise_config = config.piecewise_config.clone();
+    if config.uses_kriged_regressors() {
+        for regressor in &config.spatial_regressors {
+            if !piecewise_config.extra_regressors.contains(regressor) {
+                piecewise_config.extra_regressors.push(regressor.clone());
+            }
+        }
+    }
+    piecewise_config
+}
+
+fn kriged_regressor_frame(
+    frame: &ForecastFrame,
+    config: &SpatialPiecewiseKrigingConfig,
+) -> Result<ForecastFrame> {
+    let mut rows = frame.rows().to_vec();
+    let mut rows_by_timestamp: BTreeMap<chrono::NaiveDateTime, Vec<usize>> = BTreeMap::new();
+    for (idx, row) in rows.iter().enumerate() {
+        rows_by_timestamp
+            .entry(row.timestamp)
+            .or_default()
+            .push(idx);
+    }
+    for regressor in &config.spatial_regressors {
+        for indices in rows_by_timestamp.values() {
+            let observations = indices
+                .iter()
+                .filter_map(|idx| {
+                    let row = &rows[*idx];
+                    row.covariates.get(regressor).map(|value| (row, *value))
+                })
+                .map(|(row, value)| {
+                    let coord = config.coordinates.get(&row.series_id).ok_or_else(|| {
+                        CartoBoostError::InvalidInput(format!(
+                            "missing spatial piecewise kriging coordinate for series {}",
+                            row.series_id
+                        ))
+                    })?;
+                    Ok(KrigingObservation {
+                        x: coord.0,
+                        y: coord.1,
+                        value,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            if observations.is_empty() {
+                return Err(CartoBoostError::InvalidInput(format!(
+                    "spatial regressor {regressor:?} has no observed cutoff-safe values"
+                )));
+            }
+            let targets = indices
+                .iter()
+                .map(|idx| {
+                    let row = &rows[*idx];
+                    config
+                        .coordinates
+                        .get(&row.series_id)
+                        .copied()
+                        .ok_or_else(|| {
+                            CartoBoostError::InvalidInput(format!(
+                                "missing spatial piecewise kriging coordinate for series {}",
+                                row.series_id
+                            ))
+                        })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let predictions =
+                ordinary_kriging_predict_many(&observations, &targets, config.kriging_config)?;
+            for (idx, prediction) in indices.iter().zip(predictions) {
+                rows[*idx]
+                    .covariates
+                    .insert(regressor.clone(), prediction.mean);
+            }
+        }
+    }
+    let mut metadata = frame.metadata().clone();
+    for regressor in &config.spatial_regressors {
+        if !metadata.known_future_covariates.contains(regressor) {
+            metadata.known_future_covariates.push(regressor.clone());
+        }
+    }
+    ForecastFrame::with_metadata(rows, frame.frequency(), metadata)
+}
+
+fn kriging_config_metadata(config: OrdinaryKrigingConfig) -> Value {
+    json!({
+        "range": config.range,
+        "nugget": config.nugget,
+        "sill": config.sill,
+        "variogram_model": format!("{:?}", config.variogram_model).to_lowercase(),
+        "drift": format!("{:?}", config.drift).to_lowercase(),
+        "anisotropy_angle_degrees": config.anisotropy_angle_degrees,
+        "anisotropy_scaling": config.anisotropy_scaling,
+        "max_neighbors": config.max_neighbors,
+        "min_neighbors": config.min_neighbors,
+        "max_distance": config.max_distance,
+    })
+}
+
+fn is_neighbor_rule_error(error: &CartoBoostError) -> bool {
+    error.to_string().contains("neighbors")
+}
+
+fn residual_level_variance(levels: &BTreeMap<String, f64>) -> f64 {
+    if levels.is_empty() {
+        return 0.0;
+    }
+    let mean = levels.values().sum::<f64>() / levels.len() as f64;
+    levels
+        .values()
+        .map(|value| {
+            let delta = value - mean;
+            delta * delta
+        })
+        .sum::<f64>()
+        / levels.len() as f64
+}
+
+fn prediction_lookup_key(
+    series_id: &str,
+    timestamp: chrono::NaiveDateTime,
+    horizon: usize,
+) -> String {
+    format!(
+        "{}\x1f{}\x1f{}",
+        series_id,
+        timestamp.format("%Y-%m-%dT%H:%M:%S"),
+        horizon
+    )
+}
+
+fn component_record_key(record: &Value) -> String {
+    let series_id = record
+        .get("series_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let timestamp = record
+        .get("timestamp")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let horizon = record.get("horizon").and_then(Value::as_u64).unwrap_or(0);
+    format!("{series_id}\x1f{timestamp}\x1f{horizon}")
+}
+
 fn validate_horizon(horizon: usize) -> Result<()> {
     if horizon == 0 {
         return Err(CartoBoostError::InvalidInput(
@@ -6994,6 +7627,183 @@ mod tests {
         assert_ne!(means[0].2, means[2].2);
         assert_eq!(model.fitted_values("PU1->DO2").expect("fitted").len(), 4);
         assert_eq!(model.residuals("PU9->DO8").expect("residuals").len(), 4);
+    }
+
+    #[test]
+    fn spatial_piecewise_residual_kriging_improves_synthetic_spatial_panel() {
+        let mut rows = Vec::new();
+        let coordinates = BTreeMap::from([
+            ("PU1->DO1".to_string(), (0.0, 0.0)),
+            ("PU2->DO2".to_string(), (1.0, 0.0)),
+            ("PU3->DO3".to_string(), (2.0, 0.0)),
+        ]);
+        let offsets = BTreeMap::from([("PU1->DO1", 0.0), ("PU2->DO2", 4.0), ("PU3->DO3", 8.0)]);
+        for day in 1..=8 {
+            for (series_id, offset) in &offsets {
+                rows.push(ForecastRow::new(
+                    *series_id,
+                    ts(day),
+                    20.0 + f64::from(day) + offset,
+                ));
+            }
+        }
+        let frame = ForecastFrame::new(rows, ForecastFrequency::Daily).expect("valid frame");
+        let piecewise_config = PiecewiseLinearSeasonalConfig {
+            growth: PiecewiseLinearGrowth::Flat,
+            changepoints: 0,
+            weekly_fourier_order: 0,
+            auto_weekly_seasonality: false,
+            auto_yearly_seasonality: false,
+            auto_daily_seasonality: false,
+            ..PiecewiseLinearSeasonalConfig::default()
+        };
+        let mut base =
+            PiecewiseLinearSeasonalForecaster::new(piecewise_config.clone()).expect("base config");
+        base.fit(&frame).expect("base fit");
+        let base_result = base.predict(1).expect("base predict");
+        let mut fused = SpatialPiecewiseKrigingForecaster::new(SpatialPiecewiseKrigingConfig {
+            coordinates,
+            mode: SpatialPiecewiseKrigingMode::ResidualKriging,
+            piecewise_config,
+            kriging_config: OrdinaryKrigingConfig::new(3.0, 1.0e-6).expect("kriging config"),
+            spatial_regressors: Vec::new(),
+            residual_shrinkage: 1.0,
+            allow_neighbor_fallback: false,
+        })
+        .expect("spatial config");
+        fused.fit(&frame).expect("spatial fit");
+        let fused_result = fused.predict(1).expect("spatial predict");
+        let actuals = BTreeMap::from([
+            ("PU1->DO1".to_string(), 29.0),
+            ("PU2->DO2".to_string(), 33.0),
+            ("PU3->DO3".to_string(), 37.0),
+        ]);
+        let base_mae = base_result
+            .predictions()
+            .iter()
+            .map(|prediction| (prediction.mean - actuals[&prediction.series_id]).abs())
+            .sum::<f64>()
+            / actuals.len() as f64;
+        let fused_mae = fused_result
+            .predictions()
+            .iter()
+            .map(|prediction| (prediction.mean - actuals[&prediction.series_id]).abs())
+            .sum::<f64>()
+            / actuals.len() as f64;
+        assert!(fused_mae < base_mae);
+        assert_eq!(
+            fused_result.details().len(),
+            fused_result.predictions().len()
+        );
+        let json = fused_result.to_json_value();
+        let first = &json["records"][0];
+        assert!(first.get("base_mean").is_some());
+        assert!(first.get("spatial_correction").is_some());
+        assert!(first.get("kriging_variance").is_some());
+        assert!(first.get("selected_neighbors").is_some());
+        assert_eq!(first["metadata"]["neighbor_count"].as_u64(), Some(3));
+        assert!(first["metadata"]["correction_magnitude"].is_number());
+        assert!(first["metadata"]["kriging_variance"].is_number());
+        assert!(first["metadata"]["fit_runtime_seconds"].is_number());
+    }
+
+    #[test]
+    fn spatial_piecewise_kriging_errors_for_missing_coordinate() {
+        let frame = ForecastFrame::new(
+            vec![
+                ForecastRow::new("PU1->DO1", ts(1), 10.0),
+                ForecastRow::new("PU1->DO1", ts(2), 11.0),
+                ForecastRow::new("PU2->DO2", ts(1), 20.0),
+                ForecastRow::new("PU2->DO2", ts(2), 21.0),
+            ],
+            ForecastFrequency::Daily,
+        )
+        .expect("valid frame");
+        let mut model = SpatialPiecewiseKrigingForecaster::new(SpatialPiecewiseKrigingConfig {
+            coordinates: BTreeMap::from([("PU1->DO1".to_string(), (0.0, 0.0))]),
+            mode: SpatialPiecewiseKrigingMode::ResidualKriging,
+            piecewise_config: PiecewiseLinearSeasonalConfig::default(),
+            kriging_config: OrdinaryKrigingConfig::new(1.0, 1.0e-6).expect("kriging config"),
+            spatial_regressors: Vec::new(),
+            residual_shrinkage: 1.0,
+            allow_neighbor_fallback: false,
+        })
+        .expect("spatial config");
+        let err = model
+            .fit(&frame)
+            .expect_err("missing coordinate should fail");
+        assert!(err
+            .to_string()
+            .contains("missing spatial piecewise kriging coordinate"));
+    }
+
+    #[test]
+    fn spatial_piecewise_kriging_rejects_future_spatial_regressor_leakage() {
+        let mut piecewise_config = PiecewiseLinearSeasonalConfig::default();
+        piecewise_config
+            .future_regressors
+            .insert("traffic_density".to_string(), vec![1.0]);
+        let err = SpatialPiecewiseKrigingForecaster::new(SpatialPiecewiseKrigingConfig {
+            coordinates: BTreeMap::from([("PU1->DO1".to_string(), (0.0, 0.0))]),
+            mode: SpatialPiecewiseKrigingMode::KrigedRegressors,
+            piecewise_config,
+            kriging_config: OrdinaryKrigingConfig::new(1.0, 1.0e-6).expect("kriging config"),
+            spatial_regressors: vec!["traffic_density".to_string()],
+            residual_shrinkage: 1.0,
+            allow_neighbor_fallback: false,
+        })
+        .expect_err("future spatial regressor should fail");
+        assert!(err.to_string().contains("would leak future observations"));
+    }
+
+    #[test]
+    fn spatial_piecewise_kriging_neighbor_fallback_is_opt_in_and_flagged() {
+        let frame = ForecastFrame::new(
+            vec![
+                ForecastRow::new("PU1->DO1", ts(1), 10.0),
+                ForecastRow::new("PU1->DO1", ts(2), 11.0),
+                ForecastRow::new("PU2->DO2", ts(1), 20.0),
+                ForecastRow::new("PU2->DO2", ts(2), 21.0),
+            ],
+            ForecastFrequency::Daily,
+        )
+        .expect("valid frame");
+        let base_config = SpatialPiecewiseKrigingConfig {
+            coordinates: BTreeMap::from([
+                ("PU1->DO1".to_string(), (0.0, 0.0)),
+                ("PU2->DO2".to_string(), (100.0, 0.0)),
+            ]),
+            mode: SpatialPiecewiseKrigingMode::ResidualKriging,
+            piecewise_config: PiecewiseLinearSeasonalConfig::default(),
+            kriging_config: OrdinaryKrigingConfig::new(1.0, 1.0e-6)
+                .and_then(|config| config.with_neighbor_limits(None, 3, None))
+                .expect("kriging config"),
+            spatial_regressors: Vec::new(),
+            residual_shrinkage: 1.0,
+            allow_neighbor_fallback: false,
+        };
+        let mut strict =
+            SpatialPiecewiseKrigingForecaster::new(base_config.clone()).expect("strict config");
+        strict.fit(&frame).expect("strict fit");
+        strict
+            .predict(1)
+            .expect_err("neighbor rule should fail without fallback");
+
+        let mut fallback = SpatialPiecewiseKrigingForecaster::new(SpatialPiecewiseKrigingConfig {
+            allow_neighbor_fallback: true,
+            ..base_config
+        })
+        .expect("fallback config");
+        fallback.fit(&frame).expect("fallback fit");
+        let result = fallback.predict(1).expect("fallback predict");
+        assert!(result.details().iter().all(|detail| {
+            detail
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("neighbor_fallback"))
+                .and_then(Value::as_bool)
+                == Some(true)
+        }));
     }
 
     #[test]

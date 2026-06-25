@@ -387,6 +387,9 @@ impl Config {
                 .monotonic_constraints
                 .clone()
                 .unwrap_or(defaults.monotonic_constraints),
+            interaction_constraints: defaults.interaction_constraints,
+            graph_split_regularization: defaults.graph_split_regularization,
+            graph_leaf_smoothing: defaults.graph_leaf_smoothing,
         })
     }
 }
