@@ -90,10 +90,10 @@ class NHiTSForecaster(NativeForecastWrapper):
         )
 
 
-class NeuralPairwiseForecaster(NativeForecastWrapper):
-    """Thin Python wrapper for the Rust NeuralPairwise-style panel forecaster."""
+class NeuralPanelForecaster(NativeForecastWrapper):
+    """Thin Python wrapper for the Rust neural panel forecaster."""
 
-    native_class_name = "NeuralPairwiseForecaster"
+    native_class_name = "NeuralPanelForecaster"
 
     def __init__(
         self,
@@ -121,7 +121,7 @@ class NeuralPairwiseForecaster(NativeForecastWrapper):
         seed: int = 0,
         **metadata: Any,
     ) -> None:
-        _validate_pairwise(
+        _validate_panel(
             n_lags=n_lags,
             n_forecasts=n_forecasts,
             quantiles=quantiles,
@@ -160,10 +160,10 @@ class NeuralPairwiseForecaster(NativeForecastWrapper):
         return native_class(**params)
 
 
-class LaneNeuralPairwiseForecaster(NeuralPairwiseForecaster):
-    """Taxi lane NeuralPairwise wrapper with origin/destination/lane metadata."""
+class LaneNeuralPanelForecaster(NeuralPanelForecaster):
+    """Taxi lane neural panel wrapper with origin/destination/lane metadata."""
 
-    native_class_name = "LaneNeuralPairwiseForecaster"
+    native_class_name = "LaneNeuralPanelForecaster"
 
     def __init__(self, *, embedding_dim: int = 8, **kwargs: Any) -> None:
         if embedding_dim < 1:
@@ -176,7 +176,7 @@ class LaneNeuralPairwiseForecaster(NeuralPairwiseForecaster):
         method = getattr(self._native_model, "predict_for_lanes", None)
         if method is None:
             raise NotImplementedError(
-                "Rust binding for LaneNeuralPairwiseForecaster does not expose predict_for_lanes()."
+                "Rust binding for LaneNeuralPanelForecaster does not expose predict_for_lanes()."
             )
         return method(int(horizon), [str(series_id) for series_id in series_ids])
 
@@ -185,10 +185,10 @@ NHITSForecaster = NHiTSForecaster
 NBEATSForecaster = NBeatsForecaster
 
 __all__ = [
-    "LaneNeuralPairwiseForecaster",
+    "LaneNeuralPanelForecaster",
     "NBeatsForecaster",
     "NBEATSForecaster",
-    "NeuralPairwiseForecaster",
+    "NeuralPanelForecaster",
     "NHiTSForecaster",
     "NHITSForecaster",
 ]
@@ -210,7 +210,7 @@ def _validate_common(
         raise ValueError("learning_rate must be positive")
 
 
-def _validate_pairwise(
+def _validate_panel(
     *,
     n_lags: int,
     n_forecasts: int,

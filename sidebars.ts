@@ -54,6 +54,7 @@ const sidebars: SidebarsConfig = {
             'user-guide/forecasting-models/kriging',
             'user-guide/forecasting-models/spatial-piecewise-kriging',
             'user-guide/forecasting-models/cartoboost-lag',
+            'user-guide/forecasting-models/neural-panel',
             'user-guide/forecasting-models/ensembles',
           ],
         },

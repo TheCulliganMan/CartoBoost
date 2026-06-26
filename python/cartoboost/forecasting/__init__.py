@@ -41,10 +41,10 @@ from .local import (
 )
 from .metrics import ForecastMetricSet
 from .neural import (
-    LaneNeuralPairwiseForecaster,
+    LaneNeuralPanelForecaster,
     NBEATSForecaster,
     NBeatsForecaster,
-    NeuralPairwiseForecaster,
+    NeuralPanelForecaster,
     NHITSForecaster,
     NHiTSForecaster,
 )
@@ -104,11 +104,11 @@ __all__ = [
     "KrigingForecaster",
     "LagFeatureBuilder",
     "LagFeatureConfig",
-    "LaneNeuralPairwiseForecaster",
+    "LaneNeuralPanelForecaster",
     "NaiveForecaster",
     "NBEATSForecaster",
     "NBeatsForecaster",
-    "NeuralPairwiseForecaster",
+    "NeuralPanelForecaster",
     "NHITSForecaster",
     "NHiTSForecaster",
     "next_timestamps",

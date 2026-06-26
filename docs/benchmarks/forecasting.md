@@ -35,25 +35,25 @@ benchmark suite. They are not real TLC data.
 
 Read: the current scalable synthetic checks favor CartoBoost.
 
-## NeuralPairwise Lane Split Suite
+## NeuralPanel Lane Split Suite
 
-`NeuralPairwiseForecaster` has a dedicated taxi-lane split suite for checking
+`NeuralPanelForecaster` has a dedicated taxi-lane split suite for checking
 direct multi-horizon neural behavior under four panel stresses: rolling-origin,
 cold-lane, cold-origin, and sparse-tail. The roster is intentionally small:
-`seasonal_naive`, `cartoboost_lag`, and `cartoboost_neural_pairwise`.
+`seasonal_naive`, `cartoboost_lag`, and `cartoboost_neural_panel`.
 
 Rerun command:
 
 ```bash
 uv run --group dev python scripts/forecasting_library_benchmark.py \
   --source polars \
-  --model-roster neural-pairwise \
-  --neural-pairwise-splits \
+  --model-roster neural-panel \
+  --neural-panel-splits \
   --lanes 36 \
   --days 180 \
   --horizon 14 \
   --suite-folds 1 \
-  --output target/neural_pairwise_taxi_lane_split_suite.json
+  --output target/neural_panel_taxi_lane_split_suite.json
 ```
 
 The JSON artifact records the exact command, split definitions, RMSE/MAE/WAPE

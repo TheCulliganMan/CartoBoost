@@ -6,13 +6,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-from cartoboost.forecasting import LaneNeuralPairwiseForecaster, NeuralPairwiseForecaster
+from cartoboost.forecasting import LaneNeuralPanelForecaster, NeuralPanelForecaster
 
 
-def test_neural_pairwise_wrapper_uses_native_forecaster_syntax(install_fake_native):
-    native = install_fake_native("NeuralPairwiseForecaster")
+def test_neural_panel_wrapper_uses_native_forecaster_syntax(install_fake_native):
+    native = install_fake_native("NeuralPanelForecaster")
 
-    model = NeuralPairwiseForecaster(
+    model = NeuralPanelForecaster(
         n_lags=24,
         n_forecasts=6,
         quantiles=[0.1, 0.5, 0.9],
@@ -37,10 +37,10 @@ def test_neural_pairwise_wrapper_uses_native_forecaster_syntax(install_fake_nati
     assert native.calls[1][0] == "fit"
 
 
-def test_lane_neural_pairwise_wrapper_passes_embedding_dim(install_fake_native):
-    native = install_fake_native("LaneNeuralPairwiseForecaster")
+def test_lane_neural_panel_wrapper_passes_embedding_dim(install_fake_native):
+    native = install_fake_native("LaneNeuralPanelForecaster")
 
-    model = LaneNeuralPairwiseForecaster(n_lags=12, n_forecasts=3, embedding_dim=4)
+    model = LaneNeuralPanelForecaster(n_lags=12, n_forecasts=3, embedding_dim=4)
     model.fit({"PU1:DO2": [1.0, 2.0, 3.0, 4.0]})
 
     _init_name, params = native.calls[0]
@@ -49,10 +49,10 @@ def test_lane_neural_pairwise_wrapper_passes_embedding_dim(install_fake_native):
     assert params["embedding_dim"] == 4
 
 
-def test_lane_neural_pairwise_predict_for_lanes_delegates_lane_ids(install_fake_native):
-    native = install_fake_native("LaneNeuralPairwiseForecaster")
+def test_lane_neural_panel_predict_for_lanes_delegates_lane_ids(install_fake_native):
+    native = install_fake_native("LaneNeuralPanelForecaster")
 
-    model = LaneNeuralPairwiseForecaster(n_lags=2, n_forecasts=2)
+    model = LaneNeuralPanelForecaster(n_lags=2, n_forecasts=2)
     model.fit({"A:B": [1.0, 2.0, 3.0, 4.0]})
     result = model.predict_for_lanes(2, ["A:B", "A:C"])
 
@@ -60,9 +60,9 @@ def test_lane_neural_pairwise_predict_for_lanes_delegates_lane_ids(install_fake_
     assert native.calls[-1][0] == "predict_for_lanes"
 
 
-def test_neural_pairwise_benchmark_split_suite_records_required_artifact(tmp_path: Path):
+def test_neural_panel_benchmark_split_suite_records_required_artifact(tmp_path: Path):
     repo = Path(__file__).resolve().parents[2]
-    output = tmp_path / "neural_pairwise_split_suite.json"
+    output = tmp_path / "neural_panel_split_suite.json"
 
     subprocess.run(
         [
@@ -71,8 +71,8 @@ def test_neural_pairwise_benchmark_split_suite_records_required_artifact(tmp_pat
             "--source",
             "polars",
             "--model-roster",
-            "neural-pairwise",
-            "--neural-pairwise-splits",
+            "neural-panel",
+            "--neural-panel-splits",
             "--lanes",
             "8",
             "--days",
@@ -99,7 +99,7 @@ def test_neural_pairwise_benchmark_split_suite_records_required_artifact(tmp_pat
     )
 
     payload = json.loads(output.read_text(encoding="utf-8"))
-    assert payload["benchmark"] == "neural_pairwise_taxi_lane_split_suite"
+    assert payload["benchmark"] == "neural_panel_taxi_lane_split_suite"
     assert payload["invocation"]["command"]
     assert payload["artifact_paths"]["json"] == str(output)
     assert set(payload["splits"]) == {
@@ -109,7 +109,7 @@ def test_neural_pairwise_benchmark_split_suite_records_required_artifact(tmp_pat
         "sparse_tail",
     }
     for split in payload["splits"].values():
-        assert split["metrics"]["cartoboost_neural_pairwise"]["rmse"] >= 0.0
+        assert split["metrics"]["cartoboost_neural_panel"]["rmse"] >= 0.0
         assert split["metrics"]["cartoboost_lag"]["rmse"] >= 0.0
         assert split["metrics"]["seasonal_naive"]["rmse"] >= 0.0
     assert "splits" in payload["timing"]

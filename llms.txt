@@ -75,6 +75,7 @@ classification, ranking, forecasting, graph, and neural-embedding modeling.
 - Forecasting workflow: ./docs/forecasting.md
 - Geotemporal diagnostics: ./docs/forecasting.md#advanced-behavior
 - Forecasting model guides: ./docs/user-guide/forecasting-models/index.md
+- Neural Panel forecasting guide with interactive wasm example: ./docs/user-guide/forecasting-models/neural-panel.md
 - `ForecastFrame.from_pandas(..., sample_weight_col=...)` collapses duplicate
   series/timestamp taxi observations into one native row with weighted-mean
   target/covariates and summed timestamp weight.
@@ -250,8 +251,8 @@ classification, ranking, forecasting, graph, and neural-embedding modeling.
   and rolling-stat enrichments to taxi/synthetic route-demand sources; M4/M5/M6
   stay on the compact competition path unless a targeted benchmark proves
   otherwise.
-- `NeuralPairwiseForecaster` and `LaneNeuralPairwiseForecaster` are Rust-native
-  panel forecasters exposed through Python and wasm as `neural_pairwise`.
+- `NeuralPanelForecaster` and `LaneNeuralPanelForecaster` are Rust-native
+  panel forecasters exposed through Python and wasm as `neural_panel`.
   Inputs are `ForecastFrame` rows with directional lane ids such as
   `PULocationID:DOLocationID`; the lane wrapper records origin/destination/lane
   metadata and cold-lane fallback order, and `predict_for_lanes()` applies that
@@ -259,7 +260,7 @@ classification, ranking, forecasting, graph, and neural-embedding modeling.
   a rolling-origin benchmark compares seasonal naive and `CartoBoostLagForecaster`
   under the same split, metrics, settings, timing, and artifact capture. The
   maintained split-suite command is `scripts/forecasting_library_benchmark.py
-  --model-roster neural-pairwise --neural-pairwise-splits`, which records
+  --model-roster neural-panel --neural-panel-splits`, which records
   rolling-origin, cold-lane, cold-origin, and sparse-tail metrics plus timing
   and artifact paths.
 - M4 suite benchmark orchestration is serial in the committed wrapper so group

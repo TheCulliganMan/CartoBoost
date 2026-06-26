@@ -10,9 +10,8 @@ use cartoboost_core::forecasting::{
 };
 use cartoboost_core::BoosterConfig;
 use forecasting::{
-    LaneNeuralPairwiseConfig, LaneNeuralPairwiseForecaster, NBeatsConfig, NBeatsForecaster,
-    NHiTSConfig, NHiTSForecaster, NeuralPairwiseConfig, NeuralPairwiseForecaster,
-    NeuralPairwiseMode, StandardScaler,
+    LaneNeuralPanelConfig, LaneNeuralPanelForecaster, NBeatsConfig, NBeatsForecaster, NHiTSConfig,
+    NHiTSForecaster, NeuralPanelConfig, NeuralPanelForecaster, NeuralPanelMode, StandardScaler,
 };
 use std::collections::BTreeMap;
 
@@ -74,13 +73,13 @@ fn scaler_round_trips_constant_series() {
 }
 
 #[test]
-fn neural_pairwise_outputs_b_h_q_shape() {
+fn neural_panel_outputs_b_h_q_shape() {
     let frame = taxi_colon_frame();
-    let mut model = NeuralPairwiseForecaster::new(NeuralPairwiseConfig {
+    let mut model = NeuralPanelForecaster::new(NeuralPanelConfig {
         n_lags: 3,
         n_forecasts: 2,
         quantiles: vec![0.1, 0.5, 0.9],
-        ..NeuralPairwiseConfig::default()
+        ..NeuralPanelConfig::default()
     })
     .expect("model");
 
@@ -95,15 +94,15 @@ fn neural_pairwise_outputs_b_h_q_shape() {
 }
 
 #[test]
-fn neural_pairwise_keeps_directional_taxi_lanes_distinct() {
+fn neural_panel_keeps_directional_taxi_lanes_distinct() {
     let frame = taxi_colon_frame();
-    let mut model = LaneNeuralPairwiseForecaster::new(LaneNeuralPairwiseConfig {
-        base: NeuralPairwiseConfig {
+    let mut model = LaneNeuralPanelForecaster::new(LaneNeuralPanelConfig {
+        base: NeuralPanelConfig {
             n_lags: 3,
             n_forecasts: 1,
-            trend_mode: NeuralPairwiseMode::Local,
+            trend_mode: NeuralPanelMode::Local,
             local_l2: 0.0,
-            ..NeuralPairwiseConfig::default()
+            ..NeuralPanelConfig::default()
         },
         embedding_dim: 4,
     })
@@ -124,16 +123,16 @@ fn neural_pairwise_keeps_directional_taxi_lanes_distinct() {
 }
 
 #[test]
-fn lane_neural_pairwise_predict_for_lanes_uses_cold_origin_fallback() {
+fn lane_neural_panel_predict_for_lanes_uses_cold_origin_fallback() {
     let frame = taxi_colon_frame();
-    let mut model = LaneNeuralPairwiseForecaster::new(LaneNeuralPairwiseConfig {
-        base: NeuralPairwiseConfig {
+    let mut model = LaneNeuralPanelForecaster::new(LaneNeuralPanelConfig {
+        base: NeuralPanelConfig {
             n_lags: 3,
             n_forecasts: 2,
             quantiles: vec![0.1, 0.5, 0.9],
-            trend_mode: NeuralPairwiseMode::Local,
+            trend_mode: NeuralPanelMode::Local,
             local_l2: 0.0,
-            ..NeuralPairwiseConfig::default()
+            ..NeuralPanelConfig::default()
         },
         embedding_dim: 4,
     })
@@ -159,16 +158,16 @@ fn lane_neural_pairwise_predict_for_lanes_uses_cold_origin_fallback() {
 }
 
 #[test]
-fn neural_pairwise_window_construction_has_no_future_target_leakage() {
+fn neural_panel_window_construction_has_no_future_target_leakage() {
     let frame = taxi_colon_frame();
-    let model = NeuralPairwiseForecaster::new(NeuralPairwiseConfig {
+    let model = NeuralPanelForecaster::new(NeuralPanelConfig {
         n_lags: 2,
         n_forecasts: 2,
         future_regressors: BTreeMap::from([(
             "is_airport".to_string(),
             forecasting::ComponentMode::Additive,
         )]),
-        ..NeuralPairwiseConfig::default()
+        ..NeuralPanelConfig::default()
     })
     .expect("model");
 
@@ -181,13 +180,13 @@ fn neural_pairwise_window_construction_has_no_future_target_leakage() {
 }
 
 #[test]
-fn neural_pairwise_predict_quantiles_are_non_crossing() {
+fn neural_panel_predict_quantiles_are_non_crossing() {
     let frame = taxi_colon_frame();
-    let mut model = NeuralPairwiseForecaster::new(NeuralPairwiseConfig {
+    let mut model = NeuralPanelForecaster::new(NeuralPanelConfig {
         n_lags: 3,
         n_forecasts: 1,
         quantiles: vec![0.9, 0.1, 0.5],
-        ..NeuralPairwiseConfig::default()
+        ..NeuralPanelConfig::default()
     })
     .expect("model");
 
@@ -202,13 +201,13 @@ fn neural_pairwise_predict_quantiles_are_non_crossing() {
 }
 
 #[test]
-fn neural_pairwise_global_mode_has_no_local_deviations() {
+fn neural_panel_global_mode_has_no_local_deviations() {
     let frame = taxi_colon_frame();
-    let mut model = NeuralPairwiseForecaster::new(NeuralPairwiseConfig {
+    let mut model = NeuralPanelForecaster::new(NeuralPanelConfig {
         n_lags: 3,
         n_forecasts: 1,
-        trend_mode: NeuralPairwiseMode::Global,
-        ..NeuralPairwiseConfig::default()
+        trend_mode: NeuralPanelMode::Global,
+        ..NeuralPanelConfig::default()
     })
     .expect("model");
 
@@ -225,18 +224,58 @@ fn neural_pairwise_global_mode_has_no_local_deviations() {
 }
 
 #[test]
-fn neural_pairwise_compares_on_synthetic_panel_with_baselines() {
+fn neural_panel_ar_tail_changes_direct_forecast() {
+    let rows = [
+        ("A:B", [10.0, 10.0, 10.0, 18.0, 20.0]),
+        ("C:D", [10.0, 10.0, 10.0, 2.0, 0.0]),
+    ]
+    .into_iter()
+    .flat_map(|(series_id, values)| {
+        values.into_iter().enumerate().map(move |(idx, value)| {
+            ForecastRow::from_timestamp_str(series_id, &timestamp(idx as u32), value).expect("row")
+        })
+    })
+    .collect::<Vec<_>>();
+    let frame = ForecastFrame::new(rows, ForecastFrequency::Hourly).expect("frame");
+    let mut model = NeuralPanelForecaster::new(NeuralPanelConfig {
+        n_lags: 3,
+        n_forecasts: 1,
+        trend: forecasting::TrendMode::Off,
+        seed: 11,
+        ..NeuralPanelConfig::default()
+    })
+    .expect("model");
+
+    model.fit(&frame).expect("fit");
+    let predictions = model.predict(1).expect("predict");
+    let values = predictions.predictions();
+    let metadata = model.metadata();
+
+    assert_eq!(values[0].series_id, "A:B");
+    assert_eq!(values[1].series_id, "C:D");
+    assert_ne!(values[0].mean, values[1].mean);
+    assert_eq!(
+        metadata["component_params"]["target_tails"]["A:B"]
+            .as_array()
+            .expect("target tail")
+            .len(),
+        3
+    );
+}
+
+#[test]
+fn neural_panel_compares_on_synthetic_panel_with_baselines() {
     let (train, expected) = synthetic_seasonal_panel();
     let horizon = 4;
-    let mut neural = NeuralPairwiseForecaster::new(NeuralPairwiseConfig {
+    let mut neural = NeuralPanelForecaster::new(NeuralPanelConfig {
         n_lags: 8,
         n_forecasts: horizon,
         quantiles: vec![0.1, 0.5, 0.9],
         daily_fourier_order: 2,
-        trend_mode: NeuralPairwiseMode::Local,
+        trend_mode: NeuralPanelMode::Local,
         local_l2: 0.1,
         seed: 7,
-        ..NeuralPairwiseConfig::default()
+        ..NeuralPanelConfig::default()
     })
     .expect("neural model");
     let mut seasonal = SeasonalNaiveForecaster::new(4).expect("seasonal naive");
@@ -264,7 +303,7 @@ fn neural_pairwise_compares_on_synthetic_panel_with_baselines() {
     let lag_predictions = lag.predict(horizon).expect("lag predict");
 
     for (name, predictions) in [
-        ("neural_pairwise", neural_predictions.predictions()),
+        ("neural_panel", neural_predictions.predictions()),
         ("seasonal_naive", seasonal_predictions.predictions()),
         ("cartoboost_lag", lag_predictions.predictions()),
     ] {

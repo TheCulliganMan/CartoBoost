@@ -37,7 +37,7 @@ except ImportError:  # pragma: no cover - exercised on Windows CI.
 from cartoboost import __version__, _native
 from cartoboost.forecasting.global_models import CartoBoostLagForecaster
 from cartoboost.forecasting.local import AutoStatsBank, PiecewiseLinearSeasonalForecaster
-from cartoboost.forecasting.neural import LaneNeuralPairwiseForecaster
+from cartoboost.forecasting.neural import LaneNeuralPanelForecaster
 from cartoboost.forecasting.schema import ForecastFrame
 from cartoboost.metrics import m_competition_metrics
 from cartoboost.metrics.rank_portfolio import (
@@ -118,7 +118,7 @@ CARTOBOOST_BENCHMARK_MODELS = [
     "cartoboost_auto_forecast",
 ]
 SEASONAL_NAIVE_BENCHMARK_MODEL = "seasonal_naive"
-NEURAL_PAIRWISE_BENCHMARK_MODEL = "cartoboost_neural_pairwise"
+NEURAL_PANEL_BENCHMARK_MODEL = "cartoboost_neural_panel"
 PIECEWISE_LINEAR_BENCHMARK_MODEL = "cartoboost_piecewise_linear_seasonal"
 FORECASTING_LIBRARY_MODELS = {
     "functime": FUNCTIME_MODELS,
@@ -129,7 +129,7 @@ FORECASTING_LIBRARY_MODELS = {
 MODEL_LIBRARIES = {
     SEASONAL_NAIVE_BENCHMARK_MODEL: "baseline",
     **{model: "cartoboost" for model in CARTOBOOST_BENCHMARK_MODELS},
-    NEURAL_PAIRWISE_BENCHMARK_MODEL: "cartoboost",
+    NEURAL_PANEL_BENCHMARK_MODEL: "cartoboost",
     PIECEWISE_LINEAR_BENCHMARK_MODEL: "cartoboost",
     **{model: "functime" for model in FUNCTIME_MODELS},
     **{model: "statsforecast" for model in STATSFORECAST_MODELS},
@@ -342,22 +342,22 @@ def main() -> int:
             "cartoboost",
             "piecewise",
             "prophet-comparison",
-            "neural-pairwise",
+            "neural-panel",
         ],
         default="full",
         help=(
             "Forecast model roster. Use scalable for full M5-style panels where "
             "per-series Prophet/StatsForecast models are impractical. Use piecewise "
             "for only the native piecewise-linear model, or prophet-comparison for "
-            "the native piecewise-linear model and Prophet only. Use neural-pairwise "
+            "the native piecewise-linear model and Prophet only. Use neural-panel "
             "for seasonal naive, CartoBoost lag, and the Rust-native lane neural model."
         ),
     )
     parser.add_argument(
-        "--neural-pairwise-splits",
+        "--neural-panel-splits",
         action="store_true",
         help=(
-            "Run the NeuralPairwise taxi-lane split suite: rolling-origin, cold-lane, "
+            "Run the NeuralPanel taxi-lane split suite: rolling-origin, cold-lane, "
             "cold-origin, and sparse-tail. Writes split metrics, timing, command, and "
             "artifact path metadata to --output."
         ),
@@ -419,8 +419,8 @@ def main() -> int:
     dataset["dataset_hash"] = canonical_dataset_hash(table)
     dataset_source_hashes = source_file_hashes(dataset)
     load_seconds = perf_counter() - load_start
-    if args.neural_pairwise_splits:
-        return run_neural_pairwise_split_suite(
+    if args.neural_panel_splits:
+        return run_neural_panel_split_suite(
             args,
             table=table,
             dataset=dataset,
@@ -711,11 +711,11 @@ def benchmark_model_names(roster: str) -> list[str]:
         return [PIECEWISE_LINEAR_BENCHMARK_MODEL]
     if roster == "prophet-comparison":
         return [PIECEWISE_LINEAR_BENCHMARK_MODEL, "prophet_additive"]
-    if roster == "neural-pairwise":
+    if roster == "neural-panel":
         return [
             SEASONAL_NAIVE_BENCHMARK_MODEL,
             "cartoboost_lag",
-            NEURAL_PAIRWISE_BENCHMARK_MODEL,
+            NEURAL_PANEL_BENCHMARK_MODEL,
         ]
     if roster == "scalable":
         return [
@@ -727,7 +727,7 @@ def benchmark_model_names(roster: str) -> list[str]:
 
 
 def forecasting_library_models_for_roster(roster: str) -> dict[str, list[str]]:
-    if roster in {"cartoboost", "piecewise", "neural-pairwise"}:
+    if roster in {"cartoboost", "piecewise", "neural-panel"}:
         return {}
     if roster == "prophet-comparison":
         return {"prophet": PROPHET_MODELS}
@@ -2306,7 +2306,7 @@ def score_rolling_origin_problem(
     return split_results, aggregate_metrics, quality_summary(aggregate_metrics), timing, scored
 
 
-def run_neural_pairwise_split_suite(
+def run_neural_panel_split_suite(
     args: argparse.Namespace,
     *,
     table: Any,
@@ -2318,17 +2318,17 @@ def run_neural_pairwise_split_suite(
 ) -> int:
     horizon = int(dataset.get("horizon", args.horizon))
     season_length = int(dataset.get("season_length", 7))
-    model_names = benchmark_model_names("neural-pairwise")
+    model_names = benchmark_model_names("neural-panel")
     split_results: dict[str, Any] = {}
     scored_frames = []
     timing: dict[str, Any] = {"load_seconds": load_seconds, "splits": {}}
-    for split_name, split in neural_pairwise_split_frames(
+    for split_name, split in neural_panel_split_frames(
         table,
         horizon=horizon,
         folds=max(1, args.suite_folds),
     ).items():
         split_start = perf_counter()
-        metrics, quality, split_timing, scored = score_neural_pairwise_split(
+        metrics, quality, split_timing, scored = score_neural_panel_split(
             split["train"],
             split["test"],
             horizon=horizon,
@@ -2367,7 +2367,7 @@ def run_neural_pairwise_split_suite(
             **benchmark_integrity(args),
             "candidate_selection": False,
         },
-        "benchmark": "neural_pairwise_taxi_lane_split_suite",
+        "benchmark": "neural_panel_taxi_lane_split_suite",
         "fixture_source": args.source,
         "dataset": {
             **dataset,
@@ -2380,7 +2380,7 @@ def run_neural_pairwise_split_suite(
             "split_type": "rolling_origin_cold_lane_cold_origin_sparse_tail",
         },
         "models": model_names,
-        "model_roster": "neural-pairwise",
+        "model_roster": "neural-panel",
         "model_libraries": MODEL_LIBRARIES,
         "model_settings": cartoboost_model_settings(cartoboost_config),
         "splits": split_results,
@@ -2408,7 +2408,7 @@ def run_neural_pairwise_split_suite(
     return 0
 
 
-def neural_pairwise_split_frames(table: Any, *, horizon: int, folds: int) -> dict[str, Any]:
+def neural_panel_split_frames(table: Any, *, horizon: int, folds: int) -> dict[str, Any]:
     pl = require_polars()
     cutoffs = rolling_origin_cutoffs(table, horizon=horizon, folds=folds)
     cutoff = cutoffs[-1]
@@ -2474,7 +2474,7 @@ def neural_pairwise_split_frames(table: Any, *, horizon: int, folds: int) -> dic
     }
 
 
-def score_neural_pairwise_split(
+def score_neural_panel_split(
     train: Any,
     test: Any,
     *,
@@ -2486,7 +2486,7 @@ def score_neural_pairwise_split(
 ) -> tuple[dict[str, dict[str, float]], dict[str, Any], dict[str, Any], Any]:
     pl = require_polars()
     if train.is_empty() or test.is_empty():
-        raise ValueError("NeuralPairwise split produced empty train or test data")
+        raise ValueError("NeuralPanel split produced empty train or test data")
     actual = (
         test.sort(["lane_id", "date"])
         .with_columns((pl.int_range(pl.len()).over("lane_id") + 1).alias("horizon"))
@@ -2511,7 +2511,7 @@ def score_neural_pairwise_split(
         predictions = expand_forecasts_with_lane_fallback(predictions, actual, model_names)
     scored = actual.join(predictions, on=["series_id", "timestamp", "horizon"], how="inner")
     if scored.height != actual.height:
-        raise RuntimeError("NeuralPairwise split forecast alignment dropped rows")
+        raise RuntimeError("NeuralPanel split forecast alignment dropped rows")
     metrics = {
         model: evaluate_metrics(scored, model, train, season_length=season_length)
         for model in model_names
@@ -3640,14 +3640,14 @@ def forecast_model_roster(
         )
         forecast_frames.append(piecewise_predictions)
         model_timing["cartoboost_piecewise_linear_seasonal"] = piecewise_timing
-    if NEURAL_PAIRWISE_BENCHMARK_MODEL in model_names:
-        neural_predictions, neural_timing = cartoboost_neural_pairwise_forecast(
+    if NEURAL_PANEL_BENCHMARK_MODEL in model_names:
+        neural_predictions, neural_timing = cartoboost_neural_panel_forecast(
             train,
             horizon,
             season_length=season_length,
         )
         forecast_frames.append(neural_predictions)
-        model_timing[NEURAL_PAIRWISE_BENCHMARK_MODEL] = neural_timing
+        model_timing[NEURAL_PANEL_BENCHMARK_MODEL] = neural_timing
     if any(model in model_names for model in FUNCTIME_MODELS):
         functime_predictions, functime_timing = functime_forecasts(
             train,
@@ -5523,7 +5523,7 @@ def cartoboost_piecewise_linear_forecast(
     return predictions, timing
 
 
-def cartoboost_neural_pairwise_forecast(
+def cartoboost_neural_panel_forecast(
     train: Any,
     horizon: int,
     *,
@@ -5539,7 +5539,7 @@ def cartoboost_neural_pairwise_forecast(
     ]
     training_frame = train.select("lane_id", "date", "loads", *covariates).to_pandas()
     if not isinstance(training_frame, pd.DataFrame):
-        raise TypeError("CartoBoost NeuralPairwise benchmark conversion did not return pandas")
+        raise TypeError("CartoBoost NeuralPanel benchmark conversion did not return pandas")
     frame = ForecastFrame.from_pandas(
         training_frame,
         timestamp_col="date",
@@ -5560,7 +5560,7 @@ def cartoboost_neural_pairwise_forecast(
             season_length * 2 if season_length > 1 else 7,
         ),
     )
-    model = LaneNeuralPairwiseForecaster(
+    model = LaneNeuralPanelForecaster(
         n_lags=n_lags,
         n_forecasts=horizon,
         quantiles=[0.1, 0.5, 0.9],
@@ -5594,14 +5594,14 @@ def cartoboost_neural_pairwise_forecast(
             "timestamp",
             "horizon",
             "model",
-            NEURAL_PAIRWISE_BENCHMARK_MODEL,
+            NEURAL_PANEL_BENCHMARK_MODEL,
         ],
         orient="row",
     ).select(
         "series_id",
         pl.col("timestamp").str.to_datetime().cast(pl.Datetime("us")).alias("timestamp"),
         "horizon",
-        NEURAL_PAIRWISE_BENCHMARK_MODEL,
+        NEURAL_PANEL_BENCHMARK_MODEL,
     )
     predict_seconds = perf_counter() - predict_start
     timing = {
@@ -6041,7 +6041,7 @@ def cartoboost_model_settings(config: dict[str, Any]) -> dict[str, Any]:
                 "generic Fourier cycle named benchmark_cycle"
             ),
         },
-        NEURAL_PAIRWISE_BENCHMARK_MODEL: {
+        NEURAL_PANEL_BENCHMARK_MODEL: {
             "n_forecasts": "benchmark horizon",
             "n_lags": "min(28, minimum train history - benchmark horizon, two seasonal cycles)",
             "quantiles": [0.1, 0.5, 0.9],

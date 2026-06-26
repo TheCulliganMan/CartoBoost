@@ -273,6 +273,7 @@ const fallbackModelOptions: ModelOption[] = [
   {value: 'lag_plus', label: 'Lag Plus', group: 'global'},
   {value: 'scaled_cartoboost_lag', label: 'Scaled CartoBoost Lag', group: 'transform'},
   {value: 'log1p_cartoboost_lag', label: 'Log1p CartoBoost Lag', group: 'transform'},
+  {value: 'neural_panel', label: 'Neural Panel', group: 'neural'},
   {value: 'classical_expert_bank', label: 'Classical Expert Bank', group: 'selection'},
   {value: 'autostats_bank', label: 'AutoStats Bank', group: 'selection'},
   {value: 'intermittent_demand', label: 'Intermittent Demand', group: 'demand'},

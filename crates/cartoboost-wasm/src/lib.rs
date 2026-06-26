@@ -34,8 +34,8 @@ use cartoboost_core::{CartoBoostError, Result};
 use cartoboost_neural::{
     ArtifactFallbackKind, ComponentMode as NeuralComponentMode, GraphSageConfig,
     GraphSageRegressor, HeteroGraphSageConfig, HeteroGraphSageRegressor, HinSageConfig,
-    HinSageRegressor, NeuralEmbeddingRegressor, NeuralPairwiseConfig, NeuralPairwiseForecaster,
-    NeuralPairwiseMode, Node2VecConfig, Node2VecRegressor, StandaloneBoosterConfig,
+    HinSageRegressor, NeuralEmbeddingRegressor, NeuralPanelConfig, NeuralPanelForecaster,
+    NeuralPanelMode, Node2VecConfig, Node2VecRegressor, StandaloneBoosterConfig,
     TrendMode as NeuralTrendMode,
 };
 use serde::{Deserialize, Serialize};
@@ -848,8 +848,8 @@ fn forecast_model_registry() -> Vec<BrowserForecastModel> {
             pipeline: "transform",
         },
         BrowserForecastModel {
-            name: "neural_pairwise",
-            label: "Neural Pairwise",
+            name: "neural_panel",
+            label: "Neural Panel",
             pipeline: "neural",
         },
         BrowserForecastModel {
@@ -3440,8 +3440,8 @@ fn build_forecaster(
         "piecewise_linear_seasonal" => Ok(Box::new(PiecewiseLinearSeasonalForecaster::new(
             piecewise_linear_seasonal_config(options)?,
         )?)),
-        "neural_pairwise" => Ok(Box::new(
-            NeuralPairwiseForecaster::new(neural_pairwise_config(options, horizon)?)
+        "neural_panel" => Ok(Box::new(
+            NeuralPanelForecaster::new(neural_panel_config(options, horizon)?)
                 .map_err(|err| CartoBoostError::InvalidInput(err.to_string()))?,
         )),
         "intermittent_demand" => {
@@ -3883,11 +3883,11 @@ fn piecewise_linear_seasonal_config(
     Ok(config)
 }
 
-fn neural_pairwise_config(
+fn neural_panel_config(
     options: &BrowserForecastOptions,
     horizon: usize,
-) -> Result<NeuralPairwiseConfig> {
-    let mut config = NeuralPairwiseConfig {
+) -> Result<NeuralPanelConfig> {
+    let mut config = NeuralPanelConfig {
         n_lags: options
             .n_lags
             .or_else(|| {
@@ -3902,7 +3902,7 @@ fn neural_pairwise_config(
         trend: options
             .growth
             .as_deref()
-            .map(neural_pairwise_trend_mode)
+            .map(neural_panel_trend_mode)
             .transpose()?
             .unwrap_or(NeuralTrendMode::PiecewiseLinear),
         n_changepoints: options
@@ -3918,14 +3918,14 @@ fn neural_pairwise_config(
             .seasonality_mode
             .as_deref()
             .or(options.component_mode.as_deref())
-            .map(neural_pairwise_component_mode)
+            .map(neural_panel_component_mode)
             .transpose()?
             .unwrap_or(NeuralComponentMode::Additive),
         events: BTreeMap::new(),
         event_mode: options
             .event_mode
             .as_deref()
-            .map(neural_pairwise_component_mode)
+            .map(neural_panel_component_mode)
             .transpose()?
             .unwrap_or(NeuralComponentMode::Additive),
         future_regressors: BTreeMap::new(),
@@ -3935,10 +3935,10 @@ fn neural_pairwise_config(
         trend_mode: options
             .trend_mode
             .as_deref()
-            .map(neural_pairwise_global_local_mode)
+            .map(neural_panel_global_local_mode)
             .transpose()?
-            .unwrap_or(NeuralPairwiseMode::Global),
-        seasonality_global_local: NeuralPairwiseMode::Global,
+            .unwrap_or(NeuralPanelMode::Global),
+        seasonality_global_local: NeuralPanelMode::Global,
         local_l2: options.local_l2.unwrap_or(0.0),
         seed: options.uncertainty_seed.unwrap_or(0),
     };
@@ -3970,7 +3970,7 @@ fn neural_pairwise_config(
                 .regressor_modes
                 .as_ref()
                 .and_then(|modes| modes.get(name))
-                .map(|value| neural_pairwise_component_mode(value))
+                .map(|value| neural_panel_component_mode(value))
                 .transpose()?
                 .unwrap_or(NeuralComponentMode::Additive);
             config.future_regressors.insert(name.clone(), mode);
@@ -3982,33 +3982,33 @@ fn neural_pairwise_config(
     Ok(config)
 }
 
-fn neural_pairwise_trend_mode(value: &str) -> Result<NeuralTrendMode> {
+fn neural_panel_trend_mode(value: &str) -> Result<NeuralTrendMode> {
     match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
         "" | "linear" | "piecewise_linear" => Ok(NeuralTrendMode::PiecewiseLinear),
         "off" | "none" | "flat" => Ok(NeuralTrendMode::Off),
         other => Err(CartoBoostError::InvalidInput(format!(
-            "unsupported neural_pairwise trend mode {other:?}"
+            "unsupported neural_panel trend mode {other:?}"
         ))),
     }
 }
 
-fn neural_pairwise_component_mode(value: &str) -> Result<NeuralComponentMode> {
+fn neural_panel_component_mode(value: &str) -> Result<NeuralComponentMode> {
     match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
         "" | "additive" => Ok(NeuralComponentMode::Additive),
         "multiplicative" => Ok(NeuralComponentMode::Multiplicative),
         other => Err(CartoBoostError::InvalidInput(format!(
-            "unsupported neural_pairwise component mode {other:?}"
+            "unsupported neural_panel component mode {other:?}"
         ))),
     }
 }
 
-fn neural_pairwise_global_local_mode(value: &str) -> Result<NeuralPairwiseMode> {
+fn neural_panel_global_local_mode(value: &str) -> Result<NeuralPanelMode> {
     match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
-        "" | "global" => Ok(NeuralPairwiseMode::Global),
-        "local" => Ok(NeuralPairwiseMode::Local),
-        "glocal" => Ok(NeuralPairwiseMode::Glocal),
+        "" | "global" => Ok(NeuralPanelMode::Global),
+        "local" => Ok(NeuralPanelMode::Local),
+        "glocal" => Ok(NeuralPanelMode::Glocal),
         other => Err(CartoBoostError::InvalidInput(format!(
-            "unsupported neural_pairwise global/local mode {other:?}"
+            "unsupported neural_panel global/local mode {other:?}"
         ))),
     }
 }

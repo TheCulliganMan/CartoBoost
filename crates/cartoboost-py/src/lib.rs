@@ -98,14 +98,13 @@ use cartoboost_neural::{
     Node2VecEncoder, Node2VecLinkPredictor, Node2VecRegressor, StandaloneBoosterConfig,
 };
 use cartoboost_neural::{
-    ComponentMode as CoreNeuralPairwiseComponentMode,
-    LaneNeuralPairwiseConfig as CoreLaneNeuralPairwiseConfig,
-    LaneNeuralPairwiseForecaster as CoreLaneNeuralPairwiseForecaster,
-    NBeatsConfig as CoreNBeatsConfig, NBeatsForecaster as CoreNBeatsForecaster,
-    NHiTSConfig as CoreNHiTSConfig, NHiTSForecaster as CoreNHiTSForecaster,
-    NeuralPairwiseConfig as CoreNeuralPairwiseConfig,
-    NeuralPairwiseForecaster as CoreNeuralPairwiseForecaster,
-    NeuralPairwiseMode as CoreNeuralPairwiseMode, TrendMode as CoreNeuralPairwiseTrendMode,
+    ComponentMode as CoreNeuralPanelComponentMode,
+    LaneNeuralPanelConfig as CoreLaneNeuralPanelConfig,
+    LaneNeuralPanelForecaster as CoreLaneNeuralPanelForecaster, NBeatsConfig as CoreNBeatsConfig,
+    NBeatsForecaster as CoreNBeatsForecaster, NHiTSConfig as CoreNHiTSConfig,
+    NHiTSForecaster as CoreNHiTSForecaster, NeuralPanelConfig as CoreNeuralPanelConfig,
+    NeuralPanelForecaster as CoreNeuralPanelForecaster, NeuralPanelMode as CoreNeuralPanelMode,
+    TrendMode as CoreNeuralPanelTrendMode,
 };
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
@@ -2707,13 +2706,13 @@ impl NativeNHiTSForecaster {
     }
 }
 
-#[pyclass(name = "NeuralPairwiseForecaster")]
-struct NativeNeuralPairwiseForecaster {
-    model: CoreNeuralPairwiseForecaster,
+#[pyclass(name = "NeuralPanelForecaster")]
+struct NativeNeuralPanelForecaster {
+    model: CoreNeuralPanelForecaster,
 }
 
 #[pymethods]
-impl NativeNeuralPairwiseForecaster {
+impl NativeNeuralPanelForecaster {
     #[new]
     #[pyo3(signature = (
         n_lags=8,
@@ -2762,7 +2761,7 @@ impl NativeNeuralPairwiseForecaster {
         local_l2: f64,
         seed: u64,
     ) -> PyResult<Self> {
-        let config = neural_pairwise_config_from_parts(
+        let config = neural_panel_config_from_parts(
             n_lags,
             n_forecasts,
             quantiles,
@@ -2786,7 +2785,7 @@ impl NativeNeuralPairwiseForecaster {
             seed,
         )?;
         Ok(Self {
-            model: CoreNeuralPairwiseForecaster::new(config).map_err(to_py_neural_error)?,
+            model: CoreNeuralPanelForecaster::new(config).map_err(to_py_neural_error)?,
         })
     }
 
@@ -2816,19 +2815,19 @@ impl NativeNeuralPairwiseForecaster {
     #[classmethod]
     fn from_json(_cls: &Bound<'_, PyType>, py: Python<'_>, value: &str) -> PyResult<Self> {
         let model = py
-            .allow_threads(|| CoreNeuralPairwiseForecaster::from_json_string(value))
+            .allow_threads(|| CoreNeuralPanelForecaster::from_json_string(value))
             .map_err(to_py_value_error)?;
         Ok(Self { model })
     }
 }
 
-#[pyclass(name = "LaneNeuralPairwiseForecaster")]
-struct NativeLaneNeuralPairwiseForecaster {
-    model: CoreLaneNeuralPairwiseForecaster,
+#[pyclass(name = "LaneNeuralPanelForecaster")]
+struct NativeLaneNeuralPanelForecaster {
+    model: CoreLaneNeuralPanelForecaster,
 }
 
 #[pymethods]
-impl NativeLaneNeuralPairwiseForecaster {
+impl NativeLaneNeuralPanelForecaster {
     #[new]
     #[pyo3(signature = (
         n_lags=8,
@@ -2879,7 +2878,7 @@ impl NativeLaneNeuralPairwiseForecaster {
         seed: u64,
         embedding_dim: usize,
     ) -> PyResult<Self> {
-        let base = neural_pairwise_config_from_parts(
+        let base = neural_panel_config_from_parts(
             n_lags,
             n_forecasts,
             quantiles,
@@ -2903,7 +2902,7 @@ impl NativeLaneNeuralPairwiseForecaster {
             seed,
         )?;
         Ok(Self {
-            model: CoreLaneNeuralPairwiseForecaster::new(CoreLaneNeuralPairwiseConfig {
+            model: CoreLaneNeuralPanelForecaster::new(CoreLaneNeuralPanelConfig {
                 base,
                 embedding_dim,
             })
@@ -9052,7 +9051,7 @@ fn to_py_neural_error(err: cartoboost_neural::NeuralError) -> PyErr {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn neural_pairwise_config_from_parts(
+fn neural_panel_config_from_parts(
     n_lags: usize,
     n_forecasts: usize,
     quantiles: Option<Vec<f64>>,
@@ -9074,71 +9073,69 @@ fn neural_pairwise_config_from_parts(
     seasonality_global_local: &str,
     local_l2: f64,
     seed: u64,
-) -> PyResult<CoreNeuralPairwiseConfig> {
+) -> PyResult<CoreNeuralPanelConfig> {
     let future_regressors = future_regressors
         .unwrap_or_default()
         .into_iter()
-        .map(|(name, mode)| Ok((name, parse_neural_pairwise_component_mode(&mode)?)))
+        .map(|(name, mode)| Ok((name, parse_neural_panel_component_mode(&mode)?)))
         .collect::<PyResult<BTreeMap<_, _>>>()?;
     let custom_seasonalities = custom_seasonalities
         .unwrap_or_default()
         .into_iter()
         .map(|(name, period, order)| (name, (period, order)))
         .collect();
-    Ok(CoreNeuralPairwiseConfig {
+    Ok(CoreNeuralPanelConfig {
         n_lags,
         n_forecasts,
         quantiles: quantiles.unwrap_or_else(|| vec![0.5]),
-        trend: parse_neural_pairwise_trend_mode(trend)?,
+        trend: parse_neural_panel_trend_mode(trend)?,
         n_changepoints,
         changepoints_range,
         daily_fourier_order,
         weekly_fourier_order,
         yearly_fourier_order,
         custom_seasonalities,
-        seasonality_mode: parse_neural_pairwise_component_mode(seasonality_mode)?,
+        seasonality_mode: parse_neural_panel_component_mode(seasonality_mode)?,
         events: events.unwrap_or_default(),
-        event_mode: parse_neural_pairwise_component_mode(event_mode)?,
+        event_mode: parse_neural_panel_component_mode(event_mode)?,
         future_regressors,
         lagged_regressors: lagged_regressors.unwrap_or_default(),
         ar_layers: ar_layers.unwrap_or_default(),
         lagged_reg_layers: lagged_reg_layers.unwrap_or_default(),
-        trend_mode: parse_neural_pairwise_global_local_mode(trend_mode)?,
-        seasonality_global_local: parse_neural_pairwise_global_local_mode(
-            seasonality_global_local,
-        )?,
+        trend_mode: parse_neural_panel_global_local_mode(trend_mode)?,
+        seasonality_global_local: parse_neural_panel_global_local_mode(seasonality_global_local)?,
         local_l2,
         seed,
     })
 }
 
-fn parse_neural_pairwise_trend_mode(value: &str) -> PyResult<CoreNeuralPairwiseTrendMode> {
+fn parse_neural_panel_trend_mode(value: &str) -> PyResult<CoreNeuralPanelTrendMode> {
     match value {
-        "off" | "none" => Ok(CoreNeuralPairwiseTrendMode::Off),
-        "piecewise_linear" | "linear" => Ok(CoreNeuralPairwiseTrendMode::PiecewiseLinear),
+        "off" | "none" => Ok(CoreNeuralPanelTrendMode::Off),
+        "piecewise_linear" | "linear" => Ok(CoreNeuralPanelTrendMode::PiecewiseLinear),
         other => Err(PyValueError::new_err(format!(
-            "unknown NeuralPairwise trend mode {other:?}"
+            "unknown NeuralPanel trend mode {other:?}"
         ))),
     }
 }
 
-fn parse_neural_pairwise_component_mode(value: &str) -> PyResult<CoreNeuralPairwiseComponentMode> {
+fn parse_neural_panel_component_mode(value: &str) -> PyResult<CoreNeuralPanelComponentMode> {
     match value {
-        "additive" => Ok(CoreNeuralPairwiseComponentMode::Additive),
-        "multiplicative" => Ok(CoreNeuralPairwiseComponentMode::Multiplicative),
+        "additive" => Ok(CoreNeuralPanelComponentMode::Additive),
+        "multiplicative" => Ok(CoreNeuralPanelComponentMode::Multiplicative),
         other => Err(PyValueError::new_err(format!(
-            "unknown NeuralPairwise component mode {other:?}"
+            "unknown NeuralPanel component mode {other:?}"
         ))),
     }
 }
 
-fn parse_neural_pairwise_global_local_mode(value: &str) -> PyResult<CoreNeuralPairwiseMode> {
+fn parse_neural_panel_global_local_mode(value: &str) -> PyResult<CoreNeuralPanelMode> {
     match value {
-        "global" => Ok(CoreNeuralPairwiseMode::Global),
-        "local" => Ok(CoreNeuralPairwiseMode::Local),
-        "glocal" => Ok(CoreNeuralPairwiseMode::Glocal),
+        "global" => Ok(CoreNeuralPanelMode::Global),
+        "local" => Ok(CoreNeuralPanelMode::Local),
+        "glocal" => Ok(CoreNeuralPanelMode::Glocal),
         other => Err(PyValueError::new_err(format!(
-            "unknown NeuralPairwise global/local mode {other:?}"
+            "unknown NeuralPanel global/local mode {other:?}"
         ))),
     }
 }
@@ -9178,8 +9175,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<NativeSpatialPiecewiseKrigingForecaster>()?;
     m.add_class::<NativeNBeatsForecaster>()?;
     m.add_class::<NativeNHiTSForecaster>()?;
-    m.add_class::<NativeNeuralPairwiseForecaster>()?;
-    m.add_class::<NativeLaneNeuralPairwiseForecaster>()?;
+    m.add_class::<NativeNeuralPanelForecaster>()?;
+    m.add_class::<NativeLaneNeuralPanelForecaster>()?;
     m.add_class::<NativeAutoForecastModel>()?;
     m.add_class::<NativeCartoBoostLagForecaster>()?;
     m.add_class::<NativeWeightedEnsembleForecaster>()?;

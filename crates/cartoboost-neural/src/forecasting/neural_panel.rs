@@ -22,14 +22,14 @@ pub enum ComponentMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum NeuralPairwiseMode {
+pub enum NeuralPanelMode {
     Global,
     Local,
     Glocal,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct NeuralPairwiseConfig {
+pub struct NeuralPanelConfig {
     pub n_lags: usize,
     pub n_forecasts: usize,
     pub quantiles: Vec<f64>,
@@ -47,13 +47,13 @@ pub struct NeuralPairwiseConfig {
     pub lagged_regressors: BTreeMap<String, usize>,
     pub ar_layers: Vec<usize>,
     pub lagged_reg_layers: Vec<usize>,
-    pub trend_mode: NeuralPairwiseMode,
-    pub seasonality_global_local: NeuralPairwiseMode,
+    pub trend_mode: NeuralPanelMode,
+    pub seasonality_global_local: NeuralPanelMode,
     pub local_l2: f64,
     pub seed: u64,
 }
 
-impl Default for NeuralPairwiseConfig {
+impl Default for NeuralPanelConfig {
     fn default() -> Self {
         Self {
             n_lags: 8,
@@ -73,15 +73,15 @@ impl Default for NeuralPairwiseConfig {
             lagged_regressors: BTreeMap::new(),
             ar_layers: Vec::new(),
             lagged_reg_layers: Vec::new(),
-            trend_mode: NeuralPairwiseMode::Global,
-            seasonality_global_local: NeuralPairwiseMode::Global,
+            trend_mode: NeuralPanelMode::Global,
+            seasonality_global_local: NeuralPanelMode::Global,
             local_l2: 0.0,
             seed: 0,
         }
     }
 }
 
-impl NeuralPairwiseConfig {
+impl NeuralPanelConfig {
     pub fn validate(&mut self) -> Result<()> {
         if self.n_forecasts == 0 {
             return Err(NeuralError::InvalidArgument(
@@ -130,7 +130,7 @@ impl NeuralPairwiseConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct NeuralPairwiseWindow {
+pub struct NeuralPanelWindow {
     pub series_id: String,
     pub time: Vec<f64>,
     pub lags: Vec<f64>,
@@ -140,15 +140,15 @@ pub struct NeuralPairwiseWindow {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct NeuralPairwiseWindowDataset {
-    windows: Vec<NeuralPairwiseWindow>,
+pub struct NeuralPanelWindowDataset {
+    windows: Vec<NeuralPanelWindow>,
     tails: BTreeMap<String, Vec<f64>>,
     future_feature_names: Vec<String>,
     series_ids: Vec<String>,
 }
 
-impl NeuralPairwiseWindowDataset {
-    pub fn from_frame(frame: &ForecastFrame, config: &NeuralPairwiseConfig) -> Result<Self> {
+impl NeuralPanelWindowDataset {
+    pub fn from_frame(frame: &ForecastFrame, config: &NeuralPanelConfig) -> Result<Self> {
         let mut config = config.clone();
         config.validate()?;
         let mut windows = Vec::new();
@@ -186,7 +186,7 @@ impl NeuralPairwiseWindowDataset {
                     .enumerate()
                     .map(|(offset, row)| build_future_features(row, offset, &future_feature_names))
                     .collect::<Result<Vec<_>>>()?;
-                windows.push(NeuralPairwiseWindow {
+                windows.push(NeuralPanelWindow {
                     series_id: series_id.clone(),
                     time: (0..required).map(|idx| idx as f64).collect(),
                     lags: values[start..lag_end].to_vec(),
@@ -204,7 +204,7 @@ impl NeuralPairwiseWindowDataset {
         })
     }
 
-    pub fn windows(&self) -> &[NeuralPairwiseWindow] {
+    pub fn windows(&self) -> &[NeuralPanelWindow] {
         &self.windows
     }
 
@@ -222,8 +222,8 @@ impl NeuralPairwiseWindowDataset {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NeuralPairwiseForecaster {
-    config: NeuralPairwiseConfig,
+pub struct NeuralPanelForecaster {
+    config: NeuralPanelConfig,
     scaler: Option<StandardScaler>,
     frequency: Option<ForecastFrequency>,
     last_rows: BTreeMap<String, ForecastRow>,
@@ -232,6 +232,8 @@ pub struct NeuralPairwiseForecaster {
     global_slope: f64,
     local_levels: BTreeMap<String, f64>,
     local_slopes: BTreeMap<String, f64>,
+    #[serde(default)]
+    target_tails: BTreeMap<String, Vec<f64>>,
     ar_weights: Vec<f64>,
     covariate_weights: BTreeMap<String, f64>,
     future_regressor_weights: BTreeMap<String, f64>,
@@ -239,8 +241,8 @@ pub struct NeuralPairwiseForecaster {
     train_cutoff: Option<String>,
 }
 
-impl NeuralPairwiseForecaster {
-    pub fn new(mut config: NeuralPairwiseConfig) -> Result<Self> {
+impl NeuralPanelForecaster {
+    pub fn new(mut config: NeuralPanelConfig) -> Result<Self> {
         config.validate()?;
         Ok(Self {
             config,
@@ -252,6 +254,7 @@ impl NeuralPairwiseForecaster {
             global_slope: 0.0,
             local_levels: BTreeMap::new(),
             local_slopes: BTreeMap::new(),
+            target_tails: BTreeMap::new(),
             ar_weights: Vec::new(),
             covariate_weights: BTreeMap::new(),
             future_regressor_weights: BTreeMap::new(),
@@ -260,12 +263,12 @@ impl NeuralPairwiseForecaster {
         })
     }
 
-    pub fn config(&self) -> &NeuralPairwiseConfig {
+    pub fn config(&self) -> &NeuralPanelConfig {
         &self.config
     }
 
-    pub fn window_dataset(&self, frame: &ForecastFrame) -> Result<NeuralPairwiseWindowDataset> {
-        NeuralPairwiseWindowDataset::from_frame(frame, &self.config)
+    pub fn window_dataset(&self, frame: &ForecastFrame) -> Result<NeuralPanelWindowDataset> {
+        NeuralPanelWindowDataset::from_frame(frame, &self.config)
     }
 
     pub fn quantile_levels(&self) -> &[f64] {
@@ -283,12 +286,12 @@ impl NeuralPairwiseForecaster {
     pub fn predict_tensor(&self, horizon: usize) -> CoreResult<BTreeMap<String, Vec<Vec<f64>>>> {
         let frequency = self.frequency.ok_or_else(|| {
             CartoBoostError::InvalidInput(
-                "NeuralPairwiseForecaster must be fit before predict".to_string(),
+                "NeuralPanelForecaster must be fit before predict".to_string(),
             )
         })?;
         let scaler = self.scaler.ok_or_else(|| {
             CartoBoostError::InvalidInput(
-                "NeuralPairwiseForecaster must be fit before predict".to_string(),
+                "NeuralPanelForecaster must be fit before predict".to_string(),
             )
         })?;
         let mut by_series = BTreeMap::new();
@@ -300,6 +303,7 @@ impl NeuralPairwiseForecaster {
             })?;
             let local_level = self.local_levels.get(series_id).copied().unwrap_or(0.0);
             let local_slope = self.local_slopes.get(series_id).copied().unwrap_or(0.0);
+            let ar_effect = self.autoregressive_effect(series_id, local_level, local_slope);
             let mut rows = Vec::with_capacity(horizon);
             for step in 1..=horizon {
                 let _timestamp = frequency.advance(last_row.timestamp, step)?;
@@ -309,13 +313,38 @@ impl NeuralPairwiseForecaster {
                     self.global_level
                         + local_level
                         + (self.global_slope + local_slope) * step as f64
-                };
+                } + ar_effect / step as f64;
                 let median = scaler.inverse_transform(median_scaled);
                 rows.push(repaired_quantiles(median, &self.config.quantiles));
             }
             by_series.insert(series_id.clone(), rows);
         }
         Ok(by_series)
+    }
+
+    fn autoregressive_effect(&self, series_id: &str, local_level: f64, local_slope: f64) -> f64 {
+        if self.ar_weights.is_empty() {
+            return 0.0;
+        }
+        let Some(tail) = self.target_tails.get(series_id) else {
+            return 0.0;
+        };
+        let start_index = tail.len().saturating_sub(self.ar_weights.len());
+        tail[start_index..]
+            .iter()
+            .zip(self.ar_weights.iter())
+            .enumerate()
+            .map(|(idx, (value, weight))| {
+                let baseline = if self.config.trend == TrendMode::Off {
+                    self.global_level + local_level
+                } else {
+                    self.global_level
+                        + local_level
+                        + (self.global_slope + local_slope) * (idx + start_index + 1) as f64
+                };
+                (value - baseline) * weight
+            })
+            .sum()
     }
 
     pub fn predict_quantiles_json_string(&self, horizon: usize) -> CoreResult<String> {
@@ -328,7 +357,7 @@ impl NeuralPairwiseForecaster {
     }
 }
 
-impl Forecaster for NeuralPairwiseForecaster {
+impl Forecaster for NeuralPanelForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> CoreResult<()> {
         let dataset = self
             .window_dataset(frame)
@@ -350,6 +379,19 @@ impl Forecaster for NeuralPairwiseForecaster {
         self.feature_schema = dataset.future_feature_names().to_vec();
         self.frequency = Some(frame.frequency());
         self.scaler = Some(scaler);
+        self.target_tails = dataset
+            .tails()
+            .iter()
+            .map(|(series_id, values)| {
+                (
+                    series_id.clone(),
+                    values
+                        .iter()
+                        .map(|value| scaler.transform(*value))
+                        .collect(),
+                )
+            })
+            .collect();
         self.last_rows = self
             .series_ids
             .iter()
@@ -368,7 +410,7 @@ impl Forecaster for NeuralPairwiseForecaster {
             .map(|timestamp| timestamp.to_string());
         self.local_levels.clear();
         self.local_slopes.clear();
-        if self.config.trend_mode != NeuralPairwiseMode::Global {
+        if self.config.trend_mode != NeuralPanelMode::Global {
             for series_id in &self.series_ids {
                 let rows = frame.rows_for_series(series_id);
                 let scaled = rows
@@ -420,7 +462,7 @@ impl Forecaster for NeuralPairwiseForecaster {
         }
         let frequency = self.frequency.ok_or_else(|| {
             CartoBoostError::InvalidInput(
-                "NeuralPairwiseForecaster must be fit before predict".to_string(),
+                "NeuralPanelForecaster must be fit before predict".to_string(),
             )
         })?;
         let tensor = self.predict_tensor(horizon)?;
@@ -452,7 +494,7 @@ impl Forecaster for NeuralPairwiseForecaster {
     }
 
     fn model_name(&self) -> &'static str {
-        "neural_pairwise"
+        "neural_panel"
     }
 
     fn metadata(&self) -> Value {
@@ -468,6 +510,7 @@ impl Forecaster for NeuralPairwiseForecaster {
                 "global_slope": self.global_slope,
                 "local_levels": self.local_levels,
                 "local_slopes": self.local_slopes,
+                "target_tails": self.target_tails,
                 "ar_weights": self.ar_weights,
                 "lagged_regressor_weights": self.covariate_weights,
                 "future_regressor_weights": self.future_regressor_weights,
@@ -487,29 +530,29 @@ impl Forecaster for NeuralPairwiseForecaster {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct LaneNeuralPairwiseConfig {
-    pub base: NeuralPairwiseConfig,
+pub struct LaneNeuralPanelConfig {
+    pub base: NeuralPanelConfig,
     pub embedding_dim: usize,
 }
 
-impl Default for LaneNeuralPairwiseConfig {
+impl Default for LaneNeuralPanelConfig {
     fn default() -> Self {
         Self {
-            base: NeuralPairwiseConfig::default(),
+            base: NeuralPanelConfig::default(),
             embedding_dim: 8,
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LaneNeuralPairwiseForecaster {
-    inner: NeuralPairwiseForecaster,
-    config: LaneNeuralPairwiseConfig,
+pub struct LaneNeuralPanelForecaster {
+    inner: NeuralPanelForecaster,
+    config: LaneNeuralPanelConfig,
     fallback_index: BTreeMap<String, Vec<String>>,
 }
 
-impl LaneNeuralPairwiseForecaster {
-    pub fn new(mut config: LaneNeuralPairwiseConfig) -> Result<Self> {
+impl LaneNeuralPanelForecaster {
+    pub fn new(mut config: LaneNeuralPanelConfig) -> Result<Self> {
         if config.embedding_dim == 0 {
             return Err(NeuralError::InvalidArgument(
                 "embedding_dim must be positive".to_string(),
@@ -517,7 +560,7 @@ impl LaneNeuralPairwiseForecaster {
         }
         config.base.validate()?;
         Ok(Self {
-            inner: NeuralPairwiseForecaster::new(config.base.clone())?,
+            inner: NeuralPanelForecaster::new(config.base.clone())?,
             config,
             fallback_index: BTreeMap::new(),
         })
@@ -610,7 +653,7 @@ impl LaneNeuralPairwiseForecaster {
     ) -> CoreResult<ForecastResult> {
         let frequency = self.inner.frequency.ok_or_else(|| {
             CartoBoostError::InvalidInput(
-                "LaneNeuralPairwiseForecaster must be fit before predict_for_lanes".to_string(),
+                "LaneNeuralPanelForecaster must be fit before predict_for_lanes".to_string(),
             )
         })?;
         let tensor = self.predict_tensor_for_lanes(horizon, series_ids)?;
@@ -694,7 +737,7 @@ impl LaneNeuralPairwiseForecaster {
     }
 }
 
-impl Forecaster for LaneNeuralPairwiseForecaster {
+impl Forecaster for LaneNeuralPanelForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> CoreResult<()> {
         self.fallback_index = frame
             .series_ids()
@@ -712,11 +755,11 @@ impl Forecaster for LaneNeuralPairwiseForecaster {
     }
 
     fn model_name(&self) -> &'static str {
-        "lane_neural_pairwise"
+        "lane_neural_panel"
     }
 
     fn metadata(&self) -> Value {
-        LaneNeuralPairwiseForecaster::metadata(self)
+        LaneNeuralPanelForecaster::metadata(self)
     }
 }
 
@@ -740,7 +783,7 @@ fn normalized_quantiles(quantiles: &[f64]) -> Result<Vec<f64>> {
         .collect()
 }
 
-fn future_feature_names(config: &NeuralPairwiseConfig) -> Vec<String> {
+fn future_feature_names(config: &NeuralPanelConfig) -> Vec<String> {
     let mut names = Vec::new();
     for (name, order) in [
         ("daily", config.daily_fourier_order),
