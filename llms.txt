@@ -250,6 +250,13 @@ classification, ranking, forecasting, graph, and neural-embedding modeling.
   and rolling-stat enrichments to taxi/synthetic route-demand sources; M4/M5/M6
   stay on the compact competition path unless a targeted benchmark proves
   otherwise.
+- `NeuralPairwiseForecaster` and `LaneNeuralPairwiseForecaster` are Rust-native
+  panel forecasters exposed through Python and wasm as `neural_pairwise`.
+  Inputs are `ForecastFrame` rows with directional lane ids such as
+  `PULocationID:DOLocationID`; the lane wrapper records origin/destination/lane
+  metadata and cold-lane fallback order. Treat quality claims as unproven until
+  a rolling-origin benchmark compares seasonal naive and `CartoBoostLagForecaster`
+  under the same split, metrics, settings, timing, and artifact capture.
 - M4 suite benchmark orchestration is serial in the committed wrapper so group
   timing stays directly comparable across maintained artifacts.
 - Use `objective="rmse_wape"` when the user wants a single validation selector

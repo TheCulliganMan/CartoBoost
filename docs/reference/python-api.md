@@ -16,7 +16,8 @@ and keep artifacts that make the comparison reproducible.
 | Taxi trip, route, or zone classification | `CartoBoostClassifier`, sparse zone sets | Logloss, ROC-AUC or PR-AUC, Brier score, and calibration checks on the same split as baselines. |
 | Grouped route, customer, or zone ranking | `CartoBoostRanker`, grouped relevance labels | NDCG, MAP, MRR, and baseline ranking comparison by query group. |
 | Pickup/dropoff demand forecasting | `ForecastFrame`, `CartoBoostLagForecaster`, splitters, backtester | Rolling-origin or out-of-time RMSE, MAE, WAPE, horizon metrics. |
-| Spatial Prophet-shaped taxi forecasting | `SpatialPiecewiseKrigingForecaster` | Compare base piecewise seasonal, kriging, and fused rows under the same rolling-origin folds; inspect correction, variance, neighbors, and runtime metadata. |
+| Spatial piecewise seasonal taxi forecasting | `SpatialPiecewiseKrigingForecaster` | Compare base piecewise seasonal, kriging, and fused rows under the same rolling-origin folds; inspect correction, variance, neighbors, and runtime metadata. |
+| Directional neural lane forecasting | `NeuralPairwiseForecaster`, `LaneNeuralPairwiseForecaster` | Rolling-origin RMSE, MAE, WAPE, horizon metrics, quantile diagnostics, timing, and comparison against seasonal naive plus `CartoBoostLagForecaster`. |
 | Repeated-ID residual signal | `NeuralEmbeddingRegressor`, `benchmark_neural_vs_cartoboost` | Repeated-ID and cold-ID splits, with out-of-fold embeddings when possible. |
 | Pickup/dropoff topology | `cartoboost.graph`, standalone graph regressors, graph feature transformers | Same train-side graph construction for all rows, plus grouped or cold-source validation. |
 | Diagnostics and intervals | evaluation helpers, SHAP helpers, kriging diagnostics | Residual spatial autocorrelation, interval coverage, and residual summaries by zone/hour. |
@@ -226,9 +227,11 @@ Forecasters:
 | `SbaForecaster` | Fixed SBA intermittent-demand forecaster with Croston bias adjustment. |
 | `TsbForecaster` | Fixed TSB intermittent-demand forecaster with separate demand and occurrence smoothing. |
 | `KrigingForecaster` | Coordinate-aware panel forecaster using stable series coordinates and variogram controls. |
-| `SpatialPiecewiseKrigingForecaster` | Prophet-shaped CartoBoost base fused with cutoff-safe kriged regressors, residual kriging, or hybrid spatial correction; result JSON includes base mean, correction, variance, neighbors, components, and metadata. |
-| `PiecewiseLinearSeasonalForecaster` | Piecewise linear seasonal local model with linear, flat, or logistic growth, automatic or explicit changepoints, Prophet-shaped holiday tables and optional country holiday calendars normalized into event windows, Fourier seasonalities, conditional custom seasonalities, events, automatic extra-regressor standardization, per-component regularization, residual intervals, deterministic sampled trend uncertainty, external trend adjustments, residual shock propagation, fitted JSON round-trips, `components()` / `components_json()` forecast decomposition, and `history_components()` / `history_components_frame()` / `history_components_json()` fitted trend, movement, seasonality, event, and regressor diagnostics; interactive examples expose matching fitted artifact prediction and component helpers. |
+| `SpatialPiecewiseKrigingForecaster` | Piecewise seasonal CartoBoost base fused with cutoff-safe kriged regressors, residual kriging, or hybrid spatial correction; result JSON includes base mean, correction, variance, neighbors, components, and metadata. |
+| `PiecewiseLinearSeasonalForecaster` | Piecewise linear seasonal local model with linear, flat, or logistic growth, automatic or explicit changepoints, holiday tables and optional country holiday calendars normalized into event windows, Fourier seasonalities, conditional custom seasonalities, events, automatic extra-regressor standardization, per-component regularization, residual intervals, deterministic sampled trend uncertainty, external trend adjustments, residual shock propagation, fitted JSON round-trips, `components()` / `components_json()` forecast decomposition, and `history_components()` / `history_components_frame()` / `history_components_json()` fitted trend, movement, seasonality, event, and regressor diagnostics; interactive examples expose matching fitted artifact prediction and component helpers. |
 | `CartoBoostLagForecaster` | Global recursive forecaster using leakage-safe lag, rolling, calendar, static, and known-future features with `CartoBoostRegressor`. |
+| `NeuralPairwiseForecaster` | Rust-native neural panel forecaster with `n_lags`, `n_forecasts`, quantiles, trend, Fourier seasonality, event offsets, known-future regressors, lagged regressors, direct horizons, local/global component modes, and serializable metadata. |
+| `LaneNeuralPairwiseForecaster` | Taxi lane wrapper for `series_id="origin:destination"` panels; records origin, destination, lane, directional graph-feature, and cold-lane fallback metadata while keeping `A:B` distinct from `B:A`. |
 | `AutoForecaster` | Guarded model selector over reusable internal forecasting candidates with validation metadata and fitted artifacts. |
 | `NBeatsForecaster` | Deterministic N-BEATS style forecasting expert for regular forecast windows. |
 | `NHiTSForecaster` | Deterministic N-HiTS style forecasting expert with pooled history windows. |
@@ -238,17 +241,17 @@ Forecasters:
 `PiecewiseLinearSeasonalForecaster` accepts `growth`, `component_mode`,
 changepoint controls including `n_changepoints`, `changepoint_prior_scale`,
 and explicit `changepoints` date lists, yearly/weekly/daily Fourier orders,
-custom conditional seasonalities, event windows, Prophet-shaped `holidays`
+custom conditional seasonalities, event windows, `holidays`
 tables, optional `add_country_holidays()` calendars via `cartoboost[holidays]`,
 additive or multiplicative regressor modes,
 dynamic cap/floor regressors, prediction interval levels, quantile levels,
 trend/coefficient uncertainty controls, `trend_adjustments`,
 `trend_adjustments_by_series`, `residual_shock_window`,
 `residual_shock_scale`, `residual_shock_decay`, and robust Huber fitting.
-The default automatic changepoint count is 25 to match Prophet's public default;
-CartoBoost uses `changepoint_range=1.0` by default so short-horizon lane
+The default automatic changepoint count is 25. CartoBoost uses
+`changepoint_range=1.0` by default so short-horizon lane
 backtests can fit recent trend movement across the full training window. Set
-`changepoint_range=0.8` for Prophet's stricter default placement.
+`changepoint_range=0.8` for earlier changepoint placement.
 Fitted models serialize with `to_json()` / `from_json()` and prediction results
 preserve interval columns through JSON round-trips.
 

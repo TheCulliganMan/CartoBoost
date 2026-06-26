@@ -7,7 +7,7 @@ CartoBoost forecasting is organized around two docs surfaces:
 - the [forecasting model guides](user-guide/forecasting-models/index.md), for
   choosing an individual model type such as naive, theta, ETS, ARIMA, Kalman,
   piecewise linear seasonal, kriging, spatial piecewise kriging, CartoBoost
-  lag, AutoForecaster, or fixed weighted ensembles.
+  lag, NeuralPairwise, AutoForecaster, or fixed weighted ensembles.
 
 The Python forecasting package gives users dataframe ergonomics, explicit
 configuration, CLI entry points, and artifact handling. Model behavior is shared
@@ -182,6 +182,7 @@ Use the model guides for modeling decisions:
 | Coordinate-aware panel borrowing | [Kriging](user-guide/forecasting-models/kriging.md) |
 | Temporal components plus spatial residual or regressor kriging | [Spatial Piecewise Kriging](user-guide/forecasting-models/spatial-piecewise-kriging.md) |
 | Shared supervised lag features across many panels | [CartoBoost Lag](user-guide/forecasting-models/cartoboost-lag.md) |
+| Rust-native neural panel forecasting with directional lane ids | `NeuralPairwiseForecaster` and `LaneNeuralPairwiseForecaster` in [Forecasting Model Guides](user-guide/forecasting-models/index.md) |
 | Guarded default selector over reusable candidates | [AutoForecaster](user-guide/forecasting-models/auto-forecaster.md) |
 | Fixed combinations of fitted models | [Weighted Ensembles](user-guide/forecasting-models/ensembles.md) |
 
@@ -193,8 +194,13 @@ names.
 ETS is additive-only in this version. AutoARIMA searches bounded ARIMA(p,d,q)
 candidates with residual-lag moving-average terms; seasonal AutoARIMA is
 rejected explicitly. Weighted ensembles require explicit component models.
-Neural forecasting wrappers should not be used for quality claims without real
-benchmark evidence.
+`NeuralPairwiseForecaster` is Rust-native and accepts `ForecastFrame` panel rows
+with directional lane ids such as `PULocationID:DOLocationID`. It builds
+train-only normalized direct windows, stores quantiles with median output first
+internally, repairs non-crossing quantiles on prediction, and records
+normalization, component parameters, series ids, feature schema, lag config,
+seed, and train cutoff in metadata. Do not use it for quality claims without a
+real rolling-origin benchmark against seasonal naive and `CartoBoostLagForecaster`.
 
 ## Advanced Behavior
 
@@ -211,7 +217,7 @@ docs pages:
 | Regime-aware uncertainty | `CUSUM`, `PageHinkley`, EWMA volatility, rolling median residuals, rolling MAD residuals, and `RegimeIntervalPolicy` can widen intervals, raise process variance, or lower confidence during detected shifts. |
 | Calibrated forecast events | Probability calibration helpers turn threshold, horizon, failure-risk, or escalation-risk events into bounded probability forecasts with Brier score, log loss, ECE, calibration buckets, and reliability-curve data. |
 | Rank probability score helpers | Metrics and interval evaluation; competition-specific scoring stays in benchmark adapters. |
-| Neural forecasting experts | Optional neural wrappers with no public quality claim unless a real benchmark run records commands, settings, timing, and metrics. |
+| NeuralPairwise forecasting | Rust-native panel neural forecaster with directional lane ids, direct horizons, local/global components, known-future regressors, lagged regressors, quantiles, and serializable metadata. |
 
 These primitives are generic. A taxi lane forecast may call the state dimensions
 pickup zone, dropoff zone, and pickup-dropoff corridor, while the reusable names

@@ -40,7 +40,14 @@ from .local import (
     TsbForecaster,
 )
 from .metrics import ForecastMetricSet
-from .neural import NBEATSForecaster, NBeatsForecaster, NHITSForecaster, NHiTSForecaster
+from .neural import (
+    LaneNeuralPairwiseForecaster,
+    NBEATSForecaster,
+    NBeatsForecaster,
+    NeuralPairwiseForecaster,
+    NHITSForecaster,
+    NHiTSForecaster,
+)
 from .registry import ForecastModelSpec, ForecastRegistry
 from .schema import ForecastFrame, ForecastResult, PredictionInterval
 from .sequence import (
@@ -97,9 +104,11 @@ __all__ = [
     "KrigingForecaster",
     "LagFeatureBuilder",
     "LagFeatureConfig",
+    "LaneNeuralPairwiseForecaster",
     "NaiveForecaster",
     "NBEATSForecaster",
     "NBeatsForecaster",
+    "NeuralPairwiseForecaster",
     "NHITSForecaster",
     "NHiTSForecaster",
     "next_timestamps",

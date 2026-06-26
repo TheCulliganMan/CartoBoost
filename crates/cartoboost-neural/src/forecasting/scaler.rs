@@ -1,6 +1,7 @@
 use crate::{NeuralError, Result};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct StandardScaler {
     mean: f64,
     scale: f64,

@@ -18,8 +18,10 @@ pub use encoder::{EmbeddingTableEncoder, NeuralEncoder};
 pub use error::{NeuralError, Result};
 pub use features::NeuralFeatureBlock;
 pub use forecasting::{
-    ForecastWindow, NBeatsConfig, NBeatsForecaster, NHiTSConfig, NHiTSForecaster, StandardScaler,
-    WindowDataset,
+    ComponentMode, ForecastWindow, LaneNeuralPairwiseConfig, LaneNeuralPairwiseForecaster,
+    NBeatsConfig, NBeatsForecaster, NHiTSConfig, NHiTSForecaster, NeuralPairwiseConfig,
+    NeuralPairwiseForecaster, NeuralPairwiseMode, NeuralPairwiseWindow,
+    NeuralPairwiseWindowDataset, StandardScaler, TrendMode, WindowDataset,
 };
 pub use graph_features::{
     compute_directional_features, materialize_source_target_pair_nodes, validate_directed_metapath,

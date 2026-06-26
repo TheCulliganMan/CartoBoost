@@ -98,8 +98,14 @@ use cartoboost_neural::{
     Node2VecEncoder, Node2VecLinkPredictor, Node2VecRegressor, StandaloneBoosterConfig,
 };
 use cartoboost_neural::{
+    ComponentMode as CoreNeuralPairwiseComponentMode,
+    LaneNeuralPairwiseConfig as CoreLaneNeuralPairwiseConfig,
+    LaneNeuralPairwiseForecaster as CoreLaneNeuralPairwiseForecaster,
     NBeatsConfig as CoreNBeatsConfig, NBeatsForecaster as CoreNBeatsForecaster,
     NHiTSConfig as CoreNHiTSConfig, NHiTSForecaster as CoreNHiTSForecaster,
+    NeuralPairwiseConfig as CoreNeuralPairwiseConfig,
+    NeuralPairwiseForecaster as CoreNeuralPairwiseForecaster,
+    NeuralPairwiseMode as CoreNeuralPairwiseMode, TrendMode as CoreNeuralPairwiseTrendMode,
 };
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
@@ -2693,6 +2699,229 @@ impl NativeNHiTSForecaster {
 
     fn predict(&self, py: Python<'_>, horizon: usize) -> PyResult<NativeForecastResult> {
         predict_forecaster_py(py, &self.model, horizon)
+    }
+
+    fn metadata_json(&self) -> PyResult<String> {
+        serde_json::to_string(&self.model.metadata())
+            .map_err(|err| PyRuntimeError::new_err(err.to_string()))
+    }
+}
+
+#[pyclass(name = "NeuralPairwiseForecaster")]
+struct NativeNeuralPairwiseForecaster {
+    model: CoreNeuralPairwiseForecaster,
+}
+
+#[pymethods]
+impl NativeNeuralPairwiseForecaster {
+    #[new]
+    #[pyo3(signature = (
+        n_lags=8,
+        n_forecasts=1,
+        quantiles=None,
+        trend="piecewise_linear",
+        n_changepoints=10,
+        changepoints_range=0.8,
+        daily_fourier_order=0,
+        weekly_fourier_order=0,
+        yearly_fourier_order=0,
+        custom_seasonalities=None,
+        seasonality_mode="additive",
+        events=None,
+        event_mode="additive",
+        future_regressors=None,
+        lagged_regressors=None,
+        ar_layers=None,
+        lagged_reg_layers=None,
+        trend_mode="global",
+        seasonality_global_local="global",
+        local_l2=0.0,
+        seed=0
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        n_lags: usize,
+        n_forecasts: usize,
+        quantiles: Option<Vec<f64>>,
+        trend: &str,
+        n_changepoints: usize,
+        changepoints_range: f64,
+        daily_fourier_order: usize,
+        weekly_fourier_order: usize,
+        yearly_fourier_order: usize,
+        custom_seasonalities: Option<Vec<(String, f64, usize)>>,
+        seasonality_mode: &str,
+        events: Option<BTreeMap<String, Vec<i32>>>,
+        event_mode: &str,
+        future_regressors: Option<BTreeMap<String, String>>,
+        lagged_regressors: Option<BTreeMap<String, usize>>,
+        ar_layers: Option<Vec<usize>>,
+        lagged_reg_layers: Option<Vec<usize>>,
+        trend_mode: &str,
+        seasonality_global_local: &str,
+        local_l2: f64,
+        seed: u64,
+    ) -> PyResult<Self> {
+        let config = neural_pairwise_config_from_parts(
+            n_lags,
+            n_forecasts,
+            quantiles,
+            trend,
+            n_changepoints,
+            changepoints_range,
+            daily_fourier_order,
+            weekly_fourier_order,
+            yearly_fourier_order,
+            custom_seasonalities,
+            seasonality_mode,
+            events,
+            event_mode,
+            future_regressors,
+            lagged_regressors,
+            ar_layers,
+            lagged_reg_layers,
+            trend_mode,
+            seasonality_global_local,
+            local_l2,
+            seed,
+        )?;
+        Ok(Self {
+            model: CoreNeuralPairwiseForecaster::new(config).map_err(to_py_neural_error)?,
+        })
+    }
+
+    fn fit(&mut self, py: Python<'_>, frame: &NativeForecastFrame) -> PyResult<()> {
+        fit_forecaster_py(py, &mut self.model, frame)
+    }
+
+    fn predict(&self, py: Python<'_>, horizon: usize) -> PyResult<NativeForecastResult> {
+        predict_forecaster_py(py, &self.model, horizon)
+    }
+
+    fn quantiles_json(&self, py: Python<'_>, horizon: usize) -> PyResult<String> {
+        py.allow_threads(|| self.model.predict_quantiles_json_string(horizon))
+            .map_err(to_py_value_error)
+    }
+
+    fn metadata_json(&self) -> PyResult<String> {
+        serde_json::to_string(&self.model.metadata())
+            .map_err(|err| PyRuntimeError::new_err(err.to_string()))
+    }
+
+    fn to_json(&self, py: Python<'_>) -> PyResult<String> {
+        py.allow_threads(|| self.model.to_json_string())
+            .map_err(to_py_value_error)
+    }
+
+    #[classmethod]
+    fn from_json(_cls: &Bound<'_, PyType>, py: Python<'_>, value: &str) -> PyResult<Self> {
+        let model = py
+            .allow_threads(|| CoreNeuralPairwiseForecaster::from_json_string(value))
+            .map_err(to_py_value_error)?;
+        Ok(Self { model })
+    }
+}
+
+#[pyclass(name = "LaneNeuralPairwiseForecaster")]
+struct NativeLaneNeuralPairwiseForecaster {
+    model: CoreLaneNeuralPairwiseForecaster,
+}
+
+#[pymethods]
+impl NativeLaneNeuralPairwiseForecaster {
+    #[new]
+    #[pyo3(signature = (
+        n_lags=8,
+        n_forecasts=1,
+        quantiles=None,
+        trend="piecewise_linear",
+        n_changepoints=10,
+        changepoints_range=0.8,
+        daily_fourier_order=0,
+        weekly_fourier_order=0,
+        yearly_fourier_order=0,
+        custom_seasonalities=None,
+        seasonality_mode="additive",
+        events=None,
+        event_mode="additive",
+        future_regressors=None,
+        lagged_regressors=None,
+        ar_layers=None,
+        lagged_reg_layers=None,
+        trend_mode="global",
+        seasonality_global_local="global",
+        local_l2=0.0,
+        seed=0,
+        embedding_dim=8
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        n_lags: usize,
+        n_forecasts: usize,
+        quantiles: Option<Vec<f64>>,
+        trend: &str,
+        n_changepoints: usize,
+        changepoints_range: f64,
+        daily_fourier_order: usize,
+        weekly_fourier_order: usize,
+        yearly_fourier_order: usize,
+        custom_seasonalities: Option<Vec<(String, f64, usize)>>,
+        seasonality_mode: &str,
+        events: Option<BTreeMap<String, Vec<i32>>>,
+        event_mode: &str,
+        future_regressors: Option<BTreeMap<String, String>>,
+        lagged_regressors: Option<BTreeMap<String, usize>>,
+        ar_layers: Option<Vec<usize>>,
+        lagged_reg_layers: Option<Vec<usize>>,
+        trend_mode: &str,
+        seasonality_global_local: &str,
+        local_l2: f64,
+        seed: u64,
+        embedding_dim: usize,
+    ) -> PyResult<Self> {
+        let base = neural_pairwise_config_from_parts(
+            n_lags,
+            n_forecasts,
+            quantiles,
+            trend,
+            n_changepoints,
+            changepoints_range,
+            daily_fourier_order,
+            weekly_fourier_order,
+            yearly_fourier_order,
+            custom_seasonalities,
+            seasonality_mode,
+            events,
+            event_mode,
+            future_regressors,
+            lagged_regressors,
+            ar_layers,
+            lagged_reg_layers,
+            trend_mode,
+            seasonality_global_local,
+            local_l2,
+            seed,
+        )?;
+        Ok(Self {
+            model: CoreLaneNeuralPairwiseForecaster::new(CoreLaneNeuralPairwiseConfig {
+                base,
+                embedding_dim,
+            })
+            .map_err(to_py_neural_error)?,
+        })
+    }
+
+    fn fit(&mut self, py: Python<'_>, frame: &NativeForecastFrame) -> PyResult<()> {
+        fit_forecaster_py(py, &mut self.model, frame)
+    }
+
+    fn predict(&self, py: Python<'_>, horizon: usize) -> PyResult<NativeForecastResult> {
+        predict_forecaster_py(py, &self.model, horizon)
+    }
+
+    fn quantiles_json(&self, py: Python<'_>, horizon: usize) -> PyResult<String> {
+        py.allow_threads(|| self.model.predict_quantiles_json_string(horizon))
+            .map_err(to_py_value_error)
     }
 
     fn metadata_json(&self) -> PyResult<String> {
@@ -8800,6 +9029,98 @@ fn to_py_neural_error(err: cartoboost_neural::NeuralError) -> PyErr {
     PyValueError::new_err(err.to_string())
 }
 
+#[allow(clippy::too_many_arguments)]
+fn neural_pairwise_config_from_parts(
+    n_lags: usize,
+    n_forecasts: usize,
+    quantiles: Option<Vec<f64>>,
+    trend: &str,
+    n_changepoints: usize,
+    changepoints_range: f64,
+    daily_fourier_order: usize,
+    weekly_fourier_order: usize,
+    yearly_fourier_order: usize,
+    custom_seasonalities: Option<Vec<(String, f64, usize)>>,
+    seasonality_mode: &str,
+    events: Option<BTreeMap<String, Vec<i32>>>,
+    event_mode: &str,
+    future_regressors: Option<BTreeMap<String, String>>,
+    lagged_regressors: Option<BTreeMap<String, usize>>,
+    ar_layers: Option<Vec<usize>>,
+    lagged_reg_layers: Option<Vec<usize>>,
+    trend_mode: &str,
+    seasonality_global_local: &str,
+    local_l2: f64,
+    seed: u64,
+) -> PyResult<CoreNeuralPairwiseConfig> {
+    let future_regressors = future_regressors
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(name, mode)| Ok((name, parse_neural_pairwise_component_mode(&mode)?)))
+        .collect::<PyResult<BTreeMap<_, _>>>()?;
+    let custom_seasonalities = custom_seasonalities
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(name, period, order)| (name, (period, order)))
+        .collect();
+    Ok(CoreNeuralPairwiseConfig {
+        n_lags,
+        n_forecasts,
+        quantiles: quantiles.unwrap_or_else(|| vec![0.5]),
+        trend: parse_neural_pairwise_trend_mode(trend)?,
+        n_changepoints,
+        changepoints_range,
+        daily_fourier_order,
+        weekly_fourier_order,
+        yearly_fourier_order,
+        custom_seasonalities,
+        seasonality_mode: parse_neural_pairwise_component_mode(seasonality_mode)?,
+        events: events.unwrap_or_default(),
+        event_mode: parse_neural_pairwise_component_mode(event_mode)?,
+        future_regressors,
+        lagged_regressors: lagged_regressors.unwrap_or_default(),
+        ar_layers: ar_layers.unwrap_or_default(),
+        lagged_reg_layers: lagged_reg_layers.unwrap_or_default(),
+        trend_mode: parse_neural_pairwise_global_local_mode(trend_mode)?,
+        seasonality_global_local: parse_neural_pairwise_global_local_mode(
+            seasonality_global_local,
+        )?,
+        local_l2,
+        seed,
+    })
+}
+
+fn parse_neural_pairwise_trend_mode(value: &str) -> PyResult<CoreNeuralPairwiseTrendMode> {
+    match value {
+        "off" | "none" => Ok(CoreNeuralPairwiseTrendMode::Off),
+        "piecewise_linear" | "linear" => Ok(CoreNeuralPairwiseTrendMode::PiecewiseLinear),
+        other => Err(PyValueError::new_err(format!(
+            "unknown NeuralPairwise trend mode {other:?}"
+        ))),
+    }
+}
+
+fn parse_neural_pairwise_component_mode(value: &str) -> PyResult<CoreNeuralPairwiseComponentMode> {
+    match value {
+        "additive" => Ok(CoreNeuralPairwiseComponentMode::Additive),
+        "multiplicative" => Ok(CoreNeuralPairwiseComponentMode::Multiplicative),
+        other => Err(PyValueError::new_err(format!(
+            "unknown NeuralPairwise component mode {other:?}"
+        ))),
+    }
+}
+
+fn parse_neural_pairwise_global_local_mode(value: &str) -> PyResult<CoreNeuralPairwiseMode> {
+    match value {
+        "global" => Ok(CoreNeuralPairwiseMode::Global),
+        "local" => Ok(CoreNeuralPairwiseMode::Local),
+        "glocal" => Ok(CoreNeuralPairwiseMode::Glocal),
+        other => Err(PyValueError::new_err(format!(
+            "unknown NeuralPairwise global/local mode {other:?}"
+        ))),
+    }
+}
+
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<NativeCartoBoostRegressor>()?;
@@ -8835,6 +9156,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<NativeSpatialPiecewiseKrigingForecaster>()?;
     m.add_class::<NativeNBeatsForecaster>()?;
     m.add_class::<NativeNHiTSForecaster>()?;
+    m.add_class::<NativeNeuralPairwiseForecaster>()?;
+    m.add_class::<NativeLaneNeuralPairwiseForecaster>()?;
     m.add_class::<NativeAutoForecastModel>()?;
     m.add_class::<NativeCartoBoostLagForecaster>()?;
     m.add_class::<NativeWeightedEnsembleForecaster>()?;

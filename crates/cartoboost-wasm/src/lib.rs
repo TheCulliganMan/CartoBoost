@@ -32,9 +32,11 @@ use cartoboost_core::tree::{Node, Split, SplitterKind};
 use cartoboost_core::Booster;
 use cartoboost_core::{CartoBoostError, Result};
 use cartoboost_neural::{
-    ArtifactFallbackKind, GraphSageConfig, GraphSageRegressor, HeteroGraphSageConfig,
-    HeteroGraphSageRegressor, HinSageConfig, HinSageRegressor, NeuralEmbeddingRegressor,
-    Node2VecConfig, Node2VecRegressor, StandaloneBoosterConfig,
+    ArtifactFallbackKind, ComponentMode as NeuralComponentMode, GraphSageConfig,
+    GraphSageRegressor, HeteroGraphSageConfig, HeteroGraphSageRegressor, HinSageConfig,
+    HinSageRegressor, NeuralEmbeddingRegressor, NeuralPairwiseConfig, NeuralPairwiseForecaster,
+    NeuralPairwiseMode, Node2VecConfig, Node2VecRegressor, StandaloneBoosterConfig,
+    TrendMode as NeuralTrendMode,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -88,6 +90,8 @@ struct BrowserForecastOptions {
     observation_variance: Option<f64>,
     window_size: Option<usize>,
     window_count: Option<usize>,
+    n_lags: Option<usize>,
+    n_forecasts: Option<usize>,
     validation_window: Option<usize>,
     max_direct_horizon: Option<usize>,
     max_auto_candidate_count: Option<usize>,
@@ -146,6 +150,11 @@ struct BrowserForecastOptions {
     holidays_mode: Option<String>,
     extra_regressors: Option<Vec<String>>,
     regressor_modes: Option<BTreeMap<String, String>>,
+    lagged_regressors: Option<BTreeMap<String, usize>>,
+    ar_layers: Option<Vec<usize>>,
+    lagged_reg_layers: Option<Vec<usize>>,
+    trend_mode: Option<String>,
+    local_l2: Option<f64>,
     extra_regressor_monotonic_constraints: Option<BTreeMap<String, i8>>,
     regressor_standardization: Option<String>,
     future_regressors: Option<BTreeMap<String, Vec<f64>>>,
@@ -837,6 +846,11 @@ fn forecast_model_registry() -> Vec<BrowserForecastModel> {
             name: "log1p_cartoboost_lag",
             label: "Log1p CartoBoost Lag",
             pipeline: "transform",
+        },
+        BrowserForecastModel {
+            name: "neural_pairwise",
+            label: "Neural Pairwise",
+            pipeline: "neural",
         },
         BrowserForecastModel {
             name: "classical_expert_bank",
@@ -3426,6 +3440,10 @@ fn build_forecaster(
         "piecewise_linear_seasonal" => Ok(Box::new(PiecewiseLinearSeasonalForecaster::new(
             piecewise_linear_seasonal_config(options)?,
         )?)),
+        "neural_pairwise" => Ok(Box::new(
+            NeuralPairwiseForecaster::new(neural_pairwise_config(options, horizon)?)
+                .map_err(|err| CartoBoostError::InvalidInput(err.to_string()))?,
+        )),
         "intermittent_demand" => {
             let config = IntermittentDemandConfig {
                 alpha: options.alpha.unwrap_or(0.2),
@@ -3863,6 +3881,136 @@ fn piecewise_linear_seasonal_config(
         config.floor_regressor = Some(name.clone());
     }
     Ok(config)
+}
+
+fn neural_pairwise_config(
+    options: &BrowserForecastOptions,
+    horizon: usize,
+) -> Result<NeuralPairwiseConfig> {
+    let mut config = NeuralPairwiseConfig {
+        n_lags: options
+            .n_lags
+            .or_else(|| {
+                options
+                    .lags
+                    .as_ref()
+                    .and_then(|lags| lags.iter().copied().max())
+            })
+            .unwrap_or(8),
+        n_forecasts: options.n_forecasts.unwrap_or(horizon.max(1)),
+        quantiles: options.quantile_levels.clone().unwrap_or_else(|| vec![0.5]),
+        trend: options
+            .growth
+            .as_deref()
+            .map(neural_pairwise_trend_mode)
+            .transpose()?
+            .unwrap_or(NeuralTrendMode::PiecewiseLinear),
+        n_changepoints: options
+            .n_changepoints
+            .or(options.changepoints)
+            .unwrap_or(10),
+        changepoints_range: options.changepoint_range.unwrap_or(0.8),
+        daily_fourier_order: options.daily_fourier_order.unwrap_or(0),
+        weekly_fourier_order: options.weekly_fourier_order.unwrap_or(0),
+        yearly_fourier_order: options.yearly_fourier_order.unwrap_or(0),
+        custom_seasonalities: BTreeMap::new(),
+        seasonality_mode: options
+            .seasonality_mode
+            .as_deref()
+            .or(options.component_mode.as_deref())
+            .map(neural_pairwise_component_mode)
+            .transpose()?
+            .unwrap_or(NeuralComponentMode::Additive),
+        events: BTreeMap::new(),
+        event_mode: options
+            .event_mode
+            .as_deref()
+            .map(neural_pairwise_component_mode)
+            .transpose()?
+            .unwrap_or(NeuralComponentMode::Additive),
+        future_regressors: BTreeMap::new(),
+        lagged_regressors: options.lagged_regressors.clone().unwrap_or_default(),
+        ar_layers: options.ar_layers.clone().unwrap_or_default(),
+        lagged_reg_layers: options.lagged_reg_layers.clone().unwrap_or_default(),
+        trend_mode: options
+            .trend_mode
+            .as_deref()
+            .map(neural_pairwise_global_local_mode)
+            .transpose()?
+            .unwrap_or(NeuralPairwiseMode::Global),
+        seasonality_global_local: NeuralPairwiseMode::Global,
+        local_l2: options.local_l2.unwrap_or(0.0),
+        seed: options.uncertainty_seed.unwrap_or(0),
+    };
+    if let Some(seasonalities) = &options.custom_seasonalities {
+        config.custom_seasonalities = seasonalities
+            .iter()
+            .map(|seasonality| {
+                (
+                    seasonality.name.clone(),
+                    (seasonality.period_days * 24.0, seasonality.fourier_order),
+                )
+            })
+            .collect();
+    }
+    if let Some(events) = &options.events {
+        for event in events {
+            let lower = event.lower_window.unwrap_or(0);
+            let upper = event.upper_window.unwrap_or(0);
+            config
+                .events
+                .entry(event.name.clone())
+                .or_default()
+                .extend(lower..=upper);
+        }
+    }
+    if let Some(regressors) = &options.extra_regressors {
+        for name in regressors {
+            let mode = options
+                .regressor_modes
+                .as_ref()
+                .and_then(|modes| modes.get(name))
+                .map(|value| neural_pairwise_component_mode(value))
+                .transpose()?
+                .unwrap_or(NeuralComponentMode::Additive);
+            config.future_regressors.insert(name.clone(), mode);
+        }
+    }
+    config
+        .validate()
+        .map_err(|err| CartoBoostError::InvalidInput(err.to_string()))?;
+    Ok(config)
+}
+
+fn neural_pairwise_trend_mode(value: &str) -> Result<NeuralTrendMode> {
+    match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+        "" | "linear" | "piecewise_linear" => Ok(NeuralTrendMode::PiecewiseLinear),
+        "off" | "none" | "flat" => Ok(NeuralTrendMode::Off),
+        other => Err(CartoBoostError::InvalidInput(format!(
+            "unsupported neural_pairwise trend mode {other:?}"
+        ))),
+    }
+}
+
+fn neural_pairwise_component_mode(value: &str) -> Result<NeuralComponentMode> {
+    match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+        "" | "additive" => Ok(NeuralComponentMode::Additive),
+        "multiplicative" => Ok(NeuralComponentMode::Multiplicative),
+        other => Err(CartoBoostError::InvalidInput(format!(
+            "unsupported neural_pairwise component mode {other:?}"
+        ))),
+    }
+}
+
+fn neural_pairwise_global_local_mode(value: &str) -> Result<NeuralPairwiseMode> {
+    match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+        "" | "global" => Ok(NeuralPairwiseMode::Global),
+        "local" => Ok(NeuralPairwiseMode::Local),
+        "glocal" => Ok(NeuralPairwiseMode::Glocal),
+        other => Err(CartoBoostError::InvalidInput(format!(
+            "unsupported neural_pairwise global/local mode {other:?}"
+        ))),
+    }
 }
 
 fn piecewise_component_mode(value: &str) -> Result<PiecewiseLinearComponentMode> {

@@ -1,10 +1,16 @@
 pub mod dataloader;
 pub mod nbeats;
+pub mod neural_pairwise;
 pub mod nhits;
 pub mod scaler;
 
 pub use dataloader::{ForecastWindow, WindowDataset};
 pub use nbeats::{NBeatsConfig, NBeatsForecaster};
+pub use neural_pairwise::{
+    ComponentMode, LaneNeuralPairwiseConfig, LaneNeuralPairwiseForecaster, NeuralPairwiseConfig,
+    NeuralPairwiseForecaster, NeuralPairwiseMode, NeuralPairwiseWindow,
+    NeuralPairwiseWindowDataset, TrendMode,
+};
 pub use nhits::{NHiTSConfig, NHiTSForecaster};
 pub use scaler::StandardScaler;
 

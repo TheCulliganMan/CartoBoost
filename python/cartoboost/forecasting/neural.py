@@ -90,10 +90,99 @@ class NHiTSForecaster(NativeForecastWrapper):
         )
 
 
+class NeuralPairwiseForecaster(NativeForecastWrapper):
+    """Thin Python wrapper for the Rust NeuralPairwise-style panel forecaster."""
+
+    native_class_name = "NeuralPairwiseForecaster"
+
+    def __init__(
+        self,
+        *,
+        n_lags: int = 8,
+        n_forecasts: int = 1,
+        quantiles: tuple[float, ...] | list[float] | None = None,
+        trend: str = "piecewise_linear",
+        n_changepoints: int = 10,
+        changepoints_range: float = 0.8,
+        daily_fourier_order: int = 0,
+        weekly_fourier_order: int = 0,
+        yearly_fourier_order: int = 0,
+        custom_seasonalities: list[tuple[str, float, int]] | None = None,
+        seasonality_mode: str = "additive",
+        events: dict[str, list[int]] | None = None,
+        event_mode: str = "additive",
+        future_regressors: dict[str, str] | None = None,
+        lagged_regressors: dict[str, int] | None = None,
+        ar_layers: list[int] | None = None,
+        lagged_reg_layers: list[int] | None = None,
+        trend_mode: str = "global",
+        seasonality_global_local: str = "global",
+        local_l2: float = 0.0,
+        seed: int = 0,
+        **metadata: Any,
+    ) -> None:
+        _validate_pairwise(
+            n_lags=n_lags,
+            n_forecasts=n_forecasts,
+            quantiles=quantiles,
+            changepoints_range=changepoints_range,
+            local_l2=local_l2,
+        )
+        super().__init__(
+            n_lags=int(n_lags),
+            n_forecasts=int(n_forecasts),
+            quantiles=list(quantiles or (0.5,)),
+            trend=str(trend),
+            n_changepoints=int(n_changepoints),
+            changepoints_range=float(changepoints_range),
+            daily_fourier_order=int(daily_fourier_order),
+            weekly_fourier_order=int(weekly_fourier_order),
+            yearly_fourier_order=int(yearly_fourier_order),
+            custom_seasonalities=list(custom_seasonalities or ()),
+            seasonality_mode=str(seasonality_mode),
+            events=dict(events or {}),
+            event_mode=str(event_mode),
+            future_regressors=dict(future_regressors or {}),
+            lagged_regressors=dict(lagged_regressors or {}),
+            ar_layers=list(ar_layers or ()),
+            lagged_reg_layers=list(lagged_reg_layers or ()),
+            trend_mode=str(trend_mode),
+            seasonality_global_local=str(seasonality_global_local),
+            local_l2=float(local_l2),
+            seed=int(seed),
+            metadata=dict(metadata),
+        )
+
+    def _new_native_model(self) -> Any:
+        params = dict(self._params)
+        params.pop("metadata", None)
+        native_class = _native_forecaster_class(self.native_class_name)
+        return native_class(**params)
+
+
+class LaneNeuralPairwiseForecaster(NeuralPairwiseForecaster):
+    """Taxi lane NeuralPairwise wrapper with origin/destination/lane metadata."""
+
+    native_class_name = "LaneNeuralPairwiseForecaster"
+
+    def __init__(self, *, embedding_dim: int = 8, **kwargs: Any) -> None:
+        if embedding_dim < 1:
+            raise ValueError("embedding_dim must be a positive integer")
+        super().__init__(**kwargs)
+        self._params["embedding_dim"] = int(embedding_dim)
+
+
 NHITSForecaster = NHiTSForecaster
 NBEATSForecaster = NBeatsForecaster
 
-__all__ = ["NBeatsForecaster", "NBEATSForecaster", "NHiTSForecaster", "NHITSForecaster"]
+__all__ = [
+    "LaneNeuralPairwiseForecaster",
+    "NBeatsForecaster",
+    "NBEATSForecaster",
+    "NeuralPairwiseForecaster",
+    "NHiTSForecaster",
+    "NHITSForecaster",
+]
 
 
 def _validate_common(
@@ -110,3 +199,35 @@ def _validate_common(
         raise ValueError("epochs must be a positive integer")
     if learning_rate <= 0:
         raise ValueError("learning_rate must be positive")
+
+
+def _validate_pairwise(
+    *,
+    n_lags: int,
+    n_forecasts: int,
+    quantiles: tuple[float, ...] | list[float] | None,
+    changepoints_range: float,
+    local_l2: float,
+) -> None:
+    if n_lags < 0:
+        raise ValueError("n_lags must be non-negative")
+    if n_forecasts < 1:
+        raise ValueError("n_forecasts must be a positive integer")
+    if changepoints_range <= 0.0 or changepoints_range > 1.0:
+        raise ValueError("changepoints_range must be in (0, 1]")
+    if local_l2 < 0.0:
+        raise ValueError("local_l2 must be non-negative")
+    for quantile in quantiles or (0.5,):
+        if quantile <= 0.0 or quantile >= 1.0:
+            raise ValueError("quantiles must be in (0, 1)")
+
+
+def _native_forecaster_class(name: str) -> Any:
+    try:
+        from cartoboost import _native
+    except ImportError as exc:
+        raise NotImplementedError(f"Rust binding for {name} is not available.") from exc
+    native_class = getattr(_native, name, None)
+    if native_class is None:
+        raise NotImplementedError(f"Rust binding for {name} is not available.")
+    return native_class

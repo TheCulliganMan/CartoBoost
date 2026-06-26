@@ -20,6 +20,7 @@ against simpler baselines under the same split before interpreting a gain.
 | Are many related pickup zones, dropoff zones, or route panels forecast from shared lag features? | `CartoBoostLagForecaster` | [CartoBoost Lag](forecasting-models/cartoboost-lag.md) |
 | Should nearby coordinates borrow signal for a forecast panel? | `KrigingForecaster` | [Kriging](forecasting-models/kriging.md) |
 | Should temporal changepoints and seasonality be fused with cutoff-safe spatial kriging? | `SpatialPiecewiseKrigingForecaster` | [Spatial Piecewise Kriging](forecasting-models/spatial-piecewise-kriging.md) |
+| Should a neural panel forecaster preserve directional pickup-dropoff lane identity? | `NeuralPairwiseForecaster` or `LaneNeuralPairwiseForecaster` | [Forecasting Model Guides](forecasting-models/index.md) |
 | Should a deterministic neural forecasting expert learn from regular taxi-demand windows? | `NBeatsForecaster` or `NHiTSForecaster` | [Forecasting Model Guides](forecasting-models/index.md) |
 | Do you need a fixed combination of fitted forecasters? | `WeightedEnsembleForecaster` | [Weighted Ensembles](forecasting-models/ensembles.md) |
 | Are stable pickup zones, dropoff zones, or pairs themselves the learned artifact? | `NeuralEmbeddingStandaloneRegressor` | [Neural Features](../neural-features.md) |
@@ -258,6 +259,7 @@ Choose the model guide by series structure:
 | Coordinate-aware panel interpolation | [Kriging](forecasting-models/kriging.md) |
 | Piecewise temporal structure plus spatial residual or regressor kriging | [Spatial Piecewise Kriging](forecasting-models/spatial-piecewise-kriging.md) |
 | Shared supervised lag model across many series | [CartoBoost Lag](forecasting-models/cartoboost-lag.md) |
+| Directional neural panel forecasting | `NeuralPairwiseForecaster` or `LaneNeuralPairwiseForecaster` |
 | Reusable statistical expert-bank selection | `AutoStatsBank` |
 | Guarded default selector over forecast candidates | [AutoForecaster](forecasting-models/auto-forecaster.md) |
 | Windowed neural extrapolation | `NBeatsForecaster` or `NHiTSForecaster` |

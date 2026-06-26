@@ -27,6 +27,7 @@ it on the same rolling-origin split as the simpler baselines.
 | [Kriging](kriging.md) | Borrow signal across pickup-zone or route coordinates. | Useful for coordinate-aware panel forecasting. |
 | [Spatial Piecewise Kriging](spatial-piecewise-kriging.md) | Combine interpretable temporal components with spatial borrowing. | Includes an interactive coordinate-panel example for `spatial_piecewise_kriging`. |
 | [CartoBoost Lag](cartoboost-lag.md) | Learn one supervised lag model across many related series. | Use for pickup-zone, dropoff-zone, and lane-level panels. |
+| `NeuralPairwiseForecaster` / `LaneNeuralPairwiseForecaster` | Fit a Rust-native neural panel forecaster with direct multi-horizon output for route/lane series. | Use when lane identity, lagged targets, future-known regressors, Fourier seasonality, and quantile output are part of the hypothesis. |
 | `AutoStatsBank` | Validate a deterministic statistical expert bank. | Useful when a local statistical selector is the model being tested. |
 | `CrostonForecaster`, `SbaForecaster`, `TsbForecaster` | Forecast sparse non-negative taxi-demand series with fixed intermittent-demand methods. | Use when zeros are meaningful no-pickup periods rather than missing rows. |
 | [AutoForecaster](auto-forecaster.md) | Use the guarded default selector over lag, direct, residual-corrected, intermittent, and classical candidates. | Includes diagrams for validation, gating, prediction, and metadata inspection. |
@@ -49,6 +50,7 @@ Choose the model whose assumptions match the signal you can defend:
 | Nearby zones, route midpoints, or residual surfaces should be spatially related. | Kriging | Uses coordinate distance and a variogram to borrow cross-series signal. |
 | Pickup/dropoff zones have both temporal changepoints and spatial residual structure. | [Spatial Piecewise Kriging](spatial-piecewise-kriging.md) | Separates the temporal forecast, spatial correction, kriging variance, neighbors, metadata, and components so the spatial claim can be checked. |
 | Many related zones or lanes share lag, rolling, calendar, or trend structure. | CartoBoost lag | Learns one supervised model from many aligned panel examples. |
+| Pickup-dropoff lanes need direct multi-horizon neural forecasts with lane direction preserved. | NeuralPairwise | Builds leak-free lag windows from `ForecastFrame`, keeps `A:B` distinct from `B:A`, and stores component, normalization, quantile, series-id, and train-cutoff metadata. |
 | Pickup demand is sparse with many true zero periods. | Croston, SBA, or TSB | Uses intermittent-demand smoothing instead of generic trend extrapolation. |
 | A local statistical bank should choose among reusable non-benchmark candidates. | AutoStatsBank | Runs validation over a deterministic statistical expert bank. |
 | A production taxi-demand panel needs a deterministic guarded default with auditable candidate weights. | AutoForecaster | Validates a fixed roster, protects the lag baseline, and stores global, horizon, and series weights. |
@@ -105,7 +107,83 @@ component contributions, and fitted historical trend/seasonality diagnostics.
 The guide includes an interactive example for `piecewise_linear_seasonal`
 so you can run a small taxi-lane forecast before writing a Python workflow.
 
-Use [Spatial Piecewise Kriging](spatial-piecewise-kriging.md) when that Prophet-shaped CartoBoost
+Use `NeuralPairwiseForecaster` when the model under test is a Rust-native
+neural panel forecaster rather than a local statistical model. Input rows come
+from `ForecastFrame` with `(series_id, timestamp, target, covariates)`. For taxi
+lanes, set `series_id` to a stable directional lane id such as
+`PULocationID:DOLocationID`; the lane wrapper records origin, destination, lane,
+directional graph-feature, and cold-lane fallback metadata. The model builds
+direct windows with `n_lags + n_forecasts`, uses train-only target
+normalization, supports Fourier seasonality, event offsets, known-future
+regressors, lagged regressors, local/global component modes, direct
+multi-horizon forecasts, and non-crossing quantiles. Do not use it for a public
+quality claim until it beats seasonal naive and `CartoBoostLagForecaster` under
+the same rolling-origin split.
+
+Python lane example:
+
+```python
+from cartoboost.forecasting import ForecastFrame, LaneNeuralPairwiseForecaster
+
+frame = ForecastFrame.from_pandas(
+    hourly_lane_demand,
+    timestamp_col="pickup_hour",
+    target_col="pickup_trips",
+    series_id_col="pickup_dropoff_lane",
+    freq="h",
+    known_future_covariates=["is_airport_event"],
+    historical_covariates=["avg_trip_distance"],
+)
+
+model = LaneNeuralPairwiseForecaster(
+    n_lags=24,
+    n_forecasts=6,
+    quantiles=[0.1, 0.5, 0.9],
+    daily_fourier_order=3,
+    weekly_fourier_order=3,
+    future_regressors={"is_airport_event": "additive"},
+    lagged_regressors={"avg_trip_distance": 24},
+    trend_mode="glocal",
+    local_l2=0.1,
+    seed=42,
+)
+model.fit(frame)
+forecast = model.predict(6)
+quantiles = model.quantiles_json(6)
+```
+
+Wasm/browser example:
+
+```js
+const response = await runForecast({
+  model: "neural_pairwise",
+  horizon: 6,
+  frequency: "h",
+  rows: laneRows,
+  metadata: {
+    timestampCol: "pickup_hour",
+    targetCol: "pickup_trips",
+    seriesIdCol: "pickup_dropoff_lane",
+    knownFutureCovariates: ["is_airport_event"],
+    historicalCovariates: ["avg_trip_distance"],
+  },
+  options: {
+    nLags: 24,
+    nForecasts: 6,
+    quantileLevels: [0.1, 0.5, 0.9],
+    dailyFourierOrder: 3,
+    weeklyFourierOrder: 3,
+    extraRegressors: ["is_airport_event"],
+    regressorModes: {is_airport_event: "additive"},
+    laggedRegressors: {avg_trip_distance: 24},
+    trendMode: "glocal",
+    localL2: 0.1,
+    uncertaintySeed: 42,
+  },
+});
+```
+
+Use [Spatial Piecewise Kriging](spatial-piecewise-kriging.md) when that piecewise seasonal CartoBoost
 base should borrow spatial signal across stable taxi coordinates. Configure
 `mode="residual_kriging"` to fit the temporal base, compute in-sample
 cutoff-safe residuals by series, and krige residual corrections for each
