@@ -226,15 +226,19 @@ fn neural_panel_learns_quantile_residual_spread() {
 
     model.fit(&frame).expect("fit");
     let metadata = model.metadata();
+    let order = metadata["component_params"]["quantile_output_order"]
+        .as_array()
+        .expect("order");
     let diffs = metadata["component_params"]["quantile_residual_diffs"]
         .as_array()
         .expect("diffs");
-    let lower = diffs[0].as_f64().expect("lower");
-    let median = diffs[1].as_f64().expect("median");
+    let median = diffs[0].as_f64().expect("median");
+    let lower = diffs[1].as_f64().expect("lower");
     let upper = diffs[2].as_f64().expect("upper");
     let tensor = model.predict_tensor(1).expect("tensor");
     let quantiles = &tensor["PU1->DO2"][0];
 
+    assert_eq!(order[0].as_f64().expect("median order"), 0.5);
     assert!(lower < 0.0);
     assert_eq!(median, 0.0);
     assert!(upper > 0.0);
