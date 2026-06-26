@@ -72,14 +72,14 @@ checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
 name = "cartoboost-cli"
-version = "0.2.26"
+version = "0.2.27"
 dependencies = [
  "cartoboost-core",
 ]
 
 [[package]]
 name = "cartoboost-core"
-version = "0.2.26"
+version = "0.2.27"
 dependencies = [
  "chrono",
  "criterion",
@@ -93,7 +93,7 @@ dependencies = [
 
 [[package]]
 name = "cartoboost-neural"
-version = "0.2.26"
+version = "0.2.27"
 dependencies = [
  "cartoboost-core",
  "chrono",
@@ -107,7 +107,7 @@ dependencies = [
 
 [[package]]
 name = "cartoboost-py"
-version = "0.2.26"
+version = "0.2.27"
 dependencies = [
  "cartoboost-core",
  "cartoboost-neural",
