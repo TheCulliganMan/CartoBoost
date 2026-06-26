@@ -295,6 +295,8 @@ pub struct NeuralPanelForecaster {
     ar_net: Option<MlpState>,
     #[serde(default)]
     covar_net: Option<MlpState>,
+    #[serde(default)]
+    quantile_residual_diffs: Vec<f64>,
     future_regressor_weights: BTreeMap<String, f64>,
     feature_schema: Vec<String>,
     train_cutoff: Option<String>,
@@ -321,6 +323,7 @@ impl NeuralPanelForecaster {
             local_feature_weights: BTreeMap::new(),
             ar_net: None,
             covar_net: None,
+            quantile_residual_diffs: Vec::new(),
             future_regressor_weights: BTreeMap::new(),
             feature_schema: Vec::new(),
             train_cutoff: None,
@@ -408,7 +411,12 @@ impl NeuralPanelForecaster {
                         .or_else(|| stationary_effects.last().copied())
                         .unwrap_or(0.0);
                 let median = scaler.inverse_transform(median_scaled);
-                rows.push(repaired_quantiles(median, &self.config.quantiles));
+                rows.push(repaired_quantiles(
+                    median,
+                    &self.config.quantiles,
+                    &self.quantile_residual_diffs,
+                    scaler.scale(),
+                ));
             }
             by_series.insert(series_id.clone(), rows);
         }
@@ -530,6 +538,112 @@ impl NeuralPanelForecaster {
             }
         }
         Ok((additive, multiplicative))
+    }
+
+    fn fit_quantile_residual_diffs(
+        &self,
+        dataset: &NeuralPanelWindowDataset,
+        scaler: &StandardScaler,
+    ) -> Vec<f64> {
+        let mut residuals = Vec::new();
+        let output_width = self.config.n_forecasts * self.config.quantiles.len();
+        for window in dataset.windows() {
+            let local_level = self
+                .local_levels
+                .get(&window.series_id)
+                .copied()
+                .unwrap_or(0.0);
+            let local_slope = self
+                .local_slopes
+                .get(&window.series_id)
+                .copied()
+                .unwrap_or(0.0);
+            let ar_output = self
+                .ar_net
+                .as_ref()
+                .map(|net| {
+                    let input = window
+                        .lags
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, value)| {
+                            let baseline = self.trend_baseline(local_level, local_slope, idx);
+                            scaler.transform(*value) - baseline
+                        })
+                        .collect::<Vec<_>>();
+                    net.forward(&input)
+                })
+                .unwrap_or_else(|| vec![0.0; output_width]);
+            let covar_output = self
+                .covar_net
+                .as_ref()
+                .map(|net| {
+                    net.forward(&lagged_covariate_input(
+                        &self.config,
+                        &window.lagged_covariates,
+                    ))
+                })
+                .unwrap_or_else(|| vec![0.0; output_width]);
+            for horizon_idx in 0..self.config.n_forecasts {
+                let offset = self.config.n_lags + horizon_idx;
+                let mut median_scaled = self.trend_baseline(local_level, local_slope, offset);
+                let (additive, multiplicative) = self.fitted_feature_effects(
+                    &window.series_id,
+                    median_scaled,
+                    window.future_features.get(offset).map(Vec::as_slice),
+                    dataset.future_feature_names(),
+                );
+                let median_idx = median_quantile_index(&self.config.quantiles);
+                let output_idx = horizon_idx * self.config.quantiles.len() + median_idx;
+                median_scaled += additive
+                    + median_scaled * multiplicative
+                    + ar_output.get(output_idx).copied().unwrap_or(0.0)
+                    + covar_output.get(output_idx).copied().unwrap_or(0.0);
+                residuals.push(scaler.transform(window.targets[horizon_idx]) - median_scaled);
+            }
+        }
+        learned_quantile_diffs(&self.config.quantiles, residuals)
+    }
+
+    fn trend_baseline(&self, local_level: f64, local_slope: f64, offset: usize) -> f64 {
+        if self.config.trend == TrendMode::Off {
+            self.global_level + local_level
+        } else {
+            self.global_level + local_level + (self.global_slope + local_slope) * offset as f64
+        }
+    }
+
+    fn fitted_feature_effects(
+        &self,
+        series_id: &str,
+        _baseline: f64,
+        features: Option<&[f64]>,
+        feature_names: &[String],
+    ) -> (f64, f64) {
+        let mut additive = 0.0;
+        let mut multiplicative = 0.0;
+        let Some(features) = features else {
+            return (additive, multiplicative);
+        };
+        for (name, value) in feature_names.iter().zip(features) {
+            let global_weight = self.feature_weights.get(name).copied().unwrap_or(0.0);
+            let local_weight = self
+                .local_feature_weights
+                .get(series_id)
+                .and_then(|weights| weights.get(name))
+                .copied()
+                .unwrap_or(0.0);
+            let weight = match self.config.seasonality_global_local {
+                NeuralPanelMode::Global => global_weight,
+                NeuralPanelMode::Local => local_weight,
+                NeuralPanelMode::Glocal => global_weight + local_weight,
+            };
+            match feature_component_mode(&self.config, name) {
+                ComponentMode::Additive => additive += value * weight,
+                ComponentMode::Multiplicative => multiplicative += value * weight,
+            }
+        }
+        (additive, multiplicative)
     }
 }
 
@@ -733,6 +847,7 @@ impl Forecaster for NeuralPanelForecaster {
                 )
             })
             .collect();
+        self.quantile_residual_diffs = self.fit_quantile_residual_diffs(&dataset, &scaler);
         Ok(())
     }
 
@@ -799,6 +914,7 @@ impl Forecaster for NeuralPanelForecaster {
                 "local_nonstationary_feature_weights": self.local_feature_weights,
                 "ar_net": self.ar_net,
                 "covar_net": self.covar_net,
+                "quantile_residual_diffs": self.quantile_residual_diffs,
                 "future_regressor_weights": self.future_regressor_weights,
             },
             "quantiles": self.config.quantiles,
@@ -1846,12 +1962,59 @@ fn adamw_update(
     *value -= learning_rate * m_hat / (v_hat.sqrt() + eps);
 }
 
-fn repaired_quantiles(median: f64, quantiles: &[f64]) -> Vec<f64> {
-    let mut values = quantiles
+fn learned_quantile_diffs(quantiles: &[f64], mut residuals: Vec<f64>) -> Vec<f64> {
+    residuals.retain(|value| value.is_finite());
+    if residuals.is_empty() {
+        return vec![0.0; quantiles.len()];
+    }
+    residuals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median_residual = empirical_quantile(&residuals, 0.5);
+    quantiles
         .iter()
         .map(|quantile| {
             if (*quantile - 0.5).abs() < f64::EPSILON {
+                0.0
+            } else {
+                let diff = empirical_quantile(&residuals, *quantile) - median_residual;
+                if *quantile < 0.5 {
+                    diff.min(0.0)
+                } else {
+                    diff.max(0.0)
+                }
+            }
+        })
+        .collect()
+}
+
+fn empirical_quantile(sorted_values: &[f64], quantile: f64) -> f64 {
+    if sorted_values.len() == 1 {
+        return sorted_values[0];
+    }
+    let position = quantile.clamp(0.0, 1.0) * (sorted_values.len() - 1) as f64;
+    let lower = position.floor() as usize;
+    let upper = position.ceil() as usize;
+    if lower == upper {
+        sorted_values[lower]
+    } else {
+        let fraction = position - lower as f64;
+        sorted_values[lower] * (1.0 - fraction) + sorted_values[upper] * fraction
+    }
+}
+
+fn repaired_quantiles(
+    median: f64,
+    quantiles: &[f64],
+    residual_diffs: &[f64],
+    scale: f64,
+) -> Vec<f64> {
+    let mut values = quantiles
+        .iter()
+        .enumerate()
+        .map(|(idx, quantile)| {
+            if (*quantile - 0.5).abs() < f64::EPSILON {
                 median
+            } else if let Some(diff) = residual_diffs.get(idx).copied().filter(|v| v.is_finite()) {
+                median + diff * scale
             } else if *quantile < 0.5 {
                 median - (0.5 - *quantile) * median.abs().max(1.0) * 0.1
             } else {

@@ -201,6 +201,48 @@ fn neural_panel_predict_quantiles_are_non_crossing() {
 }
 
 #[test]
+fn neural_panel_learns_quantile_residual_spread() {
+    let rows = (0..24)
+        .map(|hour| {
+            let noise = match hour % 5 {
+                0 => -3.0,
+                1 => -1.0,
+                2 => 0.0,
+                3 => 1.0,
+                _ => 4.0,
+            };
+            ForecastRow::from_timestamp_str("PU1->DO2", &timestamp(hour), 30.0 + noise)
+                .expect("row")
+        })
+        .collect();
+    let frame = ForecastFrame::new(rows, ForecastFrequency::Hourly).expect("frame");
+    let mut model = NeuralPanelForecaster::new(NeuralPanelConfig {
+        n_lags: 4,
+        n_forecasts: 1,
+        quantiles: vec![0.1, 0.5, 0.9],
+        ..NeuralPanelConfig::default()
+    })
+    .expect("model");
+
+    model.fit(&frame).expect("fit");
+    let metadata = model.metadata();
+    let diffs = metadata["component_params"]["quantile_residual_diffs"]
+        .as_array()
+        .expect("diffs");
+    let lower = diffs[0].as_f64().expect("lower");
+    let median = diffs[1].as_f64().expect("median");
+    let upper = diffs[2].as_f64().expect("upper");
+    let tensor = model.predict_tensor(1).expect("tensor");
+    let quantiles = &tensor["PU1->DO2"][0];
+
+    assert!(lower < 0.0);
+    assert_eq!(median, 0.0);
+    assert!(upper > 0.0);
+    assert!(quantiles[0] < quantiles[1]);
+    assert!(quantiles[1] < quantiles[2]);
+}
+
+#[test]
 fn neural_panel_global_mode_has_no_local_deviations() {
     let frame = taxi_colon_frame();
     let mut model = NeuralPanelForecaster::new(NeuralPanelConfig {
