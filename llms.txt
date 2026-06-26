@@ -257,9 +257,14 @@ classification, ranking, forecasting, graph, and neural-embedding modeling.
 - `NeuralPanelForecaster` and `LaneNeuralPanelForecaster` are Rust-native
   panel forecasters exposed through Python and wasm as `neural_panel`.
   Inputs are `ForecastFrame` rows with directional lane ids such as
-  `PULocationID:DOLocationID`; the lane wrapper records origin/destination/lane
-  metadata and cold-lane fallback order, and `predict_for_lanes()` applies that
-  order for explicit cold lane ids. Treat quality claims as unproven until
+  `PULocationID:DOLocationID`; the lane wrapper injects generated
+  origin/destination/lane embedding covariates plus directional graph summary
+  covariates into the Rust neural panel, records cold-lane fallback order, and
+  `predict_for_lanes()` applies that order for explicit cold lane ids. The
+  neural panel stores median-first internal quantile residuals while returning
+  public quantile tensors ordered by level, and exposes separate global/local/
+  glocal modes for seasonality, event, and regressor components. Treat quality
+  claims as unproven until
   a rolling-origin benchmark compares seasonal naive and `CartoBoostLagForecaster`
   under the same split, metrics, settings, timing, and artifact capture. The
   maintained split-suite command is `scripts/forecasting_library_benchmark.py

@@ -3939,6 +3939,8 @@ fn neural_panel_config(
             .transpose()?
             .unwrap_or(NeuralPanelMode::Global),
         seasonality_global_local: NeuralPanelMode::Global,
+        event_global_local: NeuralPanelMode::Global,
+        regressor_global_local: NeuralPanelMode::Global,
         local_l2: options.local_l2.unwrap_or(0.0),
         seed: options.uncertainty_seed.unwrap_or(0),
         loss: NeuralPanelLoss::SmoothL1,

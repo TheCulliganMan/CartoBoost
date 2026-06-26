@@ -50,7 +50,7 @@ Choose the model whose assumptions match the signal you can defend:
 | Nearby zones, route midpoints, or residual surfaces should be spatially related. | Kriging | Uses coordinate distance and a variogram to borrow cross-series signal. |
 | Pickup/dropoff zones have both temporal changepoints and spatial residual structure. | [Spatial Piecewise Kriging](spatial-piecewise-kriging.md) | Separates the temporal forecast, spatial correction, kriging variance, neighbors, metadata, and components so the spatial claim can be checked. |
 | Many related zones or lanes share lag, rolling, calendar, or trend structure. | CartoBoost lag | Learns one supervised model from many aligned panel examples. |
-| Pickup-dropoff lanes need direct multi-horizon neural forecasts with lane direction preserved. | [Neural Panel](neural-panel.md) | Builds leak-free lag windows from `ForecastFrame`, keeps `A:B` distinct from `B:A`, and stores component, normalization, quantile, series-id, and train-cutoff metadata. |
+| Pickup-dropoff lanes need direct multi-horizon neural forecasts with lane direction preserved. | [Neural Panel](neural-panel.md) | Builds leak-free lag windows from `ForecastFrame`, keeps `A:B` distinct from `B:A`, injects generated lane embedding/graph covariates, and stores component, normalization, quantile, series-id, and train-cutoff metadata. |
 | Pickup demand is sparse with many true zero periods. | Croston, SBA, or TSB | Uses intermittent-demand smoothing instead of generic trend extrapolation. |
 | A local statistical bank should choose among reusable non-benchmark candidates. | AutoStatsBank | Runs validation over a deterministic statistical expert bank. |
 | A production taxi-demand panel needs a deterministic guarded default with auditable candidate weights. | AutoForecaster | Validates a fixed roster, protects the lag baseline, and stores global, horizon, and series weights. |
@@ -112,13 +112,16 @@ neural panel forecaster rather than a local statistical model. Input rows come
 from `ForecastFrame` with `(series_id, timestamp, target, covariates)`. For taxi
 lanes, set `series_id` to a stable directional lane id such as
 `PULocationID:DOLocationID`; the lane wrapper records origin, destination, lane,
-directional graph-feature, and cold-lane fallback metadata. The model builds
-direct windows with `n_lags + n_forecasts`, uses train-only target
+directional graph-feature, and cold-lane fallback metadata, and injects
+generated lane embedding/graph covariates into the Rust training frame. The
+model builds direct windows with `n_lags + n_forecasts`, uses train-only target
 normalization, applies fitted target-tail AR state from `n_lags`, supports
 Fourier seasonality, event offsets, known-future regressors, lagged regressors,
-local/global component modes, direct multi-horizon forecasts, and non-crossing
-quantiles. Do not use it for a public quality claim until it beats seasonal
-naive and `CartoBoostLagForecaster` under the same rolling-origin split.
+separate global/local/glocal seasonality, event, and regressor modes, direct
+multi-horizon forecasts, and median-first internal quantile residuals with
+non-crossing output repair. Do not use it for a public quality claim until it
+beats seasonal naive and `CartoBoostLagForecaster` under the same rolling-origin
+split.
 
 Python lane example:
 
@@ -144,6 +147,9 @@ model = LaneNeuralPanelForecaster(
     future_regressors={"is_airport_event": "additive"},
     lagged_regressors={"avg_trip_distance": 24},
     trend_mode="glocal",
+    seasonality_global_local="glocal",
+    event_global_local="global",
+    regressor_global_local="glocal",
     local_l2=0.1,
     seed=42,
 )

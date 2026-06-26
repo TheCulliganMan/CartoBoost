@@ -197,14 +197,22 @@ rejected explicitly. Weighted ensembles require explicit component models.
 `NeuralPanelForecaster` is Rust-native and accepts `ForecastFrame` panel rows
 with directional lane ids such as `PULocationID:DOLocationID`. It builds
 train-only normalized direct windows, stores quantiles with median output first
-internally, applies fitted target-tail AR state from `n_lags`, repairs
-non-crossing quantiles on prediction, and records normalization, component
-parameters, series ids, feature schema, lag config, seed, and train cutoff in
-metadata. Do not use it for quality claims without a real rolling-origin
-benchmark against seasonal naive and `CartoBoostLagForecaster`.
+internally, learns residual offsets for non-median quantiles, applies fitted
+target-tail AR state from `n_lags`, repairs non-crossing quantiles on
+prediction, and records normalization, component parameters, series ids,
+feature schema, lag config, seed, and train cutoff in metadata. Fourier
+seasonality, event offsets, and future regressors each have independent
+global/local/glocal parameter-sharing modes. Missing dynamic known-future
+regressors fail at prediction time; values proven constant within each fitted
+series are stored as static future covariates. Do not use it for quality claims
+without a real rolling-origin benchmark against seasonal naive and
+`CartoBoostLagForecaster`.
 For taxi lane panels, `LaneNeuralPanelForecaster.predict_for_lanes()` can
 forecast explicit cold lane ids by applying the fitted lane fallback order while
-preserving the requested `series_id`.
+preserving the requested `series_id`. The lane wrapper injects generated
+origin/destination/lane embedding covariates and directional graph summary
+covariates into the inner Rust neural panel, so lane identity participates in
+the fitted feature weights rather than living only in metadata.
 The maintained benchmark entry point can emit a NeuralPanel split artifact:
 
 ```sh
@@ -233,7 +241,7 @@ docs pages:
 | Regime-aware uncertainty | `CUSUM`, `PageHinkley`, EWMA volatility, rolling median residuals, rolling MAD residuals, and `RegimeIntervalPolicy` can widen intervals, raise process variance, or lower confidence during detected shifts. |
 | Calibrated forecast events | Probability calibration helpers turn threshold, horizon, failure-risk, or escalation-risk events into bounded probability forecasts with Brier score, log loss, ECE, calibration buckets, and reliability-curve data. |
 | Rank probability score helpers | Metrics and interval evaluation; competition-specific scoring stays in benchmark adapters. |
-| NeuralPanel forecasting | Rust-native panel neural forecaster with directional lane ids, direct horizons, local/global components, known-future regressors, lagged regressors, quantiles, and serializable metadata. |
+| NeuralPanel forecasting | Rust-native panel neural forecaster with directional lane ids, generated lane embedding/graph covariates, direct horizons, separate global/local/glocal seasonality/event/regressor modes, known-future regressors, lagged regressors, median-first internal quantile residuals, and serializable metadata. |
 
 These primitives are generic. A taxi lane forecast may call the state dimensions
 pickup zone, dropoff zone, and pickup-dropoff corridor, while the reusable names

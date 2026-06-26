@@ -120,6 +120,18 @@ fn neural_panel_keeps_directional_taxi_lanes_distinct() {
         metadata["lane_config"]["fallback_index"]["A:B"][0],
         "pair:A:B"
     );
+    let schema = metadata["feature_schema"]
+        .as_array()
+        .expect("feature schema");
+    assert!(schema
+        .iter()
+        .any(|value| value == "lane_origin_embedding_0"));
+    assert!(
+        metadata["static_future_covariates"]["A:B"]["lane_embedding_0"]
+            .as_f64()
+            .expect("lane embedding")
+            .is_finite()
+    );
 }
 
 #[test]
@@ -266,6 +278,54 @@ fn neural_panel_global_mode_has_no_local_deviations() {
             .expect("local levels")
             .len(),
         0
+    );
+}
+
+#[test]
+fn neural_panel_local_regressor_mode_fits_series_weights() {
+    let rows = (0..12)
+        .flat_map(|hour| {
+            [
+                ForecastRow::from_timestamp_str_with_covariates(
+                    "PU1:DO2",
+                    &timestamp(hour),
+                    10.0 + hour as f64 * 0.5,
+                    BTreeMap::from([("airport_lane".to_string(), (hour % 2) as f64)]),
+                )
+                .expect("row"),
+                ForecastRow::from_timestamp_str_with_covariates(
+                    "PU2:DO1",
+                    &timestamp(hour),
+                    20.0 - hour as f64 * 0.25,
+                    BTreeMap::from([("airport_lane".to_string(), ((hour + 1) % 2) as f64)]),
+                )
+                .expect("row"),
+            ]
+        })
+        .collect();
+    let frame = ForecastFrame::new(rows, ForecastFrequency::Hourly).expect("frame");
+    let mut model = NeuralPanelForecaster::new(NeuralPanelConfig {
+        n_lags: 3,
+        n_forecasts: 1,
+        future_regressors: BTreeMap::from([(
+            "airport_lane".to_string(),
+            forecasting::ComponentMode::Additive,
+        )]),
+        regressor_global_local: NeuralPanelMode::Local,
+        local_l2: 0.0,
+        ..NeuralPanelConfig::default()
+    })
+    .expect("model");
+
+    model.fit(&frame).expect("fit");
+    let metadata = model.metadata();
+
+    assert!(
+        metadata["component_params"]["local_nonstationary_feature_weights"]["PU1:DO2"]
+            ["airport_lane"]
+            .as_f64()
+            .expect("local regressor weight")
+            .is_finite()
     );
 }
 

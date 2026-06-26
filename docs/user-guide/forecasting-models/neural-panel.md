@@ -10,9 +10,9 @@ sharing the same configured neural structure.
 
 Use `LaneNeuralPanelForecaster` when `series_id` is a directional taxi lane such
 as `PULocationID:DOLocationID`. The lane wrapper keeps `132:138` distinct from
-`138:132`, learns deterministic origin/destination/lane embedding state plus
-directional graph summary features, and can forecast requested cold lane ids
-through `predict_for_lanes()`.
+`138:132`, appends origin/destination/lane embedding features plus directional
+graph summary features into the Rust training frame, and can forecast requested
+cold lane ids through `predict_for_lanes()`.
 
 ## Interactive Example
 
@@ -30,7 +30,8 @@ Use this model when the hypothesis needs:
 - direct multi-horizon panel forecasts rather than recursive local forecasts;
 - fitted target-lag state through AR-Net with `n_lags`;
 - future-known regressors, lagged regressors, event offsets, or Fourier terms;
-- global, local, or glocal component behavior by series id;
+- global, local, or glocal trend, seasonality, event, and regressor behavior by
+  series id;
 - quantile output with non-crossing repair;
 - directional lane ids and explicit cold-lane fallback.
 
@@ -56,7 +57,8 @@ The forward path is:
 4. run AR-Net on stationarized target lags and Covar-Net on concatenated lagged
    regressor histories;
 5. add direct horizon stationary network output to the nonstationary forecast;
-6. repair quantile crossings around the median output.
+6. map the median-first internal quantile layout back to requested quantile
+   levels and repair crossings around the median output.
 
 AR-Net and Covar-Net are Rust-native MLPs using deterministic Kaiming-style
 initialization, ReLU hidden layers from `ar_layers` and `lagged_reg_layers`, and
@@ -65,9 +67,27 @@ update loop. The default loss is SmoothL1; `loss="mse"`, `loss="mae"`, and
 `loss="pinball"` are also accepted. Set `newer_sample_weight=True` to use a
 monotone cosine recency ramp.
 
+Quantile heads use a median-first internal layout: the median residual lives at
+index 0 for each horizon, and non-median quantiles use learned positive or
+negative residual offsets. Public quantile tensors remain ordered by requested
+quantile level after crossing repair.
+
 When `future_regressors` are configured, prediction requires known-future
-covariates through `model.predict(horizon, known_future=future_frame)`. Missing
-required future values hard-fail instead of silently dropping the regressor.
+covariates through `model.predict(horizon, known_future=future_frame)`, unless
+the regressor was proven constant per fitted series and stored as static future
+state. Missing required dynamic future values hard-fail instead of silently
+dropping the regressor.
+
+`LaneNeuralPanelForecaster` generates static covariates named
+`lane_origin_embedding_*`, `lane_destination_embedding_*`, `lane_embedding_*`,
+and `lane_graph_*`. These generated covariates are added to the inner neural
+panel as additive future regressors, so fitted nonstationary feature weights
+learn from lane identity and directional graph summaries.
+
+Use `seasonality_global_local`, `event_global_local`, and
+`regressor_global_local` to choose `global`, `local`, or `glocal` parameter
+sharing independently for Fourier terms, event offsets, and future regressors.
+
 
 ## Python Example
 
@@ -104,6 +124,8 @@ model = LaneNeuralPanelForecaster(
     lagged_reg_layers=[16],
     trend_mode="glocal",
     seasonality_global_local="glocal",
+    event_global_local="global",
+    regressor_global_local="glocal",
     local_l2=0.1,
     loss="smooth_l1",
     epochs=80,

@@ -39,6 +39,10 @@ pub enum NeuralPanelLoss {
     Pinball,
 }
 
+fn default_neural_panel_global_mode() -> NeuralPanelMode {
+    NeuralPanelMode::Global
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NeuralPanelConfig {
     pub n_lags: usize,
@@ -60,6 +64,10 @@ pub struct NeuralPanelConfig {
     pub lagged_reg_layers: Vec<usize>,
     pub trend_mode: NeuralPanelMode,
     pub seasonality_global_local: NeuralPanelMode,
+    #[serde(default = "default_neural_panel_global_mode")]
+    pub event_global_local: NeuralPanelMode,
+    #[serde(default = "default_neural_panel_global_mode")]
+    pub regressor_global_local: NeuralPanelMode,
     pub local_l2: f64,
     pub seed: u64,
     pub loss: NeuralPanelLoss,
@@ -91,6 +99,8 @@ impl Default for NeuralPanelConfig {
             lagged_reg_layers: Vec::new(),
             trend_mode: NeuralPanelMode::Global,
             seasonality_global_local: NeuralPanelMode::Global,
+            event_global_local: NeuralPanelMode::Global,
+            regressor_global_local: NeuralPanelMode::Global,
             local_l2: 0.0,
             seed: 0,
             loss: NeuralPanelLoss::SmoothL1,
@@ -301,6 +311,8 @@ pub struct NeuralPanelForecaster {
     quantile_residual_diffs: Vec<f64>,
     future_regressor_weights: BTreeMap<String, f64>,
     feature_schema: Vec<String>,
+    #[serde(default)]
+    static_future_covariates: BTreeMap<String, BTreeMap<String, f64>>,
     train_cutoff: Option<String>,
 }
 
@@ -329,6 +341,7 @@ impl NeuralPanelForecaster {
             quantile_residual_diffs: Vec::new(),
             future_regressor_weights: BTreeMap::new(),
             feature_schema: Vec::new(),
+            static_future_covariates: BTreeMap::new(),
             train_cutoff: None,
         })
     }
@@ -523,7 +536,9 @@ impl NeuralPanelForecaster {
         let mut additive = 0.0;
         let mut multiplicative = 0.0;
         for name in &self.feature_schema {
-            let value = feature_value_for_timestamp(name, timestamp, covariates)?;
+            let static_covariates = self.static_future_covariates.get(series_id);
+            let value =
+                feature_value_for_timestamp(name, timestamp, covariates, static_covariates)?;
             let global_weight = self.feature_weights.get(name).copied().unwrap_or(0.0);
             let local_weight = self
                 .local_feature_weights
@@ -531,7 +546,7 @@ impl NeuralPanelForecaster {
                 .and_then(|weights| weights.get(name))
                 .copied()
                 .unwrap_or(0.0);
-            let weight = match self.config.seasonality_global_local {
+            let weight = match feature_global_local_mode(&self.config, name) {
                 NeuralPanelMode::Global => global_weight,
                 NeuralPanelMode::Local => local_weight,
                 NeuralPanelMode::Glocal => global_weight + local_weight,
@@ -636,7 +651,7 @@ impl NeuralPanelForecaster {
                 .and_then(|weights| weights.get(name))
                 .copied()
                 .unwrap_or(0.0);
-            let weight = match self.config.seasonality_global_local {
+            let weight = match feature_global_local_mode(&self.config, name) {
                 NeuralPanelMode::Global => global_weight,
                 NeuralPanelMode::Local => local_weight,
                 NeuralPanelMode::Glocal => global_weight + local_weight,
@@ -672,6 +687,7 @@ impl Forecaster for NeuralPanelForecaster {
         self.feature_schema = dataset.future_feature_names().to_vec();
         self.frequency = Some(frame.frequency());
         self.scaler = Some(scaler);
+        self.static_future_covariates = collect_static_future_covariates(frame, &self.config);
         self.target_tails = dataset
             .tails()
             .iter()
@@ -926,6 +942,7 @@ impl Forecaster for NeuralPanelForecaster {
             "series_id_map": self.series_ids,
             "changepoints": self.config.n_changepoints,
             "feature_schema": self.feature_schema,
+            "static_future_covariates": self.static_future_covariates,
             "lag_config": {
                 "n_lags": self.config.n_lags,
                 "lagged_regressors": self.config.lagged_regressors,
@@ -966,6 +983,8 @@ pub struct LaneNeuralPanelForecaster {
     lane_biases: BTreeMap<String, f64>,
     #[serde(default)]
     graph_directional_features: BTreeMap<String, BTreeMap<String, f64>>,
+    #[serde(default)]
+    generated_lane_feature_names: Vec<String>,
 }
 
 impl LaneNeuralPanelForecaster {
@@ -985,6 +1004,7 @@ impl LaneNeuralPanelForecaster {
             lane_embeddings: BTreeMap::new(),
             lane_biases: BTreeMap::new(),
             graph_directional_features: BTreeMap::new(),
+            generated_lane_feature_names: Vec::new(),
         })
     }
 
@@ -1012,8 +1032,9 @@ impl LaneNeuralPanelForecaster {
             "lane_embeddings": self.lane_embeddings,
             "lane_biases": self.lane_biases,
             "graph_directional_features": self.graph_directional_features,
-            "static_covariates": ["origin_embedding", "destination_embedding", "lane_embedding"],
-            "graph_features": ["directional_source_target_features"],
+            "generated_lane_feature_names": self.generated_lane_feature_names,
+            "static_covariates": self.generated_lane_feature_names,
+            "graph_features": ["origin_hash", "destination_hash", "direction_hash_delta", "observed_lane_mean"],
         });
         metadata
     }
@@ -1189,6 +1210,7 @@ impl LaneNeuralPanelForecaster {
         self.lane_embeddings.clear();
         self.lane_biases.clear();
         self.graph_directional_features.clear();
+        self.generated_lane_feature_names = generated_lane_feature_names(self.config.embedding_dim);
         let global_mean = mean(
             &frame
                 .rows()
@@ -1254,6 +1276,87 @@ impl LaneNeuralPanelForecaster {
         }
     }
 
+    fn augmented_lane_training_frame(&self, frame: &ForecastFrame) -> CoreResult<ForecastFrame> {
+        let mut rows = Vec::with_capacity(frame.rows().len());
+        for row in frame.rows() {
+            let mut augmented = row.clone();
+            for (name, value) in self.lane_feature_values(&row.series_id)? {
+                augmented.covariates.insert(name, value);
+            }
+            rows.push(augmented);
+        }
+        ForecastFrame::with_metadata(rows, frame.frequency(), frame.metadata().clone())
+    }
+
+    fn augmented_lane_config(&self) -> NeuralPanelConfig {
+        let mut config = self.config.base.clone();
+        for name in &self.generated_lane_feature_names {
+            config
+                .future_regressors
+                .entry(name.clone())
+                .or_insert(ComponentMode::Additive);
+        }
+        config
+    }
+
+    fn lane_feature_values(&self, series_id: &str) -> CoreResult<BTreeMap<String, f64>> {
+        let (origin, destination) = split_lane(series_id);
+        let (Some(origin), Some(destination)) = (origin, destination) else {
+            return Err(CartoBoostError::InvalidInput(format!(
+                "lane neural panel expects series_id='origin:destination', got '{series_id}'"
+            )));
+        };
+        let origin_embedding = self.origin_embeddings.get(origin).ok_or_else(|| {
+            CartoBoostError::InvalidInput(format!("missing origin embedding for '{origin}'"))
+        })?;
+        let destination_embedding =
+            self.destination_embeddings
+                .get(destination)
+                .ok_or_else(|| {
+                    CartoBoostError::InvalidInput(format!(
+                        "missing destination embedding for '{destination}'"
+                    ))
+                })?;
+        let lane_embedding = self.lane_embeddings.get(series_id).ok_or_else(|| {
+            CartoBoostError::InvalidInput(format!("missing lane embedding for '{series_id}'"))
+        })?;
+        let graph = self
+            .graph_directional_features
+            .get(series_id)
+            .ok_or_else(|| {
+                CartoBoostError::InvalidInput(format!(
+                    "missing graph directional features for '{series_id}'"
+                ))
+            })?;
+        let mut values = BTreeMap::new();
+        for idx in 0..self.config.embedding_dim {
+            values.insert(
+                format!("lane_origin_embedding_{idx}"),
+                origin_embedding.get(idx).copied().unwrap_or(0.0),
+            );
+            values.insert(
+                format!("lane_destination_embedding_{idx}"),
+                destination_embedding.get(idx).copied().unwrap_or(0.0),
+            );
+            values.insert(
+                format!("lane_embedding_{idx}"),
+                lane_embedding.get(idx).copied().unwrap_or(0.0),
+            );
+        }
+        for name in [
+            "origin_hash",
+            "destination_hash",
+            "direction_hash_delta",
+            "observed_lane_mean",
+        ] {
+            values.insert(
+                format!("lane_graph_{name}"),
+                graph.get(name).copied().unwrap_or(0.0),
+            );
+        }
+        Ok(values)
+    }
+
     fn lane_bias(&self, series_id: &str) -> f64 {
         if let Some(value) = self.lane_biases.get(series_id) {
             return *value;
@@ -1317,7 +1420,10 @@ impl Forecaster for LaneNeuralPanelForecaster {
             })
             .collect();
         self.fit_lane_state(frame);
-        self.inner.fit(frame)
+        let augmented_frame = self.augmented_lane_training_frame(frame)?;
+        self.inner = NeuralPanelForecaster::new(self.augmented_lane_config())
+            .map_err(|err| CartoBoostError::InvalidInput(err.to_string()))?;
+        self.inner.fit(&augmented_frame)
     }
 
     fn predict(&self, horizon: usize) -> CoreResult<ForecastResult> {
@@ -1416,6 +1522,40 @@ fn build_future_features(row: &ForecastRow, feature_names: &[String]) -> Result<
         .collect()
 }
 
+fn collect_static_future_covariates(
+    frame: &ForecastFrame,
+    config: &NeuralPanelConfig,
+) -> BTreeMap<String, BTreeMap<String, f64>> {
+    let mut by_series = BTreeMap::new();
+    for series_id in frame.series_ids() {
+        let rows = frame.rows_for_series(&series_id);
+        let mut values = BTreeMap::new();
+        for name in config.future_regressors.keys() {
+            let mut distinct = rows
+                .iter()
+                .filter_map(|row| row.covariates.get(name).copied())
+                .collect::<Vec<_>>();
+            if distinct.len() != rows.len() {
+                continue;
+            }
+            distinct.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let Some(first) = distinct.first().copied() else {
+                continue;
+            };
+            let Some(last) = distinct.last().copied() else {
+                continue;
+            };
+            if (first - last).abs() <= 1.0e-12 {
+                values.insert(name.clone(), first);
+            }
+        }
+        if !values.is_empty() {
+            by_series.insert(series_id, values);
+        }
+    }
+    by_series
+}
+
 fn required_covariate(row: &ForecastRow, name: &str) -> Result<f64> {
     row.covariates.get(name).copied().ok_or_else(|| {
         NeuralError::InvalidArgument(format!(
@@ -1429,6 +1569,7 @@ fn feature_value_for_timestamp(
     name: &str,
     timestamp: NaiveDateTime,
     covariates: Option<&BTreeMap<String, f64>>,
+    static_covariates: Option<&BTreeMap<String, f64>>,
 ) -> CoreResult<f64> {
     if name.starts_with("seasonality:") {
         return Ok(fourier_feature(name, timestamp));
@@ -1441,6 +1582,7 @@ fn feature_value_for_timestamp(
     }
     covariates
         .and_then(|values| values.get(name))
+        .or_else(|| static_covariates.and_then(|values| values.get(name)))
         .copied()
         .ok_or_else(|| {
             CartoBoostError::InvalidInput(format!(
@@ -1504,6 +1646,16 @@ fn feature_component_mode(config: &NeuralPanelConfig, name: &str) -> ComponentMo
         .get(name)
         .copied()
         .unwrap_or(ComponentMode::Additive)
+}
+
+fn feature_global_local_mode(config: &NeuralPanelConfig, name: &str) -> NeuralPanelMode {
+    if name.starts_with("seasonality:") {
+        return config.seasonality_global_local;
+    }
+    if name.starts_with("event:") {
+        return config.event_global_local;
+    }
+    config.regressor_global_local
 }
 
 fn fit_nonstationary_feature_weights(
@@ -1785,7 +1937,11 @@ fn fit_local_feature_weights(
     global_weights: &BTreeMap<String, f64>,
     baseline: impl Fn(&str, usize) -> f64,
 ) -> BTreeMap<String, BTreeMap<String, f64>> {
-    if config.seasonality_global_local == NeuralPanelMode::Global {
+    if dataset
+        .future_feature_names()
+        .iter()
+        .all(|name| feature_global_local_mode(config, name) == NeuralPanelMode::Global)
+    {
         return BTreeMap::new();
     }
     let mut numerators: BTreeMap<String, Vec<f64>> = BTreeMap::new();
@@ -2121,6 +2277,22 @@ fn deterministic_embedding(key: &str, dim: usize, seed: u64) -> Vec<f64> {
     (0..dim)
         .map(|idx| deterministic_scalar(base, idx, 0.037) * 100.0)
         .collect()
+}
+
+fn generated_lane_feature_names(embedding_dim: usize) -> Vec<String> {
+    let mut names = Vec::with_capacity(embedding_dim * 3 + 4);
+    for idx in 0..embedding_dim {
+        names.push(format!("lane_origin_embedding_{idx}"));
+        names.push(format!("lane_destination_embedding_{idx}"));
+        names.push(format!("lane_embedding_{idx}"));
+    }
+    names.extend([
+        "lane_graph_origin_hash".to_string(),
+        "lane_graph_destination_hash".to_string(),
+        "lane_graph_direction_hash_delta".to_string(),
+        "lane_graph_observed_lane_mean".to_string(),
+    ]);
+    names
 }
 
 fn stable_unit_hash(key: &str) -> f64 {
