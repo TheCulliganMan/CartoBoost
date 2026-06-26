@@ -131,7 +131,7 @@ from .utilities import (
     tsb_forecast,
 )
 
-__version__ = "0.2.23"
+__version__ = "0.2.24"
 
 __all__ = [
     "ArtifactFallback",
