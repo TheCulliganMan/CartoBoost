@@ -124,6 +124,41 @@ fn neural_pairwise_keeps_directional_taxi_lanes_distinct() {
 }
 
 #[test]
+fn lane_neural_pairwise_predict_for_lanes_uses_cold_origin_fallback() {
+    let frame = taxi_colon_frame();
+    let mut model = LaneNeuralPairwiseForecaster::new(LaneNeuralPairwiseConfig {
+        base: NeuralPairwiseConfig {
+            n_lags: 3,
+            n_forecasts: 2,
+            quantiles: vec![0.1, 0.5, 0.9],
+            trend_mode: NeuralPairwiseMode::Local,
+            local_l2: 0.0,
+            ..NeuralPairwiseConfig::default()
+        },
+        embedding_dim: 4,
+    })
+    .expect("model");
+
+    model.fit(&frame).expect("fit");
+    let exact = model
+        .predict_for_lanes(2, &["A:B".to_string()])
+        .expect("exact predict");
+    let cold = model
+        .predict_for_lanes(2, &["A:C".to_string()])
+        .expect("cold predict");
+    let exact_rows = exact.predictions();
+    let cold_rows = cold.predictions();
+
+    assert_eq!(cold_rows.len(), 2);
+    assert!(cold_rows
+        .iter()
+        .all(|prediction| prediction.series_id == "A:C"));
+    assert_eq!(cold_rows[0].timestamp, exact_rows[0].timestamp);
+    assert_eq!(cold_rows[0].mean, exact_rows[0].mean);
+    assert_eq!(cold_rows[1].mean, exact_rows[1].mean);
+}
+
+#[test]
 fn neural_pairwise_window_construction_has_no_future_target_leakage() {
     let frame = taxi_colon_frame();
     let model = NeuralPairwiseForecaster::new(NeuralPairwiseConfig {

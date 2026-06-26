@@ -201,6 +201,9 @@ internally, repairs non-crossing quantiles on prediction, and records
 normalization, component parameters, series ids, feature schema, lag config,
 seed, and train cutoff in metadata. Do not use it for quality claims without a
 real rolling-origin benchmark against seasonal naive and `CartoBoostLagForecaster`.
+For taxi lane panels, `LaneNeuralPairwiseForecaster.predict_for_lanes()` can
+forecast explicit cold lane ids by applying the fitted lane fallback order while
+preserving the requested `series_id`.
 The maintained benchmark entry point can emit a NeuralPairwise split artifact:
 
 ```sh

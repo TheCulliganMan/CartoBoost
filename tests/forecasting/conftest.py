@@ -42,6 +42,10 @@ def install_fake_native(monkeypatch: pytest.MonkeyPatch):
                 calls.append(("predict_with_known_future", args, kwargs))
                 return {"args": args, "kwargs": kwargs}
 
+            def predict_for_lanes(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+                calls.append(("predict_for_lanes", args, kwargs))
+                return {"args": args, "kwargs": kwargs}
+
             def components_json(self, *args: Any, **kwargs: Any) -> str:
                 calls.append(("components_json", args, kwargs))
                 return json.dumps({"args": list(args), "kwargs": kwargs})

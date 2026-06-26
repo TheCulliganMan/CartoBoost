@@ -551,6 +551,147 @@ impl LaneNeuralPairwiseForecaster {
     pub fn predict_quantiles_json_string(&self, horizon: usize) -> CoreResult<String> {
         self.inner.predict_quantiles_json_string(horizon)
     }
+
+    pub fn predict_tensor_for_lanes(
+        &self,
+        horizon: usize,
+        series_ids: &[String],
+    ) -> CoreResult<BTreeMap<String, Vec<Vec<f64>>>> {
+        if horizon == 0 {
+            return Err(CartoBoostError::InvalidInput(
+                "forecast horizon must be positive".to_string(),
+            ));
+        }
+        if series_ids.is_empty() {
+            return Err(CartoBoostError::InvalidInput(
+                "series_ids must contain at least one lane".to_string(),
+            ));
+        }
+        let fitted_tensor = self.inner.predict_tensor(horizon)?;
+        let mut expanded = BTreeMap::new();
+        for series_id in series_ids {
+            let candidates = self.fallback_candidates(series_id)?;
+            let candidate_rows = candidates
+                .iter()
+                .map(|candidate| {
+                    fitted_tensor.get(candidate).ok_or_else(|| {
+                        CartoBoostError::InvalidInput(format!(
+                            "missing fitted forecast tensor for fallback lane '{candidate}'"
+                        ))
+                    })
+                })
+                .collect::<CoreResult<Vec<_>>>()?;
+            let mut rows = Vec::with_capacity(horizon);
+            for step in 0..horizon {
+                let quantile_count = candidate_rows
+                    .first()
+                    .and_then(|rows| rows.get(step))
+                    .map_or(0, Vec::len);
+                let mut averaged = Vec::with_capacity(quantile_count);
+                for quantile_idx in 0..quantile_count {
+                    let value = candidate_rows
+                        .iter()
+                        .map(|rows| rows[step][quantile_idx])
+                        .sum::<f64>()
+                        / candidate_rows.len() as f64;
+                    averaged.push(value);
+                }
+                rows.push(averaged);
+            }
+            expanded.insert(series_id.clone(), rows);
+        }
+        Ok(expanded)
+    }
+
+    pub fn predict_for_lanes(
+        &self,
+        horizon: usize,
+        series_ids: &[String],
+    ) -> CoreResult<ForecastResult> {
+        let frequency = self.inner.frequency.ok_or_else(|| {
+            CartoBoostError::InvalidInput(
+                "LaneNeuralPairwiseForecaster must be fit before predict_for_lanes".to_string(),
+            )
+        })?;
+        let tensor = self.predict_tensor_for_lanes(horizon, series_ids)?;
+        let mut predictions = Vec::new();
+        for series_id in series_ids {
+            let candidates = self.fallback_candidates(series_id)?;
+            let last_timestamp = candidates
+                .iter()
+                .filter_map(|candidate| {
+                    self.inner.last_rows.get(candidate).map(|row| row.timestamp)
+                })
+                .max()
+                .ok_or_else(|| {
+                    CartoBoostError::InvalidInput(format!(
+                        "no fitted timestamp tail available for fallback lane '{series_id}'"
+                    ))
+                })?;
+            let rows = tensor.get(series_id).ok_or_else(|| {
+                CartoBoostError::InvalidInput(format!(
+                    "missing expanded forecast tensor for lane '{series_id}'"
+                ))
+            })?;
+            for (idx, quantiles) in rows.iter().enumerate() {
+                let step = idx + 1;
+                let median_idx = self
+                    .config
+                    .base
+                    .quantiles
+                    .iter()
+                    .position(|q| (*q - 0.5).abs() < f64::EPSILON)
+                    .unwrap_or(0);
+                predictions.push(ForecastPrediction {
+                    series_id: series_id.clone(),
+                    timestamp: frequency.advance(last_timestamp, step)?,
+                    horizon: step,
+                    model: self.model_name().to_string(),
+                    mean: quantiles[median_idx],
+                });
+            }
+        }
+        ForecastResult::new(predictions)
+    }
+
+    pub fn predict_quantiles_for_lanes_json_string(
+        &self,
+        horizon: usize,
+        series_ids: &[String],
+    ) -> CoreResult<String> {
+        let tensor = self.predict_tensor_for_lanes(horizon, series_ids)?;
+        serde_json::to_string_pretty(&json!({
+            "quantile_levels": self.config.base.quantiles,
+            "series": tensor,
+        }))
+        .map_err(CartoBoostError::from)
+    }
+
+    fn fallback_candidates(&self, series_id: &str) -> CoreResult<Vec<String>> {
+        let path = Self::fallback_path(series_id);
+        for key in path {
+            let candidates = self
+                .fallback_index
+                .iter()
+                .filter_map(|(candidate_id, candidate_path)| {
+                    if candidate_path
+                        .iter()
+                        .any(|candidate_key| candidate_key == &key)
+                    {
+                        Some(candidate_id.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+            if !candidates.is_empty() {
+                return Ok(candidates);
+            }
+        }
+        Err(CartoBoostError::InvalidInput(format!(
+            "no fallback forecast available for lane '{series_id}'"
+        )))
+    }
 }
 
 impl Forecaster for LaneNeuralPairwiseForecaster {

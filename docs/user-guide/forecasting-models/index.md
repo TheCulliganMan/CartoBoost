@@ -149,6 +149,7 @@ model = LaneNeuralPairwiseForecaster(
 )
 model.fit(frame)
 forecast = model.predict(6)
+cold_lane_forecast = model.predict_for_lanes(6, ["132:138", "138:132", "132:999"])
 quantiles = model.quantiles_json(6)
 ```
 
@@ -202,6 +203,9 @@ split definitions, per-model RMSE/MAE/WAPE metrics, timing, the exact command,
 and the JSON artifact path. Cold identity splits expand forecasts by exact lane,
 then origin, destination, and global horizon means so the fallback behavior is
 visible in the split metadata.
+In Python, `LaneNeuralPairwiseForecaster.predict_for_lanes()` applies the same
+explicit fitted-lane fallback order for requested cold lane ids while preserving
+the requested `series_id` in the returned forecast rows.
 
 Use [Spatial Piecewise Kriging](spatial-piecewise-kriging.md) when that piecewise seasonal CartoBoost
 base should borrow spatial signal across stable taxi coordinates. Configure

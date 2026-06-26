@@ -171,6 +171,15 @@ class LaneNeuralPairwiseForecaster(NeuralPairwiseForecaster):
         super().__init__(**kwargs)
         self._params["embedding_dim"] = int(embedding_dim)
 
+    def predict_for_lanes(self, horizon: int, series_ids: list[str] | tuple[str, ...]) -> Any:
+        self._check_is_fitted()
+        method = getattr(self._native_model, "predict_for_lanes", None)
+        if method is None:
+            raise NotImplementedError(
+                "Rust binding for LaneNeuralPairwiseForecaster does not expose predict_for_lanes()."
+            )
+        return method(int(horizon), [str(series_id) for series_id in series_ids])
+
 
 NHITSForecaster = NHiTSForecaster
 NBEATSForecaster = NBeatsForecaster

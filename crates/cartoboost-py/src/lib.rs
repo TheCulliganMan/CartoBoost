@@ -2919,9 +2919,31 @@ impl NativeLaneNeuralPairwiseForecaster {
         predict_forecaster_py(py, &self.model, horizon)
     }
 
+    fn predict_for_lanes(
+        &self,
+        py: Python<'_>,
+        horizon: usize,
+        series_ids: Vec<String>,
+    ) -> PyResult<NativeForecastResult> {
+        forecast_to_py(py.allow_threads(|| self.model.predict_for_lanes(horizon, &series_ids)))
+    }
+
     fn quantiles_json(&self, py: Python<'_>, horizon: usize) -> PyResult<String> {
         py.allow_threads(|| self.model.predict_quantiles_json_string(horizon))
             .map_err(to_py_value_error)
+    }
+
+    fn quantiles_json_for_lanes(
+        &self,
+        py: Python<'_>,
+        horizon: usize,
+        series_ids: Vec<String>,
+    ) -> PyResult<String> {
+        py.allow_threads(|| {
+            self.model
+                .predict_quantiles_for_lanes_json_string(horizon, &series_ids)
+        })
+        .map_err(to_py_value_error)
     }
 
     fn metadata_json(&self) -> PyResult<String> {

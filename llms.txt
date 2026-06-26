@@ -254,7 +254,8 @@ classification, ranking, forecasting, graph, and neural-embedding modeling.
   panel forecasters exposed through Python and wasm as `neural_pairwise`.
   Inputs are `ForecastFrame` rows with directional lane ids such as
   `PULocationID:DOLocationID`; the lane wrapper records origin/destination/lane
-  metadata and cold-lane fallback order. Treat quality claims as unproven until
+  metadata and cold-lane fallback order, and `predict_for_lanes()` applies that
+  order for explicit cold lane ids. Treat quality claims as unproven until
   a rolling-origin benchmark compares seasonal naive and `CartoBoostLagForecaster`
   under the same split, metrics, settings, timing, and artifact capture. The
   maintained split-suite command is `scripts/forecasting_library_benchmark.py

@@ -49,6 +49,17 @@ def test_lane_neural_pairwise_wrapper_passes_embedding_dim(install_fake_native):
     assert params["embedding_dim"] == 4
 
 
+def test_lane_neural_pairwise_predict_for_lanes_delegates_lane_ids(install_fake_native):
+    native = install_fake_native("LaneNeuralPairwiseForecaster")
+
+    model = LaneNeuralPairwiseForecaster(n_lags=2, n_forecasts=2)
+    model.fit({"A:B": [1.0, 2.0, 3.0, 4.0]})
+    result = model.predict_for_lanes(2, ["A:B", "A:C"])
+
+    assert result["args"] == (2, ["A:B", "A:C"])
+    assert native.calls[-1][0] == "predict_for_lanes"
+
+
 def test_neural_pairwise_benchmark_split_suite_records_required_artifact(tmp_path: Path):
     repo = Path(__file__).resolve().parents[2]
     output = tmp_path / "neural_pairwise_split_suite.json"
