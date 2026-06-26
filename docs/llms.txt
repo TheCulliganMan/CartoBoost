@@ -23,8 +23,11 @@ Use this guide as the first read before making changes. Start in the relevant co
 ## Core Components
 - [Python package API](https://github.com/TheCulliganMan/CartoBoost/blob/main/python/cartoboost): user-facing estimator, graph helpers, neural feature workflows, and utility functions.
 - [CLI reference](https://github.com/TheCulliganMan/CartoBoost/blob/main/docs/reference/cli.md): command behavior for `train`, `predict`, `eval`, and `inspect`.
-- [Neural features guide](https://github.com/TheCulliganMan/CartoBoost/blob/main/docs/neural-features.md): ID embeddings, neural-augmented boosting, graph-aware fallback, and benchmark guidance.
-- [Graph features guide](https://github.com/TheCulliganMan/CartoBoost/blob/main/docs/graph-features.md): node2vec, GraphSAGE, HeteroGraphSAGE, HinSAGE, directed source-target features, graph regularization primitives including split scoring and leaf smoothing, and graph feature bundle contracts.
+- [Boosting model guides](https://github.com/TheCulliganMan/CartoBoost/blob/main/docs/user-guide/boosting-models/index.md): per-model guides for `CartoBoostRegressor`, `CartoBoostClassifier`, and `CartoBoostRanker`.
+- [Neural model guides](https://github.com/TheCulliganMan/CartoBoost/blob/main/docs/user-guide/neural-models/index.md): standalone ID embedding regression and neural feature-generation workflows.
+- [Neural features contract](https://github.com/TheCulliganMan/CartoBoost/blob/main/docs/neural-features.md): ID embeddings, neural-augmented boosting, graph-aware fallback, artifacts, failure modes, and benchmark guidance.
+- [Graph model guides](https://github.com/TheCulliganMan/CartoBoost/blob/main/docs/user-guide/graph-models/index.md): standalone graph regressors, standalone link predictors, and graph feature workflows.
+- [Graph features contract](https://github.com/TheCulliganMan/CartoBoost/blob/main/docs/graph-features.md): node2vec, GraphSAGE, HeteroGraphSAGE, HinSAGE, directed source-target features, graph regularization primitives including split scoring and leaf smoothing, and graph feature bundle contracts.
 - [Scripts folder](https://github.com/TheCulliganMan/CartoBoost/blob/main/scripts): acceptance metrics and dataset generation utilities used for validation.
 
 ## Documentation Contracts
@@ -36,6 +39,7 @@ Use this guide as the first read before making changes. Start in the relevant co
 - [Python API reference](https://github.com/TheCulliganMan/CartoBoost/blob/main/docs/reference/python-api.md): authoritative API contracts tied to scientific model choice.
 - [CLI reference](https://github.com/TheCulliganMan/CartoBoost/blob/main/docs/reference/cli.md): argument/flag behavior and output formats.
 - [Python estimator guide](https://github.com/TheCulliganMan/CartoBoost/blob/main/docs/user-guide/python-estimator.md): estimator usage and expected semantics.
+- [Boosting model guides](https://github.com/TheCulliganMan/CartoBoost/blob/main/docs/user-guide/boosting-models/index.md): row-level boosting model selection and per-model examples for regression, classification, and ranking.
 - [Choose a model guide](https://github.com/TheCulliganMan/CartoBoost/blob/main/docs/user-guide/model-types.md):
   task-first router for the tabular regressor, classifier, ranker, forecasting
   classes, CartoBoost lag forecasting, kriging, neural embedding models, graph
@@ -67,6 +71,8 @@ Use this guide as the first read before making changes. Start in the relevant co
 - [Constraints](https://github.com/TheCulliganMan/CartoBoost/blob/main/docs/constraints.md): monotonic and split-search interaction constraints for algorithmic domain assumptions.
 - [Spatial modeling](https://github.com/TheCulliganMan/CartoBoost/blob/main/docs/spatial_modeling.md): modeling assumptions for route/time/geographic features.
 - [Graph features](https://github.com/TheCulliganMan/CartoBoost/blob/main/docs/graph-features.md): node2vec, GraphSAGE, HeteroGraphSAGE, HinSAGE, directionality, graph split and leaf regularization, and metapath contracts.
+- [Graph model guides](https://github.com/TheCulliganMan/CartoBoost/blob/main/docs/user-guide/graph-models/index.md): graph model selection and per-model examples for standalone regressors, link predictors, and graph feature generation.
+- [Neural model guides](https://github.com/TheCulliganMan/CartoBoost/blob/main/docs/user-guide/neural-models/index.md): standalone neural embedding regression and embedding-as-features workflows.
 - [General utilities](https://github.com/TheCulliganMan/CartoBoost/blob/main/docs/general_utilities.md): reusable utilities independent of the regressor and forecasting frame APIs, including sequence reference continuation, reference-path inference, leakage-safe OOF row generation and checks, group summaries, and candidate blending.
 - [Plotting](https://github.com/TheCulliganMan/CartoBoost/blob/main/docs/plotting.md): optional visualization diagnostics for already-computed CartoBoost predictions, forecast artifacts, component rows, seasonality curves, changepoints, cutoff predictions, benchmark metric rows, validation folds, interval calibration, Prophet-compatible plotting utilities matching the public `prophet.plot` 1.2.2 surface, static spatial plots, interactive PyDeck maps, report bundles, browser-local Modeling Lab splitter visualization, and rendered taxi benchmark image examples.
 - [Benchmarks overview](https://github.com/TheCulliganMan/CartoBoost/blob/main/docs/benchmarks/index.md),

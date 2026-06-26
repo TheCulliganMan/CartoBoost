@@ -105,6 +105,9 @@ be transformed trip duration, fare amount, or future pickup-zone demand.
   tabular regressor, local forecasting models, CartoBoost lag forecasting,
   kriging, spatial piecewise kriging, neural embedding models, graph models,
   and utilities.
+- [Boosting Model Guides](user-guide/boosting-models/index.md): per-model
+  guides for `CartoBoostRegressor`, `CartoBoostClassifier`, and
+  `CartoBoostRanker`.
 - [Classification Quickstart](user-guide/classification-quickstart.md):
   binary and multiclass logloss workflows with probability diagnostics.
 - [Ranking Quickstart](user-guide/ranking-quickstart.md): grouped
@@ -135,14 +138,16 @@ be transformed trip duration, fare amount, or future pickup-zone demand.
   workflow.
 - [Parameters](user-guide/parameters.md): estimator controls and supported
   splitters.
-- [Graph Models And Features](graph-features.md): standalone graph regressors,
-  standalone link predictors, Node2Vec, GraphSAGE, HeteroGraphSAGE, HinSAGE,
-  deterministic network embeddings, graph regularization, symbolic relation
-  rules, split constraints, directed source-target features, metapaths, and
-  graph feature bundles.
-- [Neural Embedding Models And Features](neural-features.md): standalone ID
-  embedding regression, neural artifacts, fallback behavior, and optional
-  feature-generation workflows.
+- [Graph Model Guides](user-guide/graph-models/index.md): standalone graph
+  regressors, standalone link predictors, and graph feature workflows.
+- [Graph Models And Features](graph-features.md): Node2Vec, GraphSAGE,
+  HeteroGraphSAGE, HinSAGE, deterministic network embeddings, graph
+  regularization, symbolic relation rules, split constraints, directed
+  source-target features, metapaths, and graph feature bundles.
+- [Neural Model Guides](user-guide/neural-models/index.md): standalone ID
+  embedding regression and neural feature-generation workflows.
+- [Neural Embedding Models And Features](neural-features.md): neural artifacts,
+  fallback behavior, benchmark reporting, and failure modes.
 - [Forecasting Model Guides](user-guide/forecasting-models/index.md): per-model examples
   for naive, seasonal naive, theta, ETS, ARIMA, AutoARIMA, Kalman, piecewise
   linear seasonal, kriging, spatial piecewise kriging, CartoBoost lag,

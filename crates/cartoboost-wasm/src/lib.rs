@@ -35,7 +35,7 @@ use cartoboost_neural::{
     ArtifactFallbackKind, ComponentMode as NeuralComponentMode, GraphSageConfig,
     GraphSageRegressor, HeteroGraphSageConfig, HeteroGraphSageRegressor, HinSageConfig,
     HinSageRegressor, NeuralEmbeddingRegressor, NeuralPanelConfig, NeuralPanelForecaster,
-    NeuralPanelMode, Node2VecConfig, Node2VecRegressor, StandaloneBoosterConfig,
+    NeuralPanelLoss, NeuralPanelMode, Node2VecConfig, Node2VecRegressor, StandaloneBoosterConfig,
     TrendMode as NeuralTrendMode,
 };
 use serde::{Deserialize, Serialize};
@@ -3941,6 +3941,11 @@ fn neural_panel_config(
         seasonality_global_local: NeuralPanelMode::Global,
         local_l2: options.local_l2.unwrap_or(0.0),
         seed: options.uncertainty_seed.unwrap_or(0),
+        loss: NeuralPanelLoss::SmoothL1,
+        epochs: 80,
+        learning_rate: 0.01,
+        weight_decay: 0.0,
+        newer_sample_weight: false,
     };
     if let Some(seasonalities) = &options.custom_seasonalities {
         config.custom_seasonalities = seasonalities

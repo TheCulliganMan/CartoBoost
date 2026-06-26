@@ -317,6 +317,72 @@ fn neural_panel_daily_fourier_component_changes_direct_forecast() {
 }
 
 #[test]
+fn neural_panel_predict_with_known_future_regressors_uses_supplied_covariates() {
+    let rows = (0..12)
+        .map(|hour| {
+            let promo = if hour % 3 == 0 { 1.0 } else { 0.0 };
+            ForecastRow::from_timestamp_str_with_covariates(
+                "A:B",
+                &timestamp(hour),
+                10.0 + 4.0 * promo,
+                BTreeMap::from([("promo".to_string(), promo)]),
+            )
+            .expect("row")
+        })
+        .collect::<Vec<_>>();
+    let frame = ForecastFrame::new(rows, ForecastFrequency::Hourly).expect("frame");
+    let mut model = NeuralPanelForecaster::new(NeuralPanelConfig {
+        n_lags: 3,
+        n_forecasts: 1,
+        trend: forecasting::TrendMode::Off,
+        future_regressors: BTreeMap::from([(
+            "promo".to_string(),
+            forecasting::ComponentMode::Additive,
+        )]),
+        seed: 23,
+        ..NeuralPanelConfig::default()
+    })
+    .expect("model");
+
+    model.fit(&frame).expect("fit");
+    assert!(model.predict(1).is_err());
+
+    let last_timestamp = frame
+        .rows_for_series("A:B")
+        .last()
+        .expect("last row")
+        .timestamp;
+    let next_timestamp = frame
+        .frequency()
+        .advance(last_timestamp, 1)
+        .expect("next timestamp");
+    let no_promo = model
+        .predict_with_known_future_covariates(
+            1,
+            &BTreeMap::from([(
+                ("A:B".to_string(), next_timestamp),
+                BTreeMap::from([("promo".to_string(), 0.0)]),
+            )]),
+        )
+        .expect("no promo predict")
+        .predictions()[0]
+        .mean;
+    let with_promo = model
+        .predict_with_known_future_covariates(
+            1,
+            &BTreeMap::from([(
+                ("A:B".to_string(), next_timestamp),
+                BTreeMap::from([("promo".to_string(), 1.0)]),
+            )]),
+        )
+        .expect("promo predict")
+        .predictions()[0]
+        .mean;
+
+    assert_ne!(no_promo, with_promo);
+}
+
+#[test]
 fn neural_panel_compares_on_synthetic_panel_with_baselines() {
     let (train, expected) = synthetic_seasonal_panel();
     let horizon = 4;

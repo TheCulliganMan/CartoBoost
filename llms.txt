@@ -26,6 +26,7 @@ classification, ranking, forecasting, graph, and neural-embedding modeling.
 - Installation: ./docs/installation.md
 - Getting started: ./docs/getting-started.md
 - Choose a model: ./docs/user-guide/model-types.md
+- Boosting model guides: ./docs/user-guide/boosting-models/index.md
 - Model guides: ./docs/user-guide/forecasting-models/index.md
 - Forecasting model guide pages include Python code and interactive examples
   from ./src/components/ModelingLabClient/index.tsx so readers can run each
@@ -66,7 +67,9 @@ classification, ranking, forecasting, graph, and neural-embedding modeling.
 - Plotting: ./docs/plotting.md
 - Parameters: ./docs/user-guide/parameters.md
 - Spatial modeling: ./docs/spatial_modeling.md
+- Graph model guides: ./docs/user-guide/graph-models/index.md
 - Graph models and features: ./docs/graph-features.md
+- Neural model guides: ./docs/user-guide/neural-models/index.md
 - Neural embedding models and features: ./docs/neural-features.md
 - Benchmarks: ./docs/benchmarks/index.md
 - Forecasting benchmarks, CartoBoost piecewise local diagnostics, and M4/M5/M6 evidence: ./docs/benchmarks/forecasting.md

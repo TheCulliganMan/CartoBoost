@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 from cartoboost.forecasting import LaneNeuralPanelForecaster, NeuralPanelForecaster
 
@@ -58,6 +59,26 @@ def test_lane_neural_panel_predict_for_lanes_delegates_lane_ids(install_fake_nat
 
     assert result["args"] == (2, ["A:B", "A:C"])
     assert native.calls[-1][0] == "predict_for_lanes"
+
+
+def test_neural_panel_predict_with_known_future_delegates_frame(install_fake_native):
+    native = install_fake_native("NeuralPanelForecaster")
+    future = native.frame_class(
+        [("A:B", "1970-01-05T00:00:00", 0.0)],
+        "D",
+        row_covariates=[{"promo": 1.0}],
+    )
+
+    model = NeuralPanelForecaster(
+        n_lags=2,
+        n_forecasts=1,
+        future_regressors={"promo": "additive"},
+    )
+    model.fit({"A:B": [1.0, 2.0, 3.0, 4.0]})
+    result = model.predict(1, known_future=SimpleNamespace(_native_frame=future))
+
+    assert result["args"] == (1, future)
+    assert native.calls[-1][0] == "predict_with_known_future"
 
 
 def test_neural_panel_benchmark_split_suite_records_required_artifact(tmp_path: Path):

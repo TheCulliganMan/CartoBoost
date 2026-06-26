@@ -2504,7 +2504,7 @@ def score_neural_panel_split(
         cartoboost_config=cartoboost_config,
         model_names=model_names,
         source="synthetic",
-        known_future=None,
+        known_future=test,
         skip_non_m_raw_auto_candidate=True,
     )
     if fallback != "none":
@@ -3645,6 +3645,7 @@ def forecast_model_roster(
             train,
             horizon,
             season_length=season_length,
+            known_future=known_future,
         )
         forecast_frames.append(neural_predictions)
         model_timing[NEURAL_PANEL_BENCHMARK_MODEL] = neural_timing
@@ -5528,6 +5529,7 @@ def cartoboost_neural_panel_forecast(
     horizon: int,
     *,
     season_length: int,
+    known_future: Any | None = None,
 ) -> tuple[Any, dict[str, float]]:
     pl = require_polars()
     pd = require_pandas_for_benchmark()
@@ -5540,6 +5542,48 @@ def cartoboost_neural_panel_forecast(
     training_frame = train.select("lane_id", "date", "loads", *covariates).to_pandas()
     if not isinstance(training_frame, pd.DataFrame):
         raise TypeError("CartoBoost NeuralPanel benchmark conversion did not return pandas")
+    known_future_frame = None
+    if "airport_lane" in covariates:
+        lane_future_rows = []
+        lane_metadata = (
+            train.sort(["lane_id", "date"])
+            .group_by("lane_id")
+            .agg(
+                pl.col("date").max().alias("last_date"),
+                pl.col("airport_lane").last().alias("airport_lane"),
+            )
+        )
+        for row in lane_metadata.iter_rows(named=True):
+            for step in range(1, horizon + 1):
+                lane_future_rows.append(
+                    {
+                        "lane_id": row["lane_id"],
+                        "date": row["last_date"] + timedelta(days=step),
+                        "airport_lane": row["airport_lane"],
+                    }
+                )
+        future = pl.DataFrame(lane_future_rows)
+        if known_future is not None and "airport_lane" in known_future.columns:
+            future = pl.concat(
+                [
+                    future,
+                    known_future.select("lane_id", "date", "airport_lane"),
+                ],
+                how="vertical",
+            ).unique(subset=["lane_id", "date"], keep="last")
+        future_frame = future.to_pandas()
+        if not isinstance(future_frame, pd.DataFrame):
+            raise TypeError("CartoBoost NeuralPanel known-future conversion did not return pandas")
+        future_frame = future_frame.assign(loads=0.0)
+        known_future_frame = ForecastFrame.from_pandas(
+            future_frame,
+            timestamp_col="date",
+            target_col="loads",
+            series_id_col="lane_id",
+            freq="D",
+            allow_irregular=True,
+            known_future_covariates=["airport_lane"],
+        )
     frame = ForecastFrame.from_pandas(
         training_frame,
         timestamp_col="date",
@@ -5586,7 +5630,11 @@ def cartoboost_neural_panel_forecast(
     fit_seconds = perf_counter() - fit_start
 
     predict_start = perf_counter()
-    result = model.predict(horizon)
+    result = (
+        model.predict(horizon, known_future=known_future_frame)
+        if known_future_frame is not None
+        else model.predict(horizon)
+    )
     predictions = pl.DataFrame(
         result.predictions(),
         schema=[

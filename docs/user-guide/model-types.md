@@ -12,9 +12,9 @@ against simpler baselines under the same split before interpreting a gain.
 
 | Question | Use | Primary guide |
 | --- | --- | --- |
-| Does each row describe one taxi trip, route observation, zone-hour aggregate, or residual to regress? | `cartoboost.CartoBoostRegressor` | [Python API Reference](../reference/python-api.md) |
-| Is the target a class label such as airport-trip flag, high-delay bucket, or route-risk class? | `cartoboost.CartoBoostClassifier` | [Python API Reference](../reference/python-api.md) |
-| Are rows grouped by search, customer, pickup zone, lane, or route request and need within-group ordering? | `cartoboost.CartoBoostRanker` | [Python API Reference](../reference/python-api.md) |
+| Does each row describe one taxi trip, route observation, zone-hour aggregate, or residual to regress? | `cartoboost.CartoBoostRegressor` | [CartoBoost Regressor](boosting-models/regressor.md) |
+| Is the target a class label such as airport-trip flag, high-delay bucket, or route-risk class? | `cartoboost.CartoBoostClassifier` | [CartoBoost Classifier](boosting-models/classifier.md) |
+| Are rows grouped by search, customer, pickup zone, lane, or route request and need within-group ordering? | `cartoboost.CartoBoostRanker` | [CartoBoost Ranker](boosting-models/ranker.md) |
 | Are you choosing how place, time, sparse memberships, losses, fuzzy routing, or local residual trends enter that row-level model? | `CartoBoostRegressor` parameters | [Parameters](parameters.md) |
 | Is the target one regular pickup-zone or lane series with its own history? | Local forecasters such as `SeasonalNaiveForecaster`, `ThetaForecaster`, `ETSForecaster`, `AutoARIMAForecaster`, or `KalmanForecaster` | [Forecasting Model Guides](forecasting-models/index.md) |
 | Are many related pickup zones, dropoff zones, or route panels forecast from shared lag features? | `CartoBoostLagForecaster` | [CartoBoost Lag](forecasting-models/cartoboost-lag.md) |
@@ -23,9 +23,9 @@ against simpler baselines under the same split before interpreting a gain.
 | Should a neural panel forecaster preserve directional pickup-dropoff lane identity? | `NeuralPanelForecaster` or `LaneNeuralPanelForecaster` | [Neural Panel](forecasting-models/neural-panel.md) |
 | Should a deterministic neural forecasting expert learn from regular taxi-demand windows? | `NBeatsForecaster` or `NHiTSForecaster` | [Forecasting Model Guides](forecasting-models/index.md) |
 | Do you need a fixed combination of fitted forecasters? | `WeightedEnsembleForecaster` | [Weighted Ensembles](forecasting-models/ensembles.md) |
-| Are stable pickup zones, dropoff zones, or pairs themselves the learned artifact? | `NeuralEmbeddingStandaloneRegressor` | [Neural Features](../neural-features.md) |
-| Is the relationship network the object being modeled? | Graph standalone regressors or link predictors | [Graph Features](../graph-features.md) |
-| Do graph or neural embeddings only need to become columns for another estimator? | `GraphFeatureTransformer`, `NeuralEmbeddingFeatures`, or `NeuralEmbeddingRegressor` | [Graph Features](../graph-features.md), [Neural Features](../neural-features.md) |
+| Are stable pickup zones, dropoff zones, or pairs themselves the learned artifact? | `NeuralEmbeddingStandaloneRegressor` | [Standalone Embedding Regressor](neural-models/standalone-embedding.md) |
+| Is the relationship network the object being modeled? | Graph standalone regressors or link predictors | [Graph Model Guides](graph-models/index.md) |
+| Do graph or neural embeddings only need to become columns for another estimator? | `GraphFeatureTransformer`, `NeuralEmbeddingFeatures`, or `NeuralEmbeddingRegressor` | [Graph Feature Workflows](graph-models/feature-workflows.md), [Embedding Feature Workflows](neural-models/embedding-features.md) |
 | Do you need one-off forecast or spatial utilities? | Functions such as `theta_forecast`, `kalman_filter`, or `ordinary_kriging_predict` | [General Utilities](../general_utilities.md) |
 
 ## When CartoBoostRegressor Fits
@@ -93,7 +93,7 @@ Choose controls from the structure you want to test:
 | Local residual trend inside learned regions | `leaf_predictor="linear"`, `linear_leaf_features=[...]` |
 | Domain monotonicity | `monotonic_constraints=[...]` |
 
-See [Python API Reference](../reference/python-api.md), [Parameters](parameters.md),
+See [CartoBoost Regressor](boosting-models/regressor.md), [Python API Reference](../reference/python-api.md), [Parameters](parameters.md),
 [Feature Schema](../feature_schema.md), [Sparse Features](../sparse_features.md),
 and [Temporal-Spatial Modeling](../spatial_modeling.md).
 
@@ -289,7 +289,8 @@ Use graph standalone regressors when relationships matter:
 Use graph or neural feature generators only when embeddings should become dense
 columns for another model.
 
-See [Graph Features](../graph-features.md) and [Neural Features](../neural-features.md).
+See [Graph Model Guides](graph-models/index.md), [Graph Features](../graph-features.md),
+and [Neural Model Guides](neural-models/index.md).
 
 ## Validation Defaults
 
@@ -312,12 +313,13 @@ entry point used to produce the numbers.
 1. Read [Getting Started](../getting-started.md) for installation, the first
    model fit, and local validation commands.
 2. Use this chooser to pick the model family.
-3. For row-level regression, read the [Python API Reference](../reference/python-api.md), then
+3. For row-level boosting, read the [Boosting Model Guides](boosting-models/index.md), then
    [Parameters](parameters.md), then [Temporal-Spatial Modeling](../spatial_modeling.md)
    and the relevant feature pages.
 4. For time-series work, read the [Forecasting](../forecasting.md) page
    when you need `ForecastFrame`, backtesting, forecast artifacts, or the CLI.
    Read [Forecasting Model Guides](forecasting-models/index.md) when you need examples for
    a specific model class.
-5. For graph or neural work, start with the standalone model sections before
+5. For graph work, start with the [Graph Model Guides](graph-models/index.md). For
+   neural work, start with the [Neural Model Guides](neural-models/index.md) before
    using feature-generation helpers.

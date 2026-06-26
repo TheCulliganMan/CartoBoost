@@ -166,8 +166,9 @@ const config: Config = {
           title: 'Deep Dives',
           items: [
             { label: 'Forecasting', to: '/docs/forecasting' },
-            { label: 'Graph Features', to: '/docs/graph-features' },
-            { label: 'Neural Features', to: '/docs/neural-features' },
+            { label: 'Boosting Models', to: '/docs/user-guide/boosting-models' },
+            { label: 'Graph Models', to: '/docs/user-guide/graph-models' },
+            { label: 'Neural Models', to: '/docs/user-guide/neural-models' },
           ],
         },
         {

@@ -103,8 +103,8 @@ use cartoboost_neural::{
     LaneNeuralPanelForecaster as CoreLaneNeuralPanelForecaster, NBeatsConfig as CoreNBeatsConfig,
     NBeatsForecaster as CoreNBeatsForecaster, NHiTSConfig as CoreNHiTSConfig,
     NHiTSForecaster as CoreNHiTSForecaster, NeuralPanelConfig as CoreNeuralPanelConfig,
-    NeuralPanelForecaster as CoreNeuralPanelForecaster, NeuralPanelMode as CoreNeuralPanelMode,
-    TrendMode as CoreNeuralPanelTrendMode,
+    NeuralPanelForecaster as CoreNeuralPanelForecaster, NeuralPanelLoss as CoreNeuralPanelLoss,
+    NeuralPanelMode as CoreNeuralPanelMode, TrendMode as CoreNeuralPanelTrendMode,
 };
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
@@ -2735,7 +2735,12 @@ impl NativeNeuralPanelForecaster {
         trend_mode="global",
         seasonality_global_local="global",
         local_l2=0.0,
-        seed=0
+        seed=0,
+        loss="smooth_l1",
+        epochs=80,
+        learning_rate=0.01,
+        weight_decay=0.0,
+        newer_sample_weight=false
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -2760,6 +2765,11 @@ impl NativeNeuralPanelForecaster {
         seasonality_global_local: &str,
         local_l2: f64,
         seed: u64,
+        loss: &str,
+        epochs: usize,
+        learning_rate: f64,
+        weight_decay: f64,
+        newer_sample_weight: bool,
     ) -> PyResult<Self> {
         let config = neural_panel_config_from_parts(
             n_lags,
@@ -2783,6 +2793,11 @@ impl NativeNeuralPanelForecaster {
             seasonality_global_local,
             local_l2,
             seed,
+            loss,
+            epochs,
+            learning_rate,
+            weight_decay,
+            newer_sample_weight,
         )?;
         Ok(Self {
             model: CoreNeuralPanelForecaster::new(config).map_err(to_py_neural_error)?,
@@ -2795,6 +2810,25 @@ impl NativeNeuralPanelForecaster {
 
     fn predict(&self, py: Python<'_>, horizon: usize) -> PyResult<NativeForecastResult> {
         predict_forecaster_py(py, &self.model, horizon)
+    }
+
+    fn predict_with_known_future(
+        &self,
+        py: Python<'_>,
+        horizon: usize,
+        frame: &NativeForecastFrame,
+    ) -> PyResult<NativeForecastResult> {
+        let mut covariates = BTreeMap::new();
+        for row in frame.frame.rows() {
+            covariates.insert(
+                (row.series_id.clone(), row.timestamp),
+                row.covariates.clone(),
+            );
+        }
+        forecast_to_py(py.allow_threads(|| {
+            self.model
+                .predict_with_known_future_covariates(horizon, &covariates)
+        }))
     }
 
     fn quantiles_json(&self, py: Python<'_>, horizon: usize) -> PyResult<String> {
@@ -2851,6 +2885,11 @@ impl NativeLaneNeuralPanelForecaster {
         seasonality_global_local="global",
         local_l2=0.0,
         seed=0,
+        loss="smooth_l1",
+        epochs=80,
+        learning_rate=0.01,
+        weight_decay=0.0,
+        newer_sample_weight=false,
         embedding_dim=8
     ))]
     #[allow(clippy::too_many_arguments)]
@@ -2876,6 +2915,11 @@ impl NativeLaneNeuralPanelForecaster {
         seasonality_global_local: &str,
         local_l2: f64,
         seed: u64,
+        loss: &str,
+        epochs: usize,
+        learning_rate: f64,
+        weight_decay: f64,
+        newer_sample_weight: bool,
         embedding_dim: usize,
     ) -> PyResult<Self> {
         let base = neural_panel_config_from_parts(
@@ -2900,6 +2944,11 @@ impl NativeLaneNeuralPanelForecaster {
             seasonality_global_local,
             local_l2,
             seed,
+            loss,
+            epochs,
+            learning_rate,
+            weight_decay,
+            newer_sample_weight,
         )?;
         Ok(Self {
             model: CoreLaneNeuralPanelForecaster::new(CoreLaneNeuralPanelConfig {
@@ -2916,6 +2965,25 @@ impl NativeLaneNeuralPanelForecaster {
 
     fn predict(&self, py: Python<'_>, horizon: usize) -> PyResult<NativeForecastResult> {
         predict_forecaster_py(py, &self.model, horizon)
+    }
+
+    fn predict_with_known_future(
+        &self,
+        py: Python<'_>,
+        horizon: usize,
+        frame: &NativeForecastFrame,
+    ) -> PyResult<NativeForecastResult> {
+        let mut covariates = BTreeMap::new();
+        for row in frame.frame.rows() {
+            covariates.insert(
+                (row.series_id.clone(), row.timestamp),
+                row.covariates.clone(),
+            );
+        }
+        forecast_to_py(py.allow_threads(|| {
+            self.model
+                .predict_with_known_future_covariates(horizon, &covariates)
+        }))
     }
 
     fn predict_for_lanes(
@@ -9073,6 +9141,11 @@ fn neural_panel_config_from_parts(
     seasonality_global_local: &str,
     local_l2: f64,
     seed: u64,
+    loss: &str,
+    epochs: usize,
+    learning_rate: f64,
+    weight_decay: f64,
+    newer_sample_weight: bool,
 ) -> PyResult<CoreNeuralPanelConfig> {
     let future_regressors = future_regressors
         .unwrap_or_default()
@@ -9106,7 +9179,24 @@ fn neural_panel_config_from_parts(
         seasonality_global_local: parse_neural_panel_global_local_mode(seasonality_global_local)?,
         local_l2,
         seed,
+        loss: parse_neural_panel_loss(loss)?,
+        epochs,
+        learning_rate,
+        weight_decay,
+        newer_sample_weight,
     })
+}
+
+fn parse_neural_panel_loss(value: &str) -> PyResult<CoreNeuralPanelLoss> {
+    match value {
+        "smooth_l1" | "huber" => Ok(CoreNeuralPanelLoss::SmoothL1),
+        "mse" | "l2" => Ok(CoreNeuralPanelLoss::Mse),
+        "mae" | "l1" => Ok(CoreNeuralPanelLoss::Mae),
+        "pinball" | "quantile" => Ok(CoreNeuralPanelLoss::Pinball),
+        other => Err(PyValueError::new_err(format!(
+            "unknown NeuralPanel loss {other:?}"
+        ))),
+    }
 }
 
 fn parse_neural_panel_trend_mode(value: &str) -> PyResult<CoreNeuralPanelTrendMode> {

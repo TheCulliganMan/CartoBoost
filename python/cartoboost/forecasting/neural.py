@@ -119,6 +119,11 @@ class NeuralPanelForecaster(NativeForecastWrapper):
         seasonality_global_local: str = "global",
         local_l2: float = 0.0,
         seed: int = 0,
+        loss: str = "smooth_l1",
+        epochs: int = 80,
+        learning_rate: float = 0.01,
+        weight_decay: float = 0.0,
+        newer_sample_weight: bool = False,
         **metadata: Any,
     ) -> None:
         _validate_panel(
@@ -127,6 +132,9 @@ class NeuralPanelForecaster(NativeForecastWrapper):
             quantiles=quantiles,
             changepoints_range=changepoints_range,
             local_l2=local_l2,
+            epochs=epochs,
+            learning_rate=learning_rate,
+            weight_decay=weight_decay,
         )
         super().__init__(
             n_lags=int(n_lags),
@@ -150,6 +158,11 @@ class NeuralPanelForecaster(NativeForecastWrapper):
             seasonality_global_local=str(seasonality_global_local),
             local_l2=float(local_l2),
             seed=int(seed),
+            loss=str(loss),
+            epochs=int(epochs),
+            learning_rate=float(learning_rate),
+            weight_decay=float(weight_decay),
+            newer_sample_weight=bool(newer_sample_weight),
             metadata=dict(metadata),
         )
 
@@ -158,6 +171,18 @@ class NeuralPanelForecaster(NativeForecastWrapper):
         params.pop("metadata", None)
         native_class = _native_forecaster_class(self.native_class_name)
         return native_class(**params)
+
+    def predict(self, horizon: int, *, known_future: Any | None = None) -> Any:
+        if known_future is None:
+            return super().predict(int(horizon))
+        self._check_is_fitted()
+        native_frame = _native_frame_from_forecast_frame(known_future)
+        method = getattr(self._native_model, "predict_with_known_future", None)
+        if method is None:
+            raise NotImplementedError(
+                "Rust binding for NeuralPanelForecaster known-future prediction is not available."
+            )
+        return method(int(horizon), native_frame)
 
 
 class LaneNeuralPanelForecaster(NeuralPanelForecaster):
@@ -217,6 +242,9 @@ def _validate_panel(
     quantiles: tuple[float, ...] | list[float] | None,
     changepoints_range: float,
     local_l2: float,
+    epochs: int,
+    learning_rate: float,
+    weight_decay: float,
 ) -> None:
     if n_lags < 0:
         raise ValueError("n_lags must be non-negative")
@@ -226,6 +254,12 @@ def _validate_panel(
         raise ValueError("changepoints_range must be in (0, 1]")
     if local_l2 < 0.0:
         raise ValueError("local_l2 must be non-negative")
+    if epochs < 1:
+        raise ValueError("epochs must be a positive integer")
+    if learning_rate <= 0.0:
+        raise ValueError("learning_rate must be positive")
+    if weight_decay < 0.0:
+        raise ValueError("weight_decay must be non-negative")
     for quantile in quantiles or (0.5,):
         if quantile <= 0.0 or quantile >= 1.0:
             raise ValueError("quantiles must be in (0, 1)")
@@ -240,3 +274,16 @@ def _native_forecaster_class(name: str) -> Any:
     if native_class is None:
         raise NotImplementedError(f"Rust binding for {name} is not available.")
     return native_class
+
+
+def _native_frame_from_forecast_frame(value: Any) -> Any:
+    native_frame = getattr(value, "_native_frame", None)
+    if native_frame is not None:
+        return native_frame
+    if value.__class__.__name__ == "ForecastFrame" and value.__class__.__module__.endswith(
+        "._native"
+    ):
+        return value
+    raise TypeError(
+        "known_future must be a cartoboost.forecasting.ForecastFrame or native ForecastFrame"
+    )

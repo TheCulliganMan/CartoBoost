@@ -20,8 +20,8 @@ pub use features::NeuralFeatureBlock;
 pub use forecasting::{
     ComponentMode, ForecastWindow, LaneNeuralPanelConfig, LaneNeuralPanelForecaster, NBeatsConfig,
     NBeatsForecaster, NHiTSConfig, NHiTSForecaster, NeuralPanelConfig, NeuralPanelForecaster,
-    NeuralPanelMode, NeuralPanelWindow, NeuralPanelWindowDataset, StandardScaler, TrendMode,
-    WindowDataset,
+    NeuralPanelLoss, NeuralPanelMode, NeuralPanelWindow, NeuralPanelWindowDataset, StandardScaler,
+    TrendMode, WindowDataset,
 };
 pub use graph_features::{
     compute_directional_features, materialize_source_target_pair_nodes, validate_directed_metapath,

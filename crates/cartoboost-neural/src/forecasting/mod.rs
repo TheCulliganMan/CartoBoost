@@ -8,7 +8,8 @@ pub use dataloader::{ForecastWindow, WindowDataset};
 pub use nbeats::{NBeatsConfig, NBeatsForecaster};
 pub use neural_panel::{
     ComponentMode, LaneNeuralPanelConfig, LaneNeuralPanelForecaster, NeuralPanelConfig,
-    NeuralPanelForecaster, NeuralPanelMode, NeuralPanelWindow, NeuralPanelWindowDataset, TrendMode,
+    NeuralPanelForecaster, NeuralPanelLoss, NeuralPanelMode, NeuralPanelWindow,
+    NeuralPanelWindowDataset, TrendMode,
 };
 pub use nhits::{NHiTSConfig, NHiTSForecaster};
 pub use scaler::StandardScaler;

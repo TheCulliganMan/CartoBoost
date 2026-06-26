@@ -10,6 +10,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::scaler::StandardScaler;
 use crate::{NeuralError, Result};
 
+type KnownFutureCovariates = BTreeMap<(String, NaiveDateTime), BTreeMap<String, f64>>;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TrendMode {
     Off,
@@ -27,6 +29,14 @@ pub enum NeuralPanelMode {
     Global,
     Local,
     Glocal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NeuralPanelLoss {
+    SmoothL1,
+    Mse,
+    Mae,
+    Pinball,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -52,6 +62,11 @@ pub struct NeuralPanelConfig {
     pub seasonality_global_local: NeuralPanelMode,
     pub local_l2: f64,
     pub seed: u64,
+    pub loss: NeuralPanelLoss,
+    pub epochs: usize,
+    pub learning_rate: f64,
+    pub weight_decay: f64,
+    pub newer_sample_weight: bool,
 }
 
 impl Default for NeuralPanelConfig {
@@ -78,6 +93,11 @@ impl Default for NeuralPanelConfig {
             seasonality_global_local: NeuralPanelMode::Global,
             local_l2: 0.0,
             seed: 0,
+            loss: NeuralPanelLoss::SmoothL1,
+            epochs: 80,
+            learning_rate: 0.01,
+            weight_decay: 0.0,
+            newer_sample_weight: false,
         }
     }
 }
@@ -97,6 +117,21 @@ impl NeuralPanelConfig {
         if !self.local_l2.is_finite() || self.local_l2 < 0.0 {
             return Err(NeuralError::InvalidArgument(
                 "local_l2 must be finite and non-negative".to_string(),
+            ));
+        }
+        if self.epochs == 0 {
+            return Err(NeuralError::InvalidArgument(
+                "epochs must be positive".to_string(),
+            ));
+        }
+        if !self.learning_rate.is_finite() || self.learning_rate <= 0.0 {
+            return Err(NeuralError::InvalidArgument(
+                "learning_rate must be finite and positive".to_string(),
+            ));
+        }
+        if !self.weight_decay.is_finite() || self.weight_decay < 0.0 {
+            return Err(NeuralError::InvalidArgument(
+                "weight_decay must be finite and non-negative".to_string(),
             ));
         }
         for hidden in self.ar_layers.iter().chain(self.lagged_reg_layers.iter()) {
@@ -222,6 +257,20 @@ impl NeuralPanelWindowDataset {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DenseLayer {
+    weights: Vec<Vec<f64>>,
+    biases: Vec<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MlpState {
+    input_width: usize,
+    output_width: usize,
+    hidden_layers: Vec<usize>,
+    layers: Vec<DenseLayer>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NeuralPanelForecaster {
     config: NeuralPanelConfig,
     scaler: Option<StandardScaler>,
@@ -234,10 +283,18 @@ pub struct NeuralPanelForecaster {
     local_slopes: BTreeMap<String, f64>,
     #[serde(default)]
     target_tails: BTreeMap<String, Vec<f64>>,
+    #[serde(default)]
+    lagged_covariate_tails: BTreeMap<String, BTreeMap<String, Vec<f64>>>,
     ar_weights: Vec<f64>,
     covariate_weights: BTreeMap<String, f64>,
     #[serde(default)]
     feature_weights: BTreeMap<String, f64>,
+    #[serde(default)]
+    local_feature_weights: BTreeMap<String, BTreeMap<String, f64>>,
+    #[serde(default)]
+    ar_net: Option<MlpState>,
+    #[serde(default)]
+    covar_net: Option<MlpState>,
     future_regressor_weights: BTreeMap<String, f64>,
     feature_schema: Vec<String>,
     train_cutoff: Option<String>,
@@ -257,9 +314,13 @@ impl NeuralPanelForecaster {
             local_levels: BTreeMap::new(),
             local_slopes: BTreeMap::new(),
             target_tails: BTreeMap::new(),
+            lagged_covariate_tails: BTreeMap::new(),
             ar_weights: Vec::new(),
             covariate_weights: BTreeMap::new(),
             feature_weights: BTreeMap::new(),
+            local_feature_weights: BTreeMap::new(),
+            ar_net: None,
+            covar_net: None,
             future_regressor_weights: BTreeMap::new(),
             feature_schema: Vec::new(),
             train_cutoff: None,
@@ -287,6 +348,22 @@ impl NeuralPanelForecaster {
     }
 
     pub fn predict_tensor(&self, horizon: usize) -> CoreResult<BTreeMap<String, Vec<Vec<f64>>>> {
+        self.predict_tensor_with_covariates(horizon, None)
+    }
+
+    pub fn predict_tensor_with_known_future_covariates(
+        &self,
+        horizon: usize,
+        known_future_covariates: &KnownFutureCovariates,
+    ) -> CoreResult<BTreeMap<String, Vec<Vec<f64>>>> {
+        self.predict_tensor_with_covariates(horizon, Some(known_future_covariates))
+    }
+
+    fn predict_tensor_with_covariates(
+        &self,
+        horizon: usize,
+        known_future_covariates: Option<&KnownFutureCovariates>,
+    ) -> CoreResult<BTreeMap<String, Vec<Vec<f64>>>> {
         let frequency = self.frequency.ok_or_else(|| {
             CartoBoostError::InvalidInput(
                 "NeuralPanelForecaster must be fit before predict".to_string(),
@@ -306,11 +383,15 @@ impl NeuralPanelForecaster {
             })?;
             let local_level = self.local_levels.get(series_id).copied().unwrap_or(0.0);
             let local_slope = self.local_slopes.get(series_id).copied().unwrap_or(0.0);
-            let ar_effect = self.autoregressive_effect(series_id, local_level, local_slope);
+            let stationary_effects =
+                self.stationary_network_effects(series_id, local_level, local_slope);
             let mut rows = Vec::with_capacity(horizon);
             for step in 1..=horizon {
                 let timestamp = frequency.advance(last_row.timestamp, step)?;
-                let (additive, multiplicative) = self.nonstationary_effect(timestamp, None)?;
+                let covariates = known_future_covariates
+                    .and_then(|values| values.get(&(series_id.clone(), timestamp)));
+                let (additive, multiplicative) =
+                    self.nonstationary_effect(series_id, timestamp, covariates)?;
                 let median_scaled = if self.config.trend == TrendMode::Off {
                     self.global_level + local_level
                 } else {
@@ -321,7 +402,11 @@ impl NeuralPanelForecaster {
                 let median_scaled = median_scaled
                     + additive
                     + median_scaled * multiplicative
-                    + ar_effect / step as f64;
+                    + stationary_effects
+                        .get(step - 1)
+                        .copied()
+                        .or_else(|| stationary_effects.last().copied())
+                        .unwrap_or(0.0);
                 let median = scaler.inverse_transform(median_scaled);
                 rows.push(repaired_quantiles(median, &self.config.quantiles));
             }
@@ -330,29 +415,82 @@ impl NeuralPanelForecaster {
         Ok(by_series)
     }
 
-    fn autoregressive_effect(&self, series_id: &str, local_level: f64, local_slope: f64) -> f64 {
-        if self.ar_weights.is_empty() {
-            return 0.0;
+    pub fn predict_with_known_future_covariates(
+        &self,
+        horizon: usize,
+        known_future_covariates: &KnownFutureCovariates,
+    ) -> CoreResult<ForecastResult> {
+        if horizon == 0 {
+            return Err(CartoBoostError::InvalidInput(
+                "forecast horizon must be positive".to_string(),
+            ));
         }
-        let Some(tail) = self.target_tails.get(series_id) else {
-            return 0.0;
-        };
-        let start_index = tail.len().saturating_sub(self.ar_weights.len());
-        tail[start_index..]
-            .iter()
-            .zip(self.ar_weights.iter())
-            .enumerate()
-            .map(|(idx, (value, weight))| {
-                let baseline = if self.config.trend == TrendMode::Off {
-                    self.global_level + local_level
-                } else {
-                    self.global_level
-                        + local_level
-                        + (self.global_slope + local_slope) * (idx + start_index + 1) as f64
-                };
-                (value - baseline) * weight
-            })
-            .sum()
+        let frequency = self.frequency.ok_or_else(|| {
+            CartoBoostError::InvalidInput(
+                "NeuralPanelForecaster must be fit before predict".to_string(),
+            )
+        })?;
+        let tensor =
+            self.predict_tensor_with_known_future_covariates(horizon, known_future_covariates)?;
+        let mut predictions = Vec::new();
+        for (series_id, rows) in tensor {
+            let last_row = self.last_rows.get(&series_id).ok_or_else(|| {
+                CartoBoostError::InvalidInput(format!(
+                    "missing fitted timestamp tail for series '{series_id}'"
+                ))
+            })?;
+            for (idx, quantiles) in rows.iter().enumerate() {
+                let step = idx + 1;
+                let median_idx = self
+                    .config
+                    .quantiles
+                    .iter()
+                    .position(|q| (*q - 0.5).abs() < f64::EPSILON)
+                    .unwrap_or(0);
+                predictions.push(ForecastPrediction {
+                    series_id: series_id.clone(),
+                    timestamp: frequency.advance(last_row.timestamp, step)?,
+                    horizon: step,
+                    model: self.model_name().to_string(),
+                    mean: quantiles[median_idx],
+                });
+            }
+        }
+        ForecastResult::new(predictions)
+    }
+
+    fn stationary_network_effects(
+        &self,
+        series_id: &str,
+        local_level: f64,
+        local_slope: f64,
+    ) -> Vec<f64> {
+        let mut output = vec![0.0; self.config.n_forecasts];
+        if let (Some(net), Some(tail)) = (&self.ar_net, self.target_tails.get(series_id)) {
+            let start_index = tail.len().saturating_sub(self.config.n_lags);
+            let input = tail[start_index..]
+                .iter()
+                .enumerate()
+                .map(|(idx, value)| {
+                    let baseline = if self.config.trend == TrendMode::Off {
+                        self.global_level + local_level
+                    } else {
+                        self.global_level
+                            + local_level
+                            + (self.global_slope + local_slope) * (idx + start_index + 1) as f64
+                    };
+                    value - baseline
+                })
+                .collect::<Vec<_>>();
+            add_median_outputs(&mut output, &net.forward(&input), &self.config.quantiles);
+        }
+        if let (Some(net), Some(tails)) =
+            (&self.covar_net, self.lagged_covariate_tails.get(series_id))
+        {
+            let input = lagged_covariate_input(&self.config, tails);
+            add_median_outputs(&mut output, &net.forward(&input), &self.config.quantiles);
+        }
+        output
     }
 
     pub fn predict_quantiles_json_string(&self, horizon: usize) -> CoreResult<String> {
@@ -366,6 +504,7 @@ impl NeuralPanelForecaster {
 
     fn nonstationary_effect(
         &self,
+        series_id: &str,
         timestamp: NaiveDateTime,
         covariates: Option<&BTreeMap<String, f64>>,
     ) -> CoreResult<(f64, f64)> {
@@ -373,7 +512,18 @@ impl NeuralPanelForecaster {
         let mut multiplicative = 0.0;
         for name in &self.feature_schema {
             let value = feature_value_for_timestamp(name, timestamp, covariates)?;
-            let weight = self.feature_weights.get(name).copied().unwrap_or(0.0);
+            let global_weight = self.feature_weights.get(name).copied().unwrap_or(0.0);
+            let local_weight = self
+                .local_feature_weights
+                .get(series_id)
+                .and_then(|weights| weights.get(name))
+                .copied()
+                .unwrap_or(0.0);
+            let weight = match self.config.seasonality_global_local {
+                NeuralPanelMode::Global => global_weight,
+                NeuralPanelMode::Local => local_weight,
+                NeuralPanelMode::Glocal => global_weight + local_weight,
+            };
             match feature_component_mode(&self.config, name) {
                 ComponentMode::Additive => additive += value * weight,
                 ComponentMode::Multiplicative => multiplicative += value * weight,
@@ -416,6 +566,27 @@ impl Forecaster for NeuralPanelForecaster {
                         .map(|value| scaler.transform(*value))
                         .collect(),
                 )
+            })
+            .collect();
+        self.lagged_covariate_tails = self
+            .series_ids
+            .iter()
+            .map(|series_id| {
+                let rows = frame.rows_for_series(series_id);
+                let covariates = self
+                    .config
+                    .lagged_regressors
+                    .iter()
+                    .map(|(name, lag)| {
+                        let start = rows.len().saturating_sub(*lag);
+                        let values = rows[start..]
+                            .iter()
+                            .map(|row| row.covariates.get(name).copied().unwrap_or(0.0))
+                            .collect::<Vec<_>>();
+                        (name.clone(), values)
+                    })
+                    .collect::<BTreeMap<_, _>>();
+                (series_id.clone(), covariates)
             })
             .collect();
         self.last_rows = self
@@ -481,6 +652,75 @@ impl Forecaster for NeuralPanelForecaster {
                 }
             },
         );
+        self.local_feature_weights = fit_local_feature_weights(
+            &self.config,
+            &dataset,
+            &scaler,
+            &self.feature_weights,
+            |series_id, offset| {
+                let local_level = self.local_levels.get(series_id).copied().unwrap_or(0.0);
+                let local_slope = self.local_slopes.get(series_id).copied().unwrap_or(0.0);
+                if self.config.trend == TrendMode::Off {
+                    self.global_level + local_level
+                } else {
+                    self.global_level
+                        + local_level
+                        + (self.global_slope + local_slope) * offset as f64
+                }
+            },
+        );
+        let output_width = self.config.n_forecasts * self.config.quantiles.len();
+        self.ar_net = if self.config.n_lags > 0 {
+            Some(train_mlp(
+                self.config.n_lags,
+                output_width,
+                &self.config.ar_layers,
+                ar_training_examples(&self.config, &dataset, &scaler, |series_id, offset| {
+                    let local_level = self.local_levels.get(series_id).copied().unwrap_or(0.0);
+                    let local_slope = self.local_slopes.get(series_id).copied().unwrap_or(0.0);
+                    if self.config.trend == TrendMode::Off {
+                        self.global_level + local_level
+                    } else {
+                        self.global_level
+                            + local_level
+                            + (self.global_slope + local_slope) * offset as f64
+                    }
+                }),
+                &self.config,
+                self.config.seed ^ 0xA71,
+            ))
+        } else {
+            None
+        };
+        let covar_input_width = self.config.lagged_regressors.values().sum::<usize>();
+        self.covar_net = if covar_input_width > 0 {
+            Some(train_mlp(
+                covar_input_width,
+                output_width,
+                &self.config.lagged_reg_layers,
+                covar_training_examples(
+                    &self.config,
+                    &dataset,
+                    &scaler,
+                    &self.ar_net,
+                    |series_id, offset| {
+                        let local_level = self.local_levels.get(series_id).copied().unwrap_or(0.0);
+                        let local_slope = self.local_slopes.get(series_id).copied().unwrap_or(0.0);
+                        if self.config.trend == TrendMode::Off {
+                            self.global_level + local_level
+                        } else {
+                            self.global_level
+                                + local_level
+                                + (self.global_slope + local_slope) * offset as f64
+                        }
+                    },
+                ),
+                &self.config,
+                self.config.seed ^ 0xC09A,
+            ))
+        } else {
+            None
+        };
         self.future_regressor_weights = self
             .config
             .future_regressors
@@ -556,6 +796,9 @@ impl Forecaster for NeuralPanelForecaster {
                 "ar_weights": self.ar_weights,
                 "lagged_regressor_weights": self.covariate_weights,
                 "nonstationary_feature_weights": self.feature_weights,
+                "local_nonstationary_feature_weights": self.local_feature_weights,
+                "ar_net": self.ar_net,
+                "covar_net": self.covar_net,
                 "future_regressor_weights": self.future_regressor_weights,
             },
             "quantiles": self.config.quantiles,
@@ -592,6 +835,16 @@ pub struct LaneNeuralPanelForecaster {
     inner: NeuralPanelForecaster,
     config: LaneNeuralPanelConfig,
     fallback_index: BTreeMap<String, Vec<String>>,
+    #[serde(default)]
+    origin_embeddings: BTreeMap<String, Vec<f64>>,
+    #[serde(default)]
+    destination_embeddings: BTreeMap<String, Vec<f64>>,
+    #[serde(default)]
+    lane_embeddings: BTreeMap<String, Vec<f64>>,
+    #[serde(default)]
+    lane_biases: BTreeMap<String, f64>,
+    #[serde(default)]
+    graph_directional_features: BTreeMap<String, BTreeMap<String, f64>>,
 }
 
 impl LaneNeuralPanelForecaster {
@@ -606,6 +859,11 @@ impl LaneNeuralPanelForecaster {
             inner: NeuralPanelForecaster::new(config.base.clone())?,
             config,
             fallback_index: BTreeMap::new(),
+            origin_embeddings: BTreeMap::new(),
+            destination_embeddings: BTreeMap::new(),
+            lane_embeddings: BTreeMap::new(),
+            lane_biases: BTreeMap::new(),
+            graph_directional_features: BTreeMap::new(),
         })
     }
 
@@ -628,6 +886,11 @@ impl LaneNeuralPanelForecaster {
         metadata["lane_config"] = json!({
             "embedding_dim": self.config.embedding_dim,
             "fallback_index": self.fallback_index,
+            "origin_embeddings": self.origin_embeddings,
+            "destination_embeddings": self.destination_embeddings,
+            "lane_embeddings": self.lane_embeddings,
+            "lane_biases": self.lane_biases,
+            "graph_directional_features": self.graph_directional_features,
             "static_covariates": ["origin_embedding", "destination_embedding", "lane_embedding"],
             "graph_features": ["directional_source_target_features"],
         });
@@ -636,6 +899,52 @@ impl LaneNeuralPanelForecaster {
 
     pub fn predict_quantiles_json_string(&self, horizon: usize) -> CoreResult<String> {
         self.inner.predict_quantiles_json_string(horizon)
+    }
+
+    pub fn predict_with_known_future_covariates(
+        &self,
+        horizon: usize,
+        known_future_covariates: &KnownFutureCovariates,
+    ) -> CoreResult<ForecastResult> {
+        if horizon == 0 {
+            return Err(CartoBoostError::InvalidInput(
+                "forecast horizon must be positive".to_string(),
+            ));
+        }
+        let frequency = self.inner.frequency.ok_or_else(|| {
+            CartoBoostError::InvalidInput(
+                "LaneNeuralPanelForecaster must be fit before predict".to_string(),
+            )
+        })?;
+        let tensor = self
+            .inner
+            .predict_tensor_with_known_future_covariates(horizon, known_future_covariates)?;
+        let mut predictions = Vec::new();
+        for (series_id, rows) in tensor {
+            let last_row = self.inner.last_rows.get(&series_id).ok_or_else(|| {
+                CartoBoostError::InvalidInput(format!(
+                    "missing fitted timestamp tail for series '{series_id}'"
+                ))
+            })?;
+            for (idx, quantiles) in rows.iter().enumerate() {
+                let step = idx + 1;
+                let median_idx = self
+                    .config
+                    .base
+                    .quantiles
+                    .iter()
+                    .position(|q| (*q - 0.5).abs() < f64::EPSILON)
+                    .unwrap_or(0);
+                predictions.push(ForecastPrediction {
+                    series_id: series_id.clone(),
+                    timestamp: frequency.advance(last_row.timestamp, step)?,
+                    horizon: step,
+                    model: self.model_name().to_string(),
+                    mean: quantiles[median_idx],
+                });
+            }
+        }
+        ForecastResult::new(predictions)
     }
 
     pub fn predict_tensor_for_lanes(
@@ -680,7 +989,7 @@ impl LaneNeuralPanelForecaster {
                         .map(|rows| rows[step][quantile_idx])
                         .sum::<f64>()
                         / candidate_rows.len() as f64;
-                    averaged.push(value);
+                    averaged.push(value + self.lane_bias(series_id));
                 }
                 rows.push(averaged);
             }
@@ -753,6 +1062,102 @@ impl LaneNeuralPanelForecaster {
         .map_err(CartoBoostError::from)
     }
 
+    fn fit_lane_state(&mut self, frame: &ForecastFrame) {
+        self.origin_embeddings.clear();
+        self.destination_embeddings.clear();
+        self.lane_embeddings.clear();
+        self.lane_biases.clear();
+        self.graph_directional_features.clear();
+        let global_mean = mean(
+            &frame
+                .rows()
+                .iter()
+                .map(|row| row.target)
+                .collect::<Vec<_>>(),
+        );
+        for series_id in frame.series_ids() {
+            let rows = frame.rows_for_series(&series_id);
+            let values = rows.iter().map(|row| row.target).collect::<Vec<_>>();
+            let lane_mean = mean(&values);
+            let lane_bias = (lane_mean - global_mean) / (1.0 + self.config.base.local_l2);
+            self.lane_biases.insert(series_id.clone(), lane_bias * 0.05);
+            let (origin, destination) = split_lane(&series_id);
+            if let Some(origin) = origin {
+                self.origin_embeddings
+                    .entry(origin.to_string())
+                    .or_insert_with(|| {
+                        deterministic_embedding(
+                            origin,
+                            self.config.embedding_dim,
+                            self.config.base.seed,
+                        )
+                    });
+            }
+            if let Some(destination) = destination {
+                self.destination_embeddings
+                    .entry(destination.to_string())
+                    .or_insert_with(|| {
+                        deterministic_embedding(
+                            destination,
+                            self.config.embedding_dim,
+                            self.config.base.seed ^ 0xD057,
+                        )
+                    });
+            }
+            self.lane_embeddings
+                .entry(series_id.clone())
+                .or_insert_with(|| {
+                    deterministic_embedding(
+                        &series_id,
+                        self.config.embedding_dim,
+                        self.config.base.seed ^ 0x1A9E,
+                    )
+                });
+            if let (Some(origin), Some(destination)) = (origin, destination) {
+                self.graph_directional_features.insert(
+                    series_id.clone(),
+                    BTreeMap::from([
+                        ("origin_hash".to_string(), stable_unit_hash(origin)),
+                        (
+                            "destination_hash".to_string(),
+                            stable_unit_hash(destination),
+                        ),
+                        (
+                            "direction_hash_delta".to_string(),
+                            stable_unit_hash(origin) - stable_unit_hash(destination),
+                        ),
+                        ("observed_lane_mean".to_string(), lane_mean),
+                    ]),
+                );
+            }
+        }
+    }
+
+    fn lane_bias(&self, series_id: &str) -> f64 {
+        if let Some(value) = self.lane_biases.get(series_id) {
+            return *value;
+        }
+        let (origin, destination) = split_lane(series_id);
+        let mut values = Vec::new();
+        if let Some(origin) = origin {
+            values.extend(self.lane_biases.iter().filter_map(|(lane, value)| {
+                let (candidate_origin, _) = split_lane(lane);
+                (candidate_origin == Some(origin)).then_some(*value)
+            }));
+        }
+        if let Some(destination) = destination {
+            values.extend(self.lane_biases.iter().filter_map(|(lane, value)| {
+                let (_, candidate_destination) = split_lane(lane);
+                (candidate_destination == Some(destination)).then_some(*value)
+            }));
+        }
+        if values.is_empty() {
+            mean(&self.lane_biases.values().copied().collect::<Vec<_>>())
+        } else {
+            mean(&values)
+        }
+    }
+
     fn fallback_candidates(&self, series_id: &str) -> CoreResult<Vec<String>> {
         let path = Self::fallback_path(series_id);
         for key in path {
@@ -790,11 +1195,18 @@ impl Forecaster for LaneNeuralPanelForecaster {
                 (series_id, path)
             })
             .collect();
+        self.fit_lane_state(frame);
         self.inner.fit(frame)
     }
 
     fn predict(&self, horizon: usize) -> CoreResult<ForecastResult> {
-        self.inner.predict(horizon)
+        let result = self.inner.predict(horizon)?;
+        let mut predictions = result.predictions().to_vec();
+        for prediction in &mut predictions {
+            prediction.model = self.model_name().to_string();
+            prediction.mean += self.lane_bias(&prediction.series_id);
+        }
+        ForecastResult::new(predictions)
     }
 
     fn model_name(&self) -> &'static str {
@@ -1003,6 +1415,437 @@ fn fit_nonstationary_feature_weights(
         .collect()
 }
 
+#[derive(Debug, Clone)]
+struct TrainingExample {
+    input: Vec<f64>,
+    target: Vec<f64>,
+    weight: f64,
+}
+
+impl MlpState {
+    fn initialized(
+        input_width: usize,
+        output_width: usize,
+        hidden_layers: &[usize],
+        seed: u64,
+    ) -> Self {
+        let mut widths = Vec::with_capacity(hidden_layers.len() + 2);
+        widths.push(input_width);
+        widths.extend_from_slice(hidden_layers);
+        widths.push(output_width);
+        let layers = widths
+            .windows(2)
+            .enumerate()
+            .map(|(layer_idx, pair)| {
+                let fan_in = pair[0].max(1) as f64;
+                let scale = (2.0 / fan_in).sqrt();
+                let weights = (0..pair[1])
+                    .map(|out_idx| {
+                        (0..pair[0])
+                            .map(|in_idx| {
+                                deterministic_scalar(
+                                    seed ^ ((layer_idx as u64 + 1) << 32),
+                                    out_idx * pair[0] + in_idx,
+                                    0.071,
+                                ) * scale
+                                    * 100.0
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>();
+                DenseLayer {
+                    weights,
+                    biases: vec![0.0; pair[1]],
+                }
+            })
+            .collect();
+        Self {
+            input_width,
+            output_width,
+            hidden_layers: hidden_layers.to_vec(),
+            layers,
+        }
+    }
+
+    fn forward(&self, input: &[f64]) -> Vec<f64> {
+        let mut activation = padded_input(input, self.input_width);
+        for (layer_idx, layer) in self.layers.iter().enumerate() {
+            let is_last = layer_idx + 1 == self.layers.len();
+            let mut next = Vec::with_capacity(layer.biases.len());
+            for (row, bias) in layer.weights.iter().zip(&layer.biases) {
+                let value = row
+                    .iter()
+                    .zip(&activation)
+                    .map(|(weight, input)| weight * input)
+                    .sum::<f64>()
+                    + bias;
+                next.push(if is_last { value } else { value.max(0.0) });
+            }
+            activation = next;
+        }
+        activation
+    }
+}
+
+fn train_mlp(
+    input_width: usize,
+    output_width: usize,
+    hidden_layers: &[usize],
+    examples: Vec<TrainingExample>,
+    config: &NeuralPanelConfig,
+    seed: u64,
+) -> MlpState {
+    let mut net = MlpState::initialized(input_width, output_width, hidden_layers, seed);
+    if examples.is_empty() || input_width == 0 || output_width == 0 {
+        return net;
+    }
+    let mut m = clone_zero_layers(&net.layers);
+    let mut v = clone_zero_layers(&net.layers);
+    let beta1 = 0.9;
+    let beta2 = 0.999;
+    let eps = 1.0e-8;
+    let mut step = 0.0_f64;
+    for _epoch in 0..config.epochs {
+        for example in &examples {
+            step += 1.0;
+            let (activations, preactivations) = forward_trace(&net, &example.input);
+            let prediction = activations.last().cloned().unwrap_or_default();
+            let mut delta = prediction
+                .iter()
+                .zip(&example.target)
+                .map(|(pred, target)| {
+                    example.weight * loss_gradient(*pred - *target, config.loss)
+                        / output_width.max(1) as f64
+                })
+                .collect::<Vec<_>>();
+            for layer_idx in (0..net.layers.len()).rev() {
+                let previous = &activations[layer_idx];
+                let layer = &mut net.layers[layer_idx];
+                let mut previous_delta = vec![0.0; previous.len()];
+                for (out_idx, delta_value) in
+                    delta.iter().copied().enumerate().take(layer.biases.len())
+                {
+                    for in_idx in 0..layer.weights[out_idx].len() {
+                        let grad = delta_value * previous[in_idx]
+                            + config.weight_decay * layer.weights[out_idx][in_idx];
+                        adamw_update(
+                            &mut layer.weights[out_idx][in_idx],
+                            &mut m[layer_idx].weights[out_idx][in_idx],
+                            &mut v[layer_idx].weights[out_idx][in_idx],
+                            grad,
+                            config.learning_rate,
+                            step,
+                            beta1,
+                            beta2,
+                            eps,
+                        );
+                        previous_delta[in_idx] += delta_value * layer.weights[out_idx][in_idx];
+                    }
+                    adamw_update(
+                        &mut layer.biases[out_idx],
+                        &mut m[layer_idx].biases[out_idx],
+                        &mut v[layer_idx].biases[out_idx],
+                        delta_value,
+                        config.learning_rate,
+                        step,
+                        beta1,
+                        beta2,
+                        eps,
+                    );
+                }
+                if layer_idx > 0 {
+                    delta = previous_delta
+                        .into_iter()
+                        .zip(&preactivations[layer_idx - 1])
+                        .map(|(grad, preactivation)| if *preactivation > 0.0 { grad } else { 0.0 })
+                        .collect();
+                }
+            }
+        }
+    }
+    net
+}
+
+fn ar_training_examples(
+    config: &NeuralPanelConfig,
+    dataset: &NeuralPanelWindowDataset,
+    scaler: &StandardScaler,
+    baseline: impl Fn(&str, usize) -> f64,
+) -> Vec<TrainingExample> {
+    let output_width = config.n_forecasts * config.quantiles.len();
+    let median_idx = median_quantile_index(&config.quantiles);
+    dataset
+        .windows()
+        .iter()
+        .enumerate()
+        .map(|(example_idx, window)| {
+            let input = window
+                .lags
+                .iter()
+                .enumerate()
+                .map(|(idx, value)| scaler.transform(*value) - baseline(&window.series_id, idx))
+                .collect::<Vec<_>>();
+            let mut target = vec![0.0; output_width];
+            for horizon_idx in 0..config.n_forecasts {
+                let offset = config.n_lags + horizon_idx;
+                target[horizon_idx * config.quantiles.len() + median_idx] = scaler
+                    .transform(window.targets[horizon_idx])
+                    - baseline(&window.series_id, offset);
+            }
+            TrainingExample {
+                input,
+                target,
+                weight: recency_weight(example_idx, dataset.windows().len(), config),
+            }
+        })
+        .collect()
+}
+
+fn covar_training_examples(
+    config: &NeuralPanelConfig,
+    dataset: &NeuralPanelWindowDataset,
+    scaler: &StandardScaler,
+    ar_net: &Option<MlpState>,
+    baseline: impl Fn(&str, usize) -> f64,
+) -> Vec<TrainingExample> {
+    let output_width = config.n_forecasts * config.quantiles.len();
+    let median_idx = median_quantile_index(&config.quantiles);
+    dataset
+        .windows()
+        .iter()
+        .enumerate()
+        .map(|(example_idx, window)| {
+            let input = lagged_covariate_input(config, &window.lagged_covariates);
+            let ar_output = ar_net
+                .as_ref()
+                .map(|net| {
+                    let ar_input = window
+                        .lags
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, value)| {
+                            scaler.transform(*value) - baseline(&window.series_id, idx)
+                        })
+                        .collect::<Vec<_>>();
+                    net.forward(&ar_input)
+                })
+                .unwrap_or_else(|| vec![0.0; output_width]);
+            let mut target = vec![0.0; output_width];
+            for horizon_idx in 0..config.n_forecasts {
+                let output_idx = horizon_idx * config.quantiles.len() + median_idx;
+                let offset = config.n_lags + horizon_idx;
+                target[output_idx] = scaler.transform(window.targets[horizon_idx])
+                    - baseline(&window.series_id, offset)
+                    - ar_output.get(output_idx).copied().unwrap_or(0.0);
+            }
+            TrainingExample {
+                input,
+                target,
+                weight: recency_weight(example_idx, dataset.windows().len(), config),
+            }
+        })
+        .collect()
+}
+
+fn fit_local_feature_weights(
+    config: &NeuralPanelConfig,
+    dataset: &NeuralPanelWindowDataset,
+    scaler: &StandardScaler,
+    global_weights: &BTreeMap<String, f64>,
+    baseline: impl Fn(&str, usize) -> f64,
+) -> BTreeMap<String, BTreeMap<String, f64>> {
+    if config.seasonality_global_local == NeuralPanelMode::Global {
+        return BTreeMap::new();
+    }
+    let mut numerators: BTreeMap<String, Vec<f64>> = BTreeMap::new();
+    let mut denominators: BTreeMap<String, Vec<f64>> = BTreeMap::new();
+    for window in dataset.windows() {
+        let numerator = numerators
+            .entry(window.series_id.clone())
+            .or_insert_with(|| vec![0.0; dataset.future_feature_names().len()]);
+        let denominator = denominators
+            .entry(window.series_id.clone())
+            .or_insert_with(|| vec![0.0; dataset.future_feature_names().len()]);
+        for horizon_idx in 0..config.n_forecasts {
+            let offset = config.n_lags + horizon_idx;
+            let Some(features) = window.future_features.get(offset) else {
+                continue;
+            };
+            let target = scaler.transform(window.targets[horizon_idx]);
+            let trend_baseline = baseline(&window.series_id, offset);
+            let global_component = features
+                .iter()
+                .enumerate()
+                .map(|(feature_idx, value)| {
+                    let feature_name = &dataset.future_feature_names()[feature_idx];
+                    let design = match feature_component_mode(config, feature_name) {
+                        ComponentMode::Additive => *value,
+                        ComponentMode::Multiplicative => trend_baseline * *value,
+                    };
+                    design * global_weights.get(feature_name).copied().unwrap_or(0.0)
+                })
+                .sum::<f64>();
+            let residual = target - trend_baseline - global_component;
+            for (feature_idx, value) in features.iter().enumerate() {
+                let feature_name = &dataset.future_feature_names()[feature_idx];
+                let design = match feature_component_mode(config, feature_name) {
+                    ComponentMode::Additive => *value,
+                    ComponentMode::Multiplicative => trend_baseline * *value,
+                };
+                numerator[feature_idx] += design * residual;
+                denominator[feature_idx] += design * design;
+            }
+        }
+    }
+    numerators
+        .into_iter()
+        .map(|(series_id, numerator)| {
+            let denominator = denominators.remove(&series_id).unwrap_or_default();
+            let weights = dataset
+                .future_feature_names()
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, name)| {
+                    let denom =
+                        denominator.get(idx).copied().unwrap_or(0.0) + config.local_l2 + 1.0e-6;
+                    if denom <= 1.0e-6 {
+                        return None;
+                    }
+                    Some((name.clone(), numerator[idx] / denom))
+                })
+                .collect();
+            (series_id, weights)
+        })
+        .collect()
+}
+
+fn lagged_covariate_input(
+    config: &NeuralPanelConfig,
+    covariates: &BTreeMap<String, Vec<f64>>,
+) -> Vec<f64> {
+    let mut input = Vec::new();
+    for (name, lag) in &config.lagged_regressors {
+        let values = covariates.get(name).cloned().unwrap_or_default();
+        let start = values.len().saturating_sub(*lag);
+        input.extend(values[start..].iter().copied());
+    }
+    input
+}
+
+fn add_median_outputs(output: &mut [f64], raw: &[f64], quantiles: &[f64]) {
+    let quantile_count = quantiles.len();
+    let median_idx = median_quantile_index(quantiles);
+    for (horizon_idx, value) in output.iter_mut().enumerate() {
+        *value += raw
+            .get(horizon_idx * quantile_count + median_idx)
+            .copied()
+            .unwrap_or(0.0);
+    }
+}
+
+fn median_quantile_index(quantiles: &[f64]) -> usize {
+    quantiles
+        .iter()
+        .position(|q| (*q - 0.5).abs() < f64::EPSILON)
+        .unwrap_or(0)
+}
+
+fn recency_weight(idx: usize, total: usize, config: &NeuralPanelConfig) -> f64 {
+    if !config.newer_sample_weight || total <= 1 {
+        return 1.0;
+    }
+    let phase = idx as f64 / (total - 1) as f64;
+    0.5 - 0.5 * (std::f64::consts::PI * (1.0 - phase)).cos()
+}
+
+fn loss_gradient(residual: f64, loss: NeuralPanelLoss) -> f64 {
+    match loss {
+        NeuralPanelLoss::SmoothL1 => {
+            if residual.abs() < 1.0 {
+                residual
+            } else {
+                residual.signum()
+            }
+        }
+        NeuralPanelLoss::Mse => 2.0 * residual,
+        NeuralPanelLoss::Mae => residual.signum(),
+        NeuralPanelLoss::Pinball => {
+            if residual >= 0.0 {
+                0.5
+            } else {
+                -0.5
+            }
+        }
+    }
+}
+
+fn padded_input(input: &[f64], width: usize) -> Vec<f64> {
+    let mut values = input.iter().copied().take(width).collect::<Vec<_>>();
+    values.resize(width, 0.0);
+    values
+}
+
+fn forward_trace(net: &MlpState, input: &[f64]) -> (Vec<Vec<f64>>, Vec<Vec<f64>>) {
+    let mut activations = vec![padded_input(input, net.input_width)];
+    let mut preactivations = Vec::new();
+    for (layer_idx, layer) in net.layers.iter().enumerate() {
+        let previous = activations.last().expect("activation");
+        let is_last = layer_idx + 1 == net.layers.len();
+        let preactivation = layer
+            .weights
+            .iter()
+            .zip(&layer.biases)
+            .map(|(row, bias)| {
+                row.iter()
+                    .zip(previous)
+                    .map(|(weight, input)| weight * input)
+                    .sum::<f64>()
+                    + bias
+            })
+            .collect::<Vec<_>>();
+        let activation = preactivation
+            .iter()
+            .map(|value| if is_last { *value } else { value.max(0.0) })
+            .collect::<Vec<_>>();
+        preactivations.push(preactivation);
+        activations.push(activation);
+    }
+    (activations, preactivations)
+}
+
+fn clone_zero_layers(layers: &[DenseLayer]) -> Vec<DenseLayer> {
+    layers
+        .iter()
+        .map(|layer| DenseLayer {
+            weights: layer
+                .weights
+                .iter()
+                .map(|row| vec![0.0; row.len()])
+                .collect(),
+            biases: vec![0.0; layer.biases.len()],
+        })
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn adamw_update(
+    value: &mut f64,
+    m: &mut f64,
+    v: &mut f64,
+    grad: f64,
+    learning_rate: f64,
+    step: f64,
+    beta1: f64,
+    beta2: f64,
+    eps: f64,
+) {
+    *m = beta1 * *m + (1.0 - beta1) * grad;
+    *v = beta2 * *v + (1.0 - beta2) * grad * grad;
+    let m_hat = *m / (1.0 - beta1.powf(step));
+    let v_hat = *v / (1.0 - beta2.powf(step));
+    *value -= learning_rate * m_hat / (v_hat.sqrt() + eps);
+}
+
 fn repaired_quantiles(median: f64, quantiles: &[f64]) -> Vec<f64> {
     let mut values = quantiles
         .iter()
@@ -1085,6 +1928,22 @@ fn deterministic_weights(count: usize, seed: u64, phase: f64) -> Vec<f64> {
 
 fn deterministic_scalar(seed: u64, idx: usize, phase: f64) -> f64 {
     (((seed as f64 + 1.0) * (idx as f64 + 1.0) * phase).sin()) * 0.01
+}
+
+fn deterministic_embedding(key: &str, dim: usize, seed: u64) -> Vec<f64> {
+    let base = key.bytes().fold(seed, |state, byte| {
+        state.wrapping_mul(16777619) ^ byte as u64
+    });
+    (0..dim)
+        .map(|idx| deterministic_scalar(base, idx, 0.037) * 100.0)
+        .collect()
+}
+
+fn stable_unit_hash(key: &str) -> f64 {
+    let hash = key.bytes().fold(1469598103934665603_u64, |state, byte| {
+        (state ^ byte as u64).wrapping_mul(1099511628211)
+    });
+    (hash % 10_000) as f64 / 10_000.0
 }
 
 fn split_lane(series_id: &str) -> (Option<&str>, Option<&str>) {

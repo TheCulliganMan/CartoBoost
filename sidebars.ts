@@ -20,8 +20,12 @@ const sidebars: SidebarsConfig = {
       items: [
         {
           type: 'category',
-          label: 'Tabular Modeling',
+          label: 'Boosting Models',
           items: [
+            'user-guide/boosting-models/index',
+            'user-guide/boosting-models/regressor',
+            'user-guide/boosting-models/classifier',
+            'user-guide/boosting-models/ranker',
             'user-guide/python-estimator',
             'user-guide/classification-quickstart',
             'user-guide/ranking-quickstart',
@@ -58,8 +62,27 @@ const sidebars: SidebarsConfig = {
             'user-guide/forecasting-models/ensembles',
           ],
         },
-        'graph-features',
-        'neural-features',
+        {
+          type: 'category',
+          label: 'Neural Models',
+          items: [
+            'user-guide/neural-models/index',
+            'user-guide/neural-models/standalone-embedding',
+            'user-guide/neural-models/embedding-features',
+            'neural-features',
+          ],
+        },
+        {
+          type: 'category',
+          label: 'Graph Models',
+          items: [
+            'user-guide/graph-models/index',
+            'user-guide/graph-models/standalone-regressors',
+            'user-guide/graph-models/link-predictors',
+            'user-guide/graph-models/feature-workflows',
+            'graph-features',
+          ],
+        },
         'general_utilities',
         'plotting',
         'user-guide/cli',
