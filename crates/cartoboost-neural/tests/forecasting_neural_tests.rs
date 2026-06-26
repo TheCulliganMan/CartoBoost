@@ -264,6 +264,59 @@ fn neural_panel_ar_tail_changes_direct_forecast() {
 }
 
 #[test]
+fn neural_panel_daily_fourier_component_changes_direct_forecast() {
+    let rows = (0..53)
+        .map(|hour| {
+            let phase = std::f64::consts::TAU * (hour % 24) as f64 / 24.0;
+            ForecastRow::from_timestamp_str(
+                "A:B",
+                &synthetic_timestamp(hour),
+                20.0 + 5.0 * phase.sin(),
+            )
+            .expect("row")
+        })
+        .collect::<Vec<_>>();
+    let frame = ForecastFrame::new(rows, ForecastFrequency::Hourly).expect("frame");
+    let base_config = NeuralPanelConfig {
+        n_lags: 4,
+        n_forecasts: 1,
+        trend: forecasting::TrendMode::Off,
+        seed: 17,
+        ..NeuralPanelConfig::default()
+    };
+    let mut without_seasonality =
+        NeuralPanelForecaster::new(base_config.clone()).expect("baseline model");
+    let mut with_seasonality = NeuralPanelForecaster::new(NeuralPanelConfig {
+        daily_fourier_order: 1,
+        ..base_config
+    })
+    .expect("seasonal model");
+
+    without_seasonality.fit(&frame).expect("baseline fit");
+    with_seasonality.fit(&frame).expect("seasonal fit");
+
+    let baseline = without_seasonality
+        .predict(1)
+        .expect("baseline predict")
+        .predictions()[0]
+        .mean;
+    let seasonal = with_seasonality
+        .predict(1)
+        .expect("seasonal predict")
+        .predictions()[0]
+        .mean;
+    let metadata = with_seasonality.metadata();
+
+    assert_ne!(baseline, seasonal);
+    assert!(
+        metadata["component_params"]["nonstationary_feature_weights"]
+            .as_object()
+            .expect("component weights")
+            .contains_key("seasonality:daily:sin:1")
+    );
+}
+
+#[test]
 fn neural_panel_compares_on_synthetic_panel_with_baselines() {
     let (train, expected) = synthetic_seasonal_panel();
     let horizon = 4;

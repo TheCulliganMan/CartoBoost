@@ -96,6 +96,7 @@ name = "cartoboost-neural"
 version = "0.2.26"
 dependencies = [
  "cartoboost-core",
+ "chrono",
  "rayon",
  "serde",
  "serde_json",

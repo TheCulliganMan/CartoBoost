@@ -2,6 +2,7 @@ use cartoboost_core::forecasting::{
     ForecastFrame, ForecastFrequency, ForecastPrediction, ForecastResult, ForecastRow, Forecaster,
 };
 use cartoboost_core::{CartoBoostError, Result as CoreResult};
+use chrono::{Datelike, NaiveDateTime, Timelike};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -183,8 +184,7 @@ impl NeuralPanelWindowDataset {
                 }
                 let future_features = rows[start..target_end]
                     .iter()
-                    .enumerate()
-                    .map(|(offset, row)| build_future_features(row, offset, &future_feature_names))
+                    .map(|row| build_future_features(row, &future_feature_names))
                     .collect::<Result<Vec<_>>>()?;
                 windows.push(NeuralPanelWindow {
                     series_id: series_id.clone(),
@@ -236,6 +236,8 @@ pub struct NeuralPanelForecaster {
     target_tails: BTreeMap<String, Vec<f64>>,
     ar_weights: Vec<f64>,
     covariate_weights: BTreeMap<String, f64>,
+    #[serde(default)]
+    feature_weights: BTreeMap<String, f64>,
     future_regressor_weights: BTreeMap<String, f64>,
     feature_schema: Vec<String>,
     train_cutoff: Option<String>,
@@ -257,6 +259,7 @@ impl NeuralPanelForecaster {
             target_tails: BTreeMap::new(),
             ar_weights: Vec::new(),
             covariate_weights: BTreeMap::new(),
+            feature_weights: BTreeMap::new(),
             future_regressor_weights: BTreeMap::new(),
             feature_schema: Vec::new(),
             train_cutoff: None,
@@ -306,14 +309,19 @@ impl NeuralPanelForecaster {
             let ar_effect = self.autoregressive_effect(series_id, local_level, local_slope);
             let mut rows = Vec::with_capacity(horizon);
             for step in 1..=horizon {
-                let _timestamp = frequency.advance(last_row.timestamp, step)?;
+                let timestamp = frequency.advance(last_row.timestamp, step)?;
+                let (additive, multiplicative) = self.nonstationary_effect(timestamp, None)?;
                 let median_scaled = if self.config.trend == TrendMode::Off {
                     self.global_level + local_level
                 } else {
                     self.global_level
                         + local_level
                         + (self.global_slope + local_slope) * step as f64
-                } + ar_effect / step as f64;
+                };
+                let median_scaled = median_scaled
+                    + additive
+                    + median_scaled * multiplicative
+                    + ar_effect / step as f64;
                 let median = scaler.inverse_transform(median_scaled);
                 rows.push(repaired_quantiles(median, &self.config.quantiles));
             }
@@ -354,6 +362,24 @@ impl NeuralPanelForecaster {
             "series": tensor,
         }))
         .map_err(CartoBoostError::from)
+    }
+
+    fn nonstationary_effect(
+        &self,
+        timestamp: NaiveDateTime,
+        covariates: Option<&BTreeMap<String, f64>>,
+    ) -> CoreResult<(f64, f64)> {
+        let mut additive = 0.0;
+        let mut multiplicative = 0.0;
+        for name in &self.feature_schema {
+            let value = feature_value_for_timestamp(name, timestamp, covariates)?;
+            let weight = self.feature_weights.get(name).copied().unwrap_or(0.0);
+            match feature_component_mode(&self.config, name) {
+                ComponentMode::Additive => additive += value * weight,
+                ComponentMode::Multiplicative => multiplicative += value * weight,
+            }
+        }
+        Ok((additive, multiplicative))
     }
 }
 
@@ -439,6 +465,22 @@ impl Forecaster for NeuralPanelForecaster {
                 )
             })
             .collect();
+        self.feature_weights = fit_nonstationary_feature_weights(
+            &self.config,
+            &dataset,
+            &scaler,
+            |series_id, offset| {
+                let local_level = self.local_levels.get(series_id).copied().unwrap_or(0.0);
+                let local_slope = self.local_slopes.get(series_id).copied().unwrap_or(0.0);
+                if self.config.trend == TrendMode::Off {
+                    self.global_level + local_level
+                } else {
+                    self.global_level
+                        + local_level
+                        + (self.global_slope + local_slope) * offset as f64
+                }
+            },
+        );
         self.future_regressor_weights = self
             .config
             .future_regressors
@@ -513,6 +555,7 @@ impl Forecaster for NeuralPanelForecaster {
                 "target_tails": self.target_tails,
                 "ar_weights": self.ar_weights,
                 "lagged_regressor_weights": self.covariate_weights,
+                "nonstationary_feature_weights": self.feature_weights,
                 "future_regressor_weights": self.future_regressor_weights,
             },
             "quantiles": self.config.quantiles,
@@ -797,8 +840,8 @@ fn future_feature_names(config: &NeuralPanelConfig) -> Vec<String> {
     }
     for (name, (_period, order)) in &config.custom_seasonalities {
         for harmonic in 1..=*order {
-            names.push(format!("seasonality:{name}:sin:{harmonic}"));
-            names.push(format!("seasonality:{name}:cos:{harmonic}"));
+            names.push(format!("seasonality:{name}:sin:{harmonic}:{_period}"));
+            names.push(format!("seasonality:{name}:cos:{harmonic}:{_period}"));
         }
     }
     for (name, offsets) in &config.events {
@@ -810,11 +853,7 @@ fn future_feature_names(config: &NeuralPanelConfig) -> Vec<String> {
     names
 }
 
-fn build_future_features(
-    row: &ForecastRow,
-    offset: usize,
-    feature_names: &[String],
-) -> Result<Vec<f64>> {
+fn build_future_features(row: &ForecastRow, feature_names: &[String]) -> Result<Vec<f64>> {
     feature_names
         .iter()
         .map(|name| {
@@ -822,7 +861,7 @@ fn build_future_features(
                 return Ok(*regressor);
             }
             if name.starts_with("seasonality:") {
-                return Ok(fourier_feature(name, offset as f64));
+                return Ok(fourier_feature(name, row.timestamp));
             }
             if name.starts_with("event:") {
                 return Ok(*row.covariates.get(name).unwrap_or(&0.0));
@@ -841,24 +880,127 @@ fn required_covariate(row: &ForecastRow, name: &str) -> Result<f64> {
     })
 }
 
-fn fourier_feature(name: &str, t: f64) -> f64 {
+fn feature_value_for_timestamp(
+    name: &str,
+    timestamp: NaiveDateTime,
+    covariates: Option<&BTreeMap<String, f64>>,
+) -> CoreResult<f64> {
+    if name.starts_with("seasonality:") {
+        return Ok(fourier_feature(name, timestamp));
+    }
+    if name.starts_with("event:") {
+        return Ok(covariates
+            .and_then(|values| values.get(name))
+            .copied()
+            .unwrap_or(0.0));
+    }
+    covariates
+        .and_then(|values| values.get(name))
+        .copied()
+        .ok_or_else(|| {
+            CartoBoostError::InvalidInput(format!(
+                "future regressor '{name}' requires known future covariates for prediction"
+            ))
+        })
+}
+
+fn fourier_feature(name: &str, timestamp: NaiveDateTime) -> f64 {
     let parts = name.split(':').collect::<Vec<_>>();
-    let period = match parts.get(1).copied().unwrap_or_default() {
-        "daily" => 24.0,
-        "weekly" => 24.0 * 7.0,
-        "yearly" => 365.25 * 24.0,
-        _ => 1.0,
+    let (position, period) = match parts.get(1).copied().unwrap_or_default() {
+        "daily" => (
+            timestamp.hour() as f64
+                + timestamp.minute() as f64 / 60.0
+                + timestamp.second() as f64 / 3600.0,
+            24.0,
+        ),
+        "weekly" => (
+            timestamp.weekday().num_days_from_monday() as f64 * 24.0
+                + timestamp.hour() as f64
+                + timestamp.minute() as f64 / 60.0
+                + timestamp.second() as f64 / 3600.0,
+            24.0 * 7.0,
+        ),
+        "yearly" => (
+            timestamp.ordinal0() as f64 * 24.0
+                + timestamp.hour() as f64
+                + timestamp.minute() as f64 / 60.0
+                + timestamp.second() as f64 / 3600.0,
+            365.25 * 24.0,
+        ),
+        _custom => {
+            let period = parts
+                .get(4)
+                .and_then(|value| value.parse::<f64>().ok())
+                .unwrap_or(1.0);
+            (timestamp.and_utc().timestamp() as f64 / 3600.0, period)
+        }
     };
     let harmonic = parts
         .get(3)
         .and_then(|value| value.parse::<f64>().ok())
         .unwrap_or(1.0);
-    let angle = std::f64::consts::TAU * harmonic * t / period;
+    let angle: f64 = std::f64::consts::TAU * harmonic * position / period;
     if parts.get(2).copied() == Some("cos") {
         angle.cos()
     } else {
         angle.sin()
     }
+}
+
+fn feature_component_mode(config: &NeuralPanelConfig, name: &str) -> ComponentMode {
+    if name.starts_with("seasonality:") {
+        return config.seasonality_mode;
+    }
+    if name.starts_with("event:") {
+        return config.event_mode;
+    }
+    config
+        .future_regressors
+        .get(name)
+        .copied()
+        .unwrap_or(ComponentMode::Additive)
+}
+
+fn fit_nonstationary_feature_weights(
+    config: &NeuralPanelConfig,
+    dataset: &NeuralPanelWindowDataset,
+    scaler: &StandardScaler,
+    baseline: impl Fn(&str, usize) -> f64,
+) -> BTreeMap<String, f64> {
+    let mut numerators = vec![0.0; dataset.future_feature_names().len()];
+    let mut denominators = vec![0.0; dataset.future_feature_names().len()];
+    for window in dataset.windows() {
+        for horizon_idx in 0..config.n_forecasts {
+            let offset = config.n_lags + horizon_idx;
+            let Some(features) = window.future_features.get(offset) else {
+                continue;
+            };
+            let target = scaler.transform(window.targets[horizon_idx]);
+            let trend_baseline = baseline(&window.series_id, offset);
+            let residual = target - trend_baseline;
+            for (feature_idx, value) in features.iter().enumerate() {
+                let feature_name = &dataset.future_feature_names()[feature_idx];
+                let design = match feature_component_mode(config, feature_name) {
+                    ComponentMode::Additive => *value,
+                    ComponentMode::Multiplicative => trend_baseline * *value,
+                };
+                numerators[feature_idx] += design * residual;
+                denominators[feature_idx] += design * design;
+            }
+        }
+    }
+    dataset
+        .future_feature_names()
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, name)| {
+            let denom = denominators[idx] + 1.0e-6;
+            if denom <= 1.0e-6 {
+                return None;
+            }
+            Some((name.clone(), numerators[idx] / denom))
+        })
+        .collect()
 }
 
 fn repaired_quantiles(median: f64, quantiles: &[f64]) -> Vec<f64> {
