@@ -292,6 +292,14 @@ pub struct NeuralPanelForecaster {
     local_levels: BTreeMap<String, f64>,
     local_slopes: BTreeMap<String, f64>,
     #[serde(default)]
+    series_lengths: BTreeMap<String, usize>,
+    #[serde(default)]
+    trend_changepoints: Vec<f64>,
+    #[serde(default)]
+    global_trend_coefficients: Vec<f64>,
+    #[serde(default)]
+    local_trend_coefficients: BTreeMap<String, Vec<f64>>,
+    #[serde(default)]
     target_tails: BTreeMap<String, Vec<f64>>,
     #[serde(default)]
     lagged_covariate_tails: BTreeMap<String, BTreeMap<String, Vec<f64>>>,
@@ -329,6 +337,10 @@ impl NeuralPanelForecaster {
             global_slope: 0.0,
             local_levels: BTreeMap::new(),
             local_slopes: BTreeMap::new(),
+            series_lengths: BTreeMap::new(),
+            trend_changepoints: Vec::new(),
+            global_trend_coefficients: Vec::new(),
+            local_trend_coefficients: BTreeMap::new(),
             target_tails: BTreeMap::new(),
             lagged_covariate_tails: BTreeMap::new(),
             ar_weights: Vec::new(),
@@ -400,10 +412,7 @@ impl NeuralPanelForecaster {
                     "missing fitted timestamp tail for series '{series_id}'"
                 ))
             })?;
-            let local_level = self.local_levels.get(series_id).copied().unwrap_or(0.0);
-            let local_slope = self.local_slopes.get(series_id).copied().unwrap_or(0.0);
-            let stationary_effects =
-                self.stationary_network_effects(series_id, local_level, local_slope);
+            let stationary_effects = self.stationary_network_effects(series_id);
             let mut rows = Vec::with_capacity(horizon);
             for step in 1..=horizon {
                 let timestamp = frequency.advance(last_row.timestamp, step)?;
@@ -411,13 +420,7 @@ impl NeuralPanelForecaster {
                     .and_then(|values| values.get(&(series_id.clone(), timestamp)));
                 let (additive, multiplicative) =
                     self.nonstationary_effect(series_id, timestamp, covariates)?;
-                let median_scaled = if self.config.trend == TrendMode::Off {
-                    self.global_level + local_level
-                } else {
-                    self.global_level
-                        + local_level
-                        + (self.global_slope + local_slope) * step as f64
-                };
+                let median_scaled = self.trend_baseline(series_id, step);
                 let median_scaled = median_scaled
                     + additive
                     + median_scaled * multiplicative
@@ -484,12 +487,7 @@ impl NeuralPanelForecaster {
         ForecastResult::new(predictions)
     }
 
-    fn stationary_network_effects(
-        &self,
-        series_id: &str,
-        local_level: f64,
-        local_slope: f64,
-    ) -> Vec<f64> {
+    fn stationary_network_effects(&self, series_id: &str) -> Vec<f64> {
         let mut output = vec![0.0; self.config.n_forecasts];
         if let (Some(net), Some(tail)) = (&self.ar_net, self.target_tails.get(series_id)) {
             let start_index = tail.len().saturating_sub(self.config.n_lags);
@@ -497,13 +495,7 @@ impl NeuralPanelForecaster {
                 .iter()
                 .enumerate()
                 .map(|(idx, value)| {
-                    let baseline = if self.config.trend == TrendMode::Off {
-                        self.global_level + local_level
-                    } else {
-                        self.global_level
-                            + local_level
-                            + (self.global_slope + local_slope) * (idx + start_index + 1) as f64
-                    };
+                    let baseline = self.trend_baseline(series_id, idx + start_index + 1);
                     value - baseline
                 })
                 .collect::<Vec<_>>();
@@ -567,16 +559,6 @@ impl NeuralPanelForecaster {
         let mut residuals = Vec::new();
         let output_width = self.config.n_forecasts * self.config.quantiles.len();
         for window in dataset.windows() {
-            let local_level = self
-                .local_levels
-                .get(&window.series_id)
-                .copied()
-                .unwrap_or(0.0);
-            let local_slope = self
-                .local_slopes
-                .get(&window.series_id)
-                .copied()
-                .unwrap_or(0.0);
             let ar_output = self
                 .ar_net
                 .as_ref()
@@ -586,7 +568,7 @@ impl NeuralPanelForecaster {
                         .iter()
                         .enumerate()
                         .map(|(idx, value)| {
-                            let baseline = self.trend_baseline(local_level, local_slope, idx);
+                            let baseline = self.trend_baseline(&window.series_id, idx);
                             scaler.transform(*value) - baseline
                         })
                         .collect::<Vec<_>>();
@@ -605,7 +587,7 @@ impl NeuralPanelForecaster {
                 .unwrap_or_else(|| vec![0.0; output_width]);
             for horizon_idx in 0..self.config.n_forecasts {
                 let offset = self.config.n_lags + horizon_idx;
-                let mut median_scaled = self.trend_baseline(local_level, local_slope, offset);
+                let mut median_scaled = self.trend_baseline(&window.series_id, offset);
                 let (additive, multiplicative) = self.fitted_feature_effects(
                     &window.series_id,
                     median_scaled,
@@ -623,12 +605,50 @@ impl NeuralPanelForecaster {
         learned_quantile_diffs(&quantile_output_order(&self.config.quantiles), residuals)
     }
 
-    fn trend_baseline(&self, local_level: f64, local_slope: f64, offset: usize) -> f64 {
+    fn trend_baseline(&self, series_id: &str, offset: usize) -> f64 {
         if self.config.trend == TrendMode::Off {
-            self.global_level + local_level
-        } else {
-            self.global_level + local_level + (self.global_slope + local_slope) * offset as f64
+            let mut value = self
+                .global_trend_coefficients
+                .first()
+                .copied()
+                .unwrap_or(self.global_level);
+            if self.config.trend_mode != NeuralPanelMode::Global {
+                value += self
+                    .local_trend_coefficients
+                    .get(series_id)
+                    .and_then(|coefficients| coefficients.first().copied())
+                    .unwrap_or(0.0);
+            }
+            return value;
         }
+        let coeffs = self
+            .local_trend_coefficients
+            .get(series_id)
+            .filter(|coefficients| !coefficients.is_empty())
+            .map(|coefficients| {
+                let mut combined = self.global_trend_coefficients.clone();
+                if combined.len() < coefficients.len() {
+                    combined.resize(coefficients.len(), 0.0);
+                }
+                for (idx, value) in coefficients.iter().enumerate() {
+                    combined[idx] += *value;
+                }
+                combined
+            })
+            .unwrap_or_else(|| self.global_trend_coefficients.clone());
+        let position = self.series_position(series_id, offset);
+        let basis = trend_basis(position, &self.trend_changepoints);
+        dot(&coeffs, &basis)
+    }
+
+    fn series_position(&self, series_id: &str, offset: usize) -> f64 {
+        let series_length = self
+            .series_lengths
+            .get(series_id)
+            .copied()
+            .unwrap_or(1)
+            .max(1);
+        series_position_from_length(offset, series_length)
     }
 
     fn fitted_feature_effects(
@@ -684,10 +704,41 @@ impl Forecaster for NeuralPanelForecaster {
         self.global_level = mean(&scaled_targets);
         self.global_slope = global_slope(frame, &scaler);
         self.series_ids = dataset.series_ids().to_vec();
+        self.series_lengths = self
+            .series_ids
+            .iter()
+            .map(|series_id| {
+                (
+                    series_id.clone(),
+                    frame.rows_for_series(series_id).len().max(1),
+                )
+            })
+            .collect();
         self.feature_schema = dataset.future_feature_names().to_vec();
         self.frequency = Some(frame.frequency());
         self.scaler = Some(scaler);
         self.static_future_covariates = collect_static_future_covariates(frame, &self.config);
+        self.trend_changepoints =
+            trend_changepoints(self.config.n_changepoints, self.config.changepoints_range);
+        let (global_trend_coefficients, local_trend_coefficients) = fit_piecewise_trend(
+            frame,
+            &scaler,
+            &self.series_lengths,
+            &self.trend_changepoints,
+            &self.config,
+        );
+        self.global_trend_coefficients = global_trend_coefficients;
+        self.local_trend_coefficients = local_trend_coefficients;
+        self.global_level = self
+            .global_trend_coefficients
+            .first()
+            .copied()
+            .unwrap_or(self.global_level);
+        self.global_slope = self
+            .global_trend_coefficients
+            .get(1)
+            .copied()
+            .unwrap_or(self.global_slope);
         self.target_tails = dataset
             .tails()
             .iter()
@@ -742,18 +793,19 @@ impl Forecaster for NeuralPanelForecaster {
         self.local_slopes.clear();
         if self.config.trend_mode != NeuralPanelMode::Global {
             for series_id in &self.series_ids {
-                let rows = frame.rows_for_series(series_id);
-                let scaled = rows
-                    .iter()
-                    .map(|row| self.scaler.expect("scaler").transform(row.target))
-                    .collect::<Vec<_>>();
-                let local_mean = mean(&scaled) - self.global_level;
-                let local_slope = slope_for_values(&scaled) - self.global_slope;
-                let shrink = 1.0 / (1.0 + self.config.local_l2);
-                self.local_levels
-                    .insert(series_id.clone(), local_mean * shrink);
-                self.local_slopes
-                    .insert(series_id.clone(), local_slope * shrink);
+                let coefficients = self
+                    .local_trend_coefficients
+                    .get(series_id)
+                    .cloned()
+                    .unwrap_or_default();
+                self.local_levels.insert(
+                    series_id.clone(),
+                    coefficients.first().copied().unwrap_or(0.0),
+                );
+                self.local_slopes.insert(
+                    series_id.clone(),
+                    coefficients.get(1).copied().unwrap_or(0.0),
+                );
             }
         }
         self.ar_weights = deterministic_weights(self.config.n_lags, self.config.seed, 0.013);
@@ -773,34 +825,14 @@ impl Forecaster for NeuralPanelForecaster {
             &self.config,
             &dataset,
             &scaler,
-            |series_id, offset| {
-                let local_level = self.local_levels.get(series_id).copied().unwrap_or(0.0);
-                let local_slope = self.local_slopes.get(series_id).copied().unwrap_or(0.0);
-                if self.config.trend == TrendMode::Off {
-                    self.global_level + local_level
-                } else {
-                    self.global_level
-                        + local_level
-                        + (self.global_slope + local_slope) * offset as f64
-                }
-            },
+            |series_id, offset| self.trend_baseline(series_id, offset),
         );
         self.local_feature_weights = fit_local_feature_weights(
             &self.config,
             &dataset,
             &scaler,
             &self.feature_weights,
-            |series_id, offset| {
-                let local_level = self.local_levels.get(series_id).copied().unwrap_or(0.0);
-                let local_slope = self.local_slopes.get(series_id).copied().unwrap_or(0.0);
-                if self.config.trend == TrendMode::Off {
-                    self.global_level + local_level
-                } else {
-                    self.global_level
-                        + local_level
-                        + (self.global_slope + local_slope) * offset as f64
-                }
-            },
+            |series_id, offset| self.trend_baseline(series_id, offset),
         );
         let output_width = self.config.n_forecasts * self.config.quantiles.len();
         self.ar_net = if self.config.n_lags > 0 {
@@ -809,15 +841,7 @@ impl Forecaster for NeuralPanelForecaster {
                 output_width,
                 &self.config.ar_layers,
                 ar_training_examples(&self.config, &dataset, &scaler, |series_id, offset| {
-                    let local_level = self.local_levels.get(series_id).copied().unwrap_or(0.0);
-                    let local_slope = self.local_slopes.get(series_id).copied().unwrap_or(0.0);
-                    if self.config.trend == TrendMode::Off {
-                        self.global_level + local_level
-                    } else {
-                        self.global_level
-                            + local_level
-                            + (self.global_slope + local_slope) * offset as f64
-                    }
+                    self.trend_baseline(series_id, offset)
                 }),
                 &self.config,
                 self.config.seed ^ 0xA71,
@@ -836,17 +860,7 @@ impl Forecaster for NeuralPanelForecaster {
                     &dataset,
                     &scaler,
                     &self.ar_net,
-                    |series_id, offset| {
-                        let local_level = self.local_levels.get(series_id).copied().unwrap_or(0.0);
-                        let local_slope = self.local_slopes.get(series_id).copied().unwrap_or(0.0);
-                        if self.config.trend == TrendMode::Off {
-                            self.global_level + local_level
-                        } else {
-                            self.global_level
-                                + local_level
-                                + (self.global_slope + local_slope) * offset as f64
-                        }
-                    },
+                    |series_id, offset| self.trend_baseline(series_id, offset),
                 ),
                 &self.config,
                 self.config.seed ^ 0xC09A,
@@ -927,6 +941,10 @@ impl Forecaster for NeuralPanelForecaster {
                 "global_slope": self.global_slope,
                 "local_levels": self.local_levels,
                 "local_slopes": self.local_slopes,
+                "series_lengths": self.series_lengths,
+                "trend_changepoints": self.trend_changepoints,
+                "global_trend_coefficients": self.global_trend_coefficients,
+                "local_trend_coefficients": self.local_trend_coefficients,
                 "target_tails": self.target_tails,
                 "ar_weights": self.ar_weights,
                 "lagged_regressor_weights": self.covariate_weights,
@@ -1554,6 +1572,169 @@ fn collect_static_future_covariates(
         }
     }
     by_series
+}
+
+fn fit_piecewise_trend(
+    frame: &ForecastFrame,
+    scaler: &StandardScaler,
+    series_lengths: &BTreeMap<String, usize>,
+    changepoints: &[f64],
+    config: &NeuralPanelConfig,
+) -> (Vec<f64>, BTreeMap<String, Vec<f64>>) {
+    let basis_width = 2 + changepoints.len();
+    let mut global_features = Vec::new();
+    let mut global_targets = Vec::new();
+    let mut global_weights = Vec::new();
+    for series_id in frame.series_ids() {
+        let rows = frame.rows_for_series(&series_id);
+        let series_len = series_lengths
+            .get(&series_id)
+            .copied()
+            .unwrap_or(rows.len())
+            .max(1);
+        for (idx, row) in rows.iter().enumerate() {
+            let position = series_position_from_length(idx, series_len);
+            global_features.push(trend_basis(position, changepoints));
+            global_targets.push(scaler.transform(row.target));
+            global_weights.push(recency_weight(idx, rows.len(), config));
+        }
+    }
+    let mut global_trend_coefficients =
+        ridge_fit(&global_features, &global_targets, &global_weights, 1.0e-6);
+    if global_trend_coefficients.len() != basis_width {
+        global_trend_coefficients.resize(basis_width, 0.0);
+    }
+    let mut local_trend_coefficients = BTreeMap::new();
+    if config.trend_mode != NeuralPanelMode::Global {
+        for series_id in frame.series_ids() {
+            let rows = frame.rows_for_series(&series_id);
+            let series_len = series_lengths
+                .get(&series_id)
+                .copied()
+                .unwrap_or(rows.len())
+                .max(1);
+            let mut local_features = Vec::new();
+            let mut local_targets = Vec::new();
+            let mut local_weights = Vec::new();
+            for (idx, row) in rows.iter().enumerate() {
+                let position = series_position_from_length(idx, series_len);
+                let basis = trend_basis(position, changepoints);
+                local_features.push(basis.clone());
+                local_targets
+                    .push(scaler.transform(row.target) - dot(&global_trend_coefficients, &basis));
+                local_weights.push(recency_weight(idx, rows.len(), config));
+            }
+            let coefficients = ridge_fit(
+                &local_features,
+                &local_targets,
+                &local_weights,
+                config.local_l2.max(1.0e-6),
+            );
+            if coefficients.iter().any(|value| value.abs() > 0.0) {
+                local_trend_coefficients.insert(series_id, coefficients);
+            }
+        }
+    }
+    (global_trend_coefficients, local_trend_coefficients)
+}
+
+fn trend_changepoints(n_changepoints: usize, changepoints_range: f64) -> Vec<f64> {
+    if n_changepoints == 0 {
+        return Vec::new();
+    }
+    let range = changepoints_range.clamp(0.0, 1.0);
+    (0..n_changepoints)
+        .map(|idx| range * (idx as f64 + 1.0) / (n_changepoints as f64 + 1.0))
+        .collect()
+}
+
+fn trend_basis(position: f64, changepoints: &[f64]) -> Vec<f64> {
+    let mut basis = vec![1.0, position];
+    basis.extend(
+        changepoints
+            .iter()
+            .map(|changepoint| (position - changepoint).max(0.0)),
+    );
+    basis
+}
+
+fn series_position_from_length(index: usize, series_length: usize) -> f64 {
+    if series_length <= 1 {
+        0.0
+    } else {
+        index as f64 / (series_length - 1) as f64
+    }
+}
+
+#[allow(clippy::needless_range_loop)]
+fn ridge_fit(features: &[Vec<f64>], targets: &[f64], weights: &[f64], ridge: f64) -> Vec<f64> {
+    if features.is_empty() {
+        return Vec::new();
+    }
+    let width = features[0].len();
+    let mut xtwx = vec![vec![0.0; width]; width];
+    let mut xtwy = vec![0.0; width];
+    for ((row, target), weight) in features.iter().zip(targets).zip(weights) {
+        let w = (*weight).max(0.0);
+        for i in 0..width {
+            xtwy[i] += w * row[i] * target;
+            for j in i..width {
+                xtwx[i][j] += w * row[i] * row[j];
+            }
+        }
+    }
+    for i in 0..width {
+        xtwx[i][i] += ridge;
+        for j in 0..i {
+            xtwx[i][j] = xtwx[j][i];
+        }
+    }
+    solve_linear_system(xtwx, xtwy).unwrap_or_else(|| vec![0.0; width])
+}
+
+#[allow(clippy::needless_range_loop)]
+fn solve_linear_system(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Option<Vec<f64>> {
+    let n = b.len();
+    for i in 0..n {
+        let pivot = (i..n)
+            .max_by(|&left, &right| {
+                a[left][i]
+                    .abs()
+                    .partial_cmp(&a[right][i].abs())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .unwrap_or(i);
+        if a[pivot][i].abs() < 1.0e-12 {
+            return None;
+        }
+        if pivot != i {
+            a.swap(i, pivot);
+            b.swap(i, pivot);
+        }
+        let pivot_value = a[i][i];
+        for j in i..n {
+            a[i][j] /= pivot_value;
+        }
+        b[i] /= pivot_value;
+        for row in 0..n {
+            if row == i {
+                continue;
+            }
+            let factor = a[row][i];
+            if factor.abs() < 1.0e-12 {
+                continue;
+            }
+            for col in i..n {
+                a[row][col] -= factor * a[i][col];
+            }
+            b[row] -= factor * b[i];
+        }
+    }
+    Some(b)
+}
+
+fn dot(left: &[f64], right: &[f64]) -> f64 {
+    left.iter().zip(right).map(|(a, b)| a * b).sum()
 }
 
 fn required_covariate(row: &ForecastRow, name: &str) -> Result<f64> {
