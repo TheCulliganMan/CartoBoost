@@ -201,6 +201,18 @@ internally, repairs non-crossing quantiles on prediction, and records
 normalization, component parameters, series ids, feature schema, lag config,
 seed, and train cutoff in metadata. Do not use it for quality claims without a
 real rolling-origin benchmark against seasonal naive and `CartoBoostLagForecaster`.
+The maintained benchmark entry point can emit a NeuralPairwise split artifact:
+
+```sh
+uv run --group dev python scripts/forecasting_library_benchmark.py \
+  --source polars \
+  --model-roster neural-pairwise \
+  --neural-pairwise-splits \
+  --output target/neural_pairwise_taxi_lane_split_suite.json
+```
+
+That artifact records rolling-origin, cold-lane, cold-origin, and sparse-tail
+splits with metrics, timing, command metadata, and artifact paths.
 
 ## Advanced Behavior
 

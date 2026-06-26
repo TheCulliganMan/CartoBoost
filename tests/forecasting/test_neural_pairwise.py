@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 from cartoboost.forecasting import LaneNeuralPairwiseForecaster, NeuralPairwiseForecaster
 
 
@@ -41,3 +47,58 @@ def test_lane_neural_pairwise_wrapper_passes_embedding_dim(install_fake_native):
     assert params["n_lags"] == 12
     assert params["n_forecasts"] == 3
     assert params["embedding_dim"] == 4
+
+
+def test_neural_pairwise_benchmark_split_suite_records_required_artifact(tmp_path: Path):
+    repo = Path(__file__).resolve().parents[2]
+    output = tmp_path / "neural_pairwise_split_suite.json"
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(repo / "scripts" / "forecasting_library_benchmark.py"),
+            "--source",
+            "polars",
+            "--model-roster",
+            "neural-pairwise",
+            "--neural-pairwise-splits",
+            "--lanes",
+            "8",
+            "--days",
+            "64",
+            "--horizon",
+            "3",
+            "--suite-folds",
+            "1",
+            "--cartoboost-n-estimators",
+            "5",
+            "--cartoboost-max-depth",
+            "2",
+            "--cartoboost-min-samples-leaf",
+            "2",
+            "--output",
+            str(output),
+        ],
+        cwd=repo,
+        env={
+            **os.environ,
+            "PYTHONPATH": os.pathsep.join([str(repo / "python"), os.environ.get("PYTHONPATH", "")]),
+        },
+        check=True,
+    )
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["benchmark"] == "neural_pairwise_taxi_lane_split_suite"
+    assert payload["invocation"]["command"]
+    assert payload["artifact_paths"]["json"] == str(output)
+    assert set(payload["splits"]) == {
+        "rolling_origin",
+        "cold_lane",
+        "cold_origin",
+        "sparse_tail",
+    }
+    for split in payload["splits"].values():
+        assert split["metrics"]["cartoboost_neural_pairwise"]["rmse"] >= 0.0
+        assert split["metrics"]["cartoboost_lag"]["rmse"] >= 0.0
+        assert split["metrics"]["seasonal_naive"]["rmse"] >= 0.0
+    assert "splits" in payload["timing"]

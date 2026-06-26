@@ -183,6 +183,26 @@ const response = await runForecast({
 });
 ```
 
+Four-split benchmark smoke:
+
+```bash
+uv run --group dev python scripts/forecasting_library_benchmark.py \
+  --source polars \
+  --model-roster neural-pairwise \
+  --neural-pairwise-splits \
+  --lanes 36 \
+  --days 180 \
+  --horizon 14 \
+  --suite-folds 1 \
+  --output target/neural_pairwise_taxi_lane_split_suite.json
+```
+
+The artifact records rolling-origin, cold-lane, cold-origin, and sparse-tail
+split definitions, per-model RMSE/MAE/WAPE metrics, timing, the exact command,
+and the JSON artifact path. Cold identity splits expand forecasts by exact lane,
+then origin, destination, and global horizon means so the fallback behavior is
+visible in the split metadata.
+
 Use [Spatial Piecewise Kriging](spatial-piecewise-kriging.md) when that piecewise seasonal CartoBoost
 base should borrow spatial signal across stable taxi coordinates. Configure
 `mode="residual_kriging"` to fit the temporal base, compute in-sample

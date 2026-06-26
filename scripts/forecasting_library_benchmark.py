@@ -37,6 +37,7 @@ except ImportError:  # pragma: no cover - exercised on Windows CI.
 from cartoboost import __version__, _native
 from cartoboost.forecasting.global_models import CartoBoostLagForecaster
 from cartoboost.forecasting.local import AutoStatsBank, PiecewiseLinearSeasonalForecaster
+from cartoboost.forecasting.neural import LaneNeuralPairwiseForecaster
 from cartoboost.forecasting.schema import ForecastFrame
 from cartoboost.metrics import m_competition_metrics
 from cartoboost.metrics.rank_portfolio import (
@@ -116,6 +117,8 @@ CARTOBOOST_BENCHMARK_MODELS = [
     "cartoboost_lag",
     "cartoboost_auto_forecast",
 ]
+SEASONAL_NAIVE_BENCHMARK_MODEL = "seasonal_naive"
+NEURAL_PAIRWISE_BENCHMARK_MODEL = "cartoboost_neural_pairwise"
 PIECEWISE_LINEAR_BENCHMARK_MODEL = "cartoboost_piecewise_linear_seasonal"
 FORECASTING_LIBRARY_MODELS = {
     "functime": FUNCTIME_MODELS,
@@ -124,7 +127,9 @@ FORECASTING_LIBRARY_MODELS = {
     "external_trees": EXTERNAL_TREE_MODELS,
 }
 MODEL_LIBRARIES = {
+    SEASONAL_NAIVE_BENCHMARK_MODEL: "baseline",
     **{model: "cartoboost" for model in CARTOBOOST_BENCHMARK_MODELS},
+    NEURAL_PAIRWISE_BENCHMARK_MODEL: "cartoboost",
     PIECEWISE_LINEAR_BENCHMARK_MODEL: "cartoboost",
     **{model: "functime" for model in FUNCTIME_MODELS},
     **{model: "statsforecast" for model in STATSFORECAST_MODELS},
@@ -331,13 +336,30 @@ def main() -> int:
     )
     parser.add_argument(
         "--model-roster",
-        choices=["full", "scalable", "cartoboost", "piecewise", "prophet-comparison"],
+        choices=[
+            "full",
+            "scalable",
+            "cartoboost",
+            "piecewise",
+            "prophet-comparison",
+            "neural-pairwise",
+        ],
         default="full",
         help=(
             "Forecast model roster. Use scalable for full M5-style panels where "
             "per-series Prophet/StatsForecast models are impractical. Use piecewise "
             "for only the native piecewise-linear model, or prophet-comparison for "
-            "the native piecewise-linear model and Prophet only."
+            "the native piecewise-linear model and Prophet only. Use neural-pairwise "
+            "for seasonal naive, CartoBoost lag, and the Rust-native lane neural model."
+        ),
+    )
+    parser.add_argument(
+        "--neural-pairwise-splits",
+        action="store_true",
+        help=(
+            "Run the NeuralPairwise taxi-lane split suite: rolling-origin, cold-lane, "
+            "cold-origin, and sparse-tail. Writes split metrics, timing, command, and "
+            "artifact path metadata to --output."
         ),
     )
     parser.add_argument(
@@ -370,7 +392,8 @@ def main() -> int:
     args = parser.parse_args()
     normalize_competition_source(args)
     validate_args(args)
-    ensure_prophet_class()
+    if "prophet" in forecasting_library_models_for_roster(args.model_roster):
+        ensure_prophet_class()
 
     cartoboost_config = {
         "n_estimators": args.cartoboost_n_estimators,
@@ -396,6 +419,16 @@ def main() -> int:
     dataset["dataset_hash"] = canonical_dataset_hash(table)
     dataset_source_hashes = source_file_hashes(dataset)
     load_seconds = perf_counter() - load_start
+    if args.neural_pairwise_splits:
+        return run_neural_pairwise_split_suite(
+            args,
+            table=table,
+            dataset=dataset,
+            source_file_hashes=dataset_source_hashes,
+            load_seconds=load_seconds,
+            cartoboost_config=cartoboost_config,
+            benchmark_start=benchmark_start,
+        )
     benchmark_horizon = int(dataset.get("horizon", args.horizon))
     season_length = int(dataset.get("season_length", 7))
     metrics, quality, timing, scored = score_models(
@@ -678,6 +711,12 @@ def benchmark_model_names(roster: str) -> list[str]:
         return [PIECEWISE_LINEAR_BENCHMARK_MODEL]
     if roster == "prophet-comparison":
         return [PIECEWISE_LINEAR_BENCHMARK_MODEL, "prophet_additive"]
+    if roster == "neural-pairwise":
+        return [
+            SEASONAL_NAIVE_BENCHMARK_MODEL,
+            "cartoboost_lag",
+            NEURAL_PAIRWISE_BENCHMARK_MODEL,
+        ]
     if roster == "scalable":
         return [
             "cartoboost_lag",
@@ -688,7 +727,7 @@ def benchmark_model_names(roster: str) -> list[str]:
 
 
 def forecasting_library_models_for_roster(roster: str) -> dict[str, list[str]]:
-    if roster in {"cartoboost", "piecewise"}:
+    if roster in {"cartoboost", "piecewise", "neural-pairwise"}:
         return {}
     if roster == "prophet-comparison":
         return {"prophet": PROPHET_MODELS}
@@ -2267,6 +2306,302 @@ def score_rolling_origin_problem(
     return split_results, aggregate_metrics, quality_summary(aggregate_metrics), timing, scored
 
 
+def run_neural_pairwise_split_suite(
+    args: argparse.Namespace,
+    *,
+    table: Any,
+    dataset: dict[str, Any],
+    source_file_hashes: dict[str, str],
+    load_seconds: float,
+    cartoboost_config: dict[str, Any],
+    benchmark_start: float,
+) -> int:
+    horizon = int(dataset.get("horizon", args.horizon))
+    season_length = int(dataset.get("season_length", 7))
+    model_names = benchmark_model_names("neural-pairwise")
+    split_results: dict[str, Any] = {}
+    scored_frames = []
+    timing: dict[str, Any] = {"load_seconds": load_seconds, "splits": {}}
+    for split_name, split in neural_pairwise_split_frames(
+        table,
+        horizon=horizon,
+        folds=max(1, args.suite_folds),
+    ).items():
+        split_start = perf_counter()
+        metrics, quality, split_timing, scored = score_neural_pairwise_split(
+            split["train"],
+            split["test"],
+            horizon=horizon,
+            season_length=season_length,
+            cartoboost_config=cartoboost_config,
+            model_names=model_names,
+            fallback=split["fallback"],
+        )
+        split_results[split_name] = {
+            "split_type": split["split_type"],
+            "cutoff": str(split["cutoff"]),
+            "train_rows": int(split["train"].height),
+            "test_rows": int(split["test"].height),
+            "heldout_lanes": split["heldout_lanes"],
+            "heldout_origins": split["heldout_origins"],
+            "sparse_tail_lanes": split["sparse_tail_lanes"],
+            "fallback": split["fallback"],
+            "metrics": metrics,
+            "quality": quality,
+        }
+        timing["splits"][split_name] = {
+            **split_timing,
+            "split_total_seconds": perf_counter() - split_start,
+        }
+        scored_frames.append(scored.with_columns(require_polars().lit(split_name).alias("split")))
+    aggregate_metrics = aggregate_split_metrics(split_results)
+    payload = {
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "cartoboost_version": __version__,
+        "git_commit": read_git_commit(),
+        "invocation": invocation_metadata(),
+        "requested_source": getattr(args, "requested_source", args.source),
+        "dataset_hash": dataset["dataset_hash"],
+        "source_file_hashes": source_file_hashes,
+        "benchmark_integrity": {
+            **benchmark_integrity(args),
+            "candidate_selection": False,
+        },
+        "benchmark": "neural_pairwise_taxi_lane_split_suite",
+        "fixture_source": args.source,
+        "dataset": {
+            **dataset,
+            "split_families": [
+                "rolling_origin",
+                "cold_lane",
+                "cold_origin",
+                "sparse_tail",
+            ],
+            "split_type": "rolling_origin_cold_lane_cold_origin_sparse_tail",
+        },
+        "models": model_names,
+        "model_roster": "neural-pairwise",
+        "model_libraries": MODEL_LIBRARIES,
+        "model_settings": cartoboost_model_settings(cartoboost_config),
+        "splits": split_results,
+        "metrics": aggregate_metrics,
+        "quality": quality_summary(aggregate_metrics, model_names=model_names),
+        "timing": {
+            "total_seconds": perf_counter() - benchmark_start,
+            **timing,
+        },
+        "resource_usage": resource_usage_snapshot(),
+        "artifact_paths": {
+            "json": str(Path(args.output)),
+        },
+    }
+    output = Path(args.output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(
+        json.dumps(
+            {"quality": payload["quality"], "artifact_paths": payload["artifact_paths"]},
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def neural_pairwise_split_frames(table: Any, *, horizon: int, folds: int) -> dict[str, Any]:
+    pl = require_polars()
+    cutoffs = rolling_origin_cutoffs(table, horizon=horizon, folds=folds)
+    cutoff = cutoffs[-1]
+    train, test, cutoff = train_test_split_for_cutoff(table, horizon=horizon, cutoff=cutoff)
+    lanes = table.select(pl.col("lane_id").unique().sort()).to_series().to_list()
+    cold_lane_count = max(1, len(lanes) // 5)
+    cold_lanes = set(lanes[-cold_lane_count:])
+    origins = sorted({split_lane_id(str(lane))[0] for lane in lanes})
+    cold_origin_count = max(1, len(origins) // 5)
+    cold_origins = set(origins[-cold_origin_count:])
+    sparse_tail_lanes = set(lanes[-cold_lane_count:])
+    sparse_train = sparsify_tail_history(
+        train,
+        sparse_tail_lanes=sparse_tail_lanes,
+        min_history=max(horizon + 2, 8),
+    )
+    validation_timestamps = test.select(pl.col("date").unique().sort()).to_series().to_list()
+    return {
+        "rolling_origin": {
+            "split_type": "rolling_origin",
+            "cutoff": cutoff,
+            "train": train,
+            "test": test,
+            "heldout_lanes": [],
+            "heldout_origins": [],
+            "sparse_tail_lanes": [],
+            "fallback": "none",
+        },
+        "cold_lane": {
+            "split_type": "cold_lane",
+            "cutoff": cutoff,
+            "train": train.filter(~pl.col("lane_id").is_in(cold_lanes)),
+            "test": table.filter(
+                pl.col("lane_id").is_in(cold_lanes) & pl.col("date").is_in(validation_timestamps)
+            ),
+            "heldout_lanes": sorted(cold_lanes),
+            "heldout_origins": [],
+            "sparse_tail_lanes": [],
+            "fallback": "exact_pair_to_origin_to_destination_to_global_by_horizon",
+        },
+        "cold_origin": {
+            "split_type": "cold_origin",
+            "cutoff": cutoff,
+            "train": train.filter(~lane_origin_expr().is_in(cold_origins)),
+            "test": table.filter(
+                lane_origin_expr().is_in(cold_origins) & pl.col("date").is_in(validation_timestamps)
+            ),
+            "heldout_lanes": [],
+            "heldout_origins": sorted(cold_origins),
+            "sparse_tail_lanes": [],
+            "fallback": "exact_pair_to_origin_to_destination_to_global_by_horizon",
+        },
+        "sparse_tail": {
+            "split_type": "sparse_tail",
+            "cutoff": cutoff,
+            "train": sparse_train,
+            "test": test.filter(pl.col("lane_id").is_in(sparse_tail_lanes)),
+            "heldout_lanes": [],
+            "heldout_origins": [],
+            "sparse_tail_lanes": sorted(sparse_tail_lanes),
+            "fallback": "none",
+        },
+    }
+
+
+def score_neural_pairwise_split(
+    train: Any,
+    test: Any,
+    *,
+    horizon: int,
+    season_length: int,
+    cartoboost_config: dict[str, Any],
+    model_names: list[str],
+    fallback: str,
+) -> tuple[dict[str, dict[str, float]], dict[str, Any], dict[str, Any], Any]:
+    pl = require_polars()
+    if train.is_empty() or test.is_empty():
+        raise ValueError("NeuralPairwise split produced empty train or test data")
+    actual = (
+        test.sort(["lane_id", "date"])
+        .with_columns((pl.int_range(pl.len()).over("lane_id") + 1).alias("horizon"))
+        .select(
+            pl.col("lane_id").alias("series_id"),
+            pl.col("date").cast(pl.Datetime("us")).alias("timestamp"),
+            "horizon",
+            pl.col("loads").alias("actual"),
+        )
+    )
+    predictions, timing = forecast_model_roster(
+        train,
+        horizon,
+        season_length=season_length,
+        cartoboost_config=cartoboost_config,
+        model_names=model_names,
+        source="synthetic",
+        known_future=None,
+        skip_non_m_raw_auto_candidate=True,
+    )
+    if fallback != "none":
+        predictions = expand_forecasts_with_lane_fallback(predictions, actual, model_names)
+    scored = actual.join(predictions, on=["series_id", "timestamp", "horizon"], how="inner")
+    if scored.height != actual.height:
+        raise RuntimeError("NeuralPairwise split forecast alignment dropped rows")
+    metrics = {
+        model: evaluate_metrics(scored, model, train, season_length=season_length)
+        for model in model_names
+    }
+    quality = quality_summary(metrics, model_names=model_names)
+    return metrics, quality, timing, scored
+
+
+def expand_forecasts_with_lane_fallback(
+    predictions: Any, actual: Any, model_names: list[str]
+) -> Any:
+    pl = require_polars()
+    prediction_rows = predictions.iter_rows(named=True)
+    lookup: dict[tuple[str, int], dict[str, float]] = {}
+    by_origin: dict[tuple[str, int], list[dict[str, float]]] = {}
+    by_destination: dict[tuple[str, int], list[dict[str, float]]] = {}
+    by_horizon: dict[int, list[dict[str, float]]] = {}
+    for row in prediction_rows:
+        series_id = str(row["series_id"])
+        horizon = int(row["horizon"])
+        origin, destination = split_lane_id(series_id)
+        values = {model: float(row[model]) for model in model_names}
+        lookup[(series_id, horizon)] = values
+        by_origin.setdefault((origin, horizon), []).append(values)
+        by_destination.setdefault((destination, horizon), []).append(values)
+        by_horizon.setdefault(horizon, []).append(values)
+    expanded = []
+    for row in actual.iter_rows(named=True):
+        series_id = str(row["series_id"])
+        horizon = int(row["horizon"])
+        origin, destination = split_lane_id(series_id)
+        values = lookup.get((series_id, horizon))
+        if values is None:
+            candidates = (
+                by_origin.get((origin, horizon))
+                or by_destination.get((destination, horizon))
+                or by_horizon.get(horizon)
+            )
+            if not candidates:
+                raise RuntimeError(
+                    f"no fallback forecast available for {series_id} horizon {horizon}"
+                )
+            values = {
+                model: float(np.mean([candidate[model] for candidate in candidates]))
+                for model in model_names
+            }
+        expanded.append(
+            {
+                "series_id": series_id,
+                "timestamp": row["timestamp"],
+                "horizon": horizon,
+                **values,
+            }
+        )
+    return pl.DataFrame(expanded).with_columns(pl.col("timestamp").cast(pl.Datetime("us")))
+
+
+def sparsify_tail_history(table: Any, *, sparse_tail_lanes: set[Any], min_history: int) -> Any:
+    pl = require_polars()
+    sparse = table.filter(pl.col("lane_id").is_in(sparse_tail_lanes)).with_columns(
+        pl.int_range(pl.len()).over("lane_id").alias("__row_nr"),
+        pl.len().over("lane_id").alias("__row_count"),
+    )
+    sparse = sparse.filter(pl.col("__row_nr") >= pl.col("__row_count") - min_history).drop(
+        "__row_nr",
+        "__row_count",
+    )
+    dense = table.filter(~pl.col("lane_id").is_in(sparse_tail_lanes))
+    return pl.concat([dense, sparse], how="vertical").sort(["lane_id", "date"])
+
+
+def split_lane_id(series_id: str) -> tuple[str, str]:
+    if "->" in series_id:
+        origin, destination = series_id.split("->", 1)
+        return origin, destination
+    if ":" in series_id:
+        origin, destination = series_id.split(":", 1)
+        return origin, destination
+    return series_id, series_id
+
+
+def lane_origin_expr() -> Any:
+    pl = require_polars()
+    return (
+        pl.when(pl.col("lane_id").str.contains("->"))
+        .then(pl.col("lane_id").str.split("->").list.get(0))
+        .otherwise(pl.col("lane_id").str.split(":").list.get(0))
+    )
+
+
 def aggregate_split_metrics(split_results: dict[str, Any]) -> dict[str, dict[str, float]]:
     first_split = next(iter(split_results.values()))
     model_names = list(first_split["metrics"])
@@ -3155,6 +3490,21 @@ def forecast_model_roster(
     forecast_frames = []
     model_timing: dict[str, Any] = {}
     native_config = cartoboost_source_config(cartoboost_config, source=source)
+    if SEASONAL_NAIVE_BENCHMARK_MODEL in model_names:
+        seasonal_predictions = seasonal_naive_forecast_frame(
+            train,
+            horizon,
+            season_length=season_length,
+            prediction_col=SEASONAL_NAIVE_BENCHMARK_MODEL,
+        )
+        forecast_frames.append(seasonal_predictions)
+        model_timing[SEASONAL_NAIVE_BENCHMARK_MODEL] = {
+            "fit_seconds": 0.0,
+            "predict_seconds": 0.0,
+            "fit_predict_seconds": 0.0,
+            "total_seconds": 0.0,
+            "baseline": True,
+        }
     if "cartoboost_lag" in model_names:
         cartoboost_predictions, cartoboost_timing = cartoboost_raw_forecast(
             train,
@@ -3290,6 +3640,14 @@ def forecast_model_roster(
         )
         forecast_frames.append(piecewise_predictions)
         model_timing["cartoboost_piecewise_linear_seasonal"] = piecewise_timing
+    if NEURAL_PAIRWISE_BENCHMARK_MODEL in model_names:
+        neural_predictions, neural_timing = cartoboost_neural_pairwise_forecast(
+            train,
+            horizon,
+            season_length=season_length,
+        )
+        forecast_frames.append(neural_predictions)
+        model_timing[NEURAL_PAIRWISE_BENCHMARK_MODEL] = neural_timing
     if any(model in model_names for model in FUNCTIME_MODELS):
         functime_predictions, functime_timing = functime_forecasts(
             train,
@@ -5165,6 +5523,99 @@ def cartoboost_piecewise_linear_forecast(
     return predictions, timing
 
 
+def cartoboost_neural_pairwise_forecast(
+    train: Any,
+    horizon: int,
+    *,
+    season_length: int,
+) -> tuple[Any, dict[str, float]]:
+    pl = require_polars()
+    pd = require_pandas_for_benchmark()
+    feature_start = perf_counter()
+    covariates = [
+        column
+        for column in ["airport_lane", "distance_miles", "pickup_zone", "dropoff_zone"]
+        if column in train.columns
+    ]
+    training_frame = train.select("lane_id", "date", "loads", *covariates).to_pandas()
+    if not isinstance(training_frame, pd.DataFrame):
+        raise TypeError("CartoBoost NeuralPairwise benchmark conversion did not return pandas")
+    frame = ForecastFrame.from_pandas(
+        training_frame,
+        timestamp_col="date",
+        target_col="loads",
+        series_id_col="lane_id",
+        freq="D",
+        allow_irregular=True,
+        known_future_covariates=[name for name in ["airport_lane"] if name in covariates],
+        historical_covariates=[name for name in ["distance_miles"] if name in covariates],
+        static_covariates=[name for name in ["pickup_zone", "dropoff_zone"] if name in covariates],
+    )
+    min_history = int(train.group_by("lane_id").len().select(pl.col("len").min()).item())
+    n_lags = max(
+        1,
+        min(
+            28,
+            min_history - horizon,
+            season_length * 2 if season_length > 1 else 7,
+        ),
+    )
+    model = LaneNeuralPairwiseForecaster(
+        n_lags=n_lags,
+        n_forecasts=horizon,
+        quantiles=[0.1, 0.5, 0.9],
+        weekly_fourier_order=3 if season_length == 7 else 0,
+        custom_seasonalities=[
+            ("benchmark_cycle", float(season_length), min(5, max(1, season_length // 2)))
+        ]
+        if season_length > 1 and season_length != 7
+        else None,
+        future_regressors={"airport_lane": "additive"} if "airport_lane" in covariates else None,
+        lagged_regressors={"distance_miles": n_lags} if "distance_miles" in covariates else None,
+        ar_layers=[16],
+        lagged_reg_layers=[8] if "distance_miles" in covariates else None,
+        trend_mode="glocal",
+        local_l2=0.1,
+        embedding_dim=8,
+        seed=42,
+    )
+    feature_seconds = perf_counter() - feature_start
+
+    fit_start = perf_counter()
+    model.fit(frame)
+    fit_seconds = perf_counter() - fit_start
+
+    predict_start = perf_counter()
+    result = model.predict(horizon)
+    predictions = pl.DataFrame(
+        result.predictions(),
+        schema=[
+            "series_id",
+            "timestamp",
+            "horizon",
+            "model",
+            NEURAL_PAIRWISE_BENCHMARK_MODEL,
+        ],
+        orient="row",
+    ).select(
+        "series_id",
+        pl.col("timestamp").str.to_datetime().cast(pl.Datetime("us")).alias("timestamp"),
+        "horizon",
+        NEURAL_PAIRWISE_BENCHMARK_MODEL,
+    )
+    predict_seconds = perf_counter() - predict_start
+    timing = {
+        "feature_seconds": feature_seconds,
+        "fit_seconds": fit_seconds,
+        "predict_seconds": predict_seconds,
+        "fit_predict_seconds": fit_seconds + predict_seconds,
+        "total_seconds": feature_seconds + fit_seconds + predict_seconds,
+        "n_lags": float(n_lags),
+        "feature_count": float(len(covariates)),
+    }
+    return predictions, timing
+
+
 def cartoboost_piecewise_linear_params(*, season_length: int) -> dict[str, Any]:
     params: dict[str, Any] = {
         "growth": "linear",
@@ -5588,6 +6039,25 @@ def cartoboost_model_settings(config: dict[str, Any]) -> dict[str, Any]:
                 "Rust-native piecewise-linear additive trend with weekly Fourier "
                 "seasonality on daily benchmark panels; non-weekly season lengths use one "
                 "generic Fourier cycle named benchmark_cycle"
+            ),
+        },
+        NEURAL_PAIRWISE_BENCHMARK_MODEL: {
+            "n_forecasts": "benchmark horizon",
+            "n_lags": "min(28, minimum train history - benchmark horizon, two seasonal cycles)",
+            "quantiles": [0.1, 0.5, 0.9],
+            "weekly_fourier_order": 3,
+            "future_regressors": ["airport_lane when present"],
+            "lagged_regressors": ["distance_miles when present"],
+            "ar_layers": [16],
+            "lagged_reg_layers": [8],
+            "trend_mode": "glocal",
+            "local_l2": 0.1,
+            "embedding_dim": 8,
+            "seed": 42,
+            "benchmark_profile": (
+                "Rust-native lane neural panel forecaster with directional lane ids, "
+                "direct multi-horizon output, quantile metadata, and cold-identity "
+                "benchmark fallback expansion."
             ),
         },
     }
