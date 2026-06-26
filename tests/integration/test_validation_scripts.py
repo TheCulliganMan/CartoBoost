@@ -3588,10 +3588,13 @@ def test_forecasting_benchmark_model_settings_include_auto_policy():
     assert set(settings) == {
         "cartoboost_lag",
         "cartoboost_auto_forecast",
+        "cartoboost_neural_panel",
         "cartoboost_piecewise_linear_seasonal",
     }
     assert settings["cartoboost_lag"]["n_estimators"] == 60
     assert settings["cartoboost_auto_forecast"]["auto_n_estimators"] == 72
+    assert settings["cartoboost_neural_panel"]["weekly_fourier_order"] == 3
+    assert settings["cartoboost_neural_panel"]["trend_mode"] == "glocal"
     assert settings["cartoboost_piecewise_linear_seasonal"]["weekly_fourier_order"] == 3
     assert (
         "piecewise-linear" in settings["cartoboost_piecewise_linear_seasonal"]["benchmark_profile"]
