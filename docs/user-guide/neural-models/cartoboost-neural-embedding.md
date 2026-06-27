@@ -1,18 +1,25 @@
-# Standalone Embedding Regressor
+import {NeuralModelExample} from '@site/src/components/ModelingLabClient';
+
+# CartoBoost Neural Embedding Regressor
 
 Use `NeuralEmbeddingStandaloneRegressor` when the learned ID embedding model is
 the artifact you want to train, score, save, and serve directly. This works
-best when train and prediction populations share stable IDs such as pickup
-zones, dropoff zones, pickup-dropoff pairs, zone-hour buckets, or trip
-clusters.
+best when the train and prediction populations share stable IDs such as entity
+IDs, route pairs, account buckets, item IDs, or recurring operational groups.
+
+## Use When
+
+- The embedding model itself is the artifact under test.
+- Stable ids recur in both training and prediction data.
+- You want a direct model, not embedding features for another estimator.
 
 ## Basic Fit
 
 ```python
-import numpy as np
 from cartoboost.neural import NeuralEmbeddingStandaloneRegressor
+import numpy as np
 
-pickup_zone = np.array([132, 161, 132, 236, 161, 236], dtype=np.uint64)
+entity_id = np.array([132, 161, 132, 236, 161, 236], dtype=np.uint64)
 dense = np.array(
     [
         [1.0, 6.0],
@@ -24,15 +31,19 @@ dense = np.array(
     ],
     dtype=float,
 )
-log_fare = np.array([2.7, 3.1, 2.8, 3.4, 3.2, 3.5])
+target = np.array([2.7, 3.1, 2.8, 3.4, 3.2, 3.5])
 
 model = NeuralEmbeddingStandaloneRegressor(dim=4, n_estimators=20, random_state=7)
-model.fit(pickup_zone, log_fare, dense=dense)
+model.fit(entity_id, target, dense=dense)
 
-pred = model.predict(pickup_zone, dense=dense)
-mae = model.score(pickup_zone, log_fare, dense=dense)
-model.save("taxi-neural-standalone.json")
+pred = model.predict(entity_id, dense=dense)
+mae = model.score(entity_id, target, dense=dense)
+model.save("neural-standalone.json")
 ```
+
+## Interactive Example
+
+<NeuralModelExample title="Neural embedding browser model" pipeline="embedding" />
 
 ## Direct Contract
 
@@ -47,6 +58,6 @@ must have the same row count as `ids`.
 ## Validation
 
 Report random, temporal, and cold-ID splits separately when they support
-different claims. Under cold-zone or cold-route holdouts, report fallback
+different claims. Under cold-ID or cold-route holdouts, report fallback
 behavior explicitly because unseen IDs cannot recover learned ID-specific
 effects.

@@ -9,8 +9,8 @@ move the prediction, not just the final point estimate.
 
 ## When To Use
 
-Use this model for one regular taxi demand, fare, duration, or trip-distance
-series when the forecast should be explained as:
+Use this model for one regular demand, fare, duration, or trip-distance series
+when the forecast should be explained as:
 
 - a piecewise trend with optional changepoints;
 - one or more repeating seasonal components;
@@ -21,9 +21,9 @@ series when the forecast should be explained as:
   over-predicted for several consecutive observations;
 - residual intervals or quantile-style uncertainty summaries.
 
-It is a good fit for airport pickup demand with event windows, Midtown demand
-with recurring weekday and hour effects, or lane-level aggregate demand where a
-scientist needs to inspect the trend and seasonal contribution separately.
+It is a good fit for demand with event windows, recurring weekday and hour
+effects, or lane-level aggregate demand where a scientist needs to inspect the
+trend and seasonal contribution separately.
 
 Prefer seasonal naive, theta, ETS, ARIMA, or Kalman when the question is only a
 small local baseline. Prefer `CartoBoostLagForecaster` or `AutoForecaster` when
@@ -31,7 +31,7 @@ many related zones or lanes should share supervised lag features.
 
 ## Interactive Example
 
-<ForecastModelExample title="Piecewise linear seasonal taxi-lane forecast" model="piecewise_linear_seasonal" />
+<ForecastModelExample title="Piecewise linear seasonal panel forecast" model="piecewise_linear_seasonal" />
 
 The embedded example runs in this page and returns forecast rows from the
 interactive example. Use the full Python API when you need to persist component
@@ -58,7 +58,7 @@ the strongest signal is cross-zone borrowing, sparse intermittent demand,
 unmodeled disruptions, or a supervised panel effect that a local component model
 cannot see.
 
-Common failure modes in taxi data:
+Common failure modes in panel data:
 
 | Failure mode | Scientific interpretation | Comparison to run |
 | --- | --- | --- |
@@ -75,8 +75,8 @@ from cartoboost.forecasting import ForecastFrame, PiecewiseLinearSeasonalForecas
 frame = ForecastFrame.from_pandas(
     hourly_airport_pickups,
     timestamp_col="pickup_hour",
-    target_col="pickup_trips",
-    series_id_col="PULocationID",
+    target_col="demand",
+    series_id_col="series_id",
     freq="h",
     known_future_covariates=["hour", "day_of_week", "holiday_event"],
 )
@@ -181,8 +181,8 @@ model = PiecewiseLinearSeasonalForecaster(
 
 Component records include `trend`, `adjusted_trend`,
 `trend_adjustment_multiplier`, `trend_adjustment`, and `residual_shock` so a
-taxi demand report can separate fitted trend, external market belief, and
-recent residual carry-forward.
+report can separate fitted trend, external market belief, and recent residual
+carry-forward.
 
 ## Historical Component Diagnostics
 
@@ -217,11 +217,11 @@ components with dotted column names:
 | `components.regressors.*` | Verify known future or historical regressor contribution and sign. |
 | `residual` | Identify whether the model is already biased immediately before the holdout. |
 
-For a weekly lane backtest with 12 cutoffs, run the model once per cutoff,
-holding out one additional week each time, then persist both the holdout
-predictions and `history_components_frame()` from that cutoff fit. When Prophet
-beats CartoBoost with a negative bias, inspect the last several historical
-component rows before each cutoff:
+For a weekly backtest with 12 cutoffs, run the model once per cutoff, holding
+out one additional week each time, then persist both the holdout predictions
+and `history_components_frame()` from that cutoff fit. When Prophet beats
+CartoBoost with a negative bias, inspect the last several historical component
+rows before each cutoff:
 
 ```python
 diagnostics_by_cutoff = {}

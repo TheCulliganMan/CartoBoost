@@ -1,35 +1,23 @@
-# Neural Embedding Models And Features
+# CartoBoost Neural Embedding Models And Features
 
-Neural ID embeddings help when stable taxi identifiers carry repeated residual
-signal. Examples include pickup zones, dropoff zones, pickup-dropoff pairs,
-zone-hour buckets, H3/S2 cells, or route clusters. The scientific question is
-whether these IDs summarize unmeasured spatial, operational, or temporal effects
-after the structured features have done their work.
+This is the contract page for learned ID embeddings. Use the
+[neural model guides](user-guide/neural-models/index.md) for examples and model
+selection. Use this page when you need the artifact, fallback, and feature
+generation details.
 
-Use neural embeddings to study effects such as:
-
-- zone-specific fare or duration residuals after controlling for distance and
-  hour;
-- recurring pickup-dropoff pair behavior not captured by scalar route features;
-- high-cardinality spatial cells where one-hot features would be too wide;
-- repeated market behavior under random, tail, or out-of-time splits;
-- whether support-aware shrinkage changes rare-zone stability.
-
-They are weaker evidence for cold-start generalization. If a validation split
-holds out zones or routes unseen during training, the model must use fallback
-vectors or fallback IDs. Report embedding results with the split protocol and do
-not treat repeated-ID gains as proof that the model understands unseen zones.
-
-CartoBoost neural support has two independent entry points:
+Neural support has two entry points:
 
 - `NeuralEmbeddingStandaloneRegressor` for direct supervised ID embedding
-  regression without `CartoBoostRegressor`;
-- `NeuralEmbeddingFeatures` and `NeuralEmbeddingRegressor` for optional feature
+  regression;
+- `NeuralEmbeddingFeatures` and `NeuralEmbeddingRegressor` for feature
   generation or neural-augmented tabular workflows.
 
-Start with the standalone regressor when the ID embedding model is the artifact
-you want to train, evaluate, save, and serve. Use the feature-generation path
-when learned ID vectors are covariates for another model.
+Use neural embeddings when stable identifiers carry repeated residual signal
+such as fare, duration, demand, or other structured effects that remain after
+the engineered features have done their work.
+
+They are weaker evidence for cold-start generalization. If a validation split
+holds out ids unseen during training, report the fallback behavior explicitly.
 
 ```mermaid
 flowchart LR
@@ -71,7 +59,7 @@ model.fit(pickup_zone, log_fare, dense=dense)
 
 pred = model.predict(pickup_zone, dense=dense)
 mae = model.score(pickup_zone, log_fare, dense=dense)
-model.save("taxi-neural-standalone.json")
+model.save("neural-standalone.json")
 ```
 
 Direct inference contract:
@@ -130,9 +118,8 @@ flowchart TD
 
 Residual mode focuses the embeddings on what the structured model missed. It
 does not directly add neural residuals to the final output; it exposes learned
-representation to the final model and lets that model decide when the signal is
-useful. `use_residual=False` trains embeddings on the raw target directly, which
-is available but usually less diagnostic for scientific ablations.
+representations to the final model and lets that model decide when the signal
+is useful. `use_residual=False` trains embeddings on the raw target directly.
 
 ```python
 import numpy as np
@@ -202,8 +189,7 @@ and checksum integrity.
 ## Benchmarking And Reporting
 
 Neural embeddings can look strong on random splits because validation rows often
-reuse IDs from training. For taxi science, include a split that matches the
-claim:
+reuse IDs from training. Include a split that matches the claim:
 
 - random or tail split: repeated-ID interpolation;
 - out-of-time split: temporal transfer with mostly familiar IDs;
@@ -225,9 +211,9 @@ uv run python scripts/run_neural_embedding_benchmark.py \
 
 Record MAE or RMSE, fit time, predict time, split mode, ID definition, fallback
 strategy, embedding dimension, random seed, and baseline settings. Synthetic
-benchmark output is smoke evidence only; benchmark claims about NYC taxi trips
-should come from the maintained benchmark protocols and real or clearly labeled
-generated acceptance data.
+benchmark output is smoke evidence only; benchmark claims should come from the
+maintained benchmark protocols and real or clearly labeled generated acceptance
+data.
 
 ## Failure Modes
 

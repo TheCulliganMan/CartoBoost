@@ -11,6 +11,9 @@ use super::scaler::StandardScaler;
 use crate::{NeuralError, Result};
 
 type KnownFutureCovariates = BTreeMap<(String, NaiveDateTime), BTreeMap<String, f64>>;
+type KnownFutureCovariateIndex<'a> =
+    BTreeMap<&'a str, BTreeMap<NaiveDateTime, &'a BTreeMap<String, f64>>>;
+type FeatureComponentBreakdown = (f64, f64, BTreeMap<String, f64>, BTreeMap<String, f64>);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TrendMode {
@@ -55,6 +58,7 @@ pub struct NeuralPanelConfig {
     pub weekly_fourier_order: usize,
     pub yearly_fourier_order: usize,
     pub custom_seasonalities: BTreeMap<String, (f64, usize)>,
+    pub custom_seasonality_conditions: BTreeMap<String, Option<String>>,
     pub seasonality_mode: ComponentMode,
     pub events: BTreeMap<String, Vec<i32>>,
     pub event_mode: ComponentMode,
@@ -90,6 +94,7 @@ impl Default for NeuralPanelConfig {
             weekly_fourier_order: 0,
             yearly_fourier_order: 0,
             custom_seasonalities: BTreeMap::new(),
+            custom_seasonality_conditions: BTreeMap::new(),
             seasonality_mode: ComponentMode::Additive,
             events: BTreeMap::new(),
             event_mode: ComponentMode::Additive,
@@ -163,6 +168,21 @@ impl NeuralPanelConfig {
                 )));
             }
         }
+        for (name, condition_name) in &self.custom_seasonality_conditions {
+            if name.is_empty() {
+                return Err(NeuralError::InvalidArgument(
+                    "custom seasonality condition names must not be empty".to_string(),
+                ));
+            }
+            match condition_name {
+                Some(condition_name) if condition_name.is_empty() => {
+                    return Err(NeuralError::InvalidArgument(format!(
+                        "custom seasonality '{name}' condition name must not be empty"
+                    )));
+                }
+                _ => {}
+            }
+        }
         for (name, lag) in &self.lagged_regressors {
             if name.is_empty() || *lag == 0 {
                 return Err(NeuralError::InvalidArgument(
@@ -186,10 +206,175 @@ pub struct NeuralPanelWindow {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) enum SeasonalityBasis {
+    Daily,
+    Weekly,
+    Yearly,
+    Custom { period: f64 },
+}
+
+impl SeasonalityBasis {
+    fn evaluate(&self, timestamp: NaiveDateTime) -> (f64, f64) {
+        match self {
+            Self::Daily => (
+                timestamp.hour() as f64
+                    + timestamp.minute() as f64 / 60.0
+                    + timestamp.second() as f64 / 3600.0,
+                24.0,
+            ),
+            Self::Weekly => (
+                timestamp.weekday().num_days_from_monday() as f64 * 24.0
+                    + timestamp.hour() as f64
+                    + timestamp.minute() as f64 / 60.0
+                    + timestamp.second() as f64 / 3600.0,
+                24.0 * 7.0,
+            ),
+            Self::Yearly => (
+                timestamp.ordinal0() as f64 * 24.0
+                    + timestamp.hour() as f64
+                    + timestamp.minute() as f64 / 60.0
+                    + timestamp.second() as f64 / 3600.0,
+                365.25 * 24.0,
+            ),
+            Self::Custom { period } => (timestamp.and_utc().timestamp() as f64 / 3600.0, *period),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) enum FutureFeatureSpec {
+    Seasonality {
+        name: String,
+        basis: SeasonalityBasis,
+        harmonic: usize,
+        is_cosine: bool,
+        component_mode: ComponentMode,
+        global_local_mode: NeuralPanelMode,
+        condition_name: Option<String>,
+    },
+    Event {
+        name: String,
+        component_mode: ComponentMode,
+        global_local_mode: NeuralPanelMode,
+    },
+    Regressor {
+        name: String,
+        component_mode: ComponentMode,
+        global_local_mode: NeuralPanelMode,
+    },
+}
+
+impl FutureFeatureSpec {
+    fn name(&self) -> &str {
+        match self {
+            Self::Seasonality { name, .. }
+            | Self::Event { name, .. }
+            | Self::Regressor { name, .. } => name,
+        }
+    }
+
+    fn component_mode(&self) -> ComponentMode {
+        match self {
+            Self::Seasonality { component_mode, .. }
+            | Self::Event { component_mode, .. }
+            | Self::Regressor { component_mode, .. } => *component_mode,
+        }
+    }
+
+    fn global_local_mode(&self) -> NeuralPanelMode {
+        match self {
+            Self::Seasonality {
+                global_local_mode, ..
+            }
+            | Self::Event {
+                global_local_mode, ..
+            }
+            | Self::Regressor {
+                global_local_mode, ..
+            } => *global_local_mode,
+        }
+    }
+
+    fn value_for_row(&self, row: &ForecastRow, config: &NeuralPanelConfig) -> CoreResult<f64> {
+        match self {
+            Self::Seasonality {
+                name,
+                basis,
+                harmonic,
+                is_cosine,
+                condition_name,
+                ..
+            } => {
+                let (position, period) = basis.evaluate(row.timestamp);
+                let angle = std::f64::consts::TAU * *harmonic as f64 * position / period;
+                let value = if *is_cosine { angle.cos() } else { angle.sin() };
+                apply_custom_seasonality_condition(
+                    name,
+                    value,
+                    Some(&row.covariates),
+                    None,
+                    config,
+                    condition_name.as_deref(),
+                )
+            }
+            Self::Event { name, .. } => Ok(*row.covariates.get(name).unwrap_or(&0.0)),
+            Self::Regressor { name, .. } => required_covariate(row, name)
+                .map_err(|err| CartoBoostError::InvalidInput(err.to_string())),
+        }
+    }
+
+    fn value_for_timestamp(
+        &self,
+        timestamp: NaiveDateTime,
+        covariates: Option<&BTreeMap<String, f64>>,
+        static_covariates: Option<&BTreeMap<String, f64>>,
+        config: &NeuralPanelConfig,
+    ) -> CoreResult<f64> {
+        match self {
+            Self::Seasonality {
+                name,
+                basis,
+                harmonic,
+                is_cosine,
+                condition_name,
+                ..
+            } => {
+                let (position, period) = basis.evaluate(timestamp);
+                let angle = std::f64::consts::TAU * *harmonic as f64 * position / period;
+                let value = if *is_cosine { angle.cos() } else { angle.sin() };
+                apply_custom_seasonality_condition(
+                    name,
+                    value,
+                    covariates,
+                    static_covariates,
+                    config,
+                    condition_name.as_deref(),
+                )
+            }
+            Self::Event { name, .. } => Ok(covariates
+                .and_then(|values| values.get(name))
+                .or_else(|| static_covariates.and_then(|values| values.get(name)))
+                .copied()
+                .unwrap_or(0.0)),
+            Self::Regressor { name, .. } => covariates
+                .and_then(|values| values.get(name))
+                .or_else(|| static_covariates.and_then(|values| values.get(name)))
+                .copied()
+                .ok_or_else(|| {
+                    CartoBoostError::InvalidInput(format!(
+                        "future regressor '{name}' requires known future covariates for prediction"
+                    ))
+                }),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NeuralPanelWindowDataset {
     windows: Vec<NeuralPanelWindow>,
     tails: BTreeMap<String, Vec<f64>>,
     future_feature_names: Vec<String>,
+    future_feature_specs: Vec<FutureFeatureSpec>,
     series_ids: Vec<String>,
 }
 
@@ -199,7 +384,11 @@ impl NeuralPanelWindowDataset {
         config.validate()?;
         let mut windows = Vec::new();
         let mut tails = BTreeMap::new();
-        let future_feature_names = future_feature_names(&config);
+        let future_feature_specs = future_feature_specs(&config);
+        let future_feature_names = future_feature_specs
+            .iter()
+            .map(|spec| spec.name().to_string())
+            .collect::<Vec<_>>();
         let series_ids = frame.series_ids();
         for series_id in &series_ids {
             let rows = frame.rows_for_series(series_id);
@@ -229,7 +418,7 @@ impl NeuralPanelWindowDataset {
                 }
                 let future_features = rows[start..target_end]
                     .iter()
-                    .map(|row| build_future_features(row, &future_feature_names))
+                    .map(|row| build_future_features(row, &future_feature_specs, &config))
                     .collect::<Result<Vec<_>>>()?;
                 windows.push(NeuralPanelWindow {
                     series_id: series_id.clone(),
@@ -245,6 +434,7 @@ impl NeuralPanelWindowDataset {
             windows,
             tails,
             future_feature_names,
+            future_feature_specs,
             series_ids,
         })
     }
@@ -259,6 +449,10 @@ impl NeuralPanelWindowDataset {
 
     pub fn future_feature_names(&self) -> &[String] {
         &self.future_feature_names
+    }
+
+    pub(crate) fn future_feature_specs(&self) -> &[FutureFeatureSpec] {
+        &self.future_feature_specs
     }
 
     pub fn series_ids(&self) -> &[String] {
@@ -286,6 +480,8 @@ pub struct NeuralPanelForecaster {
     scaler: Option<StandardScaler>,
     frequency: Option<ForecastFrequency>,
     last_rows: BTreeMap<String, ForecastRow>,
+    #[serde(default)]
+    fitted_rows: BTreeMap<String, Vec<ForecastRow>>,
     series_ids: Vec<String>,
     global_level: f64,
     global_slope: f64,
@@ -320,6 +516,12 @@ pub struct NeuralPanelForecaster {
     future_regressor_weights: BTreeMap<String, f64>,
     feature_schema: Vec<String>,
     #[serde(default)]
+    future_feature_specs: Vec<FutureFeatureSpec>,
+    #[serde(default)]
+    feature_weight_values: Vec<f64>,
+    #[serde(default)]
+    local_feature_weight_values: BTreeMap<String, Vec<f64>>,
+    #[serde(default)]
     static_future_covariates: BTreeMap<String, BTreeMap<String, f64>>,
     train_cutoff: Option<String>,
 }
@@ -332,6 +534,7 @@ impl NeuralPanelForecaster {
             scaler: None,
             frequency: None,
             last_rows: BTreeMap::new(),
+            fitted_rows: BTreeMap::new(),
             series_ids: Vec::new(),
             global_level: 0.0,
             global_slope: 0.0,
@@ -353,6 +556,9 @@ impl NeuralPanelForecaster {
             quantile_residual_diffs: Vec::new(),
             future_regressor_weights: BTreeMap::new(),
             feature_schema: Vec::new(),
+            future_feature_specs: Vec::new(),
+            feature_weight_values: Vec::new(),
+            local_feature_weight_values: BTreeMap::new(),
             static_future_covariates: BTreeMap::new(),
             train_cutoff: None,
         })
@@ -405,6 +611,7 @@ impl NeuralPanelForecaster {
                 "NeuralPanelForecaster must be fit before predict".to_string(),
             )
         })?;
+        let known_future_index = known_future_covariates.map(index_known_future_covariates);
         let mut by_series = BTreeMap::new();
         for series_id in &self.series_ids {
             let last_row = self.last_rows.get(series_id).ok_or_else(|| {
@@ -416,8 +623,10 @@ impl NeuralPanelForecaster {
             let mut rows = Vec::with_capacity(horizon);
             for step in 1..=horizon {
                 let timestamp = frequency.advance(last_row.timestamp, step)?;
-                let covariates = known_future_covariates
-                    .and_then(|values| values.get(&(series_id.clone(), timestamp)));
+                let covariates = known_future_index
+                    .as_ref()
+                    .and_then(|values| values.get(series_id.as_str()))
+                    .and_then(|values| values.get(&timestamp).copied());
                 let (additive, multiplicative) =
                     self.nonstationary_effect(series_id, timestamp, covariates)?;
                 let median_scaled = self.trend_baseline(series_id, step);
@@ -519,31 +728,375 @@ impl NeuralPanelForecaster {
         .map_err(CartoBoostError::from)
     }
 
+    pub fn predict_components_json_value(&self, horizon: usize) -> CoreResult<Value> {
+        self.predict_components_json_value_with_known_future_covariates(horizon, None)
+    }
+
+    pub fn predict_components_json_string(&self, horizon: usize) -> CoreResult<String> {
+        serde_json::to_string_pretty(&self.predict_components_json_value(horizon)?)
+            .map_err(CartoBoostError::from)
+    }
+
+    pub fn history_components_json_value(&self) -> CoreResult<Value> {
+        if self.frequency.is_none() {
+            return Err(CartoBoostError::InvalidInput(
+                "NeuralPanelForecaster must be fit before predict".to_string(),
+            ));
+        }
+        let scaler = self.scaler.ok_or_else(|| {
+            CartoBoostError::InvalidInput(
+                "NeuralPanelForecaster must be fit before predict".to_string(),
+            )
+        })?;
+        let quantile_index = self
+            .config
+            .quantiles
+            .iter()
+            .position(|q| (*q - 0.5).abs() < f64::EPSILON)
+            .unwrap_or(0);
+        let mut series = BTreeMap::new();
+        for series_id in &self.series_ids {
+            let rows = self.fitted_rows.get(series_id).ok_or_else(|| {
+                CartoBoostError::InvalidInput(format!(
+                    "missing fitted rows for series '{series_id}'"
+                ))
+            })?;
+            let mut records = Vec::new();
+            for (idx, row) in rows.iter().enumerate() {
+                let trend = self.trend_baseline(series_id, idx);
+                let static_covariates = self.static_future_covariates.get(series_id);
+                let (additive, multiplicative, additive_components, multiplicative_components) =
+                    self.feature_effects_for_timestamp(
+                        series_id,
+                        row.timestamp,
+                        Some(&row.covariates),
+                        static_covariates,
+                        trend,
+                        scaler.scale(),
+                    )?;
+                let (ar_component, lagged_regressor_component) = if idx >= self.config.n_lags {
+                    let lag_start = idx - self.config.n_lags;
+                    let ar_component = self
+                        .ar_net
+                        .as_ref()
+                        .map(|net| {
+                            let input = rows[lag_start..idx]
+                                .iter()
+                                .enumerate()
+                                .map(|(lag_idx, lag_row)| {
+                                    let baseline =
+                                        self.trend_baseline(series_id, lag_start + lag_idx);
+                                    scaler.transform(lag_row.target) - baseline
+                                })
+                                .collect::<Vec<_>>();
+                            net.forward(&input)
+                                .get(quantile_index)
+                                .copied()
+                                .unwrap_or(0.0)
+                        })
+                        .unwrap_or(0.0);
+                    let lagged_regressor_component = self
+                        .covar_net
+                        .as_ref()
+                        .map(|net| {
+                            let mut input = Vec::new();
+                            for (name, lag) in &self.config.lagged_regressors {
+                                let start = idx.saturating_sub(*lag);
+                                input.extend(rows[start..idx].iter().map(|history_row| {
+                                    history_row.covariates.get(name).copied().unwrap_or(0.0)
+                                }));
+                            }
+                            net.forward(&input)
+                                .get(quantile_index)
+                                .copied()
+                                .unwrap_or(0.0)
+                        })
+                        .unwrap_or(0.0);
+                    (ar_component, lagged_regressor_component)
+                } else {
+                    (0.0, 0.0)
+                };
+                let median_scaled = trend
+                    + additive
+                    + trend * multiplicative
+                    + ar_component
+                    + lagged_regressor_component;
+                let median = scaler.inverse_transform(median_scaled);
+                let quantiles = repaired_quantiles(
+                    median,
+                    &self.config.quantiles,
+                    &self.quantile_output_order,
+                    &self.quantile_residual_diffs,
+                    scaler.scale(),
+                );
+                records.push(json!({
+                    "series_id": series_id,
+                    "timestamp": row.timestamp,
+                    "index": idx,
+                    "actual": row.target,
+                    "fitted": median,
+                    "residual": row.target - median,
+                    "trend": scaler.inverse_transform(trend),
+                    "feature_contributions": {
+                        "additive": additive_components,
+                        "multiplicative": multiplicative_components,
+                    },
+                    "additive_total": additive * scaler.scale(),
+                    "multiplicative_total": trend * multiplicative * scaler.scale(),
+                    "ar_component": ar_component * scaler.scale(),
+                    "lagged_regressor_component": lagged_regressor_component * scaler.scale(),
+                    "prediction": median,
+                    "quantiles": quantiles,
+                }));
+            }
+            series.insert(series_id.clone(), records);
+        }
+        Ok(json!({
+            "quantile_levels": self.config.quantiles,
+            "series": series,
+        }))
+    }
+
+    pub fn history_components_json_string(&self) -> CoreResult<String> {
+        serde_json::to_string_pretty(&self.history_components_json_value()?)
+            .map_err(CartoBoostError::from)
+    }
+
+    pub fn predict_components_json_value_with_known_future_covariates(
+        &self,
+        horizon: usize,
+        known_future_covariates: Option<&KnownFutureCovariates>,
+    ) -> CoreResult<Value> {
+        if horizon == 0 {
+            return Err(CartoBoostError::InvalidInput(
+                "forecast horizon must be positive".to_string(),
+            ));
+        }
+        let frequency = self.frequency.ok_or_else(|| {
+            CartoBoostError::InvalidInput(
+                "NeuralPanelForecaster must be fit before predict".to_string(),
+            )
+        })?;
+        let scaler = self.scaler.ok_or_else(|| {
+            CartoBoostError::InvalidInput(
+                "NeuralPanelForecaster must be fit before predict".to_string(),
+            )
+        })?;
+        let mut series = BTreeMap::new();
+        let quantile_index = self
+            .config
+            .quantiles
+            .iter()
+            .position(|q| (*q - 0.5).abs() < f64::EPSILON)
+            .unwrap_or(0);
+        let quantile_count = self.config.quantiles.len();
+        let output_width = self.config.n_forecasts * quantile_count;
+        let known_future_index = known_future_covariates.map(index_known_future_covariates);
+        for series_id in &self.series_ids {
+            let last_row = self.last_rows.get(series_id).ok_or_else(|| {
+                CartoBoostError::InvalidInput(format!(
+                    "missing fitted timestamp tail for series '{series_id}'"
+                ))
+            })?;
+            let mut rows = Vec::with_capacity(horizon);
+            let ar_output = if let Some(net) = &self.ar_net {
+                let tail = self.target_tails.get(series_id).ok_or_else(|| {
+                    CartoBoostError::InvalidInput(format!(
+                        "missing fitted target tail for series '{series_id}'"
+                    ))
+                })?;
+                let start_index = tail.len().saturating_sub(self.config.n_lags);
+                let input = tail[start_index..]
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, value)| {
+                        let baseline = self.trend_baseline(series_id, idx + start_index + 1);
+                        value - baseline
+                    })
+                    .collect::<Vec<_>>();
+                net.forward(&input)
+            } else {
+                vec![0.0; output_width]
+            };
+            let covar_output = if let Some(net) = &self.covar_net {
+                let tails = self.lagged_covariate_tails.get(series_id).ok_or_else(|| {
+                    CartoBoostError::InvalidInput(format!(
+                        "missing fitted lagged covariate tail for series '{series_id}'"
+                    ))
+                })?;
+                net.forward(&lagged_covariate_input(&self.config, tails))
+            } else {
+                vec![0.0; output_width]
+            };
+            for step in 1..=horizon {
+                let timestamp = frequency.advance(last_row.timestamp, step)?;
+                let static_covariates = self.static_future_covariates.get(series_id);
+                let covariates = known_future_index
+                    .as_ref()
+                    .and_then(|values| values.get(series_id.as_str()))
+                    .and_then(|values| values.get(&timestamp).copied());
+                let trend = self.trend_baseline(series_id, step);
+                let (additive, multiplicative, additive_components, multiplicative_components) =
+                    self.feature_effects_for_timestamp(
+                        series_id,
+                        timestamp,
+                        covariates,
+                        static_covariates,
+                        trend,
+                        scaler.scale(),
+                    )?;
+                let output_idx = (step - 1) * quantile_count + quantile_index;
+                let ar_component = ar_output.get(output_idx).copied().unwrap_or(0.0);
+                let lagged_regressor_component =
+                    covar_output.get(output_idx).copied().unwrap_or(0.0);
+                let median_scaled = trend
+                    + additive
+                    + trend * multiplicative
+                    + ar_component
+                    + lagged_regressor_component;
+                let median = scaler.inverse_transform(median_scaled);
+                let quantiles = repaired_quantiles(
+                    median,
+                    &self.config.quantiles,
+                    &self.quantile_output_order,
+                    &self.quantile_residual_diffs,
+                    scaler.scale(),
+                );
+                rows.push(json!({
+                    "timestamp": timestamp,
+                    "horizon": step,
+                    "trend": scaler.inverse_transform(trend),
+                    "feature_contributions": {
+                        "additive": additive_components,
+                        "multiplicative": multiplicative_components,
+                    },
+                    "additive_total": additive * scaler.scale(),
+                    "multiplicative_total": trend * multiplicative * scaler.scale(),
+                    "ar_component": ar_component * scaler.scale(),
+                    "lagged_regressor_component": lagged_regressor_component * scaler.scale(),
+                    "median_scaled": median_scaled,
+                    "prediction": median,
+                    "quantiles": quantiles,
+                }));
+            }
+            series.insert(series_id.clone(), rows);
+        }
+        Ok(json!({
+            "quantile_levels": self.config.quantiles,
+            "series": series,
+        }))
+    }
+
     fn nonstationary_effect(
         &self,
         series_id: &str,
         timestamp: NaiveDateTime,
         covariates: Option<&BTreeMap<String, f64>>,
     ) -> CoreResult<(f64, f64)> {
+        self.feature_effect_totals_for_timestamp(series_id, timestamp, covariates)
+    }
+
+    fn feature_effects_for_timestamp(
+        &self,
+        series_id: &str,
+        timestamp: NaiveDateTime,
+        covariates: Option<&BTreeMap<String, f64>>,
+        static_covariates: Option<&BTreeMap<String, f64>>,
+        trend: f64,
+        component_scale: f64,
+    ) -> CoreResult<FeatureComponentBreakdown> {
         let mut additive = 0.0;
         let mut multiplicative = 0.0;
-        for name in &self.feature_schema {
-            let static_covariates = self.static_future_covariates.get(series_id);
-            let value =
-                feature_value_for_timestamp(name, timestamp, covariates, static_covariates)?;
-            let global_weight = self.feature_weights.get(name).copied().unwrap_or(0.0);
-            let local_weight = self
-                .local_feature_weights
-                .get(series_id)
-                .and_then(|weights| weights.get(name))
+        let mut additive_components = BTreeMap::new();
+        let mut multiplicative_components = BTreeMap::new();
+        let local_weights = self.local_feature_weight_values.get(series_id);
+        for (idx, spec) in self.future_feature_specs.iter().enumerate() {
+            let value = feature_value_for_timestamp(
+                spec,
+                timestamp,
+                covariates,
+                static_covariates,
+                &self.config,
+            )?;
+            let global_weight = self
+                .feature_weight_values
+                .get(idx)
                 .copied()
+                .or_else(|| self.feature_weights.get(spec.name()).copied())
                 .unwrap_or(0.0);
-            let weight = match feature_global_local_mode(&self.config, name) {
+            let local_weight = local_weights
+                .and_then(|weights| weights.get(idx))
+                .copied()
+                .or_else(|| {
+                    self.local_feature_weights
+                        .get(series_id)
+                        .and_then(|weights| weights.get(spec.name()))
+                        .copied()
+                })
+                .unwrap_or(0.0);
+            let weight = match spec.global_local_mode() {
                 NeuralPanelMode::Global => global_weight,
                 NeuralPanelMode::Local => local_weight,
                 NeuralPanelMode::Glocal => global_weight + local_weight,
             };
-            match feature_component_mode(&self.config, name) {
+            match spec.component_mode() {
+                ComponentMode::Additive => {
+                    let contribution = value * weight;
+                    additive += contribution;
+                    additive_components
+                        .insert(spec.name().to_string(), contribution * component_scale);
+                }
+                ComponentMode::Multiplicative => {
+                    let contribution = trend * value * weight;
+                    multiplicative += contribution;
+                    multiplicative_components
+                        .insert(spec.name().to_string(), contribution * component_scale);
+                }
+            };
+        }
+        Ok((
+            additive,
+            multiplicative,
+            additive_components,
+            multiplicative_components,
+        ))
+    }
+
+    fn feature_effect_totals_for_timestamp(
+        &self,
+        series_id: &str,
+        timestamp: NaiveDateTime,
+        covariates: Option<&BTreeMap<String, f64>>,
+    ) -> CoreResult<(f64, f64)> {
+        let static_covariates = self.static_future_covariates.get(series_id);
+        let local_weights = self.local_feature_weight_values.get(series_id);
+        let mut additive = 0.0;
+        let mut multiplicative = 0.0;
+        for (idx, spec) in self.future_feature_specs.iter().enumerate() {
+            let value =
+                spec.value_for_timestamp(timestamp, covariates, static_covariates, &self.config)?;
+            let global_weight = self
+                .feature_weight_values
+                .get(idx)
+                .copied()
+                .or_else(|| self.feature_weights.get(spec.name()).copied())
+                .unwrap_or(0.0);
+            let local_weight = local_weights
+                .and_then(|weights| weights.get(idx))
+                .copied()
+                .or_else(|| {
+                    self.local_feature_weights
+                        .get(series_id)
+                        .and_then(|weights| weights.get(spec.name()))
+                        .copied()
+                })
+                .unwrap_or(0.0);
+            let weight = match spec.global_local_mode() {
+                NeuralPanelMode::Global => global_weight,
+                NeuralPanelMode::Local => local_weight,
+                NeuralPanelMode::Glocal => global_weight + local_weight,
+            };
+            match spec.component_mode() {
                 ComponentMode::Additive => additive += value * weight,
                 ComponentMode::Multiplicative => multiplicative += value * weight,
             }
@@ -586,13 +1139,12 @@ impl NeuralPanelForecaster {
                 })
                 .unwrap_or_else(|| vec![0.0; output_width]);
             for horizon_idx in 0..self.config.n_forecasts {
-                let offset = self.config.n_lags + horizon_idx;
+                let offset = window.lags.len() + horizon_idx;
                 let mut median_scaled = self.trend_baseline(&window.series_id, offset);
                 let (additive, multiplicative) = self.fitted_feature_effects(
                     &window.series_id,
                     median_scaled,
                     window.future_features.get(offset).map(Vec::as_slice),
-                    dataset.future_feature_names(),
                 );
                 let output_idx = horizon_idx * self.config.quantiles.len();
                 median_scaled += additive
@@ -656,27 +1208,41 @@ impl NeuralPanelForecaster {
         series_id: &str,
         _baseline: f64,
         features: Option<&[f64]>,
-        feature_names: &[String],
     ) -> (f64, f64) {
         let mut additive = 0.0;
         let mut multiplicative = 0.0;
         let Some(features) = features else {
             return (additive, multiplicative);
         };
-        for (name, value) in feature_names.iter().zip(features) {
-            let global_weight = self.feature_weights.get(name).copied().unwrap_or(0.0);
-            let local_weight = self
-                .local_feature_weights
-                .get(series_id)
-                .and_then(|weights| weights.get(name))
+        let local_weights = self.local_feature_weight_values.get(series_id);
+        for (idx, (spec, value)) in self
+            .future_feature_specs
+            .iter()
+            .zip(features.iter())
+            .enumerate()
+        {
+            let global_weight = self
+                .feature_weight_values
+                .get(idx)
                 .copied()
+                .or_else(|| self.feature_weights.get(spec.name()).copied())
                 .unwrap_or(0.0);
-            let weight = match feature_global_local_mode(&self.config, name) {
+            let local_weight = local_weights
+                .and_then(|weights| weights.get(idx))
+                .copied()
+                .or_else(|| {
+                    self.local_feature_weights
+                        .get(series_id)
+                        .and_then(|weights| weights.get(spec.name()))
+                        .copied()
+                })
+                .unwrap_or(0.0);
+            let weight = match spec.global_local_mode() {
                 NeuralPanelMode::Global => global_weight,
                 NeuralPanelMode::Local => local_weight,
                 NeuralPanelMode::Glocal => global_weight + local_weight,
             };
-            match feature_component_mode(&self.config, name) {
+            match spec.component_mode() {
                 ComponentMode::Additive => additive += value * weight,
                 ComponentMode::Multiplicative => multiplicative += value * weight,
             }
@@ -714,7 +1280,12 @@ impl Forecaster for NeuralPanelForecaster {
                 )
             })
             .collect();
-        self.feature_schema = dataset.future_feature_names().to_vec();
+        self.future_feature_specs = dataset.future_feature_specs().to_vec();
+        self.feature_schema = self
+            .future_feature_specs
+            .iter()
+            .map(|spec| spec.name().to_string())
+            .collect();
         self.frequency = Some(frame.frequency());
         self.scaler = Some(scaler);
         self.static_future_covariates = collect_static_future_covariates(frame, &self.config);
@@ -789,6 +1360,20 @@ impl Forecaster for NeuralPanelForecaster {
             .map(|row| row.timestamp)
             .max()
             .map(|timestamp| timestamp.to_string());
+        self.fitted_rows = self
+            .series_ids
+            .iter()
+            .map(|series_id| {
+                (
+                    series_id.clone(),
+                    frame
+                        .rows_for_series(series_id)
+                        .into_iter()
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect();
         self.local_levels.clear();
         self.local_slopes.clear();
         if self.config.trend_mode != NeuralPanelMode::Global {
@@ -821,12 +1406,10 @@ impl Forecaster for NeuralPanelForecaster {
                 )
             })
             .collect();
-        self.feature_weights = fit_nonstationary_feature_weights(
-            &self.config,
-            &dataset,
-            &scaler,
-            |series_id, offset| self.trend_baseline(series_id, offset),
-        );
+        self.feature_weights =
+            fit_nonstationary_feature_weights(&dataset, &scaler, |series_id, offset| {
+                self.trend_baseline(series_id, offset)
+            });
         self.local_feature_weights = fit_local_feature_weights(
             &self.config,
             &dataset,
@@ -834,6 +1417,29 @@ impl Forecaster for NeuralPanelForecaster {
             &self.feature_weights,
             |series_id, offset| self.trend_baseline(series_id, offset),
         );
+        self.feature_weight_values = self
+            .future_feature_specs
+            .iter()
+            .map(|spec| {
+                self.feature_weights
+                    .get(spec.name())
+                    .copied()
+                    .unwrap_or(0.0)
+            })
+            .collect();
+        self.local_feature_weight_values = self
+            .local_feature_weights
+            .iter()
+            .map(|(series_id, weights)| {
+                (
+                    series_id.clone(),
+                    self.future_feature_specs
+                        .iter()
+                        .map(|spec| weights.get(spec.name()).copied().unwrap_or(0.0))
+                        .collect(),
+                )
+            })
+            .collect();
         let output_width = self.config.n_forecasts * self.config.quantiles.len();
         self.ar_net = if self.config.n_lags > 0 {
             Some(train_mlp(
@@ -1059,6 +1665,34 @@ impl LaneNeuralPanelForecaster {
 
     pub fn predict_quantiles_json_string(&self, horizon: usize) -> CoreResult<String> {
         self.inner.predict_quantiles_json_string(horizon)
+    }
+
+    pub fn predict_components_json_value(&self, horizon: usize) -> CoreResult<Value> {
+        self.inner.predict_components_json_value(horizon)
+    }
+
+    pub fn predict_components_json_string(&self, horizon: usize) -> CoreResult<String> {
+        self.inner.predict_components_json_string(horizon)
+    }
+
+    pub fn history_components_json_value(&self) -> CoreResult<Value> {
+        self.inner.history_components_json_value()
+    }
+
+    pub fn history_components_json_string(&self) -> CoreResult<String> {
+        self.inner.history_components_json_string()
+    }
+
+    pub fn predict_components_json_value_with_known_future_covariates(
+        &self,
+        horizon: usize,
+        known_future_covariates: &KnownFutureCovariates,
+    ) -> CoreResult<Value> {
+        self.inner
+            .predict_components_json_value_with_known_future_covariates(
+                horizon,
+                Some(known_future_covariates),
+            )
     }
 
     pub fn predict_with_known_future_covariates(
@@ -1495,47 +2129,109 @@ fn quantile_output_order(quantiles: &[f64]) -> Vec<f64> {
     output
 }
 
-fn future_feature_names(config: &NeuralPanelConfig) -> Vec<String> {
-    let mut names = Vec::new();
+fn index_known_future_covariates(
+    covariates: &KnownFutureCovariates,
+) -> KnownFutureCovariateIndex<'_> {
+    let mut index: KnownFutureCovariateIndex<'_> = BTreeMap::new();
+    for ((series_id, timestamp), values) in covariates {
+        index
+            .entry(series_id.as_str())
+            .or_default()
+            .insert(*timestamp, values);
+    }
+    index
+}
+
+fn future_feature_specs(config: &NeuralPanelConfig) -> Vec<FutureFeatureSpec> {
+    let mut specs = Vec::new();
+    let seasonality_basis = |name: &str| match name {
+        "daily" => SeasonalityBasis::Daily,
+        "weekly" => SeasonalityBasis::Weekly,
+        "yearly" => SeasonalityBasis::Yearly,
+        _ => unreachable!(),
+    };
     for (name, order) in [
         ("daily", config.daily_fourier_order),
         ("weekly", config.weekly_fourier_order),
         ("yearly", config.yearly_fourier_order),
     ] {
         for harmonic in 1..=order {
-            names.push(format!("seasonality:{name}:sin:{harmonic}"));
-            names.push(format!("seasonality:{name}:cos:{harmonic}"));
+            specs.push(FutureFeatureSpec::Seasonality {
+                name: format!("seasonality:{name}:sin:{harmonic}"),
+                basis: seasonality_basis(name),
+                harmonic,
+                is_cosine: false,
+                component_mode: config.seasonality_mode,
+                global_local_mode: config.seasonality_global_local,
+                condition_name: None,
+            });
+            specs.push(FutureFeatureSpec::Seasonality {
+                name: format!("seasonality:{name}:cos:{harmonic}"),
+                basis: seasonality_basis(name),
+                harmonic,
+                is_cosine: true,
+                component_mode: config.seasonality_mode,
+                global_local_mode: config.seasonality_global_local,
+                condition_name: None,
+            });
         }
     }
-    for (name, (_period, order)) in &config.custom_seasonalities {
+    for (name, (period, order)) in &config.custom_seasonalities {
         for harmonic in 1..=*order {
-            names.push(format!("seasonality:{name}:sin:{harmonic}:{_period}"));
-            names.push(format!("seasonality:{name}:cos:{harmonic}:{_period}"));
+            let condition_name = config
+                .custom_seasonality_conditions
+                .get(name)
+                .and_then(|value| value.clone());
+            let basis = SeasonalityBasis::Custom { period: *period };
+            specs.push(FutureFeatureSpec::Seasonality {
+                name: format!("seasonality:{name}:sin:{harmonic}"),
+                basis: basis.clone(),
+                harmonic,
+                is_cosine: false,
+                component_mode: config.seasonality_mode,
+                global_local_mode: config.seasonality_global_local,
+                condition_name: condition_name.clone(),
+            });
+            specs.push(FutureFeatureSpec::Seasonality {
+                name: format!("seasonality:{name}:cos:{harmonic}"),
+                basis,
+                harmonic,
+                is_cosine: true,
+                component_mode: config.seasonality_mode,
+                global_local_mode: config.seasonality_global_local,
+                condition_name,
+            });
         }
     }
     for (name, offsets) in &config.events {
         for offset in offsets {
-            names.push(format!("event:{name}:{offset}"));
+            specs.push(FutureFeatureSpec::Event {
+                name: format!("event:{name}:{offset}"),
+                component_mode: config.event_mode,
+                global_local_mode: config.event_global_local,
+            });
         }
     }
-    names.extend(config.future_regressors.keys().cloned());
-    names
+    for (name, mode) in &config.future_regressors {
+        specs.push(FutureFeatureSpec::Regressor {
+            name: name.clone(),
+            component_mode: *mode,
+            global_local_mode: config.regressor_global_local,
+        });
+    }
+    specs
 }
 
-fn build_future_features(row: &ForecastRow, feature_names: &[String]) -> Result<Vec<f64>> {
-    feature_names
+fn build_future_features(
+    row: &ForecastRow,
+    feature_specs: &[FutureFeatureSpec],
+    config: &NeuralPanelConfig,
+) -> Result<Vec<f64>> {
+    feature_specs
         .iter()
-        .map(|name| {
-            if let Some(regressor) = row.covariates.get(name) {
-                return Ok(*regressor);
-            }
-            if name.starts_with("seasonality:") {
-                return Ok(fourier_feature(name, row.timestamp));
-            }
-            if name.starts_with("event:") {
-                return Ok(*row.covariates.get(name).unwrap_or(&0.0));
-            }
-            required_covariate(row, name)
+        .map(|spec| {
+            spec.value_for_row(row, config)
+                .map_err(|err| NeuralError::InvalidArgument(err.to_string()))
         })
         .collect()
 }
@@ -1548,7 +2244,12 @@ fn collect_static_future_covariates(
     for series_id in frame.series_ids() {
         let rows = frame.rows_for_series(&series_id);
         let mut values = BTreeMap::new();
-        for name in config.future_regressors.keys() {
+        for name in config.future_regressors.keys().chain(
+            config
+                .custom_seasonality_conditions
+                .values()
+                .filter_map(|value| value.as_ref()),
+        ) {
             let mut distinct = rows
                 .iter()
                 .filter_map(|row| row.covariates.get(name).copied())
@@ -1747,109 +2448,53 @@ fn required_covariate(row: &ForecastRow, name: &str) -> Result<f64> {
 }
 
 fn feature_value_for_timestamp(
-    name: &str,
+    spec: &FutureFeatureSpec,
     timestamp: NaiveDateTime,
     covariates: Option<&BTreeMap<String, f64>>,
     static_covariates: Option<&BTreeMap<String, f64>>,
+    config: &NeuralPanelConfig,
 ) -> CoreResult<f64> {
-    if name.starts_with("seasonality:") {
-        return Ok(fourier_feature(name, timestamp));
-    }
-    if name.starts_with("event:") {
-        return Ok(covariates
-            .and_then(|values| values.get(name))
-            .copied()
-            .unwrap_or(0.0));
-    }
-    covariates
-        .and_then(|values| values.get(name))
-        .or_else(|| static_covariates.and_then(|values| values.get(name)))
-        .copied()
+    spec.value_for_timestamp(timestamp, covariates, static_covariates, config)
+}
+
+fn apply_custom_seasonality_condition(
+    feature_name: &str,
+    value: f64,
+    covariates: Option<&BTreeMap<String, f64>>,
+    static_covariates: Option<&BTreeMap<String, f64>>,
+    config: &NeuralPanelConfig,
+    condition_name: Option<&str>,
+) -> CoreResult<f64> {
+    let Some(condition_name) = condition_name.or_else(|| {
+        config
+            .custom_seasonality_conditions
+            .get(feature_name.split(':').nth(1).unwrap_or_default())
+            .and_then(|value| value.as_deref())
+    }) else {
+        return Ok(value);
+    };
+    let condition = covariates
+        .and_then(|values| values.get(condition_name).copied())
+        .or_else(|| static_covariates.and_then(|values| values.get(condition_name).copied()))
         .ok_or_else(|| {
             CartoBoostError::InvalidInput(format!(
-                "future regressor '{name}' requires known future covariates for prediction"
+                "conditional seasonality '{feature_name}' requires known covariate '{condition_name}'"
             ))
-        })
-}
-
-fn fourier_feature(name: &str, timestamp: NaiveDateTime) -> f64 {
-    let parts = name.split(':').collect::<Vec<_>>();
-    let (position, period) = match parts.get(1).copied().unwrap_or_default() {
-        "daily" => (
-            timestamp.hour() as f64
-                + timestamp.minute() as f64 / 60.0
-                + timestamp.second() as f64 / 3600.0,
-            24.0,
-        ),
-        "weekly" => (
-            timestamp.weekday().num_days_from_monday() as f64 * 24.0
-                + timestamp.hour() as f64
-                + timestamp.minute() as f64 / 60.0
-                + timestamp.second() as f64 / 3600.0,
-            24.0 * 7.0,
-        ),
-        "yearly" => (
-            timestamp.ordinal0() as f64 * 24.0
-                + timestamp.hour() as f64
-                + timestamp.minute() as f64 / 60.0
-                + timestamp.second() as f64 / 3600.0,
-            365.25 * 24.0,
-        ),
-        _custom => {
-            let period = parts
-                .get(4)
-                .and_then(|value| value.parse::<f64>().ok())
-                .unwrap_or(1.0);
-            (timestamp.and_utc().timestamp() as f64 / 3600.0, period)
-        }
-    };
-    let harmonic = parts
-        .get(3)
-        .and_then(|value| value.parse::<f64>().ok())
-        .unwrap_or(1.0);
-    let angle: f64 = std::f64::consts::TAU * harmonic * position / period;
-    if parts.get(2).copied() == Some("cos") {
-        angle.cos()
-    } else {
-        angle.sin()
-    }
-}
-
-fn feature_component_mode(config: &NeuralPanelConfig, name: &str) -> ComponentMode {
-    if name.starts_with("seasonality:") {
-        return config.seasonality_mode;
-    }
-    if name.starts_with("event:") {
-        return config.event_mode;
-    }
-    config
-        .future_regressors
-        .get(name)
-        .copied()
-        .unwrap_or(ComponentMode::Additive)
-}
-
-fn feature_global_local_mode(config: &NeuralPanelConfig, name: &str) -> NeuralPanelMode {
-    if name.starts_with("seasonality:") {
-        return config.seasonality_global_local;
-    }
-    if name.starts_with("event:") {
-        return config.event_global_local;
-    }
-    config.regressor_global_local
+        })?;
+    Ok(value * condition)
 }
 
 fn fit_nonstationary_feature_weights(
-    config: &NeuralPanelConfig,
     dataset: &NeuralPanelWindowDataset,
     scaler: &StandardScaler,
     baseline: impl Fn(&str, usize) -> f64,
 ) -> BTreeMap<String, f64> {
-    let mut numerators = vec![0.0; dataset.future_feature_names().len()];
-    let mut denominators = vec![0.0; dataset.future_feature_names().len()];
+    let feature_specs = dataset.future_feature_specs();
+    let mut numerators = vec![0.0; feature_specs.len()];
+    let mut denominators = vec![0.0; feature_specs.len()];
     for window in dataset.windows() {
-        for horizon_idx in 0..config.n_forecasts {
-            let offset = config.n_lags + horizon_idx;
+        for horizon_idx in 0..window.targets.len() {
+            let offset = window.lags.len() + horizon_idx;
             let Some(features) = window.future_features.get(offset) else {
                 continue;
             };
@@ -1857,8 +2502,7 @@ fn fit_nonstationary_feature_weights(
             let trend_baseline = baseline(&window.series_id, offset);
             let residual = target - trend_baseline;
             for (feature_idx, value) in features.iter().enumerate() {
-                let feature_name = &dataset.future_feature_names()[feature_idx];
-                let design = match feature_component_mode(config, feature_name) {
+                let design = match feature_specs[feature_idx].component_mode() {
                     ComponentMode::Additive => *value,
                     ComponentMode::Multiplicative => trend_baseline * *value,
                 };
@@ -1867,16 +2511,15 @@ fn fit_nonstationary_feature_weights(
             }
         }
     }
-    dataset
-        .future_feature_names()
+    feature_specs
         .iter()
         .enumerate()
-        .filter_map(|(idx, name)| {
+        .filter_map(|(idx, spec)| {
             let denom = denominators[idx] + 1.0e-6;
             if denom <= 1.0e-6 {
                 return None;
             }
-            Some((name.clone(), numerators[idx] / denom))
+            Some((spec.name().to_string(), numerators[idx] / denom))
         })
         .collect()
 }
@@ -2118,10 +2761,10 @@ fn fit_local_feature_weights(
     global_weights: &BTreeMap<String, f64>,
     baseline: impl Fn(&str, usize) -> f64,
 ) -> BTreeMap<String, BTreeMap<String, f64>> {
-    if dataset
-        .future_feature_names()
+    let feature_specs = dataset.future_feature_specs();
+    if feature_specs
         .iter()
-        .all(|name| feature_global_local_mode(config, name) == NeuralPanelMode::Global)
+        .all(|spec| spec.global_local_mode() == NeuralPanelMode::Global)
     {
         return BTreeMap::new();
     }
@@ -2130,12 +2773,12 @@ fn fit_local_feature_weights(
     for window in dataset.windows() {
         let numerator = numerators
             .entry(window.series_id.clone())
-            .or_insert_with(|| vec![0.0; dataset.future_feature_names().len()]);
+            .or_insert_with(|| vec![0.0; feature_specs.len()]);
         let denominator = denominators
             .entry(window.series_id.clone())
-            .or_insert_with(|| vec![0.0; dataset.future_feature_names().len()]);
-        for horizon_idx in 0..config.n_forecasts {
-            let offset = config.n_lags + horizon_idx;
+            .or_insert_with(|| vec![0.0; feature_specs.len()]);
+        for horizon_idx in 0..window.targets.len() {
+            let offset = window.lags.len() + horizon_idx;
             let Some(features) = window.future_features.get(offset) else {
                 continue;
             };
@@ -2145,18 +2788,20 @@ fn fit_local_feature_weights(
                 .iter()
                 .enumerate()
                 .map(|(feature_idx, value)| {
-                    let feature_name = &dataset.future_feature_names()[feature_idx];
-                    let design = match feature_component_mode(config, feature_name) {
+                    let design = match feature_specs[feature_idx].component_mode() {
                         ComponentMode::Additive => *value,
                         ComponentMode::Multiplicative => trend_baseline * *value,
                     };
-                    design * global_weights.get(feature_name).copied().unwrap_or(0.0)
+                    design
+                        * global_weights
+                            .get(feature_specs[feature_idx].name())
+                            .copied()
+                            .unwrap_or(0.0)
                 })
                 .sum::<f64>();
             let residual = target - trend_baseline - global_component;
             for (feature_idx, value) in features.iter().enumerate() {
-                let feature_name = &dataset.future_feature_names()[feature_idx];
-                let design = match feature_component_mode(config, feature_name) {
+                let design = match feature_specs[feature_idx].component_mode() {
                     ComponentMode::Additive => *value,
                     ComponentMode::Multiplicative => trend_baseline * *value,
                 };
@@ -2170,16 +2815,16 @@ fn fit_local_feature_weights(
         .map(|(series_id, numerator)| {
             let denominator = denominators.remove(&series_id).unwrap_or_default();
             let weights = dataset
-                .future_feature_names()
+                .future_feature_specs()
                 .iter()
                 .enumerate()
-                .filter_map(|(idx, name)| {
+                .filter_map(|(idx, spec)| {
                     let denom =
                         denominator.get(idx).copied().unwrap_or(0.0) + config.local_l2 + 1.0e-6;
                     if denom <= 1.0e-6 {
                         return None;
                     }
-                    Some((name.clone(), numerator[idx] / denom))
+                    Some((spec.name().to_string(), numerator[idx] / denom))
                 })
                 .collect();
             (series_id, weights)

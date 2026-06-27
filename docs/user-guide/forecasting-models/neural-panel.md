@@ -2,26 +2,29 @@ import {ForecastModelExample} from '@site/src/components/ModelingLabClient';
 
 # Neural Panel
 
-`NeuralPanelForecaster` is the Rust-native neural panel forecaster for direct
-multi-horizon forecasts across related taxi-demand series. It uses
-`ForecastFrame` rows with `(series_id, timestamp, target, covariates)`, learns
-from train-only normalized windows, and keeps panel series isolated while
-sharing the same configured neural structure.
+`NeuralPanelForecaster` is the neural panel forecaster for direct
+multi-horizon forecasts across related series. It uses `ForecastFrame` rows
+with `(series_id, timestamp, target, covariates)`, learns from train-only
+normalized windows, and keeps panel series isolated while sharing the same
+configured neural structure.
 
-Use `LaneNeuralPanelForecaster` when `series_id` is a directional taxi lane such
-as `PULocationID:DOLocationID`. The lane wrapper keeps `132:138` distinct from
+Use `LaneNeuralPanelForecaster` when `series_id` is a directional lane such as
+`source_id:target_id`. The lane wrapper keeps `132:138` distinct from
 `138:132`, appends origin/destination/lane embedding features plus directional
-graph summary features into the Rust training frame, and can forecast requested
+graph summary features into the training frame, and can forecast requested
 cold lane ids through `predict_for_lanes()`.
+
+In the interactive forecast example, `extra_regressors`, `events`, and
+`holidays` flow into the same neural-panel feature contract, so known future
+covariates stay part of the forecast input.
 
 ## Interactive Example
 
-<ForecastModelExample title="Neural panel taxi-lane forecast" model="neural_panel" />
+<ForecastModelExample title="Neural panel forecast" model="neural_panel" />
 
-The embedded example runs the browser-local wasm forecast path for
-`neural_panel` on taxi-lane rows. Use it as a quick syntax and shape check, not
-as quality evidence. Quality claims still need the maintained split benchmark
-against seasonal naive and `CartoBoostLagForecaster`.
+The embedded example runs locally. Use it as a quick syntax and shape check,
+not as quality evidence. Quality claims still need the maintained split
+benchmark against seasonal naive and `CartoBoostLagForecaster`.
 
 ## When To Use
 
@@ -29,7 +32,8 @@ Use this model when the hypothesis needs:
 
 - direct multi-horizon panel forecasts rather than recursive local forecasts;
 - fitted target-lag state through AR-Net with `n_lags`;
-- future-known regressors, lagged regressors, event offsets, or Fourier terms;
+- future-known regressors, lagged regressors, event offsets, conditional
+  seasonalities, or Fourier terms;
 - global, local, or glocal trend, seasonality, event, and regressor behavior by
   series id;
 - quantile output with non-crossing repair;
@@ -60,12 +64,12 @@ The forward path is:
 6. map the median-first internal quantile layout back to requested quantile
    levels and repair crossings around the median output.
 
-AR-Net and Covar-Net are Rust-native MLPs using deterministic Kaiming-style
-initialization, ReLU hidden layers from `ar_layers` and `lagged_reg_layers`, and
-an output width of `n_forecasts * len(quantiles)`. Training uses an AdamW-style
-update loop. The default loss is SmoothL1; `loss="mse"`, `loss="mae"`, and
-`loss="pinball"` are also accepted. Set `newer_sample_weight=True` to use a
-monotone cosine recency ramp.
+AR-Net and Covar-Net use deterministic Kaiming-style initialization, ReLU
+hidden layers from `ar_layers` and `lagged_reg_layers`, and an output width of
+`n_forecasts * len(quantiles)`. Training uses an AdamW-style update loop. The
+default loss is SmoothL1; `loss="mse"`, `loss="mae"`, and `loss="pinball"` are
+also accepted. Set `newer_sample_weight=True` to use a monotone cosine recency
+ramp.
 
 Quantile heads use a median-first internal layout: the median residual lives at
 index 0 for each horizon, and non-median quantiles use learned positive or
@@ -83,6 +87,25 @@ dropping the regressor.
 and `lane_graph_*`. These generated covariates are added to the inner neural
 panel as additive future regressors, so fitted nonstationary feature weights
 learn from lane identity and directional graph summaries.
+
+`holidays` and `country_holidays` are also accepted on the Python wrapper. When
+you fit with a `ForecastFrame`, CartoBoost injects those holiday indicators as
+known-future covariates so the native neural panel can train on them directly.
+Use `make_future_dataframe(frame, periods)` to build the future scaffold and
+reuse the same holiday injection logic for forecast-time frames.
+You can also add regressors and events after construction with
+`add_seasonality()`, `add_future_regressor()`, `add_lagged_regressor()`,
+`add_events()`, and `add_country_holidays()`. For forecast inspection, use
+`components_json()` or the browser `includeComponents` option to get a horizon
+breakdown of trend, feature, AR, and lagged-regressor contributions. Use
+`history_components_json()` or browser `includeHistoryComponents` to inspect
+the fitted training rows.
+
+Custom seasonalities can be gated with a `condition_name` covariate. When the
+condition is false, the Fourier term is masked to zero at both fit and
+prediction time. When the condition is constant per series, CartoBoost stores
+it as static future state so prediction can proceed without a separate future
+frame.
 
 Use `seasonality_global_local`, `event_global_local`, and
 `regressor_global_local` to choose `global`, `local`, or `glocal` parameter

@@ -423,6 +423,72 @@ fn neural_panel_daily_fourier_component_changes_direct_forecast() {
 }
 
 #[test]
+fn neural_panel_custom_seasonality_feature_names_are_period_agnostic() {
+    let frame = taxi_colon_frame();
+    let model = NeuralPanelForecaster::new(NeuralPanelConfig {
+        n_lags: 3,
+        n_forecasts: 1,
+        custom_seasonalities: BTreeMap::from([("taxi_cycle".to_string(), (12.0, 2))]),
+        ..NeuralPanelConfig::default()
+    })
+    .expect("model");
+
+    let dataset = model.window_dataset(&frame).expect("windows");
+    let names = dataset.future_feature_names();
+
+    assert!(names
+        .iter()
+        .any(|name| name == "seasonality:taxi_cycle:sin:1"));
+    assert!(names
+        .iter()
+        .any(|name| name == "seasonality:taxi_cycle:cos:2"));
+    assert!(names.iter().all(|name| !name.contains("taxi_cycle:sin:1:")));
+    assert!(names.iter().all(|name| !name.contains("taxi_cycle:cos:1:")));
+}
+
+#[test]
+fn neural_panel_conditional_custom_seasonality_requires_condition_and_masks_when_false() {
+    let rows = (1..=4)
+        .map(|hour| {
+            ForecastRow::from_timestamp_str_with_covariates(
+                "A:B",
+                &timestamp(hour),
+                30.0 + hour as f64,
+                BTreeMap::from([(
+                    "rush_hour".to_string(),
+                    if hour % 2 == 0 { 1.0 } else { 0.0 },
+                )]),
+            )
+            .expect("row")
+        })
+        .collect::<Vec<_>>();
+    let frame = ForecastFrame::new(rows, ForecastFrequency::Hourly).expect("frame");
+    let model = NeuralPanelForecaster::new(NeuralPanelConfig {
+        n_lags: 1,
+        n_forecasts: 1,
+        custom_seasonalities: BTreeMap::from([("taxi_cycle".to_string(), (24.0, 1))]),
+        custom_seasonality_conditions: BTreeMap::from([(
+            "taxi_cycle".to_string(),
+            Some("rush_hour".to_string()),
+        )]),
+        ..NeuralPanelConfig::default()
+    })
+    .expect("model");
+
+    let dataset = model.window_dataset(&frame).expect("windows");
+    let names = dataset.future_feature_names();
+    let seasonality_idx = names
+        .iter()
+        .position(|name| name == "seasonality:taxi_cycle:sin:1")
+        .expect("seasonality feature");
+    let first_window = &dataset.windows()[0];
+    let second_row_features = &first_window.future_features[1];
+
+    assert_eq!(first_window.future_features[0][seasonality_idx], 0.0);
+    assert!(second_row_features[seasonality_idx].abs() > 0.0);
+}
+
+#[test]
 fn neural_panel_predict_with_known_future_regressors_uses_supplied_covariates() {
     let rows = (0..12)
         .map(|hour| {
@@ -486,6 +552,116 @@ fn neural_panel_predict_with_known_future_regressors_uses_supplied_covariates() 
         .mean;
 
     assert_ne!(no_promo, with_promo);
+}
+
+#[test]
+fn neural_panel_predict_components_include_known_future_breakdown() {
+    let rows = (0..12)
+        .map(|hour| {
+            let promo = if hour % 3 == 0 { 1.0 } else { 0.0 };
+            ForecastRow::from_timestamp_str_with_covariates(
+                "A:B",
+                &timestamp(hour),
+                10.0 + 4.0 * promo,
+                BTreeMap::from([("promo".to_string(), promo)]),
+            )
+            .expect("row")
+        })
+        .collect::<Vec<_>>();
+    let frame = ForecastFrame::new(rows, ForecastFrequency::Hourly).expect("frame");
+    let mut model = NeuralPanelForecaster::new(NeuralPanelConfig {
+        n_lags: 3,
+        n_forecasts: 1,
+        trend: forecasting::TrendMode::Off,
+        future_regressors: BTreeMap::from([(
+            "promo".to_string(),
+            forecasting::ComponentMode::Additive,
+        )]),
+        seed: 23,
+        ..NeuralPanelConfig::default()
+    })
+    .expect("model");
+
+    model.fit(&frame).expect("fit");
+    let last_timestamp = frame
+        .rows_for_series("A:B")
+        .last()
+        .expect("last row")
+        .timestamp;
+    let next_timestamp = frame
+        .frequency()
+        .advance(last_timestamp, 1)
+        .expect("next timestamp");
+    let components = model
+        .predict_components_json_value_with_known_future_covariates(
+            1,
+            Some(&BTreeMap::from([(
+                ("A:B".to_string(), next_timestamp),
+                BTreeMap::from([("promo".to_string(), 1.0)]),
+            )])),
+        )
+        .expect("components");
+    let tensor = model
+        .predict_tensor_with_known_future_covariates(
+            1,
+            &BTreeMap::from([(
+                ("A:B".to_string(), next_timestamp),
+                BTreeMap::from([("promo".to_string(), 1.0)]),
+            )]),
+        )
+        .expect("tensor");
+    let rows = components["series"]["A:B"].as_array().expect("series rows");
+    let row = &rows[0];
+
+    assert_eq!(components["quantile_levels"][0].as_f64(), Some(0.5));
+    assert_eq!(row["horizon"].as_u64(), Some(1));
+    assert_eq!(row["quantiles"][0].as_f64(), Some(tensor["A:B"][0][0]));
+    assert!(row["prediction"].as_f64().expect("prediction").is_finite());
+    assert!(row["feature_contributions"]["additive"]["promo"]
+        .as_f64()
+        .expect("promo contribution")
+        .is_finite());
+}
+
+#[test]
+fn neural_panel_history_components_track_fitted_rows() {
+    let rows = (0..12)
+        .map(|hour| {
+            let promo = if hour % 3 == 0 { 1.0 } else { 0.0 };
+            ForecastRow::from_timestamp_str_with_covariates(
+                "A:B",
+                &timestamp(hour),
+                10.0 + 4.0 * promo,
+                BTreeMap::from([("promo".to_string(), promo)]),
+            )
+            .expect("row")
+        })
+        .collect::<Vec<_>>();
+    let frame = ForecastFrame::new(rows, ForecastFrequency::Hourly).expect("frame");
+    let mut model = NeuralPanelForecaster::new(NeuralPanelConfig {
+        n_lags: 3,
+        n_forecasts: 1,
+        trend: forecasting::TrendMode::Off,
+        future_regressors: BTreeMap::from([(
+            "promo".to_string(),
+            forecasting::ComponentMode::Additive,
+        )]),
+        seed: 23,
+        ..NeuralPanelConfig::default()
+    })
+    .expect("model");
+
+    model.fit(&frame).expect("fit");
+    let history = model.history_components_json_value().expect("history");
+    let rows = history["series"]["A:B"].as_array().expect("history rows");
+
+    assert_eq!(rows.len(), 12);
+    assert_eq!(rows[0]["index"].as_u64(), Some(0));
+    assert!(rows[0]["actual"].as_f64().expect("actual").is_finite());
+    assert!(rows[0]["prediction"]
+        .as_f64()
+        .expect("prediction")
+        .is_finite());
 }
 
 #[test]

@@ -1,4 +1,4 @@
-# Choose A Model
+# Choose A CartoBoost Model
 
 Use this page as the user-guide router. CartoBoost has several first-class
 model surfaces, and the right entry point depends on the scientific structure
@@ -12,38 +12,36 @@ against simpler baselines under the same split before interpreting a gain.
 
 | Question | Use | Primary guide |
 | --- | --- | --- |
-| Does each row describe one taxi trip, route observation, zone-hour aggregate, or residual to regress? | `cartoboost.CartoBoostRegressor` | [CartoBoost Regressor](boosting-models/regressor.md) |
-| Is the target a class label such as airport-trip flag, high-delay bucket, or route-risk class? | `cartoboost.CartoBoostClassifier` | [CartoBoost Classifier](boosting-models/classifier.md) |
-| Are rows grouped by search, customer, pickup zone, lane, or route request and need within-group ordering? | `cartoboost.CartoBoostRanker` | [CartoBoost Ranker](boosting-models/ranker.md) |
+| Does each row describe one observation with a numeric target or residual to regress? | `cartoboost.CartoBoostRegressor` | [CartoBoost Regressor](boosting-models/cartoboost-regressor.md) |
+| Is the target a class label? | `cartoboost.CartoBoostClassifier` | [CartoBoost Classifier](boosting-models/cartoboost-classifier.md) |
+| Are rows grouped and need within-group ordering? | `cartoboost.CartoBoostRanker` | [CartoBoost Ranker](boosting-models/cartoboost-ranker.md) |
 | Are you choosing how place, time, sparse memberships, losses, fuzzy routing, or local residual trends enter that row-level model? | `CartoBoostRegressor` parameters | [Parameters](parameters.md) |
-| Is the target one regular pickup-zone or lane series with its own history? | Local forecasters such as `SeasonalNaiveForecaster`, `ThetaForecaster`, `ETSForecaster`, `AutoARIMAForecaster`, or `KalmanForecaster` | [Forecasting Model Guides](forecasting-models/index.md) |
-| Are many related pickup zones, dropoff zones, or route panels forecast from shared lag features? | `CartoBoostLagForecaster` | [CartoBoost Lag](forecasting-models/cartoboost-lag.md) |
+| Is the target one regular time series with its own history? | Local forecasters such as `SeasonalNaiveForecaster`, `ThetaForecaster`, `ETSForecaster`, `AutoARIMAForecaster`, or `KalmanForecaster` | [CartoBoost Forecasting Model Guides](forecasting-models/index.md) |
+| Are many related series forecast from shared lag features? | `CartoBoostLagForecaster` | [CartoBoost Lag](forecasting-models/cartoboost-lag.md) |
 | Should nearby coordinates borrow signal for a forecast panel? | `KrigingForecaster` | [Kriging](forecasting-models/kriging.md) |
 | Should temporal changepoints and seasonality be fused with cutoff-safe spatial kriging? | `SpatialPiecewiseKrigingForecaster` | [Spatial Piecewise Kriging](forecasting-models/spatial-piecewise-kriging.md) |
-| Should a neural panel forecaster preserve directional pickup-dropoff lane identity? | `NeuralPanelForecaster` or `LaneNeuralPanelForecaster` | [Neural Panel](forecasting-models/neural-panel.md) |
-| Should a deterministic neural forecasting expert learn from regular taxi-demand windows? | `NBeatsForecaster` or `NHiTSForecaster` | [Forecasting Model Guides](forecasting-models/index.md) |
+| Should a neural panel forecaster preserve directional entity identity? | `NeuralPanelForecaster` or `LaneNeuralPanelForecaster` | [Neural Panel](forecasting-models/neural-panel.md) |
 | Do you need a fixed combination of fitted forecasters? | `WeightedEnsembleForecaster` | [Weighted Ensembles](forecasting-models/ensembles.md) |
-| Are stable pickup zones, dropoff zones, or pairs themselves the learned artifact? | `NeuralEmbeddingStandaloneRegressor` | [Standalone Embedding Regressor](neural-models/standalone-embedding.md) |
-| Is the relationship network the object being modeled? | Graph standalone regressors or link predictors | [Graph Model Guides](graph-models/index.md) |
-| Do graph or neural embeddings only need to become columns for another estimator? | `GraphFeatureTransformer`, `NeuralEmbeddingFeatures`, or `NeuralEmbeddingRegressor` | [Graph Feature Workflows](graph-models/feature-workflows.md), [Embedding Feature Workflows](neural-models/embedding-features.md) |
+| Are stable ids themselves the learned artifact? | `NeuralEmbeddingStandaloneRegressor` | [CartoBoost Neural Embedding Regressor](neural-models/cartoboost-neural-embedding.md) |
+| Is the relationship network the object being modeled? | Graph models | [CartoBoost Graph Model Guides](graph-models/index.md) |
+| Do graph or neural embeddings only need to become columns for another estimator? | `GraphFeatureTransformer`, `NeuralEmbeddingFeatures`, or `NeuralEmbeddingRegressor` | [Graph Features](../graph-features.md), [Neural Features](../neural-features.md) |
 | Do you need one-off forecast or spatial utilities? | Functions such as `theta_forecast`, `kalman_filter`, or `ordinary_kriging_predict` | [General Utilities](../general_utilities.md) |
 
 ## When CartoBoostRegressor Fits
 
-`CartoBoostRegressor` is the main sklearn-style estimator for row-level taxi
+`CartoBoostRegressor` is the main sklearn-style estimator for row-level
 regression. It is a good scientific choice when the target is plausibly shaped
 by structured place/time effects rather than only by generic dense covariates.
-Examples include fare, duration, demand, or residual models where pickup and
-dropoff zones, route memberships, hour-of-day, local neighborhoods, or fuzzy
-service boundaries should be part of the model rather than hidden in many
-preprocessing columns.
+Examples include duration, fare, demand, or residual models where route
+memberships, hour-of-day, local neighborhoods, or fuzzy service boundaries
+should be part of the model rather than hidden in preprocessing columns.
 
 Prefer it for experiments where you want to ask questions such as:
 
-- Do pickup/dropoff effects persist after controlling for trip distance, hour,
-  and day features?
-- Are sparse zones, routes, H3/S2 cells, or service areas informative even when
-  many memberships are rare?
+- Do structured place/time effects persist after controlling for distance,
+  hour, and day features?
+- Are sparse zones, routes, H3/S2 cells, or service areas informative even
+  when many memberships are rare?
 - Does a smooth transition near a learned spatial boundary reduce localized
   residual artifacts?
 - Does an outlier-resistant or quantile objective match the scientific target
@@ -58,11 +56,11 @@ controls satisfy the specific holdout or diagnostic that matters for the study.
 
 ## Tabular And Spatial Regression
 
-Start with dense numeric columns for the measured quantities: trip distance,
-projected pickup/dropoff coordinates, pickup hour, day of week, route-level
-aggregates, fare history, or duration history. Add sparse-set features when a
-row belongs to pickup zones, dropoff zones, H3/S2 cells, service areas, route
-memberships, or overlapping operational regions.
+Start with dense numeric columns for the measured quantities: distance,
+projected coordinates, hour, day of week, route-level aggregates, fare
+history, or duration history. Add sparse-set features when a row belongs to
+zones, H3/S2 cells, service areas, route memberships, or overlapping
+operational regions.
 
 ```python
 from cartoboost import CartoBoostRegressor
@@ -85,21 +83,21 @@ Choose controls from the structure you want to test:
 | Dense tabular baseline | `splitters=None`, `["auto"]`, `["axis"]`, or `["axis_histogram:<bins>"]` |
 | Spatial boundaries in coordinates | `["axis", "diagonal_2d", "gaussian_2d"]` |
 | Wraparound time effects | `["axis", "periodic:24"]` or another `periodic:<period>` |
-| Sparse pickup/dropoff zones, routes, cells, or areas | `["axis", "sparse_set"]` plus `sparse_sets=` |
-| Native categorical pickup/dropoff labels or service tiers | `FeatureKind.CATEGORICAL` or `FeatureKind.ORDINAL` in `feature_schema=` |
+| Sparse zones, routes, cells, or areas | `["axis", "sparse_set"]` plus `sparse_sets=` |
+| Native categorical labels or service tiers | `FeatureKind.CATEGORICAL` or `FeatureKind.ORDINAL` in `feature_schema=` |
 | Smooth changes near boundaries | `fuzzy=True`, `fuzzy_bandwidth=...`, `fuzzy_kernel=...` |
 | Outlier-resistant regression | `loss="mae"`, `loss="huber"`, or `loss="log_l2"` |
 | Conditional intervals or asymmetric service targets | `loss="quantile"`, `quantile_alpha=...` |
 | Local residual trend inside learned regions | `leaf_predictor="linear"`, `linear_leaf_features=[...]` |
 | Domain monotonicity | `monotonic_constraints=[...]` |
 
-See [CartoBoost Regressor](boosting-models/regressor.md), [Python API Reference](../reference/python-api.md), [Parameters](parameters.md),
+See [CartoBoost Regressor](boosting-models/cartoboost-regressor.md), [Python API Reference](../reference/python-api.md), [Parameters](parameters.md),
 [Feature Schema](../feature_schema.md), [Sparse Features](../sparse_features.md),
 and [Temporal-Spatial Modeling](../spatial_modeling.md).
 
 ## Categorical Features
 
-Regressor, classifier, and ranker inputs may include pandas categorical,
+CartoBoost regressor, classifier, and ranker inputs may include pandas categorical,
 string, or object columns, or columns explicitly marked with
 `FeatureKind.CATEGORICAL` or `FeatureKind.ORDINAL`. CartoBoost records a stable
 category mapping in saved artifacts. Low-cardinality nominal columns become
@@ -111,7 +109,7 @@ unknown-category value.
 ```python
 from cartoboost import CartoBoostRegressor, FeatureKind
 
-schema = {"dense": [{"name": "PULocationID", "kind": FeatureKind.CATEGORICAL}]}
+schema = {"dense": [{"name": "location_id", "kind": FeatureKind.CATEGORICAL}]}
 model = CartoBoostRegressor(splitters=["axis"])
 model.fit(zone_features, fare, feature_schema=schema)
 pred = model.predict(zone_features_holdout)
@@ -123,12 +121,12 @@ encoding and evaluate on the same split.
 
 ## Tabular And Spatial Classification
 
-Use `CartoBoostClassifier` when each row has a discrete taxi-domain label and
-the decision boundary may depend on pickup/dropoff coordinates, hour, route
-memberships, or sparse zone signals. The classifier fits binary logistic loss
-for two classes and multiclass logistic loss for three or more classes, with
-sklearn-style label handling, `predict`, `predict_proba`, `decision_function`,
-`class_weight`, and save/load label metadata.
+Use `CartoBoostClassifier` when each row has a discrete label and the decision
+boundary may depend on time, location, route memberships, or sparse signals.
+The CartoBoost classifier fits binary logistic loss for two classes and
+multiclass logistic loss for three or more classes, with sklearn-style label
+handling, `predict`, `predict_proba`, `decision_function`, `class_weight`, and
+save/load label metadata.
 
 ```python
 from cartoboost import CartoBoostClassifier
@@ -145,18 +143,16 @@ clf.fit(X_train, airport_trip_flag)
 prob_airport = clf.predict_proba(X_test)[:, list(clf.classes_).index(1)]
 ```
 
-Report classifier quality with logloss plus threshold-free metrics such as
-ROC-AUC or PR-AUC when the positive class is rare. Compare against dummy and
-standard tabular baselines on the same train/test split before interpreting a
-CartoBoost gain.
+Report CartoBoost classifier quality with logloss plus threshold-free metrics
+such as ROC-AUC or PR-AUC when the positive class is rare. Compare against
+dummy and standard tabular baselines on the same train/test split before
+interpreting a CartoBoost gain.
 
 ## Grouped Ranking
 
-Use `CartoBoostRanker` when rows are only comparable within a query group:
-candidate dropoff zones for one pickup, route alternatives for one shipment,
-or ranked taxi-zone actions for one planning context. The ranker uses pairwise
-logistic or LambdaRank objectives and reports NDCG, MAP, and MRR from grouped
-predictions.
+Use `CartoBoostRanker` when rows are only comparable within a query group. The
+CartoBoost ranker uses pairwise logistic or LambdaRank objectives and reports
+NDCG, MAP, and MRR from grouped predictions.
 
 ```python
 from cartoboost import CartoBoostRanker
@@ -180,11 +176,11 @@ contiguous query ids, or set `group_col` when the query id is a column in `X`.
 
 Use spatial validation when the claim is about generalizing to withheld zones,
 route corridors, or environmental regimes rather than interpolating among
-nearby training rows. `spatial_buffered_cv` holds out spatial blocks and removes
-nearby training rows inside a buffer. `spatial_grouped_cv` combines whole-group
-holdout with the same optional buffer, which is useful for pickup zones,
-customer groups, or lane ids. `environmental_blocked_cv` clusters covariates
-such as weather, demand regimes, or operational conditions.
+nearby training rows. `spatial_buffered_cv` holds out spatial blocks and
+removes nearby training rows inside a buffer. `spatial_grouped_cv` combines
+whole-group holdout with the same optional buffer, which is useful for grouped
+entities. `environmental_blocked_cv` clusters covariates such as weather,
+demand regimes, or operational conditions.
 
 ```python
 from cartoboost import residual_morans_i, spatial_buffered_cv, spatial_cv_gap
@@ -209,14 +205,13 @@ distances.
 
 Use the [Modeling Lab](../../modeling-lab) when you want to inspect a fitted
 CartoBoost model in the browser before moving to a Python or CLI workflow. The
-lab runs locally, loads bundled single-lane or varied-route yellow taxi samples,
-and renders the fitted tree structure without sending data to a server.
+lab runs locally, loads bundled samples, and renders the fitted tree structure
+without sending data to a server.
 
 The visualizer summarizes the boosted trees, split kinds, top splitter rules,
 depth profile, and largest holdout residuals after fitting. This is the best
 place to confirm whether axis, diagonal spatial, Gaussian spatial, periodic,
-sparse-set, or fuzzy splitters are actually used on taxi pickup, dropoff, route,
-fare, distance, duration, and demand features.
+sparse-set, or fuzzy splitters are actually used on your features.
 
 ## Forecasting
 
@@ -225,20 +220,20 @@ Forecasting has two documentation layers:
 | Layer | Covers | Start here |
 | --- | --- | --- |
 | Forecasting wrapper | `ForecastFrame`, dataframe conversion, rolling-origin backtesting, forecast metrics, artifacts, CLI workflows, and leakage checks | [Forecasting](../forecasting.md) |
-| Forecasting model guides | Model-specific examples, interactive lab links, and tuning notes for forecasting classes | [Forecasting Model Guides](forecasting-models/index.md) |
+| CartoBoost forecasting model guides | Model-specific examples, interactive lab links, and tuning notes for forecasting classes | [CartoBoost Forecasting Model Guides](forecasting-models/index.md) |
 
-Use `ForecastFrame.from_pandas` for production taxi demand or fare-duration
-workflows because it validates timestamps, frequency, duplicate rows, target
-values, panel ids, and covariate roles:
+Use `ForecastFrame.from_pandas` for production demand or time-series workflows
+because it validates timestamps, frequency, duplicate rows, target values,
+panel ids, and covariate roles:
 
 ```python
 from cartoboost.forecasting import ForecastFrame
 
 frame = ForecastFrame.from_pandas(
     hourly_zone_demand,
-    timestamp_col="pickup_hour",
-    target_col="pickup_count",
-    series_id_col="PULocationID",
+    timestamp_col="timestamp",
+    target_col="demand",
+    series_id_col="entity_id",
     freq="h",
     known_future_covariates=["hour", "day_of_week"],
 )
@@ -253,7 +248,7 @@ Choose the model guide by series structure:
 | Additive level, trend, or seasonality | [ETS](forecasting-models/ets.md) |
 | Autocorrelation and differencing | [ARIMA And AutoARIMA](forecasting-models/arima.md) |
 | Noisy local level and trend | [Kalman](forecasting-models/kalman.md) |
-| Sparse non-negative pickup demand with many true zero periods | `CrostonForecaster`, `SbaForecaster`, or `TsbForecaster` |
+| Sparse non-negative demand with many true zero periods | `CrostonForecaster`, `SbaForecaster`, or `TsbForecaster` |
 | Interpretable trend, changepoints, seasonality, events, and regressors | [Piecewise Linear Seasonal](forecasting-models/piecewise-linear-seasonal) |
 | Prophet-compatible forecast plotting for Prophet-shaped outputs | [Plotting](../plotting.md) |
 | Coordinate-aware panel interpolation | [Kriging](forecasting-models/kriging.md) |
@@ -262,7 +257,6 @@ Choose the model guide by series structure:
 | Directional neural panel forecasting | [Neural Panel](forecasting-models/neural-panel.md) |
 | Reusable statistical expert-bank selection | `AutoStatsBank` |
 | Guarded default selector over forecast candidates | [AutoForecaster](forecasting-models/auto-forecaster.md) |
-| Windowed neural extrapolation | `NBeatsForecaster` or `NHiTSForecaster` |
 | Fixed-weight combinations of fitted forecasters | [Weighted Ensembles](forecasting-models/ensembles.md) |
 
 ## Graph And Neural Models
@@ -272,10 +266,10 @@ for `CartoBoostRegressor`.
 
 Use `NeuralEmbeddingStandaloneRegressor` when the learned ID embedding is the
 artifact to train, score, save, and serve. This works best when train and
-prediction populations share stable IDs such as pickup zones, dropoff zones,
-pickup-dropoff pairs, zone-hour buckets, or trip clusters. Under cold-zone or
-cold-ID holdouts, report fallback behavior explicitly because unseen IDs cannot
-recover learned ID-specific effects.
+prediction populations share stable IDs such as zone IDs, route pairs,
+zone-hour buckets, or trip clusters. Under cold-ID or cold-route holdouts,
+report fallback behavior explicitly because unseen IDs cannot recover learned
+ID-specific effects.
 
 Use graph standalone regressors when relationships matter:
 
@@ -289,8 +283,8 @@ Use graph standalone regressors when relationships matter:
 Use graph or neural feature generators only when embeddings should become dense
 columns for another model.
 
-See [Graph Model Guides](graph-models/index.md), [Graph Features](../graph-features.md),
-and [Neural Model Guides](neural-models/index.md).
+See [CartoBoost Graph Model Guides](graph-models/index.md), [Graph Features](../graph-features.md),
+and [CartoBoost Neural Model Guides](neural-models/index.md).
 
 ## Validation Defaults
 
@@ -304,22 +298,22 @@ the same split:
 | Neural embeddings | A non-neural `CartoBoostRegressor` under random, temporal, and cold-ID splits where relevant. |
 | Graph models | A tabular route model and a graph-free ID or zone baseline. |
 
-For NYC taxi work, report the target, split, row count, features, RMSE, MAE,
-R2 when applicable, train time, prediction time, and exact command or notebook
-entry point used to produce the numbers.
+For structured data work, report the target, split, row count, features, RMSE,
+MAE, R2 when applicable, train time, prediction time, and exact command or
+notebook entry point used to produce the numbers.
 
 ## Recommended Reading Order
 
 1. Read [Getting Started](../getting-started.md) for installation, the first
    model fit, and local validation commands.
 2. Use this chooser to pick the model family.
-3. For row-level boosting, read the [Boosting Model Guides](boosting-models/index.md), then
+3. For row-level boosting, read the [CartoBoost Boosting Model Guides](boosting-models/index.md), then
    [Parameters](parameters.md), then [Temporal-Spatial Modeling](../spatial_modeling.md)
    and the relevant feature pages.
 4. For time-series work, read the [Forecasting](../forecasting.md) page
    when you need `ForecastFrame`, backtesting, forecast artifacts, or the CLI.
-   Read [Forecasting Model Guides](forecasting-models/index.md) when you need examples for
+   Read [CartoBoost Forecasting Model Guides](forecasting-models/index.md) when you need examples for
    a specific model class.
-5. For graph work, start with the [Graph Model Guides](graph-models/index.md). For
-   neural work, start with the [Neural Model Guides](neural-models/index.md) before
+5. For graph work, start with the [CartoBoost Graph Model Guides](graph-models/index.md). For
+   neural work, start with the [CartoBoost Neural Model Guides](neural-models/index.md) before
    using feature-generation helpers.

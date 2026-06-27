@@ -91,7 +91,6 @@ The JSON wrapper uses:
 - `artifact_type: "cartoboost.weights"`
 - `weights_artifact_version: 1`
 - `model_artifact_version`
-- `backend`
 - `model`
 
 The `model` field contains the same versioned model payload used by CartoBoost

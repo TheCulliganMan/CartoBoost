@@ -1,333 +1,41 @@
 # CartoBoost
 
-CartoBoost is a Python spatial boosting toolkit for regression,
-classification, ranking, forecasting, graph, and neural-embedding modeling.
+CartoBoost is a Python toolkit for structured regression, classification,
+ranking, and forecasting. Use the docs to choose the right model family, then
+compare it against strong baselines on the same split.
 
 ## Primary Docs
 
 - README: ./README.md
-- Documentation home: ./docs/index.md
-- Docusaurus config: ./docusaurus.config.ts
-- Docusaurus sidebar: ./sidebars.ts
-- Docs homepage component: ./src/pages/index.tsx
-- Modeling Lab page: ./src/pages/modeling-lab.tsx
-- Modeling Lab client: ./src/components/ModelingLabClient/index.tsx
-- Modeling Lab forecast debugger: browser-local piecewise linear seasonal
-  forecasts use Prophet-style modeling aliases, expose
-  `spatial_piecewise_kriging` for coordinate-bearing taxi panels, request
-  component and history-component payloads, and render Prophet-style trend,
-  fitted, residual, movement, spatial diagnostic columns, and every numeric
-  component key returned by the interactive model. The same model surface exposes
-  `runGeotemporalDiagnostics` for quantile diagnostics, residual-state
-  correction, regime-aware interval adjustment, and probability calibration.
-- Modeling Lab samples: ./static/samples/yellow_taxi_2024-01-single-lane-5000.parquet
-  and ./static/samples/yellow_taxi_2024-01-varied-routes-2500.parquet
-- Docs theme stylesheet: ./src/css/custom.css
-- Installation: ./docs/installation.md
+- Docs home: ./docs/index.md
 - Getting started: ./docs/getting-started.md
 - Choose a model: ./docs/user-guide/model-types.md
 - Boosting model guides: ./docs/user-guide/boosting-models/index.md
-- Model guides: ./docs/user-guide/forecasting-models/index.md
-- Forecasting model guide pages include Python code and interactive examples
-  from ./src/components/ModelingLabClient/index.tsx so readers can run each
-  supported forecast model directly in the docs.
-- Piecewise linear seasonal forecasting is exposed through
-  `cartoboost.forecasting.PiecewiseLinearSeasonalForecaster` and the browser
-  `piecewise_linear_seasonal` forecast model, including fitted artifact
-  prediction, automatic or explicit changepoints, Prophet-shaped holiday
-  tables, optional country holiday calendars via `cartoboost[holidays]`, prior
-  scale aliases normalized into regularization settings, and component decomposition
-  payloads. Use `trend_adjustments` /
-  `trend_adjustments_by_series` for external market-belief trend multipliers
-  and `residual_shock_window`, `residual_shock_scale`, and
-  `residual_shock_decay` for opt-in recent residual shock propagation. Use
-  `history_components()`, `history_components_frame()`, and
-  `history_components_json()` to inspect fitted historical trend, trend
-  movement, seasonality, event, regressor, and residual values before
-  rolling-origin holdouts.
-- `cartoboost.forecasting.SpatialPiecewiseKrigingForecaster` combines
-  interpretable temporal components with ordinary kriging. Use it for
-  taxi pickup/dropoff panels with stable coordinates when piecewise seasonal
-  base forecasts need cutoff-safe kriged regressors, residual kriging, or the
-  hybrid mode. Result JSON includes final prediction, base mean, spatial
-  correction, kriging variance, selected neighbors, components, and metadata.
-- Spatial piecewise kriging benchmark evidence is produced by
-  `uv run --group dev python scripts/forecasting_benchmark.py --days 180
-  --horizon 7 --folds 1 --panel-series 6 --output
-  target/spatial_piecewise_kriging_benchmark.json`; the
-  `spatial_piecewise_kriging_panel` aggregate compares Naive, SeasonalNaive,
-  PiecewiseLinearSeasonal, KrigingForecaster, and
-  `spatial_piecewise_kriging_hybrid` under the same rolling-origin split with
-  RMSE, MAE, WAPE, fit/predict timing, and baseline deltas.
-- AutoForecaster guide: ./docs/user-guide/forecasting-models/auto-forecaster.md
-- Piecewise linear seasonal guide: ./docs/user-guide/forecasting-models/piecewise-linear-seasonal.md
-- Spatial piecewise kriging guide: ./docs/user-guide/forecasting-models/spatial-piecewise-kriging.md
-- ARIMA and AutoARIMA guide: ./docs/user-guide/forecasting-models/arima.md
-- Python API reference: ./docs/reference/python-api.md
-- Plotting: ./docs/plotting.md
-- Parameters: ./docs/user-guide/parameters.md
-- Spatial modeling: ./docs/spatial_modeling.md
-- Graph model guides: ./docs/user-guide/graph-models/index.md
-- Graph models and features: ./docs/graph-features.md
-- Neural model guides: ./docs/user-guide/neural-models/index.md
-- Neural embedding models and features: ./docs/neural-features.md
-- Benchmarks: ./docs/benchmarks/index.md
-- Forecasting benchmarks, CartoBoost piecewise local diagnostics, and M4/M5/M6 evidence: ./docs/benchmarks/forecasting.md
-- NYC regression benchmark evidence: ./docs/benchmarks/nyc-taxi.md
-- Tabular and graph model-suite evidence: ./docs/benchmarks/model-suite.md
-- Forecasting workflow: ./docs/forecasting.md
-- Geotemporal diagnostics: ./docs/forecasting.md#advanced-behavior
 - Forecasting model guides: ./docs/user-guide/forecasting-models/index.md
-- Neural Panel forecasting guide with interactive wasm example: ./docs/user-guide/forecasting-models/neural-panel.md
-- `ForecastFrame.from_pandas(..., sample_weight_col=...)` collapses duplicate
-  series/timestamp taxi observations into one native row with weighted-mean
-  target/covariates and summed timestamp weight.
+- Graph model guides: ./docs/user-guide/graph-models/index.md
+- Neural model guides: ./docs/user-guide/neural-models/index.md
+- Forecasting reference: ./docs/forecasting.md
+- Graph features contract: ./docs/graph-features.md
+- Neural features contract: ./docs/neural-features.md
+- Benchmarks: ./docs/benchmarks/index.md
+- Model benchmark suite: ./docs/benchmarks/model-suite.md
+- NYC taxi benchmark report: ./docs/benchmarks/nyc-taxi.md
 
-## Public Python Entry Points
+## Public Surfaces
 
-- `cartoboost.CartoBoostRegressor`: sklearn-style tabular regressor.
-- `cartoboost.CartoBoostClassifier`: sklearn-style classifier with
-  binary and multiclass logloss, `predict_proba`, `decision_function`, and
-  class-weight support.
-- `cartoboost.CartoBoostRanker`: sklearn-style grouped ranker with
-  pairwise logistic and LambdaRank objectives plus NDCG/MAP/MRR metrics.
-- Native categorical handling is shared across regressor, classifier, and
-  ranker wrappers for pandas categorical/string/object columns or
-  `FeatureKind.CATEGORICAL` / `FeatureKind.ORDINAL` schema entries. Artifacts
-  persist stable category mappings for one-hot, subset partition, ordinal, or
-  smoothed target statistic encodings.
-- Spatial validation helpers include `spatial_buffered_cv`,
-  `spatial_grouped_cv`, and `environmental_blocked_cv`; diagnostics include
-  logloss, ROC-AUC, PR-AUC, Brier score, ECE, NDCG, MAP, MRR,
-  `residual_morans_i`, and `spatial_cv_gap`.
-- User-facing v0.2 guides live at `docs/user-guide/classification-quickstart.md`,
-  `docs/user-guide/ranking-quickstart.md`,
-  `docs/user-guide/categorical-features.md`,
-  `docs/user-guide/spatial-cv-best-practices.md`, and
-  `docs/benchmarks/methodology.md`.
-- The v0.2 modeling smoke benchmark runner is
-  `scripts/run_v02_modeling_benchmarks.py`; it writes JSON, JSONL, and
-  Markdown artifacts under `target/v02-benchmarks` by default.
-- `cartoboost.NeuralEmbeddingStandaloneRegressor`: direct supervised ID
-  embedding regressor.
-- `cartoboost.NeuralEmbeddingRegressor`: optional neural feature-generation
-  workflow for tabular modeling.
-- `cartoboost.Node2VecStandaloneRegressor`: direct node2vec graph regressor.
-- `cartoboost.GraphSageStandaloneRegressor`: direct homogeneous GraphSAGE graph
-  regressor.
-- `cartoboost.HeteroGraphSageStandaloneRegressor`: direct typed-edge GraphSAGE
-  graph regressor.
-- `cartoboost.HinSageStandaloneRegressor`: direct typed-node and typed-relation
-  HinSAGE graph regressor.
-- `cartoboost.Node2VecLinkPredictor`, `cartoboost.GraphSageLinkPredictor`,
-  `cartoboost.HeteroGraphSageLinkPredictor`, and
-  `cartoboost.HinSageLinkPredictor`: standalone source-target link predictors.
-- `cartoboost.plotting`: optional visualization diagnostics for predictions,
-  residuals, forecast artifacts, component rows, changepoints, horizon metrics,
-  seasonality curves, cutoff predictions, backtest fold metrics, interval
-  calibration, Prophet-compatible plotting utilities matching the public
-  `prophet.plot` 1.2.2 surface, static spatial plots, interactive PyDeck route
-  maps, report bundles, benchmark metric rows, and rendered taxi benchmark
-  image examples.
+- `cartoboost.CartoBoostRegressor`
+- `cartoboost.CartoBoostClassifier`
+- `cartoboost.CartoBoostRanker`
+- `cartoboost.forecasting.*`
+- `cartoboost.graph.*`
+- `cartoboost.neural.*`
+- `cartoboost.plotting`
 
-## Optional Integrations
+## Usage Notes
 
-- `cartoboost[h3]`: H3 latitude/longitude encoding helpers with deterministic
-  validation and sparse-row assembly.
-- `cartoboost[holidays]`: country holiday calendar expansion for the
-  piecewise linear seasonal forecaster.
-- `cartoboost[s2]`: S2 latitude/longitude encoding helpers with deterministic
-  validation and sparse-row assembly.
-- `cartoboost[duckdb]`: DuckDB relation inputs.
-- `cartoboost[polars]`: Polars inputs.
-- `cartoboost[explain]`: SHAP explanation helpers.
-- `cartoboost[optuna]`: Optuna tuning helpers.
-- `cartoboost[onnx]`: ONNX export for the supported dense axis-tree subset.
-- `cartoboost[visualization]`: Matplotlib diagnostics, static spatial plots,
-  and interactive PyDeck route maps.
-
-## Usage Notes For LLMs
-
-- Prefer taxi-style examples: pickup zones, dropoff zones, pickup-dropoff pairs,
-  trip distance, fare, duration, and demand.
-- Use the Modeling Lab for browser-local forecasting, regression,
-  graph/neural modeling smoke tests, taxi-style target diagnostics, and
-  opt-in boosted-tree splitter visualization with the 5,000-row single-lane
-  yellow taxi sample or the 2,500-row varied-route coordinate sample. The model
-  visualizer shows tree structure, split kind mix, splitter rules, depth
-  profiles, and holdout residuals without slowing normal prediction calls.
-- Treat graph and neural standalone models as first-class direct APIs. Do not
-  require `CartoBoostRegressor` when explaining standalone graph or neural usage.
-- Use `GraphFeatureTransformer` and `NeuralEmbeddingFeatures` only when the user
-  explicitly wants generated columns for another estimator.
-- Keep algorithmic behavior in Rust crates under `crates/`; Python modules under
-  `python/cartoboost` should stay thin ergonomic wrappers.
-- Use `cartoboost.kalman_filter` or `local_level_kalman_filter` when users need
-  Kalman state diagnostics, smoothed states, covariance/variance, gains,
-  residual metrics, likelihood, or forecast intervals in addition to point
-  forecasts.
-- Use `LocalLevelKalmanForecaster`, `KalmanForecaster`,
-  `AutoLocalLevelKalmanForecaster`, or `AutoKalmanForecaster` when users need
-  frame-based fitting/prediction through `cartoboost.forecasting`; auto variants
-  tune variance grids in Rust and expose `selected_params` plus
-  `validation_scores` metadata.
-- For Kalman docs or examples, prefer taxi pickup-demand examples with
-  filtered/smoothed state plots, forecast interval bands, and standardized
-  innovation charts; the runnable plotting example is
-  `examples/forecasting/kalman_diagnostics_visualization.py`.
-- Forecasting model examples with runnable visual diagnostics live under
-  `examples/forecasting/`: `naive_seasonal_visualization.py`,
-  `theta_optimized_visualization.py`, `ets_component_visualization.py`,
-  `arima_example_visualization.py`, `cartoboost_lag_visualization.py`,
-  `weighted_ensemble_visualization.py`, and `kriging_example_visualization.py`.
-- Use `cartoboost.forecasting.AutoForecaster` for the guarded
-  selector over `cartoboost_lag`, recent-level-shift-gated `recency_weighted_lag`,
-  `scaled_lag`, `delta_lag`, `scaled_delta_lag`, `seasonal_delta_lag`,
-  `scaled_seasonal_delta_lag`, validation-gated `ewm_lag`, dense-panel
-  direct/rectified tree candidates, `log1p_scaled_lag`, `lag_plus`,
-  sparse-panel `intermittent_demand`, and `classical_expert_bank`; its lag
-  spine includes rolling mean, optional partial rolling mean, rolling
-  standard-deviation, rolling min/max, delta, trend, and calendar features, and
-  the auto path adds supported season-length multiples during fit. Candidate
-  validation averages deterministic trailing rolling origins when history
-  supports them; series-specific auto weights are used only when each series has
-  at least four validation points, otherwise prediction falls back to horizon or
-  global weights. Selected member refits run in parallel while preserving
-  stable roster/member order. The Python wrapper passes `ForecastFrame.static_covariates`
-  to the native lag spine by default, supports `covariate_features=[]` as an
-  explicit opt-out, and exposes `rich_calendar_features=True`; native EWM target
-  features are opt-in via `ewm_alpha_percents` after alpha 90 regressed the
-  exact route-mix smoke without validation gating. Rich calendar features include
-  day-of-year, elapsed index, an elapsed 14-step phase feature, low-cost
-  Fourier weekday/month/day encodings, and month-start/mid/end indicators for
-  recurring operational cycles. Route-demand benchmark paths also pass native
-  low-cardinality covariate indicators for finite integer-coded static context
-  with 3 to 8 distinct training values when a training-only covariate-by-day
-  interaction signal clears the fixed threshold, and those indicators can
-  participate in the same covariate-calendar interactions.
-  Static route covariates and gated indicators may interact with month-start,
-  mid-month, and month-end event flags on taxi/synthetic route-demand sources;
-  M4/M5/M6 remain on the compact feature path unless separately validated.
-  Benchmark claims must cite
-  the maintained artifact. The synthetic forecasting suite must not force lag
-  solely by source name; lag-spine overrides are limited to documented
-  frequency-risk guards and otherwise come from inner-origin validation loss.
-  For non-M shared demand sources, auto candidates must also be
-  origin-consistent against `cartoboost_lag`; if a candidate loses any usable
-  inner validation origin to lag, the benchmark selector keeps lag even when the
-  candidate's average inner loss is lower. Non-M inner validation skips the
-  raw-auto fit and scores the lag spine plus deterministic shared candidates;
-  raw auto remains lazy in outer scoring as well, where the harness starts with
-  a placeholder auto column and only materializes the real raw-auto forecast if
-  shared selection keeps `cartoboost_auto_forecast`. Rolling-origin suites
-  cache identical inner validation cutoffs per problem, keyed by source, cutoff,
-  and candidate roster, so overlapping folds reuse the same score without
-  changing split semantics.
-  Raw native auto must clear the stronger raw-auto override gain before it can
-  replace the lag spine on non-M shared demand sources.
-- `scripts/forecasting_generalization.py --compact --no-hyperopt` is the
-  maintained non-M scalable synthetic external-roster guardrail. It uses the
-  fixed synthetic taxi-style suite with 18 series, 150 days, horizon 14, two
-  folds, seed 177, the `scalable` roster, and `--no-candidate-selection` so
-  benchmark work is not judged only on M4/M5/M6 samples and does not spend
-  calibration time when raw native auto and lag are quality-identical.
-- `docs/assets/nyc_taxi_benchmarks/forecasting_overhaul_committed_suite_scalable_roster.json`
-  is the current scalable external-roster committed synthetic artifact. The
-  older full external-roster artifact is still present, but refresh attempts can
-  stall in `statsforecast_autotbats`/ARIMA optimization; use the scalable
-  artifact for the current external-tree/functime synthetic read.
-- Non-M shared candidate selection uses up to two inner rolling origins, with
-  an early stop after one origin when `cartoboost_lag` beats every finite
-  candidate by at least 15%. M4 keeps three origins, M5 keeps two origins, and
-  M6 keeps one; this preserves the current M benchmark artifacts while reducing
-  redundant non-M inner fits versus the previous three-origin policy.
-- `ClassicalExpertBank` and `AutoStatsBank` rosters include native
-  `window_average` candidates with fixed `window_size` values 3 and 7.
-  Seasonal rosters also include a native `seasonal_window_average` candidate
-  with fixed `window_count=3` when `season_length > 1`; these smooth recent
-  levels or matching seasonal positions without adding hyperparameter search.
-- Native `CartoBoostLagForecaster` can consume numeric `covariate_features`
-  from `ForecastFrame` rows, multiply them by configured calendar features when
-  `covariate_calendar_interactions=True`, and carry latest static values
-  forward during recursive prediction. The benchmark harness source-gates
-  static covariates, covariate-calendar interactions, rich calendar features,
-  and rolling-stat enrichments to taxi/synthetic route-demand sources; M4/M5/M6
-  stay on the compact competition path unless a targeted benchmark proves
-  otherwise.
-- `NeuralPanelForecaster` and `LaneNeuralPanelForecaster` are Rust-native
-  panel forecasters exposed through Python and wasm as `neural_panel`.
-  Inputs are `ForecastFrame` rows with directional lane ids such as
-  `PULocationID:DOLocationID`; the lane wrapper injects generated
-  origin/destination/lane embedding covariates plus directional graph summary
-  covariates into the Rust neural panel, records cold-lane fallback order, and
-  `predict_for_lanes()` applies that order for explicit cold lane ids. The
-  neural panel stores median-first internal quantile residuals while returning
-  public quantile tensors ordered by level, and exposes separate global/local/
-  glocal modes for seasonality, event, and regressor components. Treat quality
-  claims as unproven until
-  a rolling-origin benchmark compares seasonal naive and `CartoBoostLagForecaster`
-  under the same split, metrics, settings, timing, and artifact capture. The
-  maintained split-suite command is `scripts/forecasting_library_benchmark.py
-  --model-roster neural-panel --neural-panel-splits`, which records
-  rolling-origin, cold-lane, cold-origin, and sparse-tail metrics plus timing
-  and artifact paths.
-- M4 suite benchmark orchestration is serial in the committed wrapper so group
-  timing stays directly comparable across maintained artifacts.
-- Use `objective="rmse_wape"` when the user wants a single validation selector
-  that balances RMSE and WAPE; it averages WAPE with RMSE normalized by mean
-  absolute actual demand.
-- Use `cartoboost.metrics.wrmsse`, `cartoboost.metrics.m6`, and the benchmark
-  artifact `official_metrics` section for M5/M6-style checks instead of
-  treating all forecasting benchmarks as RMSE-only. M6 benchmark artifacts
-  include training-window rank-probability calibration metadata. The maintained
-  M5/M6 selector paths avoid nested auto calibration during inner-origin
-  scoring to preserve quality while cutting benchmark latency. M5 selection is
-  RMSE-first for point quality while still emitting official WRMSSE artifacts;
-  M5 shared candidates must beat the lag spine by the configured minimum
-  relative-gain guard before replacing it. Two-origin M5 validation keeps only
-  the total-reconciled shared route in the
-  selectable surface after state/store reconciled variants measured as
-  non-selected overhead, and one-origin comparison runs may select the
-  autostats/phase-14 point blend. The Rust `ClassicalExpertBank` selects the
-  strict best validation-MSE expert rather than a simpler expert inside a 1%
-  tolerance; this lets `AutoStatsBank` use validation-winning local statistical
-  routes on demand panels. M6 selection is one-origin and RMSE-first for
-  the daily-return point proxy, with a validation-selected market-neutral
-  return candidate; cite point RMSE and
-  calibrated RPS separately because the point-quality route is not the RPS
-  leader on the maintained full-roster artifact. M4, M5, and M6 inner-origin
-  candidate validation skip expensive raw-auto fits when judging deterministic
-  shared candidates; M4 still fits both committed CartoBoost rows in the outer
-  reported run, M5 one-origin comparison runs map the skipped outer auto column
-  to the already-fit AutoStats candidate, and M6 shared-selection runs use a
-  zero-cost market-neutral outer candidate. Direct no-selection runs still fit
-  raw auto, and two-origin committed M5 runs still fit raw auto because the
-  selected reconciled route depends on it. M6 records skipped raw inner scores
-  as null.
-- Shared-candidate selection keeps `cartoboost_lag` as the default champion
-  unless a replacement candidate clears the configured minimum relative gain
-  versus lag. This guard is source-general, runs after native raw-auto keep
-  checks, and prevents tiny validation wins from displacing the lag spine.
-  Non-M shared demand sources also require origin-consistent displacement:
-  any usable inner-origin loss to lag sends auto back to the lag spine. Non-M
-  inner validation skips raw-auto fitting up front, while non-M outer scoring
-  skips raw-auto fitting unless that exact raw route is the selected final
-  candidate.
-- After shared-candidate validation selects the final route, benchmark outer
-  scoring builds only the required selected candidate columns. Inner validation
-  still scores the broad candidate bank, but final artifact generation skips
-  unused calendar, trend, reconciliation, and local-statistical columns.
-- Forecast benchmark artifacts record separate `cartoboost_lag` and
-  `cartoboost_auto_forecast` settings. `--cartoboost-n-estimators` controls the
-  lag estimator budget; auto uses the quality floor
-  `max(--cartoboost-n-estimators, 360)` unless
-  `--cartoboost-auto-n-estimators` is explicitly provided for latency probes.
-- Forecasting benchmark artifacts expose `git_commit`, `dataset_hash`,
-  `source_file_hashes`, `benchmark_integrity`, and `resource_usage` for
-  evidence checks.
-- Use `uv sync --group dev` for local development and
-  `uv run --group dev maturin develop` after native binding changes.
-- Use `npm run typecheck` and `npm run build` for the Docusaurus docs site.
-- Run `just validate` for full validation when feasible.
-- Benchmark claims need equal settings, serious baselines, stable splits, and
-  enough repeatability evidence to support the claim.
+- Keep public docs focused on what each model family is good for, not on
+  implementation details.
+- Use taxi examples only as one domain example among others such as mobility,
+  routing, logistics, and demand forecasting.
+- Keep benchmark claims tied to maintained artifacts, exact commands, and
+  comparable baselines.

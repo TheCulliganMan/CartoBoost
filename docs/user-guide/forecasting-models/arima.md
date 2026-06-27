@@ -2,7 +2,7 @@ import {ForecastModelExample} from '@site/src/components/ModelingLabClient';
 
 # ARIMA And AutoARIMA
 
-ARIMA models are useful when a taxi demand series is mostly explained by recent
+ARIMA models are useful when a series is mostly explained by recent
 values, recent forecast errors, and one or two rounds of differencing.
 CartoBoost exposes bounded, non-seasonal ARIMA models:
 
@@ -14,30 +14,29 @@ CartoBoost exposes bounded, non-seasonal ARIMA models:
 
 ## Interactive Example
 
-<ForecastModelExample title="Auto ARIMA taxi-lane forecast" model="auto_arima" />
+<ForecastModelExample title="Auto ARIMA panel forecast" model="auto_arima" />
 
 ## When To Use It
 
-Use ARIMA for one regular pickup-zone, dropoff-zone, or pickup/dropoff lane
-series when:
+Use ARIMA for one regular series when:
 
 - the series needs first or second differencing to remove a local trend,
 - the last few observations predict the next value,
 - recent forecast errors carry useful signal, or
 - you want a strong local baseline before trying a global lag model.
 
-Prefer `CartoBoostLagForecaster` when hundreds of lanes should share one model
-and borrow cross-lane structure. Prefer `KrigingForecaster` when spatial
-coordinates should smooth nearby pickup zones. Prefer seasonal naive, ETS, or
+Prefer `CartoBoostLagForecaster` when many panels should share one model and
+borrow cross-panel structure. Prefer `KrigingForecaster` when spatial
+coordinates should smooth nearby locations. Prefer seasonal naive, ETS, or
 Theta when daily or weekly seasonality dominates and the non-seasonal ARIMA
 scope is too narrow.
 
 ## Scientific Role
 
 ARIMA is a local serial-dependence model. It is the right scientific choice
-when the hypothesis is that a single taxi series can be forecast from its own
-recent values, its recent errors, and a bounded amount of differencing. It does
-not explain the series with geography, shared panel behavior, or known future
+when the hypothesis is that a single series can be forecast from its own recent
+values, its recent errors, and a bounded amount of differencing. It does not
+explain the series with geography, shared panel behavior, or known future
 covariates.
 
 Choose fixed ARIMA when the order is part of the experiment or has already been
@@ -52,7 +51,7 @@ autoregressive and moving-average terms to be useful. It can fail when the
 strongest signal is deterministic seasonality, known calendar effects, sudden
 interventions, spatial spillover, or cross-series learning.
 
-Common failure modes in taxi data are easy to diagnose:
+Common failure modes are easy to diagnose:
 
 | Failure mode | Scientific interpretation | Comparison to run |
 | --- | --- | --- |
@@ -72,7 +71,7 @@ Common failure modes in taxi data are easy to diagnose:
 
 ## Pickup-Demand Example
 
-This example creates two hourly pickup/dropoff lanes. `PU132->DO138` contains a
+This example creates two hourly lanes. `lane_a` contains a
 stronger airport-style morning ramp; `PU79->DO230` is flatter but still
 autocorrelated.
 
@@ -89,8 +88,8 @@ def example_lane_table(hours: int = 72) -> pd.DataFrame:
     start = datetime(2026, 1, 1)
     rows = []
     for lane, bias, ramp in [
-        ("PU132->DO138", 95.0, 18.0),
-        ("PU79->DO230", 64.0, 7.0),
+        ("lane_a", 95.0, 18.0),
+        ("lane_b", 64.0, 7.0),
     ]:
         for hour in range(hours):
             pickup_hour = start + timedelta(hours=hour)
@@ -98,12 +97,12 @@ def example_lane_table(hours: int = 72) -> pd.DataFrame:
             daily = 10.0 if 6 <= hour_of_day <= 9 else -4.0
             evening = 5.0 if 16 <= hour_of_day <= 19 else 0.0
             trend = hour * 0.12
-            pickup_count = bias + daily + evening + trend + ramp * (hour / hours)
+            demand = bias + daily + evening + trend + ramp * (hour / hours)
             rows.append(
                 {
                     "lane_id": lane,
                     "pickup_hour": pickup_hour,
-                    "pickup_count": pickup_count,
+                    "demand": demand,
                 }
             )
     return pd.DataFrame(rows)
@@ -113,7 +112,7 @@ table = example_lane_table()
 frame = ForecastFrame.from_pandas(
     table,
     timestamp_col="pickup_hour",
-    target_col="pickup_count",
+    target_col="demand",
     series_id_col="lane_id",
     freq="h",
 )
@@ -155,7 +154,7 @@ For docs or CI smoke checks where Matplotlib is not installed, omit
 
 The example is intentionally deterministic. It is useful for checking API
 shape, plotting, and interpretation, but it is not evidence for model selection
-on real TLC-derived taxi demand.
+on real demand.
 
 The compact JSON fields are the first values to inspect:
 
@@ -177,7 +176,7 @@ horizon.
 ## Visual Diagnostics
 
 The most useful ARIMA plots show forecast shape and residual behavior together.
-In a taxi lane workflow, inspect:
+In a local-series workflow, inspect:
 
 - whether the forecast follows the held-out pickup ramp or flattens too early,
 - whether residuals are mostly centered around zero,
@@ -199,12 +198,12 @@ The core plotting pattern is:
 
 ```python
 fixed_evaluation = actual.merge(fixed_forecast, on=["lane_id", "pickup_hour"])
-fixed_evaluation["residual"] = fixed_evaluation["prediction"] - fixed_evaluation["pickup_count"]
+fixed_evaluation["residual"] = fixed_evaluation["prediction"] - fixed_evaluation["demand"]
 
 auto_evaluation = actual.merge(auto_forecast, on=["lane_id", "pickup_hour"])
-auto_evaluation["residual"] = auto_evaluation["prediction"] - auto_evaluation["pickup_count"]
+auto_evaluation["residual"] = auto_evaluation["prediction"] - auto_evaluation["demand"]
 
-axis.plot(observed["pickup_hour"], observed["pickup_count"], label="Observed pickups")
+axis.plot(observed["pickup_hour"], observed["demand"], label="Observed values")
 axis.plot(fixed_evaluation["pickup_hour"], fixed_evaluation["prediction"], label="ARIMA(2,1,1)")
 axis.plot(auto_evaluation["pickup_hour"], auto_evaluation["prediction"], label="AutoARIMA")
 residual_axis.axhline(0.0, color="black", linewidth=1)
@@ -250,10 +249,10 @@ local-model workflows stay deterministic and fast.
 
 ## Model-Order Interpretation
 
-Treat `(p, d, q)` as a compact explanation of what the local taxi lane model is
+Treat `(p, d, q)` as a compact explanation of what the local series model is
 allowed to remember:
 
-| Order part | Taxi interpretation | Risk when too small | Risk when too large |
+| Order part | Interpretation | Risk when too small | Risk when too large |
 | --- | --- | --- | --- |
 | `p` | How many recent differenced pickup counts affect the next forecast. | Forecast ignores short local momentum. | Forecast can chase short spikes from a single unusual hour. |
 | `d` | How many times the lane series is differenced before fitting AR/MA terms. | Forecast can lag a local trend or ramp. | Forecast can overreact and drift when the original level was already stable. |
@@ -265,7 +264,7 @@ Examples:
 - `ARIMA(1,0,0)` uses the previous pickup count pattern without differencing.
 - `ARIMA(0,1,0)` is a random-walk style forecast after first differencing.
 - `ARIMA(2,1,1)` allows two recent differenced lags and one residual correction,
-  which is often a useful fixed candidate for a short hourly taxi lane example.
+  which is often a useful fixed candidate for a short hourly series example.
 
 AutoARIMA reports the selected order and all candidate scores:
 
@@ -319,7 +318,7 @@ from cartoboost.forecasting import AutoARIMAForecaster, ForecastFrame
 frame = ForecastFrame.from_pandas(
     hourly_lane_demand,
     timestamp_col="pickup_hour",
-    target_col="pickup_count",
+    target_col="demand",
     series_id_col="lane_id",
     freq="h",
 )
@@ -380,7 +379,7 @@ lanes instead of treating every lane as isolated.
 ## Held-Out Evaluation Pattern
 
 Use fixed train/test boundaries when comparing fixed ARIMA and AutoARIMA on a
-taxi lane. Keep the boundary and horizon identical across candidates:
+series. Keep the boundary and horizon identical across candidates:
 
 ```python
 train = lane_table.iloc[:72]
@@ -389,7 +388,7 @@ actual = lane_table.iloc[72:84]
 frame = ForecastFrame.from_pandas(
     train,
     timestamp_col="pickup_hour",
-    target_col="pickup_count",
+    target_col="demand",
     series_id_col="lane_id",
     freq="h",
 )
@@ -410,7 +409,7 @@ forecast = pd.DataFrame(
 )
 
 joined = actual.merge(forecast, on=["lane_id", "pickup_hour"])
-joined["residual"] = joined["prediction"] - joined["pickup_count"]
+joined["residual"] = joined["prediction"] - joined["demand"]
 rmse = (joined["residual"].pow(2).mean()) ** 0.5
 mae = joined["residual"].abs().mean()
 bias = joined["residual"].mean()

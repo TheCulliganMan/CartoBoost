@@ -3,26 +3,25 @@ import {ForecastModelExample} from '@site/src/components/ModelingLabClient';
 # Theta
 
 Theta models provide lightweight trend extrapolation for local forecasting.
-They are useful when taxi demand has a clear local level and drift, but you do
+They are useful when a series has a clear local level and drift, but you do
 not need the larger ARIMA or lag-model surface.
 
 ## Interactive Example
 
-<ForecastModelExample title="Optimized theta taxi-lane forecast" model="optimized_theta" />
+<ForecastModelExample title="Optimized theta panel forecast" model="optimized_theta" />
 
 ## When To Use
 
-Use theta forecasting for pickup counts, fares, trip duration, or trip distance
+Use theta forecasting for counts, fares, trip duration, or trip distance
 aggregates when the recent history is short, the main signal is level plus
 trend, and you want a fast deterministic baseline. Theta is often a practical
-comparison point for airport pickup demand, single-zone hourly demand, and
-taxi-lane aggregates where the next few horizons should continue a smooth
-recent movement.
+comparison point for single-series hourly demand and other short-horizon
+settings where the next few horizons should continue a smooth recent movement.
 
 Do not treat theta as evidence of spatial generalization. It does not know
-pickup-zone geometry, dropoff-zone relationships, road distance, or graph
-structure. Compare it against seasonal naive and lag-feature models on the same
-rolling-origin folds before using it as a production benchmark.
+zone geometry, route relationships, road distance, or graph structure. Compare
+it against seasonal naive and lag-feature models on the same rolling-origin
+folds before using it as a production benchmark.
 
 ## Scientific Role
 
@@ -32,7 +31,7 @@ after applying a simple seasonal adjustment. That makes it useful when a
 scientist wants a transparent trend baseline before moving to richer
 autocorrelation, state-space, or supervised lag models.
 
-Choose theta when the research question is close to: "Does recent taxi demand
+Choose theta when the research question is close to: "Does recent demand
 continue its local direction?" It is especially useful for short windows where
 a large lag model would have too few examples, but where naive persistence is
 too flat.
@@ -84,8 +83,8 @@ print(optimized_forecast.predictions())
 
 ## ForecastFrame Example
 
-Use a `ForecastFrame` for taxi panels. Each `PULocationID` is fit as its own
-local series.
+Use a `ForecastFrame` for panel data. Each `series_id` is fit as its own local
+series.
 
 ```python
 from cartoboost.forecasting import ForecastFrame, OptimizedThetaForecaster
@@ -93,8 +92,8 @@ from cartoboost.forecasting import ForecastFrame, OptimizedThetaForecaster
 frame = ForecastFrame.from_pandas(
     hourly_zone_demand,
     timestamp_col="pickup_hour",
-    target_col="pickup_count",
-    series_id_col="PULocationID",
+    target_col="demand",
+    series_id_col="series_id",
     freq="h",
 )
 
@@ -108,7 +107,7 @@ forecast = model.predict(12)
 
 ## Seasonal Theta
 
-Hourly taxi demand often has a daily cycle. Set both `seasonality` and
+Hourly demand often has a daily cycle. Set both `seasonality` and
 `season_length` when the training window contains enough full cycles.
 
 ```python
@@ -182,7 +181,7 @@ uv run python examples/forecasting/theta_optimized_visualization.py
 It writes `target/examples/theta_optimized_visualization.png` and prints a JSON
 summary with manual theta metrics, optimized theta metrics, and the best
 holdout grid candidate from the example scoring loop. The example uses
-JFK-style and Upper East Side-style pickup counts and does not download data.
+synthetic panel counts and does not download data.
 
 The core plotting pattern is:
 
@@ -195,8 +194,8 @@ from cartoboost.forecasting import ForecastFrame, OptimizedThetaForecaster, Thet
 frame = ForecastFrame.from_pandas(
     train_pickups,
     timestamp_col="pickup_hour",
-    target_col="pickup_count",
-    series_id_col="PULocationID",
+    target_col="demand",
+    series_id_col="series_id",
     freq="h",
 )
 
@@ -213,7 +212,7 @@ optimized = OptimizedThetaForecaster(
 optimized.fit(frame)
 optimized_forecast = optimized.predict(12).predictions()
 
-plt.plot(observed["pickup_hour"], observed["pickup_count"], label="observed pickups")
+plt.plot(observed["pickup_hour"], observed["demand"], label="observed counts")
 plt.plot(manual_hours, manual_values, label="Theta theta=2.0 alpha=0.25")
 plt.plot(optimized_hours, optimized_values, label="OptimizedTheta grid")
 plt.axvline(observed["pickup_hour"].iloc[-12], color="gray", linestyle="--")
@@ -237,7 +236,7 @@ uv run python examples/forecasting/single_series_theta.py
 ```
 
 It fits a theta model against `examples/forecasting/forecast_cli_input.csv` with
-`timestamp`, `pickup_demand`, and `PULocationID` columns, then prints the saved
+`timestamp`, `demand`, and `series_id` columns, then prints the saved
 model artifact JSON.
 
 ## Validation Notes
@@ -245,7 +244,7 @@ model artifact JSON.
 Theta models are local univariate models. They do not encode hour-of-week
 calendar features beyond the configured seasonal pattern, and they do not share
 information across pickup zones. If a taxi workflow depends on special-event
-effects, airport disruption, dropoff-zone mix, or spatial spillover, compare
+effects, airport disruption, location mix, or spatial spillover, compare
 theta against CartoBoost lag models, graph/neural features, ARIMA, ETS, Kalman,
 and seasonal naive on the same split.
 

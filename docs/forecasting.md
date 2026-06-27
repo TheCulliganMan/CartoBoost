@@ -10,20 +10,20 @@ CartoBoost forecasting is organized around two docs surfaces:
   lag, NeuralPanel, AutoForecaster, or fixed weighted ensembles.
 
 The Python forecasting package gives users dataframe ergonomics, explicit
-configuration, CLI entry points, and artifact handling. Model behavior is shared
-across Python, CLI, and interactive examples: fitting, prediction, backtesting,
-metric evaluation, leakage checks, feature generation, intervals,
+configuration, CLI entry points, and artifact handling. Model behavior is
+shared across Python, CLI, and interactive examples: fitting, prediction,
+backtesting, metric evaluation, leakage checks, feature generation, intervals,
 reconciliation, and serialization contracts follow the same rules. Python does
 not provide fallback forecasting algorithms.
 
 ## Workflow
 
-Start by making the scientific unit of analysis explicit. For taxi demand, this
-is usually one time series per pickup zone (`PULocationID`) or per pickup to
-dropoff lane (`PULocationID` and `DOLocationID`). The timestamp might be
-`pickup_hour`, the target might be `pickup_trips`, `fare`, `duration`, or
-`trip_distance`, and known-future covariates should be limited to values that
-are genuinely known at forecast creation time, such as hour or day-of-week.
+Start by making the scientific unit of analysis explicit. For panel forecasting,
+this is usually one time series per entity, location, route, or product. The
+timestamp might be an hour, day, or week field, the target might be counts,
+revenue, duration, or demand, and known-future covariates should be limited to
+values that are genuinely known at forecast creation time, such as hour or
+day-of-week.
 
 Then choose the validation protocol before choosing a winner. Forecasting
 validation should answer, "At this origin timestamp, using only information
@@ -48,12 +48,12 @@ from cartoboost.forecasting import ForecastFrame
 
 frame = ForecastFrame.from_pandas(
     hourly_zone_demand,
-    timestamp_col="pickup_hour",
-    target_col="pickup_trips",
-    series_id_col="PULocationID",
+    timestamp_col="timestamp",
+    target_col="demand",
+    series_id_col="entity_id",
     freq="h",
     known_future_covariates=["hour", "day_of_week"],
-    static_covariates=["borough_id", "airport_zone"],
+    static_covariates=["group_id"],
 )
 ```
 
@@ -64,8 +64,8 @@ Known-future covariates are values available at forecast creation time; lagged
 targets, rolling summaries, and other history-derived features must be built
 from rows before the forecast origin.
 
-When raw taxi observations have multiple rows at the same timestamp, aggregate
-them before modeling or pass a positive `sample_weight_col`. With
+When raw observations have multiple rows at the same timestamp, aggregate them
+before modeling or pass a positive `sample_weight_col`. With
 `sample_weight_col`, CartoBoost collapses each duplicate series/timestamp group
 into one forecast row: the target and numeric covariates become weighted
 means, and the weight column becomes the total weight for that timestamp.
@@ -73,21 +73,20 @@ means, and the weight column becomes the total weight for that timestamp.
 ```python
 frame = ForecastFrame.from_pandas(
     trip_observations,
-    timestamp_col="pickup_hour",
+    timestamp_col="timestamp",
     target_col="fare",
-    series_id_col="pickup_dropoff_lane",
+    series_id_col="entity_id",
     freq="h",
     historical_covariates=["trip_distance"],
     sample_weight_col="trip_count",
 )
 ```
 
-If five taxi trips share the same lane and `pickup_hour`, the forecasting model
-sees one hourly lane row. With `trip_count` as the weight, the
-hourly target is the trip-count-weighted mean fare, `trip_distance` is the
-trip-count-weighted mean distance, and `trip_count` is the sum of the five
-weights. Without `sample_weight_col`, those five rows still fail as duplicate
-timestamps because forecasting requires one target per series/timestamp.
+If five events share the same entity and timestamp, the forecasting model sees
+one row. With `trip_count` as the weight, the hourly target is the weighted
+mean and the weight column is the sum of the five weights. Without
+`sample_weight_col`, those five rows still fail as duplicate timestamps because
+forecasting requires one target per series/timestamp.
 
 ## Results And Metrics
 
@@ -111,8 +110,7 @@ score aligned rows from the same origin, horizon, and series ids.
 
 Use rolling-origin validation for forecasting claims. A fold trains on rows
 strictly before the origin and scores the next horizon only. Random row splits
-leak future demand and should not be used for taxi pickup, dropoff, or lane
-forecasts.
+leak future demand and should not be used for forecast claims.
 
 ```python
 from cartoboost.forecasting import RollingOriginBacktester, SeasonalNaiveForecaster
@@ -147,7 +145,7 @@ python scripts/forecast.py fit \
   --input examples/forecasting/forecast_cli_input.csv \
   --timestamp-col timestamp \
   --target-col pickup_demand \
-  --series-id-col PULocationID \
+  --series-id-col entity_id \
   --freq D \
   --model theta \
   --horizon 7 \
@@ -182,37 +180,32 @@ Use the model guides for modeling decisions:
 | Coordinate-aware panel borrowing | [Kriging](user-guide/forecasting-models/kriging.md) |
 | Temporal components plus spatial residual or regressor kriging | [Spatial Piecewise Kriging](user-guide/forecasting-models/spatial-piecewise-kriging.md) |
 | Shared supervised lag features across many panels | [CartoBoost Lag](user-guide/forecasting-models/cartoboost-lag.md) |
-| Rust-native neural panel forecasting with directional lane ids | [Neural Panel](user-guide/forecasting-models/neural-panel.md) |
+| Neural panel forecasting with directional ids | [Neural Panel](user-guide/forecasting-models/neural-panel.md) |
 | Guarded default selector over reusable candidates | [AutoForecaster](user-guide/forecasting-models/auto-forecaster.md) |
 | Fixed combinations of fitted models | [Weighted Ensembles](user-guide/forecasting-models/ensembles.md) |
 
 Benchmark scripts expose stable aliases such as `cartoboost_lag` and
-`cartoboost_auto_forecast` for reproducible evidence tables. Keep competition or
-benchmark-specific aliases in benchmark orchestration, not in generic model
-names.
+`cartoboost_auto_forecast` for reproducible evidence tables. Keep benchmark-
+specific aliases in benchmark orchestration, not in generic model names.
 
 ETS is additive-only in this version. AutoARIMA searches bounded ARIMA(p,d,q)
 candidates with residual-lag moving-average terms; seasonal AutoARIMA is
 rejected explicitly. Weighted ensembles require explicit component models.
-`NeuralPanelForecaster` is Rust-native and accepts `ForecastFrame` panel rows
-with directional lane ids such as `PULocationID:DOLocationID`. It builds
-train-only normalized direct windows, stores quantiles with median output first
-internally, learns residual offsets for non-median quantiles, applies fitted
-target-tail AR state from `n_lags`, repairs non-crossing quantiles on
-prediction, and records normalization, component parameters, series ids,
-feature schema, lag config, seed, and train cutoff in metadata. Fourier
-seasonality, event offsets, and future regressors each have independent
-global/local/glocal parameter-sharing modes. Missing dynamic known-future
-regressors fail at prediction time; values proven constant within each fitted
-series are stored as static future covariates. Do not use it for quality claims
-without a real rolling-origin benchmark against seasonal naive and
-`CartoBoostLagForecaster`.
-For taxi lane panels, `LaneNeuralPanelForecaster.predict_for_lanes()` can
-forecast explicit cold lane ids by applying the fitted lane fallback order while
-preserving the requested `series_id`. The lane wrapper injects generated
-origin/destination/lane embedding covariates and directional graph summary
-covariates into the inner Rust neural panel, so lane identity participates in
-the fitted feature weights rather than living only in metadata.
+`NeuralPanelForecaster` accepts `ForecastFrame` panel rows. It builds train-only normalized direct windows, stores quantiles with median
+output first internally, learns residual offsets for non-median quantiles,
+applies fitted target-tail AR state from `n_lags`, repairs non-crossing
+quantiles on prediction, and records normalization, component parameters,
+series ids, feature schema, lag config, seed, and train cutoff in metadata.
+Fourier seasonality, event offsets, and future regressors each have
+independent global/local/glocal parameter-sharing modes. Missing dynamic
+known-future regressors fail at prediction time; values proven constant within
+each fitted series are stored as static future covariates. Do not use it for
+quality claims without a real rolling-origin benchmark against seasonal naive
+and `CartoBoostLagForecaster`.
+The lane wrapper injects generated origin/destination/lane embedding
+covariates and directional graph summary covariates into the inner neural
+panel, so lane identity participates in the fitted feature weights rather than
+living only in metadata.
 The maintained benchmark entry point can emit a NeuralPanel split artifact:
 
 ```sh
@@ -220,7 +213,7 @@ uv run --group dev python scripts/forecasting_library_benchmark.py \
   --source polars \
   --model-roster neural-panel \
   --neural-panel-splits \
-  --output target/neural_panel_taxi_lane_split_suite.json
+  --output target/neural_panel_split_suite.json
 ```
 
 That artifact records rolling-origin, cold-lane, cold-origin, and sparse-tail
@@ -241,13 +234,12 @@ docs pages:
 | Regime-aware uncertainty | `CUSUM`, `PageHinkley`, EWMA volatility, rolling median residuals, rolling MAD residuals, and `RegimeIntervalPolicy` can widen intervals, raise process variance, or lower confidence during detected shifts. |
 | Calibrated forecast events | Probability calibration helpers turn threshold, horizon, failure-risk, or escalation-risk events into bounded probability forecasts with Brier score, log loss, ECE, calibration buckets, and reliability-curve data. |
 | Rank probability score helpers | Metrics and interval evaluation; competition-specific scoring stays in benchmark adapters. |
-| NeuralPanel forecasting | Rust-native panel neural forecaster with directional lane ids, generated lane embedding/graph covariates, direct horizons, separate global/local/glocal seasonality/event/regressor modes, known-future regressors, lagged regressors, median-first internal quantile residuals, and serializable metadata. |
+| NeuralPanel forecasting | Panel neural forecaster with directional ids, generated embedding/graph covariates, direct horizons, separate global/local/glocal seasonality/event/regressor modes, known-future regressors, lagged regressors, median-first internal quantile residuals, and serializable metadata. |
 
-These primitives are generic. A taxi lane forecast may call the state dimensions
-pickup zone, dropoff zone, and pickup-dropoff corridor, while the reusable names
-stay origin, destination, corridor, segment, entity family, target family, and
-time bucket. Benchmark-specific labels and competition scoring stay in
-benchmark orchestration.
+These primitives are generic. A panel forecast may call the state dimensions
+origin, destination, corridor, segment, entity family, target family, and time
+bucket. Benchmark-specific labels and competition scoring stay in benchmark
+orchestration.
 
 The interactive examples use the same primitive families through
 `runGeotemporalDiagnostics(request)`. The request can include any combination of

@@ -3,20 +3,19 @@ import {ForecastModelExample} from '@site/src/components/ModelingLabClient';
 # ETS
 
 `ETSForecaster` is the exponential smoothing forecaster for level, additive
-trend, and optional additive seasonality. It is a good fit when a taxi series
-has a stable seasonal pattern and recent observations should update the state
+trend, and optional additive seasonality. It is a good fit when a series has a
+stable seasonal pattern and recent observations should update the state
 smoothly instead of forcing abrupt step changes.
 
 ## Interactive Example
 
-<ForecastModelExample title="Auto ETS taxi-lane forecast" model="auto_ets" />
+<ForecastModelExample title="Auto ETS panel forecast" model="auto_ets" />
 
 ## When To Use
 
-Use ETS for hourly pickup counts, fare totals, duration aggregates, or trip
-distance aggregates when the series has a clear repeating cycle. Common taxi
-uses include JFK pickup demand by hour of day, Midtown evening demand, or a
-single pickup/dropoff lane with a daily rhythm.
+Use ETS for hourly counts, fare totals, duration aggregates, or trip distance
+aggregates when the series has a clear repeating cycle. Common uses include
+hour-of-day demand, evening demand, or a single panel with a daily rhythm.
 
 ETS is strongest when the forecast can be explained as:
 
@@ -25,16 +24,16 @@ ETS is strongest when the forecast can be explained as:
 - an additive seasonal adjustment for the current hour or day slot.
 
 If the main signal is a sudden intervention, a moving event calendar, or
-zone-to-zone spatial spillover, compare ETS against a lag model with calendar
-features and against spatial models where appropriate.
+cross-panel spillover, compare ETS against a lag model with calendar features
+and against spatial models where appropriate.
 
 ## Scientific Role
 
 ETS is appropriate when the scientist can explain the series as an evolving
-baseline, a gradual drift, and a repeatable additive seasonal effect. For taxi
-data, that means questions like: "How much of this pickup count is the current
-zone baseline, how much is a slow movement in that baseline, and how much is
-the hour-of-day lift or drag?"
+baseline, a gradual drift, and a repeatable additive seasonal effect. For panel
+data, that means questions like: "How much of this count is the current
+baseline, how much is a slow movement in that baseline, and how much is the
+hour-of-day lift or drag?"
 
 Choose ETS when component interpretability matters. The fitted level, trend,
 seasonal component, fitted values, and residuals let you inspect whether the
@@ -46,7 +45,7 @@ The current ETS surface is additive. It assumes seasonal effects add or
 subtract roughly fixed amounts from the level, not fixed percentages. It also
 requires enough complete seasonal cycles to estimate the seasonal state.
 
-ETS can fail when taxi demand is dominated by sudden shocks, sparse panels,
+ETS can fail when demand is dominated by sudden shocks, sparse panels,
 structural breaks, or effects that are known before the forecast but absent
 from the model, such as holidays, weather, airport operations, or event
 schedules. If residuals cluster by hour, zone, or route, compare against
@@ -82,7 +81,7 @@ print(forecast.predictions())
 
 Forecast rows are `(series_id, timestamp, horizon, model, mean)`. When a plain
 Python list is used, the wrapper builds a single-series frame. For production
-taxi data, prefer `ForecastFrame` so timestamps and series IDs stay explicit.
+panel data, prefer `ForecastFrame` so timestamps and series IDs stay explicit.
 
 ## ForecastFrame Example
 
@@ -90,10 +89,10 @@ taxi data, prefer `ForecastFrame` so timestamps and series IDs stay explicit.
 from cartoboost.forecasting import ETSForecaster, ForecastFrame
 
 frame = ForecastFrame.from_pandas(
-    hourly_zone_demand.query("PULocationID == 132"),
+    hourly_zone_demand.query("series_id == '132'"),
     timestamp_col="pickup_hour",
-    target_col="pickup_count",
-    series_id_col="PULocationID",
+    target_col="demand",
+    series_id_col="series_id",
     freq="h",
 )
 
@@ -141,14 +140,14 @@ trend(t) = beta * (level(t) - level(t-1)) + (1 - beta) * trend(t-1)
 seasonal(t) = gamma * (y(t) - level(t)) + (1 - gamma) * seasonal(t)
 ```
 
-Interpret the components in taxi terms:
+Interpret the components in series terms:
 
-| Component | Taxi interpretation | What to inspect |
+| Component | Interpretation | What to inspect |
 | --- | --- | --- |
-| Level | Current baseline pickup count after removing hour-of-day effects. | Whether the baseline follows real demand shifts without chasing every observation. |
+| Level | Current baseline count after removing hour-of-day effects. | Whether the baseline follows real demand shifts without chasing every observation. |
 | Trend | Recent drift in the baseline. | Whether the model projects a plausible ramp into the next few hours. |
-| Seasonal | Additive lift or drag for a repeating slot, such as each hour of day. | Whether airport peaks, overnight lows, and evening demand have sensible signs and magnitudes. |
-| Residual | Difference between observed pickups and one-step fitted values. | Whether missed events or missing calendar features dominate the error. |
+| Seasonal | Additive lift or drag for a repeating slot, such as each hour of day. | Whether peak periods, overnight lows, and evening demand have sensible signs and magnitudes. |
+| Residual | Difference between observed values and one-step fitted values. | Whether missed events or missing calendar features dominate the error. |
 
 ## Visual Diagnostics
 
@@ -160,14 +159,13 @@ uv run python examples/forecasting/ets_component_visualization.py
 
 It writes `target/examples/ets_component_visualization.png` and prints a JSON
 summary with RMSE, MAE, model metadata, final level/trend, and seasonal range.
-The example uses deterministic JFK-style pickup counts and does not download
-data.
+The example uses deterministic panel counts and does not download data.
 
 The plot is designed to answer three practical questions:
 
 - Does the one-step fitted line follow the training history without copying
   noise?
-- Do the level and trend components look plausible for the taxi zone?
+- Do the level and trend components look plausible for the panel?
 - Does the seasonal component show the expected overnight drag and peak-hour
   lift?
 
@@ -179,8 +177,8 @@ from cartoboost.forecasting import ETSForecaster, ForecastFrame
 frame = ForecastFrame.from_pandas(
     hourly_zone_demand,
     timestamp_col="pickup_hour",
-    target_col="pickup_count",
-    series_id_col="PULocationID",
+    target_col="demand",
+    series_id_col="series_id",
     freq="h",
 )
 
@@ -228,7 +226,7 @@ candidates = [
 ]
 ```
 
-For hourly taxi demand, use the same train/validation split for every
+For hourly demand, use the same train/validation split for every
 candidate. Score each setting against the validation horizon:
 
 ```python
@@ -255,7 +253,7 @@ print(sorted(scores, key=lambda item: item[0])[0])
 
 Prefer the simplest setting selected by validation. If ETS and seasonal naive
 are close, keep the seasonal naive baseline in reporting; it is a useful guard
-against overclaiming smoothing behavior on strongly repeating taxi series.
+against overclaiming smoothing behavior on strongly repeating series.
 
 ## Validation Notes
 

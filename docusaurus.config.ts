@@ -139,7 +139,6 @@ const config: Config = {
       },
       items: [
         { to: '/docs/installation', label: 'Get Started', position: 'left' },
-        { to: '/docs/user-guide/model-types', label: 'Guides', position: 'left' },
         { to: '/modeling-lab', label: 'Modeling Lab', position: 'left' },
         { to: '/docs/reference/python-api', label: 'Reference', position: 'left' },
         { to: '/docs/benchmarks', label: 'Benchmarks', position: 'left' },

@@ -2,19 +2,18 @@ import {ForecastModelExample} from '@site/src/components/ModelingLabClient';
 
 # AutoForecaster
 
-`AutoForecaster` is CartoBoost's guarded default forecasting model for taxi
-demand panels. It is not a black-box hyperparameter search. The Python class
+`AutoForecaster` is CartoBoost's guarded default forecasting model for demand
+panels. It is not a black-box hyperparameter search. The Python class
 normalizes user-facing configuration, fits a fixed candidate roster, validates
 members on trailing origins, gates fragile candidates, refits selected members,
 and records prediction metadata.
 
-Use it when you want one reproducible default for pickup-zone, dropoff-zone, or
-pickup-to-dropoff lane demand forecasting and you still want to inspect which
-candidate models earned forecast weight.
+Use it when you want one reproducible default for panel demand forecasting and
+you still want to inspect which candidate models earned forecast weight.
 
 ## Interactive Example
 
-<ForecastModelExample title="AutoForecaster coordinate-panel forecast" model="auto_forecast" sample="spatial" />
+<ForecastModelExample title="AutoForecaster panel forecast" model="auto_forecast" sample="spatial" />
 
 ## Public Contract
 
@@ -22,11 +21,11 @@ candidate models earned forecast weight.
 from cartoboost.forecasting import AutoForecaster, ForecastFrame
 
 frame = ForecastFrame.from_pandas(
-    hourly_pickup_demand,
-    timestamp_col="pickup_hour",
-    target_col="pickup_trips",
-    series_id_col="PULocationID",
-    static_covariates=["borough_id", "airport_zone"],
+    hourly_demand,
+    timestamp_col="timestamp",
+    target_col="demand",
+    series_id_col="series_id",
+    static_covariates=["region_id", "market_zone"],
     freq="h",
 )
 
@@ -66,7 +65,7 @@ refits only the selected members on the full frame.
 
 ```mermaid
 flowchart TD
-    A["ForecastFrame<br/>taxi zones or lanes"] --> B["Python AutoForecaster<br/>normalizes config"]
+    A["ForecastFrame<br/>series panels"] --> B["Python AutoForecaster<br/>normalizes config"]
     B --> C["AutoForecastModel"]
     C --> D["Choose validation_window<br/>configured or min_history / 5 clamped to 1..8"]
     D --> E["Choose validation_origin_count<br/>configured count capped by available history"]
@@ -169,7 +168,7 @@ the configured objective value is extracted.
 The default objective is `rmse_wape`, which blends normalized RMSE and WAPE so
 selection is sensitive to both scale-aware squared error and aggregate absolute
 error. Other objective strings such as `rmse`, `mae`, or `wape` can be used
-when that metric is the scientific target for the taxi panel.
+when that metric is the scientific target for the panel.
 
 For each candidate, the scorer emits:
 
@@ -281,7 +280,7 @@ metadata["nonnegative_output"]         # whether predictions are clamped
 metadata["auto_forecaster"]            # Python wrapper settings
 ```
 
-For an auditable taxi benchmark report, include the selected weights,
+For an auditable benchmark report, include the selected weights,
 validation scores, effective lag config, validation window, origin count,
 objective, target column, frequency, horizon, split definition, RMSE, MAE,
 WAPE, training time, and prediction time.
@@ -307,8 +306,7 @@ WAPE, training time, and prediction time.
 | `n_estimators`, `learning_rate`, `max_depth`, `min_samples_leaf`, `min_gain`, `splitters` | Booster defaults | Passed into the CartoBoost booster config used by tree-based candidates. |
 | `target_mode` | `"level"` | Base lag target mode before auto candidates add delta and seasonal-delta alternatives. |
 
-The PyO3 binding rejects `recursive=False`; the current auto model uses
-recursive-compatible forecasting surfaces.
+`recursive=False` is not supported for the current auto model.
 
 ## Failure Modes
 

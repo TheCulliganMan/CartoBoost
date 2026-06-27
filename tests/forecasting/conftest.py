@@ -48,7 +48,7 @@ def install_fake_native(monkeypatch: pytest.MonkeyPatch):
 
             def components_json(self, *args: Any, **kwargs: Any) -> str:
                 calls.append(("components_json", args, kwargs))
-                return json.dumps({"args": list(args), "kwargs": kwargs})
+                return json.dumps({"args": list(args), "kwargs": kwargs}, default=str)
 
             def history_components_json(self, *args: Any, **kwargs: Any) -> str:
                 calls.append(("history_components_json", args, kwargs))

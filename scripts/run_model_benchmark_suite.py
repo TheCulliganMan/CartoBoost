@@ -225,18 +225,27 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--selection-mode",
         choices=["fixed", "validation_search"],
-        default="fixed",
+        default="validation_search",
         help=(
             "fixed keeps one configured row per model. validation_search evaluates an "
-            "equal-size inner-validation candidate grid for standard regression rows, "
+            "equal-size inner-validation candidate grid for every tunable model family, "
             "then retrains the selected candidate on the full outer training split."
+        ),
+    )
+    parser.add_argument(
+        "--min-samples-leaf",
+        type=int,
+        default=None,
+        help=(
+            "Optional shared minimum-leaf override used by CartoBoost-family and tree "
+            "baselines when a candidate grid varies leaf regularization."
         ),
     )
     parser.add_argument(
         "--validation-trials",
         type=int,
         default=3,
-        help="Number of validation-search candidates per tunable regression model.",
+        help="Number of validation-search candidates per tunable model family.",
     )
     parser.add_argument("--no-plots", action="store_true")
     return parser.parse_args()
@@ -608,10 +617,12 @@ def index_fingerprint(indices: np.ndarray) -> str:
 def selection_policy() -> dict[str, str]:
     return {
         "global_hyperparameters": (
-            "fixed before holdout scoring; no model family uses test labels for tuning"
+            "every tunable model family uses the same inner-validation budget before "
+            "holdout scoring; no model family uses test labels for tuning"
         ),
         "primary_cartoboost_row": (
-            "single configured cartoboost run; no internal candidate is selected on test metrics"
+            "single selected cartoboost run retrained after inner validation; no internal "
+            "candidate is selected on test metrics"
         ),
         "neural_feature_gate": (
             "uses deterministic inner train/validation rows inside the training split only"
@@ -746,14 +757,21 @@ def run_mean(train_y: np.ndarray, test_rows: int) -> tuple[np.ndarray, dict[str,
     return timed_fit_predict(fit, lambda: np.full(test_rows, value), test_rows)
 
 
+def min_samples_leaf_value(args: argparse.Namespace, *, default: int) -> int:
+    value = getattr(args, "min_samples_leaf", None)
+    return int(value) if value is not None else int(default)
+
+
 def cartoboost_model(args: argparse.Namespace) -> Any:
     from cartoboost import CartoBoostRegressor
+
+    min_samples_leaf = min_samples_leaf_value(args, default=CARTOBOOST_MIN_SAMPLES_LEAF)
 
     return CartoBoostRegressor(
         n_estimators=args.n_estimators,
         learning_rate=args.learning_rate,
         max_depth=args.max_depth,
-        min_samples_leaf=CARTOBOOST_MIN_SAMPLES_LEAF,
+        min_samples_leaf=min_samples_leaf,
         min_gain=0.0,
         splitters=QUALITATIVE_CARTOBOOST_SPLITTERS,
         random_state=args.seed,
@@ -773,7 +791,14 @@ def run_cartoboost(
         lambda: model.predict(test_x),
         len(test_x),
     )
-    return prediction, timing, {"backend": getattr(model, "_backend_used", None)}
+    return (
+        prediction,
+        timing,
+        {
+            "backend": getattr(model, "_backend_used", None),
+            "min_samples_leaf": min_samples_leaf_value(args, default=CARTOBOOST_MIN_SAMPLES_LEAF),
+        },
+    )
 
 
 def run_neural(
@@ -798,14 +823,18 @@ def run_neural(
                 "n_estimators": max(10, args.n_estimators // 2),
                 "learning_rate": args.learning_rate,
                 "max_depth": args.max_depth,
-                "min_samples_leaf": CARTOBOOST_MIN_SAMPLES_LEAF,
+                "min_samples_leaf": min_samples_leaf_value(
+                    args, default=CARTOBOOST_MIN_SAMPLES_LEAF
+                ),
                 "splitters": QUALITATIVE_CARTOBOOST_SPLITTERS,
             },
             final_model_kwargs={
                 "n_estimators": args.n_estimators,
                 "learning_rate": args.learning_rate,
                 "max_depth": args.max_depth,
-                "min_samples_leaf": CARTOBOOST_MIN_SAMPLES_LEAF,
+                "min_samples_leaf": min_samples_leaf_value(
+                    args, default=CARTOBOOST_MIN_SAMPLES_LEAF
+                ),
                 "splitters": QUALITATIVE_CARTOBOOST_SPLITTERS,
             },
         )
@@ -873,6 +902,7 @@ def run_neural(
             "embedding_dim": int(args.neural_dim),
             "oof_folds": 5,
             "support_prior_strength": 2.0,
+            "min_samples_leaf": min_samples_leaf_value(args, default=CARTOBOOST_MIN_SAMPLES_LEAF),
             "fit_stages_ms": fit_stages_ms,
             "neural_guard": {
                 "selected": selected,
@@ -1031,7 +1061,7 @@ def run_standalone_neural(
         n_estimators=args.n_estimators,
         learning_rate=args.learning_rate,
         max_depth=args.max_depth,
-        min_samples_leaf=CARTOBOOST_MIN_SAMPLES_LEAF,
+        min_samples_leaf=min_samples_leaf_value(args, default=CARTOBOOST_MIN_SAMPLES_LEAF),
     )
     prediction, timing = timed_fit_predict(
         lambda: model.fit(
@@ -1077,7 +1107,7 @@ def run_standalone_node2vec_regressor(
         n_estimators=args.n_estimators,
         booster_learning_rate=args.learning_rate,
         max_depth=args.max_depth,
-        min_samples_leaf=CARTOBOOST_MIN_SAMPLES_LEAF,
+        min_samples_leaf=min_samples_leaf_value(args, default=CARTOBOOST_MIN_SAMPLES_LEAF),
     )
     prediction, timing = timed_fit_predict(
         lambda: model.fit(
@@ -1131,7 +1161,7 @@ def run_standalone_graphsage_regressor(
         n_estimators=args.n_estimators,
         booster_learning_rate=args.learning_rate,
         max_depth=args.max_depth,
-        min_samples_leaf=CARTOBOOST_MIN_SAMPLES_LEAF,
+        min_samples_leaf=min_samples_leaf_value(args, default=CARTOBOOST_MIN_SAMPLES_LEAF),
     )
     prediction, timing = timed_fit_predict(
         lambda: model.fit(
@@ -1191,7 +1221,7 @@ def run_standalone_typed_graphsage_regressor(
             n_estimators=args.n_estimators,
             booster_learning_rate=args.learning_rate,
             max_depth=args.max_depth,
-            min_samples_leaf=CARTOBOOST_MIN_SAMPLES_LEAF,
+            min_samples_leaf=min_samples_leaf_value(args, default=CARTOBOOST_MIN_SAMPLES_LEAF),
         )
     else:
         from cartoboost import HinSageStandaloneRegressor
@@ -1206,7 +1236,7 @@ def run_standalone_typed_graphsage_regressor(
             n_estimators=args.n_estimators,
             booster_learning_rate=args.learning_rate,
             max_depth=args.max_depth,
-            min_samples_leaf=CARTOBOOST_MIN_SAMPLES_LEAF,
+            min_samples_leaf=min_samples_leaf_value(args, default=CARTOBOOST_MIN_SAMPLES_LEAF),
         )
         fit_kwargs["node_types"] = [0] * int(workload.graph_node_features.shape[0])
 
@@ -1506,7 +1536,7 @@ def run_random_forest(
     model = RandomForestRegressor(
         n_estimators=args.n_estimators,
         max_depth=args.max_depth,
-        min_samples_leaf=getattr(args, "min_samples_leaf", 2),
+        min_samples_leaf=min_samples_leaf_value(args, default=2),
         random_state=args.seed,
         n_jobs=args.n_threads or -1,
     )
@@ -1515,7 +1545,7 @@ def run_random_forest(
         lambda: model.predict(test_x),
         len(test_x),
     )
-    return prediction, timing, {"min_samples_leaf": int(getattr(args, "min_samples_leaf", 2))}
+    return prediction, timing, {"min_samples_leaf": min_samples_leaf_value(args, default=2)}
 
 
 def run_extra_trees(
@@ -1529,7 +1559,7 @@ def run_extra_trees(
     model = ExtraTreesRegressor(
         n_estimators=args.n_estimators,
         max_depth=args.max_depth,
-        min_samples_leaf=getattr(args, "min_samples_leaf", 2),
+        min_samples_leaf=min_samples_leaf_value(args, default=2),
         random_state=args.seed,
         n_jobs=args.n_threads or -1,
     )
@@ -1538,7 +1568,7 @@ def run_extra_trees(
         lambda: model.predict(test_x),
         len(test_x),
     )
-    return prediction, timing, {"min_samples_leaf": int(getattr(args, "min_samples_leaf", 2))}
+    return prediction, timing, {"min_samples_leaf": min_samples_leaf_value(args, default=2)}
 
 
 def run_ridge(
@@ -1566,11 +1596,32 @@ def candidate_args(args: argparse.Namespace, config: dict[str, Any]) -> argparse
     return candidate
 
 
-def validation_candidate_grid(
-    model_name: str,
-    args: argparse.Namespace,
-) -> list[dict[str, Any]]:
-    common = [
+def cartoboost_candidate_grid(args: argparse.Namespace) -> list[dict[str, Any]]:
+    base_leaf = min_samples_leaf_value(args, default=CARTOBOOST_MIN_SAMPLES_LEAF)
+    return [
+        {
+            "n_estimators": args.n_estimators,
+            "learning_rate": args.learning_rate,
+            "max_depth": args.max_depth,
+            "min_samples_leaf": base_leaf,
+        },
+        {
+            "n_estimators": max(8, int(round(args.n_estimators * 0.75))),
+            "learning_rate": min(0.3, args.learning_rate * 1.25),
+            "max_depth": args.max_depth,
+            "min_samples_leaf": max(2, base_leaf // 2),
+        },
+        {
+            "n_estimators": max(8, int(round(args.n_estimators * 1.25))),
+            "learning_rate": max(0.01, args.learning_rate * 0.8),
+            "max_depth": max(1, args.max_depth - 1),
+            "min_samples_leaf": max(2, base_leaf * 2),
+        },
+    ]
+
+
+def tree_candidate_grid(args: argparse.Namespace) -> list[dict[str, Any]]:
+    return [
         {
             "n_estimators": args.n_estimators,
             "learning_rate": args.learning_rate,
@@ -1578,29 +1629,139 @@ def validation_candidate_grid(
         },
         {
             "n_estimators": max(8, int(round(args.n_estimators * 0.75))),
-            "learning_rate": args.learning_rate * 1.25,
+            "learning_rate": min(0.3, args.learning_rate * 1.25),
             "max_depth": args.max_depth,
         },
         {
-            "n_estimators": args.n_estimators,
-            "learning_rate": args.learning_rate,
+            "n_estimators": max(8, int(round(args.n_estimators * 1.25))),
+            "learning_rate": max(0.01, args.learning_rate * 0.8),
             "max_depth": max(1, args.max_depth - 1),
         },
     ]
-    if model_name in {"cartoboost", "lightgbm", "xgboost", "catboost", "hist_gradient_boosting"}:
-        return common[: args.validation_trials]
+
+
+def forest_candidate_grid(args: argparse.Namespace) -> list[dict[str, Any]]:
+    base_leaf = min_samples_leaf_value(args, default=2)
+    return [
+        {
+            "n_estimators": args.n_estimators,
+            "max_depth": args.max_depth,
+            "min_samples_leaf": base_leaf,
+        },
+        {
+            "n_estimators": max(8, int(round(args.n_estimators * 0.75))),
+            "max_depth": max(1, args.max_depth - 1),
+            "min_samples_leaf": max(1, base_leaf // 2),
+        },
+        {
+            "n_estimators": max(8, int(round(args.n_estimators * 1.25))),
+            "max_depth": args.max_depth + 1,
+            "min_samples_leaf": max(2, base_leaf * 2),
+        },
+    ]
+
+
+def neural_candidate_grid(args: argparse.Namespace) -> list[dict[str, Any]]:
+    base_leaf = min_samples_leaf_value(args, default=CARTOBOOST_MIN_SAMPLES_LEAF)
+    return [
+        {
+            "neural_dim": args.neural_dim,
+            "n_estimators": args.n_estimators,
+            "learning_rate": args.learning_rate,
+            "max_depth": args.max_depth,
+            "min_samples_leaf": base_leaf,
+        },
+        {
+            "neural_dim": max(4, args.neural_dim // 2),
+            "n_estimators": max(8, int(round(args.n_estimators * 0.75))),
+            "learning_rate": min(0.3, args.learning_rate * 1.25),
+            "max_depth": args.max_depth,
+            "min_samples_leaf": max(2, base_leaf // 2),
+        },
+        {
+            "neural_dim": max(4, args.neural_dim * 2),
+            "n_estimators": max(8, int(round(args.n_estimators * 1.25))),
+            "learning_rate": max(0.01, args.learning_rate * 0.8),
+            "max_depth": max(1, args.max_depth - 1),
+            "min_samples_leaf": max(2, base_leaf * 2),
+        },
+    ]
+
+
+def graph_candidate_grid(args: argparse.Namespace) -> list[dict[str, Any]]:
+    base_leaf = min_samples_leaf_value(args, default=CARTOBOOST_MIN_SAMPLES_LEAF)
+    return [
+        {
+            "graph_dim": args.graph_dim,
+            "graph_epochs": args.graph_epochs,
+            "n_estimators": args.n_estimators,
+            "learning_rate": args.learning_rate,
+            "max_depth": args.max_depth,
+            "min_samples_leaf": base_leaf,
+        },
+        {
+            "graph_dim": max(2, args.graph_dim // 2),
+            "graph_epochs": max(1, args.graph_epochs // 2),
+            "n_estimators": max(8, int(round(args.n_estimators * 0.75))),
+            "learning_rate": min(0.3, args.learning_rate * 1.25),
+            "max_depth": args.max_depth,
+            "min_samples_leaf": max(2, base_leaf // 2),
+        },
+        {
+            "graph_dim": max(2, args.graph_dim * 2),
+            "graph_epochs": max(2, args.graph_epochs + 2),
+            "n_estimators": max(8, int(round(args.n_estimators * 1.25))),
+            "learning_rate": max(0.01, args.learning_rate * 0.8),
+            "max_depth": max(1, args.max_depth - 1),
+            "min_samples_leaf": max(2, base_leaf * 2),
+        },
+    ]
+
+
+def link_predictor_candidate_grid(args: argparse.Namespace) -> list[dict[str, Any]]:
+    return [
+        {"graph_dim": args.graph_dim, "graph_epochs": args.graph_epochs},
+        {
+            "graph_dim": max(2, args.graph_dim // 2),
+            "graph_epochs": max(1, args.graph_epochs // 2),
+        },
+        {
+            "graph_dim": max(2, args.graph_dim * 2),
+            "graph_epochs": max(2, args.graph_epochs + 2),
+        },
+    ]
+
+
+def validation_candidate_grid(
+    model_name: str,
+    args: argparse.Namespace,
+) -> list[dict[str, Any]]:
+    if model_name == "cartoboost":
+        return cartoboost_candidate_grid(args)[: args.validation_trials]
+    if model_name in {"lightgbm", "xgboost", "catboost", "hist_gradient_boosting"}:
+        return tree_candidate_grid(args)[: args.validation_trials]
     if model_name in {"random_forest", "extra_trees"}:
-        return [
-            {"n_estimators": args.n_estimators, "max_depth": args.max_depth, "min_samples_leaf": 2},
-            {
-                "n_estimators": args.n_estimators,
-                "max_depth": max(1, args.max_depth - 1),
-                "min_samples_leaf": 2,
-            },
-            {"n_estimators": args.n_estimators, "max_depth": args.max_depth, "min_samples_leaf": 5},
-        ][: args.validation_trials]
+        return forest_candidate_grid(args)[: args.validation_trials]
     if model_name == "ridge":
         return [{"ridge_alpha": value} for value in [0.1, 1.0, 10.0]][: args.validation_trials]
+    if model_name in {"cartoboost_neural", "neural_embedding_regressor"}:
+        return neural_candidate_grid(args)[: args.validation_trials]
+    if model_name in GRAPH_MODEL_FAMILIES:
+        return graph_candidate_grid(args)[: args.validation_trials]
+    if model_name in {
+        "node2vec_regressor",
+        "graphsage_regressor",
+        "hetero_graphsage_regressor",
+        "hinsage_regressor",
+    }:
+        return graph_candidate_grid(args)[: args.validation_trials]
+    if model_name in {
+        "node2vec_link_predictor",
+        "graphsage_link_predictor",
+        "hetero_graphsage_link_predictor",
+        "hinsage_link_predictor",
+    }:
+        return link_predictor_candidate_grid(args)[: args.validation_trials]
     return []
 
 
@@ -1617,6 +1778,10 @@ def failed_validation_search_reason(validation_rows: list[dict[str, Any]]) -> st
     if len(reasons) == 1:
         return f"all validation-search candidates failed: {reasons[0]}"
     return "all validation-search candidates failed: " + "; ".join(reasons)
+
+
+def skipped_result(reason: str) -> dict[str, Any]:
+    return {"status": "skipped", "reason": reason}
 
 
 def run_one_model_fixed(
@@ -1711,11 +1876,17 @@ def run_one_model(
     args: argparse.Namespace,
 ) -> dict[str, Any]:
     if args.selection_mode != "validation_search":
-        return run_one_model_fixed(model_name, workload, train_idx, test_idx, args)
+        try:
+            return run_one_model_fixed(model_name, workload, train_idx, test_idx, args)
+        except (ImportError, ValueError) as exc:
+            return skipped_result(str(exc))
 
     grid = validation_candidate_grid(model_name, args)
     if not grid:
-        result = run_one_model_fixed(model_name, workload, train_idx, test_idx, args)
+        try:
+            result = run_one_model_fixed(model_name, workload, train_idx, test_idx, args)
+        except (ImportError, ValueError) as exc:
+            return skipped_result(str(exc))
         result.setdefault("selection", {"mode": "fixed_not_tunable"})
         return result
 
@@ -1726,13 +1897,24 @@ def run_one_model(
     validation_rows: list[dict[str, Any]] = []
     for trial_index, config in enumerate(grid, start=1):
         trial_args = candidate_args(args, config)
-        trial = run_one_model_fixed(
-            model_name,
-            workload,
-            train_idx[inner_train],
-            train_idx[inner_validation],
-            trial_args,
-        )
+        try:
+            trial = run_one_model_fixed(
+                model_name,
+                workload,
+                train_idx[inner_train],
+                train_idx[inner_validation],
+                trial_args,
+            )
+        except (ImportError, ValueError) as exc:
+            validation_rows.append(
+                {
+                    "trial": trial_index,
+                    "config": config,
+                    "status": "skipped",
+                    "reason": str(exc),
+                }
+            )
+            continue
         if trial["status"] != "ok":
             validation_rows.append(
                 {
@@ -1754,7 +1936,7 @@ def run_one_model(
 
     successful = [row for row in validation_rows if row["status"] == "ok"]
     if not successful:
-        raise ValueError(failed_validation_search_reason(validation_rows))
+        return skipped_result(failed_validation_search_reason(validation_rows))
 
     best = min(successful, key=lambda row: (float(row["validation_rmse"]), int(row["trial"])))
     selected_args = candidate_args(args, dict(best["config"]))
@@ -2291,6 +2473,10 @@ def write_markdown(payload: dict[str, Any], output_path: Path) -> None:
                             f"| {model_name} | ok |  |  |  |  | {timing['train_seconds']:.4f} | "
                             f"{timing['predict_rows_per_second']:.0f} |"
                         )
+                elif result["status"] == "skipped":
+                    lines.append(
+                        f"| {model_name} | skipped: {result.get('reason', '')} |  |  |  |  |  |  |"
+                    )
                 else:
                     raise ValueError(
                         f"unexpected non-ok benchmark result for {model_name}: {result}"

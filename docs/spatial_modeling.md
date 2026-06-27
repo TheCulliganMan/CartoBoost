@@ -1,19 +1,19 @@
 # Temporal-Spatial Modeling
 
-CartoBoost is built for regression problems where time, place, taxi-zone
-membership, or local neighborhoods drive the target. Examples include pickup
-demand by hour and zone, fare or duration adjustments by location, and
-operational metrics grouped by pickup/dropoff zones.
+CartoBoost is built for regression problems where time, place, membership, or
+local neighborhoods drive the target. Examples include demand by hour and zone,
+adjustments by location, and operational metrics grouped by source/target
+pairs.
 
 ## When It Is A Good Scientific Choice
 
 Use `CartoBoostRegressor` when the modeling question depends on structured
 place/time effects that should remain visible in the fitted workflow:
 
-- Pickup and dropoff coordinates may define boundaries, corridors, or radial
-  hotspots that are awkward to express with only axis-aligned cuts.
-- Zone, route, H3/S2, grid, corridor, or service-area memberships may be sparse
-  but scientifically meaningful.
+- Coordinates may define boundaries, corridors, or radial hotspots that are
+  awkward to express with only axis-aligned cuts.
+- Zone, route, H3/S2, grid, corridor, or service-area memberships may be
+  sparse but scientifically meaningful.
 - Hour-of-day, weekday, or seasonal phase may wrap around, so 23:00 and 00:00
   should be treated as neighbors rather than distant values.
 - Service boundaries, geocoding noise, and route assignments may be fuzzy,
@@ -35,7 +35,7 @@ CartoBoost-specific control directly tests a scientific hypothesis.
 | --- | --- | --- |
 | Hour-of-day, weekday, seasonality | Dense periodic feature with `periodic:<period>` | Preserves wraparound adjacency. |
 | Latitude/longitude or projected x/y | Dense numeric features with `diagonal_2d` or `gaussian_2d` | Learns spatial boundaries and neighborhoods without only stair-step axis cuts. |
-| Pickup zones, dropoff zones, encoded H3 cells | `sparse_sets={...}` with `splitters=["sparse_set"]` | Uses list-valued memberships directly. |
+| Zones, encoded H3 cells | `sparse_sets={...}` with `splitters=["sparse_set"]` | Uses list-valued memberships directly. |
 | Smooth transitions near a boundary | `fuzzy=True` with `fuzzy_bandwidth` and optional `fuzzy_kernel` | Routes samples fractionally instead of forcing a hard left/right decision. |
 | Local trend inside a region | `leaf_predictor="linear"` | Fits a ridge residual model inside leaves. |
 | Heavy-tailed or asymmetric targets | `loss="mae"`, `loss="huber"`, `loss="log_l2"`, or `loss="quantile"` | Aligns the objective with the estimand. |
@@ -102,9 +102,9 @@ unseen IDs cannot recover learned ID-specific effects.
 
 ## Robust And Quantile Targets
 
-Taxi fare and duration data often have airport trips, traffic disruptions,
-metering differences, cancellations, and data-quality outliers. If the
-scientific estimand is not the conditional mean, choose the loss accordingly:
+Structured fare and duration data often have traffic disruptions, metering
+differences, cancellations, and data-quality outliers. If the scientific
+estimand is not the conditional mean, choose the loss accordingly:
 
 | Target | Loss |
 | --- | --- |

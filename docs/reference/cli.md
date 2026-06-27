@@ -5,9 +5,9 @@ prediction, inspection, and simple evaluation. Use it for command-line evidence
 when the data is already encoded into comparable columns for CartoBoost and
 baseline tools.
 
-The CLI is intentionally narrower than the Python API. For taxi-zone sparse
-sets, graph features, neural residual embeddings, rolling-origin forecasting,
-or leakage-aware split generation, use the Python API and benchmark scripts.
+The CLI is intentionally narrower than the Python API. For sparse sets, graph
+features, neural residual embeddings, rolling-origin forecasting, or
+leakage-aware split generation, use the Python API and benchmark scripts.
 
 ## `train`
 
@@ -106,8 +106,8 @@ Forecasting V1 is exposed through `scripts/forecast.py`:
 python scripts/forecast.py fit \
   --input examples/forecasting/forecast_cli_input.csv \
   --timestamp-col timestamp \
-  --target-col pickup_demand \
-  --series-id-col PULocationID \
+  --target-col demand \
+  --series-id-col series_id \
   --freq D \
   --model theta \
   --horizon 7 \
@@ -131,8 +131,8 @@ Forecasting options:
 | --- | --- |
 | `--input` | CSV history. Required for `fit`, `backtest`, and `compare`. |
 | `--timestamp-col` | Timestamp column such as `timestamp` or `pickup_hour`. |
-| `--target-col` | Target column such as `pickup_demand`, `fare`, or `duration`. |
-| `--series-id-col` | Optional panel id such as `PULocationID` or `lane_id`. |
+| `--target-col` | Target column such as `demand`, `fare`, or `duration`. |
+| `--series-id-col` | Optional panel id such as `series_id` or `lane_id`. |
 | `--freq` | Frequency: `D`, `H`, `W`, or `M`. |
 | `--model` | `naive`, `seasonal_naive`, `theta`, `optimized_theta`, `ets`, `auto_arima`, `cartoboost_lag`, or `all` for `compare`. |
 | `--horizon` | Positive forecast horizon. |
@@ -149,4 +149,4 @@ message on stderr.
 For scientific forecasting comparisons, prefer `compare` or `backtest` over
 manually fitting separate models. Those commands keep the forecast rows aligned
 by `series_id`, `timestamp`, and `horizon`, which is required for honest
-pickup/dropoff lane demand metrics.
+forecast metrics.

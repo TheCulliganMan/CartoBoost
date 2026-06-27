@@ -2,27 +2,24 @@ import {ForecastModelExample} from '@site/src/components/ModelingLabClient';
 
 # Spatial Piecewise Kriging
 
-`SpatialPiecewiseKrigingForecaster` is for taxi panels that need both
-inspectable temporal structure and spatial borrowing. It fits a piecewise
-linear seasonal base, then uses ordinary kriging to add cutoff-safe spatial
-signal from stable pickup, dropoff, zone, or route coordinates.
+`SpatialPiecewiseKrigingForecaster` is for panels that need both inspectable
+temporal structure and spatial borrowing. It fits a piecewise linear seasonal
+base, then uses ordinary kriging to add cutoff-safe spatial signal from stable
+coordinates.
 
 The interactive example below runs the same model when the sample table
 has stable `longitude` and `latitude` columns.
 
 ## When To Use
 
-Use this model when a taxi panel has both of these mechanisms:
+Use this model when a panel has both of these mechanisms:
 
 - each zone or lane has trend, changepoints, seasonality, events, or known
   future regressors that should remain inspectable;
-- nearby pickup zones, dropoff zones, or route coordinates have related
-  residuals or known spatial covariates.
+- nearby coordinates have related residuals or known spatial covariates.
 
-Good fits usually look like hourly pickup demand by `PULocationID`,
-dropoff-zone demand by `DOLocationID`, or route-hour panels where each
-pickup/dropoff lane has a stable coordinate such as a pickup centroid, dropoff
-centroid, or route midpoint.
+Good fits usually look like hourly demand by zone, store, or route panel where
+each series has a stable coordinate such as a centroid or midpoint.
 
 Prefer [Piecewise Linear Seasonal](piecewise-linear-seasonal.md) when geography
 is not part of the claim. Prefer [Kriging](kriging.md) when the temporal base is
@@ -52,8 +49,8 @@ from cartoboost.forecasting import ForecastFrame, SpatialPiecewiseKrigingForecas
 frame = ForecastFrame.from_pandas(
     hourly_zone_demand,
     timestamp_col="pickup_hour",
-    target_col="pickup_count",
-    series_id_col="PULocationID",
+    target_col="demand",
+    series_id_col="zone_id",
     freq="h",
     known_future_covariates=["hour", "day_of_week"],
 )
@@ -116,7 +113,7 @@ spatial correction is small, directional, or dominated by high kriging variance.
 
 ## Benchmark Check
 
-The maintained synthetic taxi-panel diagnostic compares this model against
+The maintained synthetic panel diagnostic compares this model against
 naive, seasonal naive, piecewise linear seasonal, and kriging under the same
 rolling-origin split:
 

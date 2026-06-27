@@ -1,8 +1,9 @@
-# Categorical Features
+# CartoBoost Categorical Features
 
-CartoBoost accepts categorical columns in the regressor, classifier, and ranker
-Python wrappers. The fitted artifact records the mapping used during training
-so prediction and save/load use the same encoding.
+CartoBoost accepts categorical columns in the CartoBoost regressor,
+classifier, and ranker Python wrappers. The fitted artifact records the
+mapping used during training so prediction and save/load use the same
+encoding.
 
 ## Supported Inputs
 
@@ -20,7 +21,7 @@ from cartoboost import CartoBoostRegressor, FeatureKind
 
 schema = {
     "dense": [
-        {"name": "PULocationID", "kind": FeatureKind.CATEGORICAL},
+        {"name": "location_id", "kind": FeatureKind.CATEGORICAL},
         {"name": "service_tier", "kind": FeatureKind.ORDINAL},
         {"name": "trip_distance", "kind": FeatureKind.NUMERIC},
     ]

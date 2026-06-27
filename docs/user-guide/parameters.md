@@ -6,15 +6,16 @@ scientific structure of temporal-spatial regression.
 
 ## Choose Parameters From The Question
 
-Before tuning ranges, decide what claim the model needs to support. In NYC taxi
-work, parameters should usually map to a modeling question:
+Before tuning ranges, decide what claim the model needs to support. In
+structured regression work, parameters should usually map to a modeling
+question:
 
 | Scientific question | Controls to consider |
 | --- | --- |
 | Is a dense tabular baseline enough for fare, duration, demand, or residual prediction? | `splitters=None`, `["auto"]`, `["axis"]`, or `["axis_histogram:<bins>"]` |
 | Are pickup/dropoff coordinates or projected x/y values defining spatial boundaries? | `diagonal_2d`, `gaussian_2d` |
 | Does hour-of-day, weekday, or season wrap around? | `periodic:<period>` |
-| Are rare zones, routes, cells, or service-area memberships part of the signal? | `sparse_set` plus `sparse_sets=` |
+| Are rare memberships, routes, cells, or service-area memberships part of the signal? | `sparse_set` plus `sparse_sets=` |
 | Should nearby observations blend across an uncertain boundary? | `fuzzy=True`, `fuzzy_bandwidth`, `fuzzy_kernel` |
 | Is the target about median-like behavior, outlier resistance, or asymmetric service risk? | `loss="mae"`, `loss="huber"`, `loss="log_l2"`, or `loss="quantile"` |
 | Is a local trend still visible after the tree finds a region or time bucket? | `leaf_predictor="linear"`, `linear_leaf_features` |
@@ -42,15 +43,15 @@ ordinary bias/variance tuning after the validation split is fixed.
 ## Loss
 
 Choose the loss from the estimand. Mean regression is appropriate for many
-fare or duration targets, but taxi data often contains heavy tails, dispatch
-exceptions, airport trips, and localized service-level questions.
+fare or duration targets, but structured data often contains heavy tails,
+dispatch exceptions, and localized service-level questions.
 
 | Parameter | Default | Notes |
 | --- | --- | --- |
 | `loss` | `"l2"` | Accepts `"l2"`, `"squared_error"`, `"l1"`, `"mae"`, `"absolute_error"`, `"huber"`, `"log_l2"`, `"quantile"`, or `"pinball"`. |
 | `quantile_alpha` | `0.5` | Required to be finite and in `(0, 1)` for quantile loss. |
 | `huber_delta` | `1.0` | Positive clipping threshold for Huber loss. |
-| `log_offset` | `1.0` | Positive offset for `log_l2`; the current backend supports `1.0`. |
+| `log_offset` | `1.0` | Positive offset for `log_l2`. |
 
 `l1`, `huber`, `log_l2`, and quantile loss currently require
 `leaf_predictor="constant"`.
@@ -71,7 +72,7 @@ scientific structure in the rows.
 | `diagonal_2d`, `diagonal2d` | Oblique 2D boundaries for coordinates or projected x/y features. |
 | `gaussian_2d`, `gaussian2d`, `radial` | Radial neighborhoods around local hotspots, depots, zones, or corridors. |
 | `periodic_time`, `periodic_24`, `periodic:<period>` | Wraparound time features such as hour-of-day, weekday, or seasonal phase. |
-| `sparse_set`, `sparse` | List-valued taxi-zone, zone, grid, or encoded H3 memberships. |
+| `sparse_set`, `sparse` | List-valued zone, grid, or encoded H3 memberships. |
 
 Unknown splitter names raise `ValueError`.
 
@@ -83,7 +84,7 @@ Common temporal-spatial combinations:
 | Exact axis baseline | `["axis"]` |
 | Dense location and time | `["axis", "diagonal_2d", "gaussian_2d", "periodic:24"]` |
 | Route or cell membership | `["axis", "periodic:24", "sparse_set"]` |
-| Location plus taxi zones | `["axis", "diagonal_2d", "gaussian_2d", "periodic:24", "sparse_set"]` |
+| Location plus sparse memberships | `["axis", "diagonal_2d", "gaussian_2d", "periodic:24", "sparse_set"]` |
 
 ## Leaves
 
@@ -93,10 +94,10 @@ Common temporal-spatial combinations:
 | `linear_leaf_features` | `None` | Python API currently expects stringified integer feature indices, such as `["0", "2"]`. |
 | `l2_regularization` | `1.0` | Ridge penalty for linear leaves. |
 
-Use linear leaves when the tree can find a region, taxi zone, or time bucket
-but the remaining residual trend inside that region is still approximately
-linear. For example, a learned airport corridor may still have a distance or
-time-of-day trend represented locally rather than globally.
+Use linear leaves when the tree can find a region or time bucket but the
+remaining residual trend inside that region is still approximately linear. For
+example, a learned corridor may still have a distance or time-of-day trend
+represented locally rather than globally.
 
 ## Fuzzy Routing
 

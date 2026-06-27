@@ -1,0 +1,54 @@
+# AutoStatsBank
+
+`AutoStatsBank` validates a fixed bank of local statistical forecasting
+experts. Use it when you want deterministic model selection among reusable
+classical candidates without moving to the broader `AutoForecaster` panel
+selector.
+
+## When To Use
+
+- The forecast question is local to each series.
+- You want validation-based selection across statistical experts.
+- The model should stay deterministic and easy to audit.
+- You need a stronger local baseline before trying lagged or neural panel
+  models.
+
+Use `AutoStatsBank` as a selection layer, not as proof that a complex model is
+needed. Keep naive and seasonal naive in the comparison table.
+
+## Basic Fit
+
+```python
+from cartoboost.forecasting import AutoStatsBank, ForecastFrame
+
+frame = ForecastFrame.from_pandas(
+    hourly_demand,
+    timestamp_col="timestamp",
+    target_col="demand",
+    series_id_col="series_id",
+    freq="h",
+)
+
+model = AutoStatsBank(
+    season_length=24,
+    validation_window=12,
+)
+model.fit(frame)
+forecast = model.predict(12)
+```
+
+## Use When
+
+| Situation | Better first choice |
+| --- | --- |
+| You need a transparent last-value or seasonal baseline. | `NaiveForecaster` or `SeasonalNaiveForecaster` |
+| You want one selected local statistical expert. | `AutoStatsBank` |
+| You need lag features shared across many panels. | `CartoBoostLagForecaster` |
+| You need guarded panel selection across lag, direct, intermittent, and classical candidates. | `AutoForecaster` |
+
+## Validation
+
+`AutoStatsBank` should be evaluated under the same rolling-origin split as the
+individual local forecasters. Report the selected candidate, validation window,
+horizon, RMSE, MAE, WAPE, train time, prediction time, and the simple baselines
+it had to beat.

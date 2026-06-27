@@ -1,10 +1,10 @@
 # Feature Schema
 
-Feature schemas tell CartoBoost what each input column means. That matters for
-taxi-trip science because the same numeric array can contain scalar variables,
-cyclic time, and list-valued geographic memberships. Without a schema, the model
-can still fit, but saved artifacts and future prediction calls have less
-evidence about which feature semantics were intended.
+Feature schemas tell CartoBoost what each input column means. The same numeric
+array can contain scalar variables, cyclic time, and list-valued geographic or
+membership features. Without a schema, the model can still fit, but saved
+artifacts and future prediction calls have less evidence about which feature
+semantics were intended.
 
 Use a schema when:
 
@@ -26,15 +26,15 @@ schema = {
     "dense": [
         {"name": "pickup_x", "kind": "numeric"},
         {"name": "pickup_y", "kind": "numeric"},
-        {"name": "PULocationID", "kind": "categorical"},
+        {"name": "location_id", "kind": "categorical"},
         {"name": "service_tier", "kind": "ordinal"},
         {"name": "distance_m", "kind": "numeric"},
         {"name": "hour_of_day", "kind": "periodic", "period": 24},
     ],
     "sparse_sets": [
-        {"name": "taxi_zones", "kind": "sparse_set"},
-        {"name": "pickup_zone_parent", "kind": "zone_sparse_set"},
-        {"name": "dropoff_zone", "kind": "zone_sparse_set"},
+        {"name": "zone_ids", "kind": "sparse_set"},
+        {"name": "parent_zone", "kind": "zone_sparse_set"},
+        {"name": "child_zone", "kind": "zone_sparse_set"},
     ],
 }
 ```
@@ -45,7 +45,7 @@ Pass the schema during training:
 model.fit(
     X_dense,
     y,
-    sparse_sets={"taxi_zones": taxi_zones},
+    sparse_sets={"zone_ids": zone_ids},
     feature_schema=schema,
 )
 ```
@@ -53,8 +53,8 @@ model.fit(
 ## Modeling Effects
 
 Periodic declarations let splitters treat values near the cycle boundary as
-neighbors. For taxi trips, `hour_of_day=23` and `hour_of_day=0` can be adjacent
-late-night behavior rather than opposite ends of a numeric line.
+neighbors. For cyclic time, `hour_of_day=23` and `hour_of_day=0` can be
+adjacent late-night behavior rather than opposite ends of a numeric line.
 
 Sparse-set declarations tell the model that a row can belong to multiple
 scientific groups at once, such as pickup zone, dropoff zone, parent borough,
@@ -82,10 +82,10 @@ CartoBoost stores supported schema dictionaries in a compact artifact payload:
   "names": [
     "pickup_x",
     "pickup_y",
-    "PULocationID",
+    "location_id",
     "distance_m",
     "hour_of_day",
-    "taxi_zones"
+    "zone_ids"
   ],
   "kinds": [
     "Numeric",

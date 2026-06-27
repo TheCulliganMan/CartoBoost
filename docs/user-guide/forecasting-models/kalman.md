@@ -10,18 +10,18 @@ variance-grid search before refitting on all training rows.
 
 ## Interactive Example
 
-<ForecastModelExample title="Auto Kalman taxi-lane forecast" model="auto_kalman" />
+<ForecastModelExample title="Auto Kalman panel forecast" model="auto_kalman" />
 
 ## When To Use
 
-Use Kalman forecasting for taxi demand or fare aggregates when recent
+Use Kalman forecasting for demand or fare aggregates when recent
 observations should update the level and trend without requiring a fixed
 seasonal cycle. It is often a good baseline for short horizons and noisy
 single-zone series.
 
 ## Scientific Role
 
-Kalman forecasting is a state-space choice. It represents observed taxi counts
+Kalman forecasting is a state-space choice. It represents observed counts
 as noisy measurements of an unobserved level and trend. The model is useful
 when the research question is: "What latent demand state best explains these
 noisy observations, and how should that state move into the next few horizons?"
@@ -43,7 +43,7 @@ events drive the forecast, or when abrupt structural breaks are too large for
 the process variance settings. A very reactive filter can chase noise; a very
 stiff filter can miss real pickup-demand shifts. Use standardized innovations,
 forecast intervals, and rolling-origin error to decide whether the variance
-settings match the taxi series.
+settings match the series.
 
 ## Example
 
@@ -68,11 +68,11 @@ print(forecast.predictions())
 ## Examples
 
 Use these small examples to choose the right Kalman surface before moving to a
-full taxi-zone panel.
+full panel.
 
 | Example | Use | Why |
 | --- | --- | --- |
-| A JFK pickup sensor is noisy but the true demand level is stable. | `LocalLevelKalmanForecaster` or `cartoboost.local_level_kalman_filter` | One latent level is enough; there is no explicit slope. |
+| A single location sensor is noisy but the true demand level is stable. | `LocalLevelKalmanForecaster` or `cartoboost.local_level_kalman_filter` | One latent level is enough; there is no explicit slope. |
 | Airport pickup demand is drifting upward through the evening rush. | `KalmanForecaster` or `cartoboost.kalman_filter` | The local-linear model estimates both a level and a trend. |
 | You want the model to choose variance settings from a small grid. | `AutoLocalLevelKalmanForecaster` or `AutoKalmanForecaster` | Candidate settings are scored on a time-ordered tail window and the winner is refit. |
 | You need a normal forecast band for a dashboard. | `forecast_distribution` from either utility | It returns mean, variance, lower, and upper for each horizon. |
@@ -121,9 +121,9 @@ print(state["diagnostics"]["rmse"], state["diagnostics"]["mae"])
 from cartoboost.forecasting import AutoKalmanForecaster, ForecastFrame
 
 frame = ForecastFrame.from_pandas(
-    hourly_zone_demand.query("PULocationID == 132"),
+    hourly_zone_demand.query("series_id == '132'"),
     timestamp_col="pickup_hour",
-    target_col="pickup_count",
+    target_col="demand",
     freq="h",
 )
 
@@ -222,7 +222,7 @@ uv run python examples/forecasting/kalman_diagnostics_visualization.py
 ```
 
 It writes `target/examples/kalman_diagnostics_visualization.png` and prints a
-small JSON summary. The example uses synthetic JFK-style pickup counts and does
+small JSON summary. The example uses synthetic panel counts and does
 not download data.
 
 The core plotting pattern is:
@@ -299,7 +299,7 @@ Interpretation:
 
 ## Tuning With An Example Grid
 
-For a real taxi workflow, score a small grid on a rolling split before choosing
+For a real workflow, score a small grid on a rolling split before choosing
 parameters. Keep the split fixed across candidates.
 
 ```python

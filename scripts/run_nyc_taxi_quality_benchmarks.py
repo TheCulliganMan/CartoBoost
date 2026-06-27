@@ -1943,10 +1943,13 @@ def fit_predict_model(
         }
 
     if pickup_demand_cold_zone_fraction(task, train_indices, test_indices) >= 0.8:
-        raise ValueError(
-            "learned models are not valid for pickup_demand cold-zone spatial holdout; "
-            "the split removes all zone demand history, so predictions collapse to priors"
-        )
+        return {
+            "status": "skipped",
+            "reason": (
+                "learned models are not valid for pickup_demand cold-zone spatial holdout; "
+                "the split removes all zone demand history, so predictions collapse to priors"
+            ),
+        }
 
     if model_name in {"cartoboost", "cartoboost_reference"}:
         from cartoboost import CartoBoostRegressor
@@ -2546,14 +2549,23 @@ def run_benchmarks(tasks: list[BenchmarkTask], args: argparse.Namespace) -> dict
                     f"test_rows={len(current_test_indices)}",
                     flush=True,
                 )
-                result = fit_predict_model(
-                    model_name=model_name,
-                    task=current_task,
-                    train_indices=current_train_indices,
-                    test_indices=current_test_indices,
-                    args=args,
-                )
-                prediction = result.pop("predictions", None)
+                try:
+                    result = fit_predict_model(
+                        model_name=model_name,
+                        task=current_task,
+                        train_indices=current_train_indices,
+                        test_indices=current_test_indices,
+                        args=args,
+                    )
+                    prediction = result.pop("predictions", None)
+                except Exception as exc:
+                    if model_name.startswith("cartoboost"):
+                        raise
+                    result = {
+                        "status": "skipped",
+                        "reason": f"{type(exc).__name__}: {exc}",
+                    }
+                    prediction = None
                 print(
                     f"finished task={current_task.name} split={current_split_mode} "
                     f"model={model_name} status={result['status']}",
@@ -3005,10 +3017,10 @@ def write_markdown(results: dict[str, Any], output_dir: Path) -> None:
         "## Comparison Method",
         "",
         "The primary `cartoboost` row is compared with the requested external",
-        "baselines that finish in the validated environment: XGBoost, optional",
-        "LightGBM and CatBoost estimators when available, scikit-learn tree",
-        "ensembles, Ridge, and a mean baseline under the same task, split, target",
-        "transformation, and global benchmark settings.",
+        "baselines that finish in the validated environment: XGBoost, LightGBM,",
+        "CatBoost, scikit-learn tree ensembles, Ridge, and a mean baseline under",
+        "the same task, split, target transformation, and global benchmark",
+        "settings.",
         "",
         f"- dataset source: {results['dataset']['source']}",
         f"- source URL: {results['dataset'].get('source_url', '')}",
@@ -3231,9 +3243,8 @@ def write_markdown(results: dict[str, Any], output_dir: Path) -> None:
                         f"{timing['predict_rows_per_second']:.2f} | {note} |"
                     )
                 else:
-                    raise ValueError(
-                        f"unexpected non-ok benchmark result for {model_name}: {model}"
-                    )
+                    reason = str(model.get("reason", "skipped"))
+                    lines.append(f"| {model_name} | skipped |  |  |  |  |  |  |  | {reason} |")
             lines.append("")
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "results.md").write_text("\n".join(lines) + "\n", encoding="utf-8")

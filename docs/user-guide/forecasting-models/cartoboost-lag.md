@@ -8,34 +8,31 @@ regressor to forecast future horizons.
 
 ## Interactive Example
 
-<ForecastModelExample title="CartoBoost lag coordinate-panel forecast" model="cartoboost_lag" sample="spatial" />
+<ForecastModelExample title="CartoBoost lag panel forecast" model="cartoboost_lag" sample="spatial" />
 
 ## When To Use
 
-Use it when many related taxi time series should share one model:
+Use it when many related time series should share one model:
 
-- pickup-zone hourly demand;
-- dropoff-zone hourly demand;
-- airport lane demand;
-- pickup-dropoff route counts;
-- zone-level fare or duration aggregates.
+- hourly demand by zone, store, product, or region;
+- route counts or event counts;
+- grouped fare, duration, or usage aggregates.
 
 For a single short series, start with seasonal naive, theta, ETS, ARIMA, or
 Kalman instead. The lag model is most useful when repeated structure across
-zones or lanes gives the global regressor more examples than any one series can
+panels gives the global regressor more examples than any one series can
 provide.
 
 ## Scientific Role
 
 `CartoBoostLagForecaster` is a supervised panel model. It tests whether a
 shared nonlinear mapping from historical lags, rolling summaries, calendar
-features, trend features, and panel identity can forecast many related taxi
-series under the same split used for local one-series models.
+features, trend features, and panel identity can forecast many related series
+under the same split used for local one-series models.
 
-Choose it when the scientific unit is a system of related zones or lanes, not a
-single isolated sequence. It is appropriate when repeated behavior across
-`PULocationID`, `DOLocationID`, or pickup/dropoff lanes gives the model more
-evidence than any one series contains.
+Choose it when the scientific unit is a system of related panels, not a single
+isolated sequence. It is appropriate when repeated behavior across groups gives
+the model more evidence than any one series contains.
 
 ## Assumptions And Failure Modes
 
@@ -58,8 +55,8 @@ from cartoboost.forecasting import CartoBoostLagForecaster
 
 model = CartoBoostLagForecaster(
     time_col="pickup_hour",
-    target_col="pickup_count",
-    panel_cols=["PULocationID"],
+    target_col="demand",
+    panel_cols=["zone_id"],
     frequency="h",
     lags=[1, 2, 24, 168],
     rolling_windows=[24, 168],
@@ -95,8 +92,8 @@ from cartoboost.forecasting import (
 
 model = CartoBoostLagForecaster(
     time_col="pickup_hour",
-    target_col="pickup_count",
-    panel_cols=["PULocationID"],
+    target_col="demand",
+    panel_cols=["zone_id"],
     frequency="h",
     lag_config=LagFeatureConfig(lags=[1, 24, 168]),
     rolling_config=RollingFeatureConfig(windows=[24, 168], aggregations=("mean",)),
@@ -116,13 +113,13 @@ forecast = model.predict(24)
 ## Runnable Visual Example
 
 Run the committed example to create a forecast plot and a residual plot for a
-synthetic taxi pickup-zone panel:
+synthetic panel:
 
 ```bash
 uv run python examples/forecasting/cartoboost_lag_visualization.py
 ```
 
-It writes `target/examples/cartoboost_lag.png` and prints JSON with rows, zone
+It writes `target/examples/cartoboost_lag.png` and prints JSON with rows, panel
 count, horizon, RMSE, and MAE. The example does not download data.
 
 The core pattern is:
@@ -131,12 +128,12 @@ The core pattern is:
 import pandas as pd
 from cartoboost.forecasting import CartoBoostLagForecaster
 
-train = hourly_zone_demand.groupby("PULocationID", sort=False).head(72)
+train = hourly_zone_demand.groupby("zone_id", sort=False).head(72)
 
 model = CartoBoostLagForecaster(
     time_col="pickup_hour",
-    target_col="pickup_count",
-    panel_cols=["PULocationID"],
+    target_col="demand",
+    panel_cols=["zone_id"],
     frequency="h",
     lags=[1, 2, 24],
     rolling_windows=[6, 24],
@@ -152,7 +149,7 @@ model.fit(train)
 
 forecast = pd.DataFrame(
     model.predict(12).predictions(),
-    columns=["PULocationID", "pickup_hour", "horizon", "model", "prediction"],
+    columns=["zone_id", "pickup_hour", "horizon", "model", "prediction"],
 )
 forecast["pickup_hour"] = pd.to_datetime(forecast["pickup_hour"])
 ```
@@ -163,17 +160,17 @@ shift or the recursive strategy is compounding short-horizon bias.
 
 ## Feature Families
 
-| Feature family | Taxi interpretation | Common use |
+| Feature family | Interpretation | Common use |
 | --- | --- | --- |
-| `lags=[1, 2]` | Recent pickup pressure in the same zone or lane. | Short-horizon nowcasting. |
+| `lags=[1, 2]` | Recent pressure in the same series. | Short-horizon nowcasting. |
 | `lags=[24, 168]` | Same hour yesterday or last week. | Daily and weekly demand cycles. |
-| `rolling_windows=[6, 24]` | Recent moving average demand. | Smooth noisy pickup counts before tree splits. |
+| `rolling_windows=[6, 24]` | Recent moving average demand. | Smooth noisy targets before tree splits. |
 | `calendar_features=True` | Native day, month, and day-of-week features. | Let one global model separate weekday and weekend behavior. |
-| `trend_features=True` | Lag deltas and rolling-trend features. | Capture ramps into commute peaks or airport surges. |
-| `panel_cols=["PULocationID"]` | Series identity for each pickup zone. | Share tree structure while keeping panels isolated by history. |
+| `trend_features=True` | Lag deltas and rolling-trend features. | Capture ramps into recurring peaks. |
+| `panel_cols=["zone_id"]` | Series identity for each panel. | Share tree structure while keeping panels isolated by history. |
 
 Keep lags and rolling windows meaningful for the forecast frequency. For hourly
-taxi data, `24` usually means same hour yesterday and `168` means same hour last
+data, `24` usually means same hour yesterday and `168` means same hour last
 week. For daily aggregates, those same numbers mean very different behavior and
 should be chosen deliberately.
 
@@ -184,9 +181,9 @@ seasonality is present and the frame includes calendar or hour-cycle structure.
 Keep geographic features in the supervised frame or use panel ids to let the
 global model learn repeated zone patterns.
 
-If a model with `periodic:24` passes on a taxi split, check later rolling
-origins too. A single split can overstate a periodic splitter when the holdout
-happens to align with the same commute pattern.
+If a model with `periodic:24` passes on one split, check later rolling origins
+too. A single split can overstate a periodic splitter when the holdout happens
+to align with the same cycle.
 
 ## Native Feature Support
 
@@ -213,10 +210,10 @@ Start by joining predictions back to the holdout on panel id and timestamp:
 ```python
 joined = actual.merge(
     forecast,
-    on=["PULocationID", "pickup_hour"],
+    on=["zone_id", "pickup_hour"],
     validate="one_to_one",
 )
-joined["error"] = joined["prediction"] - joined["pickup_count"]
+joined["error"] = joined["prediction"] - joined["demand"]
 joined["abs_error"] = joined["error"].abs()
 ```
 
@@ -226,7 +223,7 @@ Then inspect errors by horizon, hour of day, and zone:
 joined["hour"] = joined["pickup_hour"].dt.hour
 print(joined.groupby("horizon")["abs_error"].mean())
 print(joined.groupby("hour")["abs_error"].mean())
-print(joined.groupby("PULocationID")["abs_error"].mean().sort_values(ascending=False))
+print(joined.groupby("zone_id")["abs_error"].mean().sort_values(ascending=False))
 ```
 
 Interpretation:
@@ -244,7 +241,7 @@ Always use rolling-origin backtests. Lag and rolling features must be strictly
 historical relative to the forecast row. Keep split boundaries stable when
 comparing against seasonal naive, ARIMA, ETS, LightGBM, or XGBoost baselines.
 
-For taxi-zone panels, report at least:
+For panel forecasts, report at least:
 
 - split timestamps and horizon;
 - number of zones or lanes;

@@ -1,48 +1,41 @@
-# Boosting Model Guides
+# CartoBoost Boosting Model Guides
 
-These guides cover CartoBoost's sklearn-style boosted tree estimators for
-row-level taxi modeling. Use this section when each row is a trip, route
-observation, zone-hour aggregate, ranked candidate, or residual model rather
-than a regular forecast series.
+Use these guides for row-level boosted tree models. If the target is a regular
+time series, switch to the forecasting guides. If the learned ID representation
+itself is the point of the experiment, switch to the neural guides.
 
-Use [Forecasting Model Guides](../forecasting-models/index.md) when the target
-is future demand over a regular time index. Use
-[Neural Model Guides](../neural-models/index.md) when the learned ID embedding
-itself is the model under test.
+## Use When
 
-## Pick A Guide
+- You need a tree model for numeric, class, or grouped-ranking targets.
+- The signal may depend on time, location, membership, or residual structure.
+- You want one entry point for fit, predict, save, load, and parameter
+  selection, then a narrower page for each estimator.
 
-| Model guide | Best first use | Notes |
-| --- | --- | --- |
-| [CartoBoost Regressor](regressor.md) | Predict fare, duration, demand aggregates, or residuals from row-level features. | Main boosted tree estimator for numeric targets. |
-| [CartoBoost Classifier](classifier.md) | Predict labels such as airport-trip flag, high-delay bucket, or route-risk class. | Supports binary and multiclass probability workflows. |
-| [CartoBoost Ranker](ranker.md) | Order candidates within a pickup, lane, route request, or planning group. | Uses grouped pairwise or LambdaRank objectives. |
+## Guides
 
-## Shared Inputs
+- [CartoBoost Regressor](cartoboost-regressor.md): numeric targets such as duration,
+  fare, demand, or residuals.
+- [CartoBoost Classifier](cartoboost-classifier.md): binary or multiclass labels.
+- [CartoBoost Ranker](cartoboost-ranker.md): grouped candidate ordering.
 
-Start with measured dense features such as trip distance, pickup hour,
-day-of-week, projected pickup/dropoff coordinates, route history, fare history,
-or duration history. Add structured feature contracts only when they match the
-scientific question:
+## Shared Setup
 
-| Need | Guide |
-| --- | --- |
-| Estimator lifecycle, save/load, and sklearn-style methods | [Python Estimator](../python-estimator.md) |
-| Splitter, loss, fuzzy routing, and leaf controls | [Parameters](../parameters.md) |
-| Native categorical and ordinal columns | [Categorical Features](../categorical-features.md) |
-| Spatially blocked validation | [Spatial CV Best Practices](../spatial-cv-best-practices.md) |
-| Coordinates, route geometry, and fuzzy spatial behavior | [Spatial Modeling](../../spatial_modeling.md) |
-| Feature schemas and validation contracts | [Feature Schema](../../feature_schema.md) |
-| Pickup/dropoff zones, H3/S2 cells, and route memberships | [Sparse Features](../../sparse_features.md) |
+Start from dense measured features, then add specialized controls only when
+they match the question:
 
-## Validation
+- [Python Estimator](../python-estimator.md) for fit, predict, save, and load
+  behavior.
+- [Parameters](../parameters.md) for splitters, losses, fuzzy routing, and
+  leaves.
+- [Categorical Features](../categorical-features.md) for native categorical
+  and ordinal columns.
+- [Spatial CV Best Practices](../spatial-cv-best-practices.md) for blocked
+  validation.
+- [Spatial Modeling](../../spatial_modeling.md) for coordinates and spatial
+  split behavior.
+- [Feature Schema](../../feature_schema.md) for validation contracts.
+- [Sparse Features](../../sparse_features.md) for zones, cells, and route
+  memberships.
 
-Boosting claims should compare against serious baselines on the same split and
-feature set. For taxi regression that usually means a mean baseline plus
-LightGBM or XGBoost. For classification, report logloss plus ROC-AUC or PR-AUC
-when the positive class is rare. For ranking, report grouped metrics such as
-NDCG, MAP, and MRR.
-
-Record the target, split, row count, feature set, RMSE or task metric, train
-time, prediction time, and the exact command or notebook entry point used to
-produce the numbers.
+Compare against serious baselines on the same split, keep the feature access
+equal, and record the exact command, dataset, split, and metric summary.

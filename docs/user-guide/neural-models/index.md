@@ -1,41 +1,21 @@
-# Neural Model Guides
+# CartoBoost Neural Model Guides
 
-These guides cover neural ID embedding models and neural feature-generation
-workflows. Use this section when stable taxi identifiers carry repeated
-residual signal: pickup zones, dropoff zones, pickup-dropoff pairs, zone-hour
-buckets, H3/S2 cells, or route clusters.
+Use neural models when stable identifiers carry repeated residual signal.
+These guides are for learned ID structure, not for graph relationships or
+forecasting panels.
 
-Use [Forecasting Model Guides](../forecasting-models/index.md) for
-`NeuralPanelForecaster`, `LaneNeuralPanelForecaster`, N-BEATS, and N-HiTS
-forecasting models. Use [Graph Features](../../graph-features.md) when the
-relationship network itself is the model structure.
+Use [CartoBoost Forecasting Model Guides](../forecasting-models/index.md) for
+`NeuralPanelForecaster` and `LaneNeuralPanelForecaster`, and [CartoBoost Graph
+Model Guides](../graph-models/index.md) when the relationship network itself is
+the thing being modeled.
 
-## Pick A Guide
+## Choose A Guide
 
-| Model guide | Best first use | Notes |
-| --- | --- | --- |
-| [Standalone Embedding Regressor](standalone-embedding.md) | Train, evaluate, save, and serve a supervised ID embedding model directly. | Best when the embedding model is the artifact under test. |
-| [Embedding Feature Workflows](embedding-features.md) | Turn learned ID vectors into dense columns for another model. | Best for ablation studies and neural-augmented boosting. |
+| Guide | Best when |
+| --- | --- |
+| [CartoBoost Neural Embedding Regressor](cartoboost-neural-embedding.md) | The supervised ID embedding model is the artifact you train, score, save, and serve. |
+| [CartoBoost NeuralEmbeddingFeatures](cartoboost-neural-embedding-features.md) | Learned ID vectors should become columns for another estimator or ablation. |
+| [CartoBoost NeuralEmbeddingRegressor](cartoboost-neural-embedding-regressor.md) | One wrapper should learn ID embeddings and fit the downstream CartoBoost regressor. |
 
-## Scientific Fit
-
-Neural embeddings are useful for studying repeated-ID effects such as:
-
-- zone-specific fare or duration residuals after controlling for distance and
-  hour;
-- recurring pickup-dropoff pair behavior not captured by scalar route features;
-- high-cardinality spatial cells where one-hot features would be too wide;
-- repeated market behavior under random, tail, or out-of-time splits;
-- whether support-aware shrinkage changes rare-zone stability.
-
-They are weaker evidence for cold-start generalization. If a validation split
-holds out zones or routes unseen during training, the model must use fallback
-vectors or fallback IDs. Report embedding results with the split protocol and
-do not treat repeated-ID gains as proof that the model understands unseen
-zones.
-
-## Read Next
-
-[Neural Embedding Models And Features](../../neural-features.md) remains the
-full contract page for artifacts, fallback behavior, benchmark reporting, and
-failure modes.
+See [Neural Features](../../neural-features.md) for the artifact contract,
+fallback behavior, and failure modes.

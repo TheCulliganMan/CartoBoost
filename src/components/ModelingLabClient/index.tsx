@@ -30,6 +30,7 @@ type ForecastChartPoint = {
   label: string;
   timestamp: string;
   value: number;
+  index: number;
   horizon?: number;
 };
 
@@ -124,6 +125,8 @@ type ForecastResponse = {
 };
 
 type ComparisonResult = {
+  runId?: string;
+  runLabel?: string;
   requestedModel: string;
   label: string;
   pipeline: string;
@@ -132,6 +135,8 @@ type ComparisonResult = {
 };
 
 type BacktestResult = {
+  runId?: string;
+  runLabel?: string;
   requestedModel: string;
   label: string;
   pipeline: string;
@@ -142,6 +147,8 @@ type BacktestResult = {
   response?: ForecastResponse;
   error?: string;
 };
+
+type BenchmarkResult = ComparisonResult | BacktestResult;
 
 type RunProgress = {
   label: string;
@@ -356,7 +363,7 @@ export function ForecastModelExample({
         <div>
           <strong>{title}</strong>
           <p style={{margin: '0.25rem 0 0'}}>
-            Runs <code>{selectedModel}</code> against a bundled taxi-style {sample === 'spatial' ? 'coordinate panel' : 'lane'} sample.
+            Runs <code>{selectedModel}</code> against a bundled {sample === 'spatial' ? 'multi-location demand panel' : 'route-demand'} sample.
           </p>
         </div>
         <button className="button button--primary" type="button" disabled={isRunning} onClick={() => void runExample()}>
@@ -395,12 +402,68 @@ export function ForecastModelExample({
   );
 }
 
+export function NeuralModelExample({pipeline, title}: NeuralModelExampleProps): React.ReactElement {
+  const wasmJsUrl = useBaseUrl('/wasm/cartoboost/cartoboost_wasm.js');
+  const wasmBinaryUrl = useBaseUrl('/wasm/cartoboost/cartoboost_wasm_bg.wasm');
+  const [status, setStatus] = useState('Ready to run in this page.');
+  const [isRunning, setIsRunning] = useState(false);
+  const [result, setResult] = useState<RegressionResponse | null>(null);
+
+  const runExample = useCallback(async () => {
+    setIsRunning(true);
+    setStatus('Running neural model in this page.');
+    try {
+      const wasmModule = await getInitializedWasmModule(wasmJsUrl, wasmBinaryUrl);
+      const response = wasmModule.runNeuralModel(neuralExampleRequest(pipeline));
+      setResult(response);
+      setStatus(`Model complete with ${response.metrics.holdoutRows.toLocaleString()} holdout rows.`);
+    } catch (error) {
+      setResult(null);
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsRunning(false);
+    }
+  }, [pipeline, wasmBinaryUrl, wasmJsUrl]);
+
+  return (
+    <section
+      style={{
+        border: '1px solid var(--ifm-color-emphasis-300)',
+        borderRadius: 8,
+        padding: '1rem',
+        margin: '1rem 0',
+      }}
+    >
+      <div style={{display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap'}}>
+        <div>
+          <strong>{title}</strong>
+          <p style={{margin: '0.25rem 0 0'}}>
+            Runs <code>{pipeline}</code> in the browser with the bundled CartoBoost Wasm model.
+          </p>
+        </div>
+        <button className="button button--primary" type="button" disabled={isRunning} onClick={() => void runExample()}>
+          {isRunning ? 'Running' : 'Run model'}
+        </button>
+      </div>
+      <p style={{margin: '0.75rem 0'}}>{status}</p>
+      {result && (
+        <>
+          <RegressionMetricSummary result={result} />
+          <RegressionPredictionChart result={result} />
+          <FeatureImportanceChart result={result} />
+          <RegressionPredictionTable result={result} />
+        </>
+      )}
+    </section>
+  );
+}
+
 export function ForecastModelRosterExample(): React.ReactElement {
   const wasmJsUrl = useBaseUrl('/wasm/cartoboost/cartoboost_wasm.js');
   const wasmBinaryUrl = useBaseUrl('/wasm/cartoboost/cartoboost_wasm_bg.wasm');
   const [models, setModels] = useState<ModelOption[]>(fallbackModelOptions);
   const [model, setModel] = useState('auto_forecast');
-  const [status, setStatus] = useState('Choose any forecast model and run the same taxi-style example.');
+  const [status, setStatus] = useState('Choose any forecast model and run the same route-demand example.');
   const [isRunning, setIsRunning] = useState(false);
   const [result, setResult] = useState<ForecastResponse | null>(null);
   const selectedModel = normalizedForecastModel(model);
@@ -511,6 +574,71 @@ export function ForecastModelRosterExample(): React.ReactElement {
   );
 }
 
+function neuralExampleRequest(pipeline: NeuralModelExampleProps['pipeline']) {
+  const nodeTypes = [0, 1, 1, 0, 0, 1, 1, 0];
+  const rows = Array.from({length: 64}, (_, index) => {
+    const source = index % nodeTypes.length;
+    const sourceType = nodeTypes[source];
+    const compatibleTargets = nodeTypes
+      .map((nodeType, node) => ({nodeType, node}))
+      .filter((candidate) => candidate.nodeType !== sourceType);
+    const targetNode = compatibleTargets[(Math.floor(index / nodeTypes.length) + source) % compatibleTargets.length].node;
+    const edgeType = sourceType === 0 ? 0 : 1;
+    const id = 100 + (source * 3 + targetNode) % 10;
+    const distance = 1.2 + ((source + targetNode) % 6) * 0.45 + (index % 4) * 0.08;
+    const hour = 6 + ((index * 3 + source) % 18);
+    const routeEffect = sourceType === 0 ? 0.35 : -0.15;
+    const target = 1.8 + distance * 0.42 + hour * 0.055 + routeEffect + (targetNode % 3) * 0.18 + (id % 5) * 0.07;
+    return {
+      id,
+      source,
+      targetNode,
+      edgeType,
+      dense: [Number(distance.toFixed(3)), hour],
+      target: Number(target.toFixed(3)),
+    };
+  });
+
+  return {
+    pipeline,
+    denseFeatureNames: ['distance', 'hour'],
+    nodeFeatures: [
+      [1.0, 0.0],
+      [0.0, 1.0],
+      [0.6, 0.3],
+      [0.2, 0.7],
+      [0.9, 0.2],
+      [0.1, 0.8],
+      [0.5, 0.6],
+      [0.4, 0.1],
+    ],
+    nodeTypes,
+    edgeTypeTriples: [
+      [0, 0, 1],
+      [1, 1, 0],
+    ],
+    rows,
+    options: {
+      holdoutFraction: 0.25,
+      embeddingDim: 6,
+      randomState: 42,
+      nEstimators: 48,
+      learningRate: 0.07,
+      maxDepth: 3,
+      minSamplesLeaf: 3,
+      node2vecWalkLength: 10,
+      node2vecWalksPerNode: 6,
+      node2vecWindowSize: 3,
+      node2vecEpochs: 4,
+      node2vecSeed: 42,
+      graphSageEpochs: 6,
+      graphSageNegativeSamples: 3,
+      graphSageSeed: 42,
+      includeModelVisualization: true,
+    },
+  };
+}
+
 function ForecastExampleChart({records, table}: {records: ForecastRecord[]; table: ParsedTable}): React.ReactElement | null {
   const [hovered, setHovered] = useState<ForecastChartPoint | null>(null);
   const points = useMemo(() => forecastChartPoints(records, table), [records, table]);
@@ -518,8 +646,8 @@ function ForecastExampleChart({records, table}: {records: ForecastRecord[]; tabl
     return null;
   }
   const width = 720;
-  const height = 260;
-  const padding = {top: 22, right: 18, bottom: 44, left: 54};
+  const height = 300;
+  const padding = {top: 24, right: 18, bottom: 58, left: 58};
   const innerWidth = width - padding.left - padding.right;
   const innerHeight = height - padding.top - padding.bottom;
   const values = points.map((point) => point.value);
@@ -535,6 +663,8 @@ function ForecastExampleChart({records, table}: {records: ForecastRecord[]; tabl
   const pointIndex = new Map(points.map((point, index) => [point, index]));
   const actualPath = chartPath(actualPoints, pointIndex, xFor, yFor);
   const forecastPath = chartPath(forecastPoints, pointIndex, xFor, yFor);
+  const boundaryIndex = actualPoints.length - 0.5;
+  const boundaryX = actualPoints.length > 0 && forecastPoints.length > 0 ? xFor(boundaryIndex) : null;
   const joinPath =
     actualPoints.length > 0 && forecastPoints.length > 0
       ? `M ${xFor(pointIndex.get(actualPoints[actualPoints.length - 1]) ?? 0)} ${yFor(actualPoints[actualPoints.length - 1].value)} L ${xFor(pointIndex.get(forecastPoints[0]) ?? 0)} ${yFor(forecastPoints[0].value)}`
@@ -543,14 +673,21 @@ function ForecastExampleChart({records, table}: {records: ForecastRecord[]; tabl
 
   return (
     <figure style={{margin: '1rem 0'}}>
-      <figcaption style={{fontWeight: 600, marginBottom: '0.35rem'}}>Forecast graph</figcaption>
-      <div style={{overflowX: 'auto'}}>
+      <figcaption style={{fontWeight: 700, marginBottom: '0.35rem'}}>Recent actuals and browser forecast</figcaption>
+      <div style={{overflowX: 'auto', border: '1px solid var(--ifm-color-emphasis-200)', borderRadius: 8, padding: '0.5rem'}}>
         <svg
           role="img"
           aria-label="Recent actual values and forecast path"
           viewBox={`0 0 ${width} ${height}`}
           style={{width: '100%', minWidth: 520, maxWidth: width, display: 'block'}}
         >
+          <rect x={padding.left} y={padding.top} width={innerWidth} height={innerHeight} fill="var(--ifm-color-emphasis-100)" opacity="0.3" />
+          {boundaryX !== null && (
+            <>
+              <rect x={boundaryX} y={padding.top} width={width - padding.right - boundaryX} height={innerHeight} fill="#fed7aa" opacity="0.22" />
+              <line x1={boundaryX} x2={boundaryX} y1={padding.top} y2={height - padding.bottom} stroke="#c2410c" strokeDasharray="5 5" />
+            </>
+          )}
           <line x1={padding.left} x2={width - padding.right} y1={height - padding.bottom} y2={height - padding.bottom} stroke="var(--ifm-color-emphasis-400)" />
           <line x1={padding.left} x2={padding.left} y1={padding.top} y2={height - padding.bottom} stroke="var(--ifm-color-emphasis-400)" />
           {[0, 0.5, 1].map((tick) => {
@@ -568,27 +705,42 @@ function ForecastExampleChart({records, table}: {records: ForecastRecord[]; tabl
           {actualPath && <path d={actualPath} fill="none" stroke="var(--ifm-color-primary)" strokeWidth="3" />}
           {joinPath && <path d={joinPath} fill="none" stroke="var(--ifm-color-primary)" strokeWidth="2" strokeDasharray="4 4" />}
           {forecastPath && <path d={forecastPath} fill="none" stroke="#c2410c" strokeWidth="3" />}
-          {points.map((point, index) => (
-            <circle
-              key={`${point.kind}-${point.timestamp}-${index}`}
-              cx={xFor(index)}
-              cy={yFor(point.value)}
-              r={hovered === point ? 6 : 4}
-              fill={point.kind === 'actual' ? 'var(--ifm-color-primary)' : '#c2410c'}
-              stroke="white"
-              strokeWidth="1.5"
-              onPointerEnter={() => setHovered(point)}
-              onPointerLeave={() => setHovered(null)}
-            />
-          ))}
-          <text x={padding.left} y={height - 14} fontSize="12" fill="var(--ifm-font-color-base)">
+          {points.map((point, index) => {
+            const isEndpoint = index === 0 || index === points.length - 1 || point.kind === 'forecast';
+            return (
+              <g key={`${point.kind}-${point.timestamp}-${index}`}>
+                <circle
+                  cx={xFor(index)}
+                  cy={yFor(point.value)}
+                  r={hovered === point ? 6 : isEndpoint ? 4 : 2.5}
+                  fill={point.kind === 'actual' ? 'var(--ifm-color-primary)' : '#c2410c'}
+                  stroke="white"
+                  strokeWidth="1.5"
+                />
+                <circle
+                  cx={xFor(index)}
+                  cy={yFor(point.value)}
+                  r="10"
+                  fill="transparent"
+                  onPointerEnter={() => setHovered(point)}
+                  onPointerLeave={() => setHovered(null)}
+                />
+              </g>
+            );
+          })}
+          {boundaryX !== null && (
+            <text x={boundaryX + 6} y={padding.top + 14} fontSize="12" fill="#9a3412">
+              forecast starts
+            </text>
+          )}
+          <text x={padding.left} y={height - 20} fontSize="12" fill="var(--ifm-font-color-base)">
             Actual
           </text>
-          <circle cx={padding.left + 42} cy={height - 18} r="4" fill="var(--ifm-color-primary)" />
-          <text x={padding.left + 64} y={height - 14} fontSize="12" fill="var(--ifm-font-color-base)">
+          <circle cx={padding.left + 42} cy={height - 24} r="4" fill="var(--ifm-color-primary)" />
+          <text x={padding.left + 64} y={height - 20} fontSize="12" fill="var(--ifm-font-color-base)">
             Forecast
           </text>
-          <circle cx={padding.left + 120} cy={height - 18} r="4" fill="#c2410c" />
+          <circle cx={padding.left + 120} cy={height - 24} r="4" fill="#c2410c" />
         </svg>
       </div>
       <p style={{margin: '0.35rem 0 0'}}>
@@ -606,21 +758,23 @@ function forecastChartPoints(records: ForecastRecord[], table: ParsedTable): For
   }
   const actuals = table.rows
     .filter((row) => row.series_id === firstSeries)
-    .map((row) => ({
+    .map((row, index) => ({
       kind: 'actual' as const,
       label: 'Actual',
       timestamp: row.timestamp,
       value: Number(row.target),
+      index,
     }))
     .filter((point) => Number.isFinite(point.value))
-    .slice(-18);
+    .slice(-36);
   const forecasts = records
     .filter((record) => record.series_id === firstSeries)
-    .map((record) => ({
+    .map((record, index) => ({
       kind: 'forecast' as const,
       label: 'Forecast',
       timestamp: record.timestamp,
       value: record.prediction,
+      index,
       horizon: record.horizon,
     }))
     .filter((point) => Number.isFinite(point.value));
@@ -668,7 +822,7 @@ const graphNeuralPipelines = new Set(['node2vec', 'graphsage', 'hetero_graphsage
 type ActiveModelingSurface = 'forecast' | 'model' | 'neural';
 
 type PendingLabRun = {
-  action: 'forecast' | 'compare' | 'backtest';
+  action: 'forecast' | 'compare' | 'backtest' | 'benchmark';
   model: string;
 };
 
@@ -677,6 +831,11 @@ type ForecastModelExampleProps = {
   title: string;
   sample?: 'lane' | 'spatial';
   horizon?: number;
+};
+
+type NeuralModelExampleProps = {
+  pipeline: 'embedding' | 'node2vec' | 'graphsage' | 'hetero_graphsage' | 'hinsage';
+  title: string;
 };
 const TAXI_LANE_SAMPLE_ROWS = 5000;
 const TAXI_VARIED_ROUTE_SAMPLE_ROWS = 2500;
@@ -759,6 +918,7 @@ export default function ModelingLabClient(): React.ReactElement {
   const [result, setResult] = useState<ForecastResponse | null>(null);
   const [comparisonResults, setComparisonResults] = useState<ComparisonResult[]>([]);
   const [backtestResults, setBacktestResults] = useState<BacktestResult[]>([]);
+  const [hiddenBenchmarkSeries, setHiddenBenchmarkSeries] = useState<string[]>([]);
   const [regressionResult, setRegressionResult] = useState<RegressionResponse | null>(null);
   const [neuralResult, setNeuralResult] = useState<RegressionResponse | null>(null);
   const [featureCols, setFeatureCols] = useState<string[]>([]);
@@ -827,6 +987,7 @@ export default function ModelingLabClient(): React.ReactElement {
     setResult(null);
     setComparisonResults([]);
     setBacktestResults([]);
+    setHiddenBenchmarkSeries([]);
     setRegressionResult(null);
     setNeuralResult(null);
     setTimestampCol(nextTimestampCol);
@@ -852,6 +1013,7 @@ export default function ModelingLabClient(): React.ReactElement {
         setResult(null);
         setComparisonResults([]);
         setBacktestResults([]);
+        setHiddenBenchmarkSeries([]);
         setRegressionResult(null);
         setNeuralResult(null);
         setTimestampCol(nextTimestampCol);
@@ -891,6 +1053,7 @@ export default function ModelingLabClient(): React.ReactElement {
     setResult(null);
     setComparisonResults([]);
     setBacktestResults([]);
+    setHiddenBenchmarkSeries([]);
     setRegressionResult(null);
     setNeuralResult(null);
     setTimestampCol(nextTimestampCol);
@@ -989,7 +1152,7 @@ export default function ModelingLabClient(): React.ReactElement {
       requestedSample ||
       (modelValue === 'kriging' || modelValue === 'spatial_piecewise_kriging' ? 'varied' : 'lane');
     const action =
-      requestedAction === 'compare' || requestedAction === 'backtest' || requestedAction === 'forecast'
+      requestedAction === 'benchmark' || requestedAction === 'compare' || requestedAction === 'backtest' || requestedAction === 'forecast'
         ? requestedAction
         : null;
 
@@ -1042,6 +1205,7 @@ export default function ModelingLabClient(): React.ReactElement {
       setResult(response);
       setComparisonResults([]);
       setBacktestResults([]);
+      setHiddenBenchmarkSeries([]);
       setRegressionResult(null);
       setNeuralResult(null);
       setStatus(`Forecast complete with ${response.forecast.records.length.toLocaleString()} prediction rows.`);
@@ -1068,23 +1232,23 @@ export default function ModelingLabClient(): React.ReactElement {
 
   const runComparison = useCallback(async () => {
     if (!table || !selectedColumnsReady) {
-      setStatus('Choose timestamp and target columns before running a comparison.');
+      setStatus('Choose timestamp and target columns before running a benchmark.');
       return;
     }
     setIsRunning(true);
     setRunProgress({label: 'Preparing model roster', current: 0, total: modelOptions.length});
     setResult(null);
-    setBacktestResults([]);
     setRegressionResult(null);
     setNeuralResult(null);
-    setComparisonResults([]);
     setRunLog([]);
-    setStatus('Running model roster.');
+    setStatus('Running model roster benchmark.');
     const roster = modelOptions.filter((option) => forecastModelCanRun(option, table.columns));
     setRunProgress({label: 'Running model roster', current: 0, total: roster.length});
-    appendRunLog(`Started roster comparison with ${roster.length.toLocaleString()} models.`);
+    const runId = benchmarkRunId();
+    const runLabel = benchmarkRunLabel([...comparisonResults, ...backtestResults]);
+    appendRunLog(`Started ${runLabel} with ${roster.length.toLocaleString()} models.`);
     await waitForBrowserPaint();
-    const nextResults: ComparisonResult[] = [];
+    const nextResults: ComparisonResult[] = [...comparisonResults];
     for (const [index, option] of roster.entries()) {
       setRunProgress({label: `Running ${option.label}`, current: index, total: roster.length});
       setStatus(`Running ${option.label}.`);
@@ -1105,6 +1269,8 @@ export default function ModelingLabClient(): React.ReactElement {
           seasonLength,
         });
         nextResults.push({
+          runId,
+          runLabel,
           requestedModel: option.value,
           label: option.label,
           pipeline: option.group,
@@ -1114,6 +1280,8 @@ export default function ModelingLabClient(): React.ReactElement {
       } catch (error) {
         appendRunLog(`${option.label} reported a constraint after ${formatElapsedMs(performance.now() - started)}.`);
         nextResults.push({
+          runId,
+          runLabel,
           requestedModel: option.value,
           label: option.label,
           pipeline: option.group,
@@ -1125,12 +1293,16 @@ export default function ModelingLabClient(): React.ReactElement {
       await waitForBrowserPaint();
     }
     const successes = nextResults.filter((item) => item.response).length;
-    setStatus(`Model roster complete: ${successes.toLocaleString()} succeeded, ${(nextResults.length - successes).toLocaleString()} reported constraints.`);
-    appendRunLog(`Roster complete: ${successes.toLocaleString()} succeeded.`);
+    const runRows = nextResults.filter((item) => item.runId === runId);
+    const runSuccesses = runRows.filter((item) => item.response).length;
+    setStatus(`${runLabel} complete: ${runSuccesses.toLocaleString()} succeeded, ${(runRows.length - runSuccesses).toLocaleString()} reported constraints. Previous plotted runs are still available.`);
+    appendRunLog(`${runLabel} complete: ${runSuccesses.toLocaleString()} succeeded.`);
     setIsRunning(false);
     setRunProgress(null);
   }, [
     appendRunLog,
+    backtestResults,
+    comparisonResults,
     frequency,
     horizon,
     modelOptions,
@@ -1152,19 +1324,19 @@ export default function ModelingLabClient(): React.ReactElement {
     setIsRunning(true);
     setRunProgress({label: 'Preparing holdout backtest'});
     setResult(null);
-    setComparisonResults([]);
-    setBacktestResults([]);
     setRegressionResult(null);
     setNeuralResult(null);
     setRunLog([]);
-    setStatus('Running holdout backtest across the model roster.');
+    setStatus('Running holdout benchmark across the model roster.');
     try {
       const split = holdoutSplit(table, timestampCol, targetCol, seriesCol, horizon);
       const roster = modelOptions.filter((option) => forecastModelCanRun(option, table.columns));
       setRunProgress({label: 'Running holdout backtest', current: 0, total: roster.length});
-      appendRunLog(`Started holdout backtest with ${roster.length.toLocaleString()} models.`);
+      const runId = benchmarkRunId();
+      const runLabel = benchmarkRunLabel([...backtestResults, ...comparisonResults]);
+      appendRunLog(`Started ${runLabel} with ${roster.length.toLocaleString()} models.`);
       await waitForBrowserPaint();
-      const nextResults: BacktestResult[] = [];
+      const nextResults: BacktestResult[] = [...backtestResults];
       for (const [index, option] of roster.entries()) {
         setRunProgress({label: `Backtesting ${option.label}`, current: index, total: roster.length});
         setStatus(`Backtesting ${option.label}.`);
@@ -1186,6 +1358,8 @@ export default function ModelingLabClient(): React.ReactElement {
           });
           const metrics = evaluateHoldout(response.forecast.records, split.actuals);
           nextResults.push({
+            runId,
+            runLabel,
             requestedModel: option.value,
             label: option.label,
             pipeline: option.group,
@@ -1196,6 +1370,8 @@ export default function ModelingLabClient(): React.ReactElement {
         } catch (error) {
           appendRunLog(`${option.label} reported a constraint after ${formatElapsedMs(performance.now() - started)}.`);
           nextResults.push({
+            runId,
+            runLabel,
             requestedModel: option.value,
             label: option.label,
             pipeline: option.group,
@@ -1206,9 +1382,10 @@ export default function ModelingLabClient(): React.ReactElement {
         setRunProgress({label: `Checked ${option.label}`, current: index + 1, total: roster.length});
         await waitForBrowserPaint();
       }
-      const successes = nextResults.filter((item) => item.rmse !== undefined).length;
-      setStatus(`Holdout backtest complete: ${successes.toLocaleString()} scored, ${(nextResults.length - successes).toLocaleString()} reported constraints.`);
-      appendRunLog(`Backtest complete: ${successes.toLocaleString()} scored.`);
+      const runRows = nextResults.filter((item) => item.runId === runId);
+      const successes = runRows.filter((item) => item.rmse !== undefined).length;
+      setStatus(`${runLabel} complete: ${successes.toLocaleString()} scored, ${(runRows.length - successes).toLocaleString()} reported constraints. Earlier plotted models were kept.`);
+      appendRunLog(`${runLabel} complete: ${successes.toLocaleString()} scored.`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
       appendRunLog(error instanceof Error ? error.message : String(error));
@@ -1218,6 +1395,8 @@ export default function ModelingLabClient(): React.ReactElement {
     }
   }, [
     appendRunLog,
+    backtestResults,
+    comparisonResults.length,
     frequency,
     horizon,
     modelOptions,
@@ -1239,9 +1418,7 @@ export default function ModelingLabClient(): React.ReactElement {
       return;
     }
     setPendingLabRun(null);
-    if (pendingLabRun.action === 'compare') {
-      scheduleRun(runComparison);
-    } else if (pendingLabRun.action === 'backtest') {
+    if (pendingLabRun.action === 'compare' || pendingLabRun.action === 'backtest' || pendingLabRun.action === 'benchmark') {
       scheduleRun(runBacktest);
     } else {
       scheduleRun(runForecast);
@@ -1252,7 +1429,6 @@ export default function ModelingLabClient(): React.ReactElement {
     model,
     pendingLabRun,
     runBacktest,
-    runComparison,
     runForecast,
     scheduleRun,
     selectedColumnsReady,
@@ -1269,6 +1445,7 @@ export default function ModelingLabClient(): React.ReactElement {
     setResult(null);
     setComparisonResults([]);
     setBacktestResults([]);
+    setHiddenBenchmarkSeries([]);
     setRegressionResult(null);
     setNeuralResult(null);
     setStatus('Fitting CartoBoost regression in this page.');
@@ -1312,6 +1489,7 @@ export default function ModelingLabClient(): React.ReactElement {
     setResult(null);
     setComparisonResults([]);
     setBacktestResults([]);
+    setHiddenBenchmarkSeries([]);
     setRegressionResult(null);
     setNeuralResult(null);
     setStatus(`Fitting ${neuralPipelineLabels[neuralPipeline] ?? neuralPipeline} in this page.`);
@@ -1418,6 +1596,13 @@ export default function ModelingLabClient(): React.ReactElement {
     () => actualRowsForFirstSeries(table, timestampCol, targetCol, seriesCol),
     [seriesCol, table, targetCol, timestampCol],
   );
+  const benchmarkRows = backtestResults.length > 0 ? backtestResults : comparisonResults;
+  const visibleBenchmarkRows = benchmarkRows.filter((item) => !hiddenBenchmarkSeries.includes(benchmarkSeriesKey(item)));
+  const toggleBenchmarkSeries = useCallback((key: string) => {
+    setHiddenBenchmarkSeries((current) =>
+      current.includes(key) ? current.filter((item) => item !== key) : [...current, key],
+    );
+  }, []);
 
   return (
     <main className={styles.shell}>
@@ -1643,11 +1828,8 @@ export default function ModelingLabClient(): React.ReactElement {
                 <button className={styles.primaryButton} type="button" disabled={!selectedColumnsReady || isRunning || isLoadingTaxiSample} onClick={() => scheduleRun(runForecast)}>
                   {isRunning ? 'Running forecast' : 'Run forecast'}
                 </button>
-                <button className={styles.secondaryActionButton} type="button" disabled={!selectedColumnsReady || isRunning || isLoadingTaxiSample} onClick={() => scheduleRun(runComparison)}>
-                  Compare roster
-                </button>
                 <button className={styles.secondaryActionButton} type="button" disabled={!selectedColumnsReady || isRunning || isLoadingTaxiSample} onClick={() => scheduleRun(runBacktest)}>
-                  Backtest
+                  Benchmark roster
                 </button>
               </>
             )}
@@ -1739,47 +1921,28 @@ export default function ModelingLabClient(): React.ReactElement {
               <FeatureImportanceChart result={regressionResult} />
               <RegressionPredictionTable result={regressionResult} />
             </>
-          ) : backtestResults.length > 0 ? (
+          ) : benchmarkRows.length > 0 ? (
             <>
               <div className={styles.resultHeader}>
                 <div>
-                  <span className={styles.eyebrow}>Backtest</span>
-                  <h2>Holdout metrics</h2>
+                  <span className={styles.eyebrow}>Benchmark</span>
+                  <h2>Roster results</h2>
                 </div>
                 <dl>
                   <div>
-                    <dt>Scored</dt>
-                    <dd>{backtestResults.filter((item) => item.rmse !== undefined).length}</dd>
+                    <dt>Visible</dt>
+                    <dd>{visibleBenchmarkRows.length}</dd>
                   </div>
                   <div>
                     <dt>Checked</dt>
-                    <dd>{backtestResults.length}</dd>
+                    <dd>{benchmarkRows.length}</dd>
                   </div>
                 </dl>
               </div>
-              <BacktestMetricChart results={backtestResults} />
-              <BacktestTable results={backtestResults} />
-            </>
-          ) : comparisonResults.length > 0 ? (
-            <>
-              <div className={styles.resultHeader}>
-                <div>
-                  <span className={styles.eyebrow}>Comparison</span>
-                  <h2>Native roster</h2>
-                </div>
-                <dl>
-                  <div>
-                    <dt>Passed</dt>
-                    <dd>{comparisonResults.filter((item) => item.response).length}</dd>
-                  </div>
-                  <div>
-                    <dt>Checked</dt>
-                    <dd>{comparisonResults.length}</dd>
-                  </div>
-                </dl>
-              </div>
-              <ComparisonChart actualRows={actualRows} results={comparisonResults} />
-              <ComparisonTable results={comparisonResults} />
+              <BenchmarkModelToggles results={benchmarkRows} hidden={hiddenBenchmarkSeries} onToggle={toggleBenchmarkSeries} />
+              <ComparisonChart actualRows={actualRows} results={visibleBenchmarkRows} />
+              {backtestResults.length > 0 && <BacktestMetricChart results={visibleBenchmarkRows as BacktestResult[]} />}
+              {backtestResults.length > 0 ? <BacktestTable results={visibleBenchmarkRows as BacktestResult[]} /> : <ComparisonTable results={visibleBenchmarkRows as ComparisonResult[]} />}
             </>
           ) : result ? (
             <>
@@ -2872,15 +3035,10 @@ function RegressionPredictionTable({result}: {result: RegressionResponse}) {
   );
 }
 
-function ComparisonChart({actualRows, results}: {actualRows: ActualRecord[]; results: ComparisonResult[]}) {
+function ComparisonChart({actualRows, results}: {actualRows: ActualRecord[]; results: BenchmarkResult[]}) {
   const successfulResults = results.filter((result) => result.response);
-  const piecewiseResult = successfulResults.find((result) => result.requestedModel === 'piecewise_linear_seasonal');
-  const plottedResults = successfulResults.slice(0, 8);
-  if (piecewiseResult && !plottedResults.some((result) => result.requestedModel === piecewiseResult.requestedModel)) {
-    plottedResults[plottedResults.length - 1] = piecewiseResult;
-  }
-  const forecastSeries = plottedResults.map((result) => ({
-      label: result.label,
+  const forecastSeries = successfulResults.map((result) => ({
+      label: benchmarkSeriesLabel(result),
       records: firstSeriesForecastRows(result.response as ForecastResponse),
     }));
   const maxForecastLength = Math.max(0, ...forecastSeries.map((series) => series.records.length));
@@ -4099,6 +4257,55 @@ function forecastWarningLabel(response?: ForecastResponse) {
   return `fallback to ${fallback}${reason}`;
 }
 
+function benchmarkRunId() {
+  return `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function benchmarkRunLabel(existingResults: Pick<ComparisonResult, 'runId'>[]) {
+  const existingRunIds = new Set(existingResults.map((result) => result.runId).filter(Boolean));
+  return `Benchmark ${existingRunIds.size + 1}`;
+}
+
+function benchmarkSeriesKey(result: Pick<ComparisonResult, 'runId' | 'requestedModel'>) {
+  return `${result.runId ?? 'run'}::${result.requestedModel}`;
+}
+
+function benchmarkSeriesLabel(result: Pick<ComparisonResult, 'runLabel' | 'label'>) {
+  return result.runLabel ? `${result.runLabel} / ${result.label}` : result.label;
+}
+
+function BenchmarkModelToggles({
+  results,
+  hidden,
+  onToggle,
+}: {
+  results: BenchmarkResult[];
+  hidden: string[];
+  onToggle: (key: string) => void;
+}) {
+  const successful = results.filter((result) => result.response || (result as BacktestResult).rmse !== undefined);
+  if (successful.length === 0) {
+    return null;
+  }
+  return (
+    <div className={styles.benchmarkToggles} aria-label="Benchmark model visibility">
+      {successful.map((result) => {
+        const key = benchmarkSeriesKey(result);
+        return (
+          <label key={key}>
+            <input
+              type="checkbox"
+              checked={!hidden.includes(key)}
+              onChange={() => onToggle(key)}
+            />
+            <span>{benchmarkSeriesLabel(result)}</span>
+          </label>
+        );
+      })}
+    </div>
+  );
+}
+
 function ComparisonTable({results}: {results: ComparisonResult[]}) {
   return (
     <div className={styles.tableScroller}>
@@ -4116,8 +4323,8 @@ function ComparisonTable({results}: {results: ComparisonResult[]}) {
           {results.map((result) => {
             const first = result.response?.forecast.records[0];
             return (
-              <tr key={result.requestedModel}>
-                <td>{result.label}</td>
+              <tr key={benchmarkSeriesKey(result)}>
+                <td>{benchmarkSeriesLabel(result)}</td>
                 <td>{result.pipeline}</td>
                 <td>{result.response ? result.response.forecast.records.length.toLocaleString() : '-'}</td>
                 <td>{first ? formatMetric(first.prediction) : '-'}</td>
@@ -4144,8 +4351,8 @@ function BacktestMetricChart({results}: {results: BacktestResult[]}) {
     <figure className={styles.metricChart}>
       <figcaption>RMSE by model, lower is better</figcaption>
       {scored.map((result, index) => (
-        <div className={styles.metricRow} key={result.requestedModel}>
-          <span>{index + 1}. {result.label}</span>
+        <div className={styles.metricRow} key={benchmarkSeriesKey(result)}>
+          <span>{index + 1}. {benchmarkSeriesLabel(result)}</span>
           <div>
             <i style={{width: `${Math.max(((result.rmse as number) / maxRmse) * 100, 2)}%`}} />
           </div>
@@ -4173,8 +4380,8 @@ function BacktestTable({results}: {results: BacktestResult[]}) {
         </thead>
         <tbody>
           {[...results].sort(sortBacktestRows).map((result) => (
-            <tr key={result.requestedModel}>
-              <td>{result.label}</td>
+            <tr key={benchmarkSeriesKey(result)}>
+              <td>{benchmarkSeriesLabel(result)}</td>
               <td>{result.pipeline}</td>
               <td>{formatMetric(result.rmse)}</td>
               <td>{formatMetric(result.mae)}</td>
@@ -4206,32 +4413,50 @@ function embeddedForecastExampleTable(sample: 'lane' | 'spatial', frequency: 'da
   const spatialSeries =
     sample === 'spatial'
       ? [
-          {series_id: 'PU186-DO48', base: 24, longitude: -73.991, latitude: 40.748, queue: 1.0},
-          {series_id: 'PU237-DO230', base: 20, longitude: -73.966, latitude: 40.769, queue: 0.6},
-          {series_id: 'PU79-DO263', base: 18, longitude: -73.986, latitude: 40.728, queue: 0.2},
+          {series_id: 'north-core', base: 42, longitude: -73.991, latitude: 40.748, queue: 1.0, slope: 0.035},
+          {series_id: 'waterfront', base: 34, longitude: -73.966, latitude: 40.769, queue: 0.6, slope: 0.018},
+          {series_id: 'airport-loop', base: 29, longitude: -73.986, latitude: 40.728, queue: 0.2, slope: 0.028},
         ]
-      : [{series_id: 'PU132-DO236', base: 34, longitude: -73.787, latitude: 40.647, queue: 1.2}];
+      : [{series_id: 'primary-route', base: 38, longitude: -73.787, latitude: 40.647, queue: 1.2, slope: 0.018}];
   const rows: ParsedTable['rows'] = [];
   const start = Date.UTC(2024, 0, 1, 0, 0, 0);
-  const rowCount = frequency === 'daily' ? 56 : 96;
+  const rowCount = frequency === 'daily' ? 140 : 336;
   const stepMs = frequency === 'daily' ? 24 * 60 * 60 * 1000 : 60 * 60 * 1000;
   for (let index = 0; index < rowCount; index += 1) {
     const timestamp = new Date(start + index * stepMs).toISOString().slice(0, 19);
     const hour = frequency === 'daily' ? 12 : index % 24;
     const dayOfWeek = frequency === 'daily' ? index % 7 : Math.floor(index / 24) % 7;
-    const commute = hour >= 7 && hour <= 9 ? 4 : hour >= 16 && hour <= 18 ? 3 : 0;
-    const overnight = hour <= 5 ? -5 : 0;
-    const dailyWave = Math.sin((hour / 24) * Math.PI * 2) * 2.5;
-    const weeklyWave = Math.sin((dayOfWeek / 7) * Math.PI * 2) * 1.8;
+    const weekIndex = frequency === 'daily' ? Math.floor(index / 7) : Math.floor(index / (24 * 7));
+    const commute = frequency === 'hourly' && hour >= 7 && hour <= 9 ? 6.5 : frequency === 'hourly' && hour >= 16 && hour <= 18 ? 5.2 : 0;
+    const midday = frequency === 'hourly' && hour >= 11 && hour <= 14 ? 2.4 : 0;
+    const overnight = frequency === 'hourly' && hour <= 5 ? -7.0 : 0;
+    const weekend = dayOfWeek === 5 || dayOfWeek === 6 ? (frequency === 'daily' ? -4.8 : -3.2) : 0;
+    const dailyWave = frequency === 'hourly' ? Math.sin(((hour - 6) / 24) * Math.PI * 2) * 3.2 : 0;
+    const weeklyWave = Math.sin(((dayOfWeek + 1) / 7) * Math.PI * 2) * (frequency === 'daily' ? 5.5 : 2.2);
+    const eventLift = weekIndex === 5 || weekIndex === 12 ? 7.5 : weekIndex === 9 ? -4.0 : 0;
     for (const series of spatialSeries) {
-      const trend = index * (frequency === 'daily' ? 0.08 : 0.035);
-      const target = series.base + commute + overnight + dailyWave + weeklyWave + trend + series.queue * Math.cos(index / 8);
+      const trend = index * series.slope;
+      const routeCycle = series.queue * Math.cos(index / (frequency === 'daily' ? 5 : 18)) * 2.4;
+      const target =
+        series.base +
+        commute +
+        midday +
+        overnight +
+        weekend +
+        dailyWave +
+        weeklyWave +
+        eventLift * series.queue +
+        trend +
+        routeCycle;
       rows.push({
         timestamp,
         series_id: series.series_id,
         target: target.toFixed(3),
         hour: String(hour),
         day_of_week: String(dayOfWeek),
+        week_index: String(weekIndex),
+        is_weekend: weekend === 0 ? '0' : '1',
+        event_pressure: (eventLift * series.queue).toFixed(3),
         longitude: String(series.longitude),
         latitude: String(series.latitude),
         airport_queue_pressure: series.queue.toFixed(2),
@@ -4239,8 +4464,20 @@ function embeddedForecastExampleTable(sample: 'lane' | 'spatial', frequency: 'da
     }
   }
   return {
-    fileName: sample === 'spatial' ? 'embedded-spatial-taxi-panel.csv' : 'embedded-taxi-lane.csv',
-    columns: ['timestamp', 'series_id', 'target', 'hour', 'day_of_week', 'longitude', 'latitude', 'airport_queue_pressure'],
+    fileName: sample === 'spatial' ? 'embedded-spatial-demand-panel.csv' : 'embedded-route-demand.csv',
+    columns: [
+      'timestamp',
+      'series_id',
+      'target',
+      'hour',
+      'day_of_week',
+      'week_index',
+      'is_weekend',
+      'event_pressure',
+      'longitude',
+      'latitude',
+      'airport_queue_pressure',
+    ],
     rows,
   };
 }

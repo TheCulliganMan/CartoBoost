@@ -62,7 +62,7 @@ from cartoboost import environmental_blocked_cv
 folds = list(
     environmental_blocked_cv(
         weather_and_demand_frame,
-        feature_cols=["temperature", "rain_mm", "pickup_count_lag_24h"],
+        feature_cols=["temperature", "rain_mm", "demand_lag_24h"],
         n_splits=5,
         random_state=42,
     )

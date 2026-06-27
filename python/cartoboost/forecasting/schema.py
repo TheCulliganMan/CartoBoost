@@ -574,11 +574,11 @@ def _build_native_frame(frame: ForecastFrame, *, data: Any | None = None) -> Any
         *frame.historical_covariates,
     ]
     data = frame.data if data is None else data
+    records = data.to_dict(orient="records")
     sample_weights = None
     if frame.sample_weight_col is not None:
         sample_weights = [float(value) for value in data[frame.sample_weight_col].tolist()]
-    for row in data.itertuples(index=False):
-        values = row._asdict()
+    for values in records:
         series_id = (
             "__single__" if frame.series_id_col is None else str(values[frame.series_id_col])
         )

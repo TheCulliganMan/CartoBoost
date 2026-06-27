@@ -11,15 +11,11 @@ the mechanics after those choices are clear.
 ## 1. Frame The Scientific Question
 
 CartoBoost is meant for regression and forecasting tasks where temporal or
-spatial structure is part of the hypothesis. In the NYC taxi domain, typical
-questions include:
+spatial structure is part of the hypothesis. Typical questions include:
 
-- Can pickup hour, weekday, pickup zone, dropoff zone, and trip distance explain
-  transformed trip duration under a leakage-aware split?
-- Does route direction, such as `PULocationID -> DOLocationID`, change fare or
-  duration estimates compared with treating the two zones as unordered IDs?
-- Can daily pickup-zone or pickup/dropoff-lane demand be forecast from lagged
-  demand, calendar features, airport-lane indicators, and borough context?
+- Can time, location, and distance explain the target under a leakage-aware split?
+- Does source-to-target direction change the estimate compared with treating the two ends as unordered IDs?
+- Can demand be forecast from lagged demand, calendar features, and context?
 - Do spatial splitters or sparse zone memberships recover signal that an
   axis-only model misses?
 
@@ -29,15 +25,13 @@ times, zones, or route patterns appear in both train and validation data.
 
 ## 2. Choose Features For Place And Time
 
-A first taxi regression table might include:
+A first regression table might include:
 
-- dense numeric columns: trip distance, pickup longitude/latitude, dropoff
-  longitude/latitude, pickup hour, weekday, passenger count;
+- dense numeric columns: distance, coordinates, time of day, weekday, passenger count;
 - periodic columns: hour-of-day with period `24`, day-of-week with period `7`;
-- sparse-set columns: taxi zones, route cells, or memberships derived from
-  `PULocationID` and `DOLocationID`;
-- graph context: directed pickup-to-dropoff flows when source and target roles
-  should remain distinct.
+- sparse-set columns: zones, route cells, or memberships derived from source
+  and target identifiers;
+- graph context: directed source-to-target flows when source and target roles should remain distinct.
 
 Match splitters to the scientific structure you want to test:
 
@@ -64,11 +58,11 @@ Optional packages are installed only when needed. For example, use
 `cartoboost[polars]` for Polars inputs, `cartoboost[optuna]` for Optuna tuning,
 or `cartoboost[onnx]` for the supported ONNX export subset.
 
-## 4. Fit A Taxi-Style Regression Model
+## 4. Fit A Regression Model
 
 The snippet below assumes you have already built `X_train`, `X_validation`,
 `y_train`, and `y_validation` from a leakage-aware split, such as holding out
-the latest pickup dates.
+the latest dates.
 
 ```python
 from cartoboost import CartoBoostRegressor
@@ -89,7 +83,7 @@ Start with a smaller splitter set if the study only needs dense numeric
 features. Add spatial, periodic, sparse, neural, or graph structure only when it
 matches the modeling question and passes the same validation split.
 
-## 5. Use Sparse Taxi-Zone Memberships
+## 5. Use Sparse Memberships
 
 Use sparse-set features when a trip belongs to multiple route or zone-derived
 sets and a wide one-hot matrix would be awkward or unstable.
@@ -103,7 +97,7 @@ schema = {
         {"name": "pickup_y", "kind": "numeric"},
     ],
     "sparse_sets": [
-        {"name": "taxi_zones", "kind": "sparse_set"},
+        {"name": "zone_ids", "kind": "sparse_set"},
     ],
 }
 
@@ -118,7 +112,7 @@ model = CartoBoostRegressor(
 model.fit(
     X_train_dense,
     y_train,
-    sparse_sets={"taxi_zones": taxi_zones_train},
+    sparse_sets={"zone_ids": zone_ids_train},
     feature_schema=schema,
 )
 ```
@@ -127,7 +121,7 @@ See [Spatial Modeling](spatial_modeling.md) and
 [Sparse Features](sparse_features.md) for zone membership examples and blocked
 evaluation patterns.
 
-## 6. Forecast Taxi Demand
+## 6. Forecast Demand
 
 Use `ForecastFrame` when the target is future demand, fare, duration, or another
 time-indexed quantity. Panel data should identify the series, such as
@@ -140,7 +134,7 @@ from cartoboost.forecasting import ForecastFrame, ThetaForecaster
 
 daily_lanes = pd.DataFrame(
     {
-        "lane_id": ["JFK->LGA"] * 10 + ["LGA->EWR"] * 10,
+        "lane_id": ["route_a"] * 10 + ["route_b"] * 10,
         "date": list(pd.date_range("2026-01-01", periods=10, freq="D")) * 2,
         "pickup_trips": [
             20, 21, 24, 23, 25, 28, 29, 27, 30, 31,
@@ -214,20 +208,20 @@ neural_model.fit(X_train, y_train, ids=pickup_zone_ids_train)
 predictions = neural_model.predict(X_validation, ids=pickup_zone_ids_validation)
 ```
 
-Use graph features or standalone graph models when the observed units are
-connected entities, such as directed pickup/dropoff lanes, borough-zone
-hierarchies, or repeated OD-pair flow patterns. See
-[Graph Models And Features](graph-features.md) and
-[Neural Embedding Models And Features](neural-features.md).
+Use CartoBoost graph features or CartoBoost graph models when the observed
+units are connected entities, such as directed pickup/dropoff lanes,
+borough-zone hierarchies, or repeated OD-pair flow patterns. See
+[CartoBoost Graph Models And Features](graph-features.md) and
+[CartoBoost Neural Embedding Models And Features](neural-features.md).
 
 ## 9. Save Reproducible Artifacts
 
 ```python
-model.save("taxi-duration.cartoboost.json")
-loaded = CartoBoostRegressor.load("taxi-duration.cartoboost.json")
+model.save("cartoboost-regressor.json")
+loaded = CartoBoostRegressor.load("cartoboost-regressor.json")
 
-model.save_weights("taxi-duration.weights.json")
-weights_loaded = CartoBoostRegressor.load_weights("taxi-duration.weights.json")
+model.save_weights("cartoboost-regressor.weights.json")
+weights_loaded = CartoBoostRegressor.load_weights("cartoboost-regressor.weights.json")
 ```
 
 Use `save` for CartoBoost JSON model artifacts and `save_weights` for portable

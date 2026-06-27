@@ -34,10 +34,12 @@ use cartoboost_core::{CartoBoostError, Result};
 use cartoboost_neural::{
     ArtifactFallbackKind, ComponentMode as NeuralComponentMode, GraphSageConfig,
     GraphSageRegressor, HeteroGraphSageConfig, HeteroGraphSageRegressor, HinSageConfig,
-    HinSageRegressor, NeuralEmbeddingRegressor, NeuralPanelConfig, NeuralPanelForecaster,
-    NeuralPanelLoss, NeuralPanelMode, Node2VecConfig, Node2VecRegressor, StandaloneBoosterConfig,
+    HinSageRegressor, NBeatsConfig, NBeatsForecaster, NHiTSConfig, NHiTSForecaster,
+    NeuralEmbeddingRegressor, NeuralPanelConfig, NeuralPanelForecaster, NeuralPanelLoss,
+    NeuralPanelMode, Node2VecConfig, Node2VecRegressor, StandaloneBoosterConfig,
     TrendMode as NeuralTrendMode,
 };
+use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -73,6 +75,10 @@ struct BrowserForecastRow {
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct BrowserForecastOptions {
+    input_size: Option<usize>,
+    hidden_size: Option<usize>,
+    epochs: Option<usize>,
+    pooling_size: Option<usize>,
     season_length: Option<usize>,
     theta: Option<f64>,
     alpha: Option<f64>,
@@ -853,6 +859,16 @@ fn forecast_model_registry() -> Vec<BrowserForecastModel> {
             pipeline: "neural",
         },
         BrowserForecastModel {
+            name: "nbeats",
+            label: "N-BEATS",
+            pipeline: "neural",
+        },
+        BrowserForecastModel {
+            name: "nhits",
+            label: "N-HiTS",
+            pipeline: "neural",
+        },
+        BrowserForecastModel {
             name: "classical_expert_bank",
             label: "Classical Expert Bank",
             pipeline: "selection",
@@ -1475,6 +1491,60 @@ fn run_forecast_request(request: BrowserForecastRequest) -> Result<BrowserForeca
             quantiles,
         });
     }
+    if model.trim().to_ascii_lowercase().replace('-', "_") == "neural_panel" {
+        let mut forecaster = NeuralPanelForecaster::new(
+            neural_panel_config(&options, request.horizon)
+                .map_err(|err| CartoBoostError::InvalidInput(err.to_string()))?,
+        )
+        .map_err(|err| CartoBoostError::InvalidInput(err.to_string()))?;
+        forecaster.fit(&frame)?;
+        let covariates = if has_browser_neural_future_regressors(&options) {
+            Some(browser_neural_future_covariates(
+                &frame,
+                &options,
+                request.horizon,
+            )?)
+        } else {
+            None
+        };
+        let forecast = if let Some(covariates) = &covariates {
+            forecaster.predict_with_known_future_covariates(request.horizon, covariates)?
+        } else {
+            forecaster.predict(request.horizon)?
+        };
+        let components = if options.include_components.unwrap_or(false) {
+            Some(js_safe_json_value(if let Some(covariates) = &covariates {
+                forecaster.predict_components_json_value_with_known_future_covariates(
+                    request.horizon,
+                    Some(covariates),
+                )?
+            } else {
+                forecaster.predict_components_json_value(request.horizon)?
+            }))
+        } else {
+            None
+        };
+        let history_components = if options.include_history_components.unwrap_or(false) {
+            Some(js_safe_json_value(
+                forecaster.history_components_json_value()?,
+            ))
+        } else {
+            None
+        };
+        let metadata = json!({
+            "model": forecaster.model_name(),
+            "input": frame.metadata_value(),
+            "modelMetadata": forecaster.metadata(),
+        });
+        return Ok(BrowserForecastResponse {
+            metadata: js_safe_json_value(metadata),
+            forecast: js_safe_json_value(forecast.to_json_value()),
+            components,
+            history_components,
+            samples: None,
+            quantiles: None,
+        });
+    }
     let mut forecaster = build_forecaster(&model, &options, &frame, request.horizon)?;
     let fit_result = forecaster
         .fit(&frame)
@@ -1489,6 +1559,86 @@ fn run_forecast_request(request: BrowserForecastRequest) -> Result<BrowserForeca
         )),
         Err(error) => Err(error),
     }
+}
+
+fn has_browser_neural_future_regressors(options: &BrowserForecastOptions) -> bool {
+    options
+        .extra_regressors
+        .as_ref()
+        .map(|values| !values.is_empty())
+        .unwrap_or(false)
+        || options
+            .future_regressors
+            .as_ref()
+            .map(|values| !values.is_empty())
+            .unwrap_or(false)
+        || options
+            .future_regressors_by_series
+            .as_ref()
+            .map(|values| !values.is_empty())
+            .unwrap_or(false)
+}
+
+fn browser_neural_future_covariates(
+    frame: &ForecastFrame,
+    options: &BrowserForecastOptions,
+    horizon: usize,
+) -> Result<BTreeMap<(String, NaiveDateTime), BTreeMap<String, f64>>> {
+    let mut regressor_names = BTreeSet::new();
+    if let Some(names) = &options.extra_regressors {
+        regressor_names.extend(names.iter().cloned());
+    }
+    if let Some(values) = &options.future_regressors {
+        regressor_names.extend(values.keys().cloned());
+    }
+    if let Some(values) = &options.future_regressors_by_series {
+        for series_values in values.values() {
+            regressor_names.extend(series_values.keys().cloned());
+        }
+    }
+    if regressor_names.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
+    let mut covariates = BTreeMap::new();
+    for series_id in frame.series_ids() {
+        let rows = frame.rows_for_series(&series_id);
+        let last_row = rows.last().ok_or_else(|| {
+            CartoBoostError::InvalidInput(format!(
+                "missing fitted timestamp tail for series '{series_id}'"
+            ))
+        })?;
+        for step in 1..=horizon {
+            let timestamp = frame.frequency().advance(last_row.timestamp, step)?;
+            let entry = covariates
+                .entry((series_id.clone(), timestamp))
+                .or_insert_with(BTreeMap::new);
+            for name in &regressor_names {
+                let value = options
+                    .future_regressors_by_series
+                    .as_ref()
+                    .and_then(|series_values| series_values.get(&series_id))
+                    .and_then(|series_values| series_values.get(name))
+                    .and_then(|values| values.get(step - 1))
+                    .copied()
+                    .or_else(|| {
+                        options
+                            .future_regressors
+                            .as_ref()
+                            .and_then(|values| values.get(name))
+                            .and_then(|values| values.get(step - 1))
+                            .copied()
+                    })
+                    .ok_or_else(|| {
+                        CartoBoostError::InvalidInput(format!(
+                            "future regressor '{name}' requires known future covariates for prediction"
+                        ))
+                    })?;
+                entry.insert(name.clone(), value);
+            }
+        }
+    }
+    Ok(covariates)
 }
 
 fn forecast_response(
@@ -3444,6 +3594,14 @@ fn build_forecaster(
             NeuralPanelForecaster::new(neural_panel_config(options, horizon)?)
                 .map_err(|err| CartoBoostError::InvalidInput(err.to_string()))?,
         )),
+        "nbeats" => Ok(Box::new(
+            NBeatsForecaster::new(nbeats_config(options))
+                .map_err(|err| CartoBoostError::InvalidInput(err.to_string()))?,
+        )),
+        "nhits" => Ok(Box::new(
+            NHiTSForecaster::new(nhits_config(options))
+                .map_err(|err| CartoBoostError::InvalidInput(err.to_string()))?,
+        )),
         "intermittent_demand" => {
             let config = IntermittentDemandConfig {
                 alpha: options.alpha.unwrap_or(0.2),
@@ -3914,6 +4072,7 @@ fn neural_panel_config(
         weekly_fourier_order: options.weekly_fourier_order.unwrap_or(0),
         yearly_fourier_order: options.yearly_fourier_order.unwrap_or(0),
         custom_seasonalities: BTreeMap::new(),
+        custom_seasonality_conditions: BTreeMap::new(),
         seasonality_mode: options
             .seasonality_mode
             .as_deref()
@@ -3925,6 +4084,7 @@ fn neural_panel_config(
         event_mode: options
             .event_mode
             .as_deref()
+            .or(options.holidays_mode.as_deref())
             .map(neural_panel_component_mode)
             .transpose()?
             .unwrap_or(NeuralComponentMode::Additive),
@@ -3959,6 +4119,10 @@ fn neural_panel_config(
                 )
             })
             .collect();
+        config.custom_seasonality_conditions = seasonalities
+            .iter()
+            .map(|seasonality| (seasonality.name.clone(), seasonality.condition_name.clone()))
+            .collect();
     }
     if let Some(events) = &options.events {
         for event in events {
@@ -3967,6 +4131,17 @@ fn neural_panel_config(
             config
                 .events
                 .entry(event.name.clone())
+                .or_default()
+                .extend(lower..=upper);
+        }
+    }
+    if let Some(holidays) = &options.holidays {
+        for holiday in holidays {
+            let lower = holiday.lower_window.unwrap_or(0);
+            let upper = holiday.upper_window.unwrap_or(0);
+            config
+                .events
+                .entry(holiday.holiday.clone())
                 .or_default()
                 .extend(lower..=upper);
         }
@@ -3987,6 +4162,25 @@ fn neural_panel_config(
         .validate()
         .map_err(|err| CartoBoostError::InvalidInput(err.to_string()))?;
     Ok(config)
+}
+
+fn nbeats_config(options: &BrowserForecastOptions) -> NBeatsConfig {
+    NBeatsConfig {
+        input_size: options.input_size.unwrap_or(8),
+        hidden_size: options.hidden_size.unwrap_or(16),
+        epochs: options.epochs.unwrap_or(80),
+        learning_rate: options.learning_rate.unwrap_or(0.01),
+    }
+}
+
+fn nhits_config(options: &BrowserForecastOptions) -> NHiTSConfig {
+    NHiTSConfig {
+        input_size: options.input_size.unwrap_or(12),
+        hidden_size: options.hidden_size.unwrap_or(16),
+        epochs: options.epochs.unwrap_or(80),
+        learning_rate: options.learning_rate.unwrap_or(0.01),
+        pooling_size: options.pooling_size.unwrap_or(2),
+    }
 }
 
 fn neural_panel_trend_mode(value: &str) -> Result<NeuralTrendMode> {
@@ -5377,6 +5571,256 @@ mod tests {
             Some("airport_queue")
         );
         assert!(records[0]["prediction"].as_f64().expect("prediction") > 80.0);
+    }
+
+    #[test]
+    fn browser_neural_panel_custom_seasonality_flows_through_dispatch() {
+        let start = NaiveDate::from_ymd_opt(2026, 3, 1)
+            .expect("valid start date")
+            .and_hms_opt(0, 0, 0)
+            .expect("valid start time");
+        let rows = (1..=32)
+            .map(|day| {
+                let phase = std::f64::consts::TAU * f64::from(day % 8) / 8.0;
+                BrowserForecastRow {
+                    series_id: Some("pickup_zone_1".to_string()),
+                    timestamp: (start + Duration::days((day - 1) as i64))
+                        .format("%Y-%m-%dT%H:%M:%S")
+                        .to_string(),
+                    target: 50.0 + 8.0 * phase.sin(),
+                    covariates: BTreeMap::from([("rushHour".to_string(), 1.0)]),
+                }
+            })
+            .collect::<Vec<_>>();
+        let response = run_forecast_request(BrowserForecastRequest {
+            rows,
+            frequency: "daily".to_string(),
+            horizon: 3,
+            model: "neural_panel".to_string(),
+            options: BrowserForecastOptions {
+                n_lags: Some(4),
+                n_forecasts: Some(3),
+                custom_seasonalities: Some(vec![BrowserForecastSeasonality {
+                    name: "taxi_cycle".to_string(),
+                    period_days: 8.0,
+                    fourier_order: 2,
+                    mode: Some("additive".to_string()),
+                    condition_name: Some("rushHour".to_string()),
+                    l2_regularization: None,
+                }]),
+                include_components: Some(true),
+                include_history_components: Some(true),
+                ..BrowserForecastOptions::default()
+            },
+            metadata: BrowserForecastMetadata::default(),
+        })
+        .expect("neural panel forecast");
+        let feature_schema = response.metadata["modelMetadata"]["feature_schema"]
+            .as_array()
+            .expect("feature schema");
+        let custom_seasonalities = response.metadata["modelMetadata"]["config"]
+            ["custom_seasonalities"]
+            .as_object()
+            .expect("custom seasonalities");
+        let custom_seasonality_conditions = response.metadata["modelMetadata"]["config"]
+            ["custom_seasonality_conditions"]
+            .as_object()
+            .expect("custom seasonality conditions");
+
+        assert!(feature_schema
+            .iter()
+            .any(|value| value.as_str() == Some("seasonality:taxi_cycle:sin:1")));
+        assert_eq!(custom_seasonalities["taxi_cycle"][0].as_f64(), Some(192.0));
+        assert_eq!(
+            custom_seasonality_conditions["taxi_cycle"].as_str(),
+            Some("rushHour")
+        );
+        assert!(response
+            .forecast
+            .get("records")
+            .and_then(Value::as_array)
+            .expect("forecast records")
+            .iter()
+            .all(|record| record["prediction"]
+                .as_f64()
+                .expect("prediction")
+                .is_finite()));
+        let component_records = response
+            .components
+            .as_ref()
+            .and_then(|components| components.get("series"))
+            .and_then(|series| series.get("pickup_zone_1"))
+            .and_then(Value::as_array)
+            .expect("component records");
+        let history_records = response
+            .history_components
+            .as_ref()
+            .and_then(|components| components.get("series"))
+            .and_then(|series| series.get("pickup_zone_1"))
+            .and_then(Value::as_array)
+            .expect("history records");
+        assert_eq!(component_records.len(), 3);
+        assert_eq!(history_records.len(), 32);
+        assert!(component_records[0]["prediction"]
+            .as_f64()
+            .expect("component prediction")
+            .is_finite());
+        assert!(history_records[0]["prediction"]
+            .as_f64()
+            .expect("history prediction")
+            .is_finite());
+    }
+
+    #[test]
+    fn browser_nbeats_forecast_runs_through_generic_dispatch() {
+        let rows = (1..=18)
+            .map(|day| BrowserForecastRow {
+                series_id: Some("pickup_zone_237".to_string()),
+                timestamp: format!("2026-02-{day:02}T00:00:00"),
+                target: 30.0 + f64::from(day) + f64::from(day % 3),
+                covariates: BTreeMap::new(),
+            })
+            .collect::<Vec<_>>();
+        let response = run_forecast_request(BrowserForecastRequest {
+            rows,
+            frequency: "daily".to_string(),
+            horizon: 3,
+            model: "nbeats".to_string(),
+            options: BrowserForecastOptions {
+                input_size: Some(5),
+                hidden_size: Some(8),
+                epochs: Some(6),
+                learning_rate: Some(0.02),
+                ..BrowserForecastOptions::default()
+            },
+            metadata: BrowserForecastMetadata::default(),
+        })
+        .expect("nbeats forecast");
+
+        assert_eq!(response.metadata["model"].as_str(), Some("nbeats"));
+        assert_eq!(
+            response.metadata["modelMetadata"]["input_size"].as_u64(),
+            Some(5)
+        );
+        assert!(response
+            .forecast
+            .get("records")
+            .and_then(Value::as_array)
+            .expect("forecast records")
+            .iter()
+            .all(|record| record["prediction"]
+                .as_f64()
+                .expect("prediction")
+                .is_finite()));
+    }
+
+    #[test]
+    fn browser_nhits_forecast_runs_through_generic_dispatch() {
+        let rows = (1..=22)
+            .map(|day| BrowserForecastRow {
+                series_id: Some("pickup_zone_161".to_string()),
+                timestamp: format!("2026-04-{day:02}T00:00:00"),
+                target: 45.0 + 2.0 * f64::from(day % 4) + 0.5 * f64::from(day),
+                covariates: BTreeMap::new(),
+            })
+            .collect::<Vec<_>>();
+        let response = run_forecast_request(BrowserForecastRequest {
+            rows,
+            frequency: "daily".to_string(),
+            horizon: 4,
+            model: "nhits".to_string(),
+            options: BrowserForecastOptions {
+                input_size: Some(6),
+                hidden_size: Some(10),
+                pooling_size: Some(3),
+                epochs: Some(6),
+                learning_rate: Some(0.02),
+                ..BrowserForecastOptions::default()
+            },
+            metadata: BrowserForecastMetadata::default(),
+        })
+        .expect("nhits forecast");
+
+        assert_eq!(response.metadata["model"].as_str(), Some("nhits"));
+        assert_eq!(
+            response.metadata["modelMetadata"]["pooling_size"].as_u64(),
+            Some(3)
+        );
+        assert!(response
+            .forecast
+            .get("records")
+            .and_then(Value::as_array)
+            .expect("forecast records")
+            .iter()
+            .all(|record| record["prediction"]
+                .as_f64()
+                .expect("prediction")
+                .is_finite()));
+    }
+
+    #[test]
+    fn browser_neural_panel_holidays_and_regressors_flow_through_dispatch() {
+        let rows = (1..=16)
+            .map(|day| {
+                let queue = if day % 4 == 0 { 1.0 } else { 0.0 };
+                let holiday = if day == 6 { 1.0 } else { 0.0 };
+                BrowserForecastRow {
+                    series_id: Some("pickup_zone_1".to_string()),
+                    timestamp: format!("2026-01-{day:02}T00:00:00"),
+                    target: 40.0 + f64::from(day) + 9.0 * queue + 14.0 * holiday,
+                    covariates: BTreeMap::from([("airport_queue".to_string(), queue)]),
+                }
+            })
+            .collect::<Vec<_>>();
+        let response = run_forecast_request(BrowserForecastRequest {
+            rows,
+            frequency: "daily".to_string(),
+            horizon: 2,
+            model: "neural_panel".to_string(),
+            options: BrowserForecastOptions {
+                n_lags: Some(4),
+                n_forecasts: Some(2),
+                weekly_fourier_order: Some(0),
+                extra_regressors: Some(vec!["airport_queue".to_string()]),
+                regressor_modes: Some(BTreeMap::from([(
+                    "airport_queue".to_string(),
+                    "additive".to_string(),
+                )])),
+                future_regressors: Some(BTreeMap::from([(
+                    "airport_queue".to_string(),
+                    vec![0.0, 1.0],
+                )])),
+                holidays: Some(vec![BrowserForecastHoliday {
+                    holiday: "airport_holiday".to_string(),
+                    ds: "2026-01-06T00:00:00".to_string(),
+                    lower_window: Some(0),
+                    upper_window: Some(0),
+                    prior_scale: Some(10.0),
+                }]),
+                holidays_mode: Some("additive".to_string()),
+                ..BrowserForecastOptions::default()
+            },
+            metadata: BrowserForecastMetadata::default(),
+        })
+        .expect("neural panel forecast");
+        let feature_schema = response.metadata["modelMetadata"]["feature_schema"]
+            .as_array()
+            .expect("feature schema");
+
+        assert!(feature_schema
+            .iter()
+            .any(|value| value.as_str() == Some("airport_queue")));
+        assert!(feature_schema
+            .iter()
+            .any(|value| value.as_str() == Some("event:airport_holiday:0")));
+        assert!(response
+            .forecast
+            .get("records")
+            .and_then(Value::as_array)
+            .expect("forecast records")[0]["prediction"]
+            .as_f64()
+            .expect("prediction")
+            .is_finite());
     }
 
     #[test]

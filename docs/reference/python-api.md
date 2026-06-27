@@ -2,7 +2,7 @@
 
 This page lists the public Python entry points used to fit, evaluate, explain,
 and save CartoBoost regression, classification, ranking, forecasting,
-standalone graph, and standalone neural models.
+CartoBoost graph, and CartoBoost neural models.
 
 The API is organized around scientific model choice: fit the same train split
 as the baselines, predict the same validation rows, compute the same metrics,
@@ -12,14 +12,14 @@ and keep artifacts that make the comparison reproducible.
 
 | Need | Primary entry points | Evidence to collect |
 | --- | --- | --- |
-| Taxi fare or duration regression | `CartoBoostRegressor`, `FeatureSchema`, sparse zone sets | RMSE, MAE, R2 on random and spatial pickup-zone holdouts. |
-| Taxi trip, route, or zone classification | `CartoBoostClassifier`, sparse zone sets | Logloss, ROC-AUC or PR-AUC, Brier score, and calibration checks on the same split as baselines. |
-| Grouped route, customer, or zone ranking | `CartoBoostRanker`, grouped relevance labels | NDCG, MAP, MRR, and baseline ranking comparison by query group. |
-| Pickup/dropoff demand forecasting | `ForecastFrame`, `CartoBoostLagForecaster`, splitters, backtester | Rolling-origin or out-of-time RMSE, MAE, WAPE, horizon metrics. |
-| Spatial piecewise seasonal taxi forecasting | `SpatialPiecewiseKrigingForecaster` | Compare base piecewise seasonal, kriging, and fused rows under the same rolling-origin folds; inspect correction, variance, neighbors, and runtime metadata. |
-| Directional neural lane forecasting | `NeuralPanelForecaster`, `LaneNeuralPanelForecaster` | Rolling-origin RMSE, MAE, WAPE, horizon metrics, quantile diagnostics, timing, and comparison against seasonal naive plus `CartoBoostLagForecaster`. |
+| Row-level regression | `CartoBoostRegressor`, `FeatureSchema`, sparse sets | RMSE, MAE, R2 on the same split as baselines. |
+| Binary or multiclass classification | `CartoBoostClassifier`, sparse sets | Logloss, ROC-AUC or PR-AUC, Brier score, and calibration checks on the same split as baselines. |
+| Grouped ranking | `CartoBoostRanker`, grouped relevance labels | NDCG, MAP, MRR, and baseline ranking comparison by query group. |
+| Demand or time-series forecasting | `ForecastFrame`, `CartoBoostLagForecaster`, splitters, backtester | Rolling-origin or out-of-time RMSE, MAE, WAPE, horizon metrics. |
+| Spatial piecewise forecasting | `SpatialPiecewiseKrigingForecaster` | Compare base piecewise seasonal, kriging, and fused rows under the same rolling-origin folds; inspect correction, variance, neighbors, and runtime metadata. |
+| Directional panel forecasting | `NeuralPanelForecaster`, `LaneNeuralPanelForecaster` | Rolling-origin RMSE, MAE, WAPE, horizon metrics, quantile diagnostics, timing, and comparison against seasonal naive plus `CartoBoostLagForecaster`. |
 | Repeated-ID residual signal | `NeuralEmbeddingRegressor`, `benchmark_neural_vs_cartoboost` | Repeated-ID and cold-ID splits, with out-of-fold embeddings when possible. |
-| Pickup/dropoff topology | `cartoboost.graph`, standalone graph regressors, graph feature transformers | Same train-side graph construction for all rows, plus grouped or cold-source validation. |
+| Directed topology | `cartoboost.graph`, CartoBoost graph regressors, graph feature transformers | Same train-side graph construction for all rows, plus grouped or cold-source validation. |
 | Diagnostics and intervals | evaluation helpers, SHAP helpers, kriging diagnostics | Residual spatial autocorrelation, interval coverage, and residual summaries by zone/hour. |
 
 ## `cartoboost.CartoBoostRegressor`
@@ -79,7 +79,7 @@ smoothed target-stat encoding.
 
 For benchmark comparisons, call `fit` only on the training indices from the
 chosen split and call `predict` only on the matching validation indices. If
-CartoBoost receives pickup/dropoff zone, hour, distance, or target-mean
+CartoBoost receives zone, hour, distance, or target-mean
 features, provide comparable encoded columns to LightGBM, XGBoost, or other
 baselines before interpreting a quality delta.
 
@@ -121,17 +121,17 @@ or a label-to-weight dict to weight gradients.
 | `predict(X, sparse_sets=None)` | `numpy.ndarray` | Returns original class labels. |
 | `predict_proba(X, sparse_sets=None)` | `numpy.ndarray` | Columns follow `classes_`. |
 | `decision_function(X, sparse_sets=None)` | `numpy.ndarray` | Binary returns one raw margin per row; multiclass returns class margins. |
-| `save(path)` | `None` | Writes classifier artifact plus Python class-label metadata. |
+| `save(path)` | `None` | Writes CartoBoost classifier artifact plus Python class-label metadata. |
 | `save_weights(path, format="auto")` | raises `NotImplementedError` | Classifier portable weights and ONNX export are intentionally unsupported. |
-| `CartoBoostClassifier.load(path)` | estimator | Loads classifier artifacts. |
+| `CartoBoostClassifier.load(path)` | estimator | Loads CartoBoost classifier artifacts. |
 | `get_params(deep=True)` | `dict` | sklearn-compatible parameter inspection. |
 | `set_params(**params)` | `self` | Validates known parameter names. |
 
-Use the same feature columns and split definitions as the baseline classifier.
-For taxi classification, common labels include airport-trip flag, high-delay
-bucket, cancellation risk class, or pickup-demand surge class.
-Categorical columns follow the same mapping behavior as the regressor and are
-saved with classifier class-label metadata.
+Use the same feature columns and split definitions as the baseline CartoBoost classifier.
+Common labels include churn flag, high-delay bucket, cancellation risk class,
+or demand-surge class.
+Categorical columns follow the same mapping behavior as the CartoBoost
+regressor and are saved with CartoBoost classifier class-label metadata.
 
 ## `cartoboost.CartoBoostRanker`
 
@@ -157,7 +157,7 @@ CartoBoostRanker(
 )
 ```
 
-The ranker trains pairwise objectives over contiguous query groups.
+The CartoBoost ranker trains pairwise objectives over contiguous query groups.
 Use `objective="pairwise_logit"` for unweighted pairwise logistic gradients or
 `objective="lambdarank"` for NDCG-delta weighted gradients. Pass `groups` to
 `fit` as group sizes whose positive entries sum to the row count, or as one
@@ -174,23 +174,23 @@ training.
 | `fit(X, y, groups=None, group_col=None, sample_weight=None, feature_schema=None, sparse_sets=None)` | `self` | Requires group sizes, row-level query ids, or `group_col`. |
 | `predict(X, sparse_sets=None)` | `numpy.ndarray` | Returns one relevance score per row; accepts full frames with `group_col` or already-dropped feature matrices. |
 | `score_groups(X, y, groups=None, group_col=None, sparse_sets=None)` | `dict` | Returns `ndcg`, `map`, and `mrr`. |
-| `save(path)` | `None` | Writes ranker state plus Python grouping and categorical metadata. |
+| `save(path)` | `None` | Writes CartoBoost ranker state plus Python grouping and categorical metadata. |
 | `save_weights(path, format="auto")` | raises `NotImplementedError` | Ranker portable weights and ONNX export are intentionally unsupported. |
-| `CartoBoostRanker.load(path)` | estimator | Loads ranker artifacts. |
+| `CartoBoostRanker.load(path)` | estimator | Loads CartoBoost ranker artifacts. |
 | `get_params(deep=True)` | `dict` | sklearn-compatible parameter inspection. |
 | `set_params(**params)` | `self` | Validates known parameter names. |
 
 Ranking labels are relevance scores within a group, not global regression
-targets. For taxi workflows, examples include ranking candidate dropoff zones,
-route alternatives, or service actions within one pickup/customer context.
+targets. Common examples include ranking candidate items, route alternatives,
+or service actions within one query context.
 Categorical ranker columns use train-side relevance labels for smoothed
-target-stat encoding and persist their mappings in ranker artifacts.
+target-stat encoding and persist their mappings in CartoBoost ranker artifacts.
 
 ## `cartoboost.forecasting`
 
 Forecasting APIs validate timestamped inputs, produce deterministic forecast
 tables, and provide leakage-safe evaluation for single-series and panel data.
-Use these APIs when the question is future pickup/dropoff demand rather than
+Use these APIs when the question is future demand rather than
 row-level fare or duration prediction.
 
 Core schema:
@@ -203,10 +203,10 @@ Core schema:
 | `PredictionInterval(level, lower, upper)` | Validates lower/upper interval bounds. |
 
 `ForecastFrame.from_pandas(..., sample_weight_col="trip_count")` is the
-opt-in path for duplicate taxi observations at one timestamp. Duplicate
-series/timestamp rows are collapsed before forecast validation: targets and
-numeric covariates are weighted means, while the weight column is summed and
-kept as a historical covariate.
+opt-in path for duplicate rows at one timestamp. Duplicate series/timestamp
+rows are collapsed before forecast validation: targets and numeric covariates
+are weighted means, while the weight column is summed and kept as a historical
+covariate.
 
 Forecasters:
 
@@ -223,15 +223,15 @@ Forecasters:
 | `AutoLocalLevelKalmanForecaster` | Deterministic grid search over local-level process/observation variances; metadata includes `selected_params` and `validation_scores`. |
 | `AutoKalmanForecaster` | Deterministic grid search over local-linear level/trend/observation variances; metadata includes `selected_params` and `validation_scores`. |
 | `AutoStatsBank` | Validation bank over statistical forecasting candidates. |
-| `CrostonForecaster` | Fixed Croston intermittent-demand forecaster for sparse non-negative taxi demand. |
+| `CrostonForecaster` | Fixed Croston intermittent-demand forecaster for sparse non-negative series. |
 | `SbaForecaster` | Fixed SBA intermittent-demand forecaster with Croston bias adjustment. |
 | `TsbForecaster` | Fixed TSB intermittent-demand forecaster with separate demand and occurrence smoothing. |
 | `KrigingForecaster` | Coordinate-aware panel forecaster using stable series coordinates and variogram controls. |
 | `SpatialPiecewiseKrigingForecaster` | Piecewise seasonal CartoBoost base fused with cutoff-safe kriged regressors, residual kriging, or hybrid spatial correction; result JSON includes base mean, correction, variance, neighbors, components, and metadata. |
 | `PiecewiseLinearSeasonalForecaster` | Piecewise linear seasonal local model with linear, flat, or logistic growth, automatic or explicit changepoints, holiday tables and optional country holiday calendars normalized into event windows, Fourier seasonalities, conditional custom seasonalities, events, automatic extra-regressor standardization, per-component regularization, residual intervals, deterministic sampled trend uncertainty, external trend adjustments, residual shock propagation, fitted JSON round-trips, `components()` / `components_json()` forecast decomposition, and `history_components()` / `history_components_frame()` / `history_components_json()` fitted trend, movement, seasonality, event, and regressor diagnostics; interactive examples expose matching fitted artifact prediction and component helpers. |
 | `CartoBoostLagForecaster` | Global recursive forecaster using leakage-safe lag, rolling, calendar, static, and known-future features with `CartoBoostRegressor`. |
-| `NeuralPanelForecaster` | Rust-native neural panel forecaster with `n_lags`, `n_forecasts`, quantiles, trend, Fourier seasonality, event offsets, known-future regressors, lagged regressors, direct horizons, separate local/global/glocal seasonality, event, and regressor modes, median-first internal quantile residuals, and serializable metadata. |
-| `LaneNeuralPanelForecaster` | Taxi lane wrapper for `series_id="origin:destination"` panels; injects generated origin, destination, lane, and directional graph covariates into the fitted Rust neural panel while keeping `A:B` distinct from `B:A`; `predict_for_lanes(horizon, series_ids)` applies fitted-lane fallback for explicit cold lane ids. |
+| `NeuralPanelForecaster` | Neural panel forecaster with `n_lags`, `n_forecasts`, quantiles, trend, Fourier seasonality, event offsets, known-future regressors, lagged regressors, direct horizons, separate local/global/glocal seasonality, event, and regressor modes, median-first internal quantile residuals, and serializable metadata. |
+| `LaneNeuralPanelForecaster` | Directional pair wrapper for `series_id="origin:destination"` panels; injects generated origin, destination, lane, and directional graph covariates into the panel model while keeping `A:B` distinct from `B:A`; `predict_for_lanes(horizon, series_ids)` applies fitted-lane fallback for explicit cold lane ids. |
 | `AutoForecaster` | Guarded model selector over reusable internal forecasting candidates with validation metadata and fitted artifacts. |
 | `NBeatsForecaster` | Deterministic N-BEATS style forecasting expert for regular forecast windows. |
 | `NHiTSForecaster` | Deterministic N-HiTS style forecasting expert with pooled history windows. |
@@ -288,7 +288,7 @@ Plotting:
 | `cartoboost.plotting.plot_cutoff_predictions` | Cross-validation predictions grouped by cutoff. |
 | `cartoboost.plotting.plot_predicted_actual` | Predicted-vs-actual scatter plot with a parity reference line. |
 | `cartoboost.plotting.plot_residual_diagnostics` | Residual-vs-prediction and residual distribution diagnostics. |
-| `cartoboost.plotting.plot_route_segments` | Static pickup/dropoff route segment map with optional metric coloring. |
+| `cartoboost.plotting.plot_route_segments` | Static route-segment map with optional metric coloring. |
 | `cartoboost.plotting.plot_metric_comparison` | Sorted bar chart for RMSE, MAE, WAPE, timing, or other metric rows. |
 | `cartoboost.plotting.plot_forecast` | History, forecast, optional holdout actuals, and optional interval bands. |
 | `cartoboost.plotting.plot_forecast_component` | Prophet-compatible single component plot. |
@@ -359,8 +359,7 @@ features and trains a tabular model on the expanded matrix.
 Set `oof_folds > 1` to train final-model embedding columns out of fold. Use
 `support_prior_strength` to shrink rare IDs more strongly toward their prior.
 Report neural results with both repeated-ID and cold-ID validation. A random
-split gain is not evidence of cold pickup-zone, dropoff-zone, lane, or route
-generalization.
+split gain is not evidence of cold location, lane, or route generalization.
 
 ## General Utilities
 
@@ -410,15 +409,15 @@ relation-aware sampling and link feature construction.
 
 ## `cartoboost.graph` Feature Helpers
 
-The `cartoboost.graph` package contains standalone graph models, link
-predictors, and graph-feature helpers. Use standalone classes for direct
-modeling; use `GraphFeatureTransformer` only when you want dense and sparse
-graph inputs for another estimator.
+The `cartoboost.graph` package contains CartoBoost graph models, CartoBoost
+link predictors, and graph-feature helpers. Use the direct models when the
+graph itself is the thing you want to score; use `GraphFeatureTransformer`
+only when you want dense and sparse graph inputs for another estimator.
 
-For taxi source-target modeling, build graph features from train-side
-pickup/dropoff relationships when validation lanes or timestamps must remain
-unseen. If validation edges leak into topology construction, label the result as
-transductive rather than a deployment holdout.
+For source-target modeling, build graph features from train-side relationships
+when validation edges or timestamps must remain unseen. If validation edges
+leak into topology construction, label the result as transductive rather than a
+deployment holdout.
 
 | Entry point | Purpose |
 | --- | --- |
@@ -446,7 +445,7 @@ Directional source-target features are opt-in through
 Use these models when graph or neural embeddings should score directly instead
 of becoming generated feature columns.
 
-Standalone regressors:
+CartoBoost regressors:
 
 | Entry point | Fit signature | Notes |
 | --- | --- | --- |
@@ -458,7 +457,7 @@ Standalone regressors:
 
 All standalone regressors expose `predict`, `score`, `save`, and `load`.
 
-Standalone link predictors:
+CartoBoost link predictors:
 
 | Entry point | Fit signature | Notes |
 | --- | --- | --- |
@@ -467,7 +466,7 @@ Standalone link predictors:
 | `HeteroGraphSageLinkPredictor` | `fit(node_features, edges)` | Typed-edge link scoring. |
 | `HinSageLinkPredictor` | `fit(node_features, node_types, edges)` | Typed-node and typed-relation link scoring. |
 
-All standalone link predictors expose `predict_scores`, `report`, `save`, and
+All CartoBoost link predictors expose `predict_scores`, `report`, `save`, and
 `load`.
 
 ### Function: `cartoboost.benchmark_neural_vs_cartoboost`

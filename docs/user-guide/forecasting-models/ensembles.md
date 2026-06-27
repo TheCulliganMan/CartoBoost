@@ -17,7 +17,7 @@ Python.
 
 ## When To Use
 
-Use an ensemble when different models capture different parts of a taxi demand
+Use an ensemble when different models capture different parts of a demand
 pattern. For example, seasonal naive can preserve repeated hourly cycles, theta
 can adapt to a changing level, and Kalman can update a noisy level/trend from
 recent observations.
@@ -35,7 +35,7 @@ shared supervised lag structure. The ensemble is useful only when those
 mechanisms make complementary errors under the same validation design.
 
 Choose it when validation shows that no single component dominates all horizons
-or all taxi zones, and when the selected weights can be explained. The weights
+or all panels, and when the selected weights can be explained. The weights
 are part of the model claim; they are not learned automatically by the ensemble.
 
 ## Assumptions And Failure Modes
@@ -74,7 +74,7 @@ ensemble = WeightedEnsembleForecaster(
         "theta": 0.30,
         "kalman": 0.15,
     },
-    metadata={"purpose": "pickup-zone demand baseline"},
+    metadata={"purpose": "panel demand baseline"},
 )
 
 ensemble.fit(hourly_pickups)
@@ -93,9 +93,9 @@ from cartoboost.forecasting import SeasonalNaiveForecaster, ThetaForecaster
 from cartoboost.forecasting import WeightedEnsembleForecaster
 
 frame = ForecastFrame.from_pandas(
-    hourly_zone_demand.query("PULocationID == 161"),
+    hourly_zone_demand.query("series_id == '161'"),
     timestamp_col="pickup_hour",
-    target_col="pickup_count",
+    target_col="demand",
     freq="h",
 )
 
@@ -114,7 +114,7 @@ forecast = ensemble.predict(24)
 ## Runnable Visual Example
 
 Run the committed example to compare component forecasts against the weighted
-blend for taxi airport lanes:
+blend for a panel dataset:
 
 ```bash
 uv run python examples/forecasting/weighted_ensemble_visualization.py
@@ -138,7 +138,7 @@ from cartoboost.forecasting import (
 frame = ForecastFrame.from_pandas(
     train,
     timestamp_col="pickup_hour",
-    target_col="pickup_count",
+    target_col="demand",
     series_id_col="lane_id",
     freq="h",
 )
@@ -178,7 +178,7 @@ A pragmatic workflow is:
 2. Remove members that are consistently worse than a simple seasonal baseline.
 3. Try a small weight grid such as seasonal-heavy, trend-heavy, and balanced.
 4. Pick the simplest blend that clears the best individual member on average and
-   does not fail badly on any taxi zone or lane segment.
+   does not fail badly on any panel or segment.
 
 Example grid:
 
@@ -208,7 +208,7 @@ optimized theta, ETS, ARIMA, AutoARIMA, Kalman, and `CartoBoostLagForecaster`.
 
 ## Visual Diagnostics
 
-Plot the observed taxi series with every component and the ensemble. Useful
+Plot the observed series with every component and the ensemble. Useful
 patterns:
 
 | Visual pattern | Meaning | Typical next step |

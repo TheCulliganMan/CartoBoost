@@ -7,7 +7,7 @@ intermittent-demand sequence and want a direct result.
 
 These functions are useful for scientific checks and ablations: they let you
 compare a full estimator or forecasting wrapper against the same underlying
-method on a simple taxi-zone sequence, route panel, or coordinate interpolation
+method on a simple zone sequence, route panel, or coordinate interpolation
 problem.
 
 ```python
@@ -18,9 +18,8 @@ import cartoboost as cb
 
 Use `cartoboost.forecasting.sequence` when a row sequence has a known target
 prefix, a target-missing prediction suffix, and an external reference axis such
-as a canonical pickup-demand profile. The utilities validate the prefix/suffix
-boundary, reject target leakage in prediction rows, and keep the implementation
-in Rust for Python and browser callers.
+as a canonical demand profile. The utilities validate the prefix/suffix
+boundary and reject target leakage in prediction rows.
 
 ```python
 from cartoboost.forecasting.sequence import (
@@ -32,7 +31,7 @@ from cartoboost.forecasting.sequence import (
 )
 
 series = SequenceSeries(
-    "PULocationID_142",
+    "location_142",
     [
         SequenceRow("hour_00", 0.0, 0.0),
         SequenceRow("hour_01", 1.0, 1.0),
@@ -62,7 +61,7 @@ Available entry points:
 Use local-level Kalman filtering when the signal is a noisy measurement of a
 slowly moving level and there is no explicit trend term.
 
-Example: a pickup-zone counter reads a stable hourly demand level with small
+Example: a location counter reads a stable hourly demand level with small
 noise, and you want a smoothed level plus a short flat forecast.
 
 ```python
@@ -249,8 +248,8 @@ Panel input is also supported:
 ```python
 model.fit(
     {
-        "PULocationID_142": [40.0, 42.0, 45.0, 47.0],
-        "PULocationID_236": [70.0, 69.0, 68.0, 66.0],
+        "location_142": [40.0, 42.0, 45.0, 47.0],
+        "location_236": [70.0, 69.0, 68.0, 66.0],
     }
 )
 ```
@@ -262,8 +261,8 @@ spatial interpolation at new coordinates. The utility is independent of
 forecasting. The forecasting wrapper uses the latest observed value for each
 series and interpolates across panel coordinates.
 
-Example: three taxi zones have observed pickup pressure, and you want the
-estimated pressure at a nearby zone centroid.
+Example: three locations have observed demand pressure, and you want the
+estimated pressure at a nearby centroid.
 
 ```python
 import cartoboost as cb
@@ -316,7 +315,7 @@ Return shape:
   held-out observation and is intended for spatial residual diagnostics.
 - `empirical_variogram(...)` returns binned semivariances with lag boundaries,
   mean lag distance, and pair counts.
-- `fit_ordinary_kriging_variogram(...)` runs Rust weighted least-squares
+- `fit_ordinary_kriging_variogram(...)` runs weighted least-squares
   selection over variogram, range, nugget, and sill candidates and returns the
   selected config plus the empirical bins and objective value.
 - `ordinary_kriging_leave_one_out_diagnostics(...)` returns held-out predictions
@@ -327,7 +326,7 @@ Visual example walkthrough:
 
 - Full example script: `examples/forecasting/kriging_example_visualization.py`
 - Generated surface:
-  ![Taxi pickup kriging example surface](assets/kriging_examples/kriging_surface.png)
+  ![Kriging example surface](assets/kriging_examples/kriging_surface.png)
 - Generated variogram:
   ![Empirical variogram with fitted model](assets/kriging_examples/kriging_variogram_fit.png)
 - Generated leave-one-out diagnostics:
@@ -343,17 +342,17 @@ known panel values at that series coordinate.
 from cartoboost.forecasting.local import KrigingForecaster
 
 coordinates = {
-    "PULocationID_142": (0.0, 0.0),
-    "PULocationID_236": (1.0, 0.0),
-    "PULocationID_239": (0.0, 1.0),
+    "location_142": (0.0, 0.0),
+    "location_236": (1.0, 0.0),
+    "location_239": (0.0, 1.0),
 }
 
 model = KrigingForecaster(coordinates=coordinates, range=1.5, nugget=1.0e-6)
 model.fit(
     {
-        "PULocationID_142": [10.0, 12.0],
-        "PULocationID_236": [20.0, 21.0],
-        "PULocationID_239": [14.0, 15.0],
+        "location_142": [10.0, 12.0],
+        "location_236": [20.0, 21.0],
+        "location_239": [14.0, 15.0],
     }
 )
 result = model.predict(1)
@@ -366,8 +365,8 @@ Coordinates can also be passed as triples:
 ```python
 KrigingForecaster(
     coordinates=[
-        ("PULocationID_142", 0.0, 0.0),
-        ("PULocationID_236", 1.0, 0.0),
+        ("location_142", 0.0, 0.0),
+        ("location_236", 1.0, 0.0),
     ],
 )
 ```
@@ -375,7 +374,7 @@ KrigingForecaster(
 ## Intermittent Demand
 
 Use Croston-family utilities when demand is non-negative and contains many
-zeros. They are useful for sparse pickup requests, low-volume parts, or rare
+zeros. They are useful for sparse demand requests, low-volume parts, or rare
 lane/customer activity.
 
 Example: a low-volume lane has several zero-demand days and occasional

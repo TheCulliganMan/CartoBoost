@@ -6,11 +6,10 @@ import {ForecastModelExample} from '@site/src/components/ModelingLabClient';
 across series using explicit coordinates keyed by series id.
 
 Kriging is most useful when the thing being forecast has spatial structure:
-pickup counts near JFK should be related to other airport-area pickup counts,
-Midtown zones should borrow more from nearby Midtown zones than from far-away
-zones, and route midpoint aggregates can share signal with nearby corridors.
-CartoBoost exposes both the panel forecaster and lower-level utilities for
-one-off interpolation, variogram fitting, and residual diagnostics.
+nearby locations should be related to nearby locations, and route midpoint
+aggregates can share signal with nearby corridors. CartoBoost exposes both the
+panel forecaster and lower-level utilities for one-off interpolation,
+variogram fitting, and residual diagnostics.
 
 ## Interactive Example
 
@@ -18,13 +17,12 @@ one-off interpolation, variogram fitting, and residual diagnostics.
 
 ## When To Use
 
-Use kriging when nearby pickup zones, dropoff zones, or route midpoints should
-have related future values. Every series id in the training panel should have a
-coordinate.
+Use kriging when nearby locations or route midpoints should have related
+future values. Every series id in the training panel should have a coordinate.
 
 Good fits usually have these properties:
 
-- stable series ids such as `PULocationID`, `DOLocationID`, or route ids,
+- stable series ids such as location ids or route ids,
 - a coordinate for every training series id,
 - enough neighboring zones to estimate spatial correlation,
 - validation folds that preserve time order,
@@ -32,18 +30,18 @@ Good fits usually have these properties:
   lag features.
 
 Avoid kriging as the only model when the signal is mostly temporal, such as a
-single-zone rush-hour pattern. In that case, compare against seasonal naive,
+single-series rush-hour pattern. In that case, compare against seasonal naive,
 Kalman, ARIMA, or a lag model with hour/day features. Kriging is strongest when
 spatial borrowing adds information that a per-series temporal model cannot see.
 
 ## Scientific Role
 
-Kriging is a spatial covariance model. It asks whether differences between taxi
+Kriging is a spatial covariance model. It asks whether differences between
 series are related to coordinate distance after the chosen temporal summary has
 been formed. A scientist should choose it when geography is part of the
-mechanism being tested, not merely because zones have coordinates.
+mechanism being tested, not merely because locations have coordinates.
 
-For pickup-zone demand, a defensible kriging claim is: nearby zones or route
+For panel demand, a defensible kriging claim is: nearby locations or route
 midpoints have correlated residual demand, and the variogram plus neighbor
 rules make that borrowing explicit. The model is weaker as a pure time-series
 forecaster because it does not learn hour-of-day dynamics by itself.
@@ -67,7 +65,7 @@ time-ordered validation before treating a spatial surface as forecast evidence.
 from cartoboost.forecasting import KrigingForecaster
 
 coordinates = {
-    "132": (-73.7781, 40.6413),  # JFK area
+    "132": (-73.7781, 40.6413),  # location 132
     "161": (-73.9776, 40.7580),  # Midtown
     "236": (-73.9577, 40.7808),  # Upper East Side
 }
@@ -105,8 +103,8 @@ from cartoboost.forecasting import ForecastFrame, KrigingForecaster
 frame = ForecastFrame.from_pandas(
     hourly_zone_demand,
     timestamp_col="pickup_hour",
-    target_col="pickup_count",
-    series_id_col="PULocationID",
+    target_col="demand",
+    series_id_col="series_id",
     freq="h",
 )
 
@@ -128,9 +126,9 @@ model.fit(frame)
 forecast = model.predict(6)
 ```
 
-The frame example is the usual production shape: aggregate trips to hourly
-pickup-zone counts, keep `PULocationID` as the stable series key, and pass a
-centroid table whose keys match those ids after string conversion.
+The frame example is the usual production shape: aggregate observations to
+hourly counts, keep the stable series key, and pass a centroid table whose keys
+match those ids after string conversion.
 
 ## Utility Workflow
 
@@ -142,10 +140,10 @@ one timestamp or validation fold.
 import cartoboost as cb
 
 observations = [
-    (-73.7781, 40.6413, 126.0),  # PULocationID 132, JFK area
-    (-73.8628, 40.7684, 113.0),  # PULocationID 138, LaGuardia area
-    (-73.9776, 40.7580, 86.0),   # PULocationID 161, Midtown
-    (-73.9577, 40.7808, 72.0),   # PULocationID 236, Upper East Side
+    (-73.7781, 40.6413, 126.0),  # location 132
+    (-73.8628, 40.7684, 113.0),  # location 138
+    (-73.9776, 40.7580, 86.0),   # location 161
+    (-73.9577, 40.7808, 72.0),   # location 236
 ]
 
 fit = cb.fit_ordinary_kriging_variogram(
@@ -176,11 +174,11 @@ Use `detailed=True` when a dashboard or QA notebook needs kriging variance,
 weights, and selected neighbor indices. The same fitted config can be copied to
 `KrigingForecaster` for repeated panel forecasting.
 
-## Practical Taxi-Zone Workflow
+## Practical Workflow
 
-1. Aggregate the taxi trips to the grain you plan to forecast, for example
-   hourly `pickup_count` by `PULocationID`.
-2. Join or build a zone centroid table keyed by the same ids. For route-level
+1. Aggregate the data to the grain you plan to forecast, for example hourly
+   counts by series id.
+2. Join or build a centroid table keyed by the same ids. For route-level
    models, use route midpoint coordinates or a carefully chosen corridor
    coordinate.
 3. Pick one training timestamp or rolling fold and create `(x, y, value)`
@@ -194,12 +192,12 @@ weights, and selected neighbor indices. The same fitted config can be copied to
    errors, add temporal features, adjust neighbor limits, or treat the zone as a
    special case before using the fitted config in a forecaster.
 
-## Taxi-Zone Example Walkthrough
+## Example Walkthrough
 
-The runnable example script below creates eight pickup zones with fixed coordinates,
-fits a variogram by weighted least squares, interpolates a dense grid, and runs
-leave-one-out diagnostics. The data is synthetic and intentionally small so the
-geometry and residual behavior are easy to inspect.
+The runnable example script below creates eight locations with fixed
+coordinates, fits a variogram by weighted least squares, interpolates a dense
+grid, and runs leave-one-out diagnostics. The data is synthetic and
+intentionally small so the geometry and residual behavior are easy to inspect.
 
 ```bash
 uv run python examples/forecasting/kriging_example_visualization.py \
@@ -221,7 +219,7 @@ The surface plot shows how observed pickup demand at named zones is interpolated
 over an example city coordinate plane. The white points are observed zones, the large
 numbers are example pickup counts, and the background is the kriging mean.
 
-![Taxi pickup kriging example surface](../../assets/kriging_examples/kriging_surface.png)
+![Kriging example surface](../../assets/kriging_examples/kriging_surface.png)
 
 Interpret the surface as a spatial sanity check:
 
@@ -332,9 +330,9 @@ assert metrics["interval_coverage_95"] >= 0.0
 
 ## Data Requirements
 
-Kriging is panel-oriented. Use stable series ids such as `PULocationID`,
-`DOLocationID`, or route ids. Coordinate keys must match the string form of the
-series ids used by the forecasting frame or panel dictionary.
+Kriging is panel-oriented. Use stable series ids such as location ids or route
+ids. Coordinate keys must match the string form of the series ids used by the
+forecasting frame or panel dictionary.
 
 Coordinates can be projected coordinates, normalized city-plane coordinates, or
 longitude/latitude pairs for compact areas where the distance approximation is

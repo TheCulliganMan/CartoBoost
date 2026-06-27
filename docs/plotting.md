@@ -40,12 +40,12 @@ neural surfaces, the visualizer renders a splitter atlas, boosted-tree
 blueprints, split-kind mix, top splitter rules, depth profile, and largest
 holdout residuals.
 
-Use the built-in taxi buttons to load either bundled browser sample. The
-5,000-row single-lane yellow taxi demand sample is shaped for forecasting demos:
-one pickup/dropoff lane, one continuous hourly series, and enough history for
-roster comparisons without changing the forecast task into a panel problem. The
-2,500-row varied-route sample keeps many pickup/dropoff coordinates for spatial,
-graph, neural, and splitter-visualization checks.
+Use the built-in demo buttons to load either bundled browser sample. The
+5,000-row single-series demand sample is shaped for forecasting demos: one
+continuous hourly target and enough history for roster comparisons without
+changing the forecast task into a panel problem. The 2,500-row varied-route
+sample keeps many coordinates and IDs for spatial, graph, neural, and
+splitter-visualization checks.
 
 Visualization metadata is requested only by the Modeling Lab. Main browser
 forecasting, regression, and neural prediction calls continue without historical
@@ -138,18 +138,17 @@ fig = plot(prophet_like_model, forecast)
 save_figure(fig, "target/plots/prophet_forecast_pu237_do236.png", close=True)
 ```
 
-Prophet's forecast plot is single-series. For taxi lane reviews, render one
-Prophet-shaped figure per pickup/dropoff lane rather than mixing lanes into one
+Prophet's forecast plot is single-series. For panel reviews, render one
+Prophet-shaped figure per entity rather than mixing unrelated rows into one
 axis.
 
-![Prophet-compatible forecast plot for PU237 to DO236](assets/nyc_taxi_benchmarks/forecasting_plots/prophet_forecast_pu237-do236.png)
+![Prophet-compatible forecast plot 1](assets/nyc_taxi_benchmarks/forecasting_plots/prophet_forecast_pu237-do236.png)
 
-![Prophet-compatible forecast plot for PU236 to DO237](assets/nyc_taxi_benchmarks/forecasting_plots/prophet_forecast_pu236-do237.png)
+![Prophet-compatible forecast plot 2](assets/nyc_taxi_benchmarks/forecasting_plots/prophet_forecast_pu236-do237.png)
 
-![Prophet-compatible forecast plot for PU239 to DO238](assets/nyc_taxi_benchmarks/forecasting_plots/prophet_forecast_pu239-do238.png)
+![Prophet-compatible forecast plot 3](assets/nyc_taxi_benchmarks/forecasting_plots/prophet_forecast_pu239-do238.png)
 
-These images were generated from the January 2024 NYC yellow taxi lane-demand
-benchmark holdout with:
+These images were generated from the maintained NYC benchmark holdout with:
 
 ```sh
 uv run --no-sync --group dev --group bench python scripts/forecasting_library_benchmark.py \
@@ -176,7 +175,7 @@ uv add "cartoboost[visualization]"
 ## Regression diagnostics
 
 Use `plot_predicted_actual` and `plot_residual_diagnostics` after scoring the
-same held-out taxi rows across CartoBoost and baselines.
+same held-out rows across CartoBoost and baselines.
 
 ```python
 from cartoboost import CartoBoostRegressor
@@ -193,30 +192,30 @@ predicted_fare = model.predict(test_features)
 fig = plot_predicted_actual(
     test_fare,
     predicted_fare,
-    title="Taxi fare holdout: predicted vs actual",
+    title="CartoBoost fare holdout: predicted vs actual",
     xlabel="Actual fare",
     ylabel="Predicted fare",
 )
-save_figure(fig, "target/plots/taxi_fare_predicted_actual.png", close=True)
+save_figure(fig, "target/plots/cartoboost_fare_predicted_actual.png", close=True)
 
 fig = plot_residual_diagnostics(
     test_fare,
     predicted_fare,
-    title="Taxi fare holdout residual diagnostics",
+    title="CartoBoost fare holdout residual diagnostics",
 )
-save_figure(fig, "target/plots/taxi_fare_residuals.png", close=True)
+save_figure(fig, "target/plots/cartoboost_fare_residuals.png", close=True)
 ```
 
 The scatter plot includes a parity line. The residual diagnostic figure shows
 residuals by prediction and the residual distribution, which makes bias,
-heteroskedasticity, and outlier-heavy taxi rows easier to spot than a metric
-table alone.
+heteroskedasticity, and outlier-heavy rows easier to spot than a metric table
+alone.
 
-Rendered taxi examples from the maintained NYC taxi benchmark:
+Rendered benchmark examples from the maintained NYC benchmark:
 
-![Taxi fare predicted versus actual](assets/nyc_taxi_benchmarks/plots/fare_random_cartoboost_predicted_actual.png)
+![Fare predicted versus actual](assets/nyc_taxi_benchmarks/plots/fare_random_cartoboost_predicted_actual.png)
 
-![Taxi fare residuals by zone](assets/nyc_taxi_benchmarks/plots/fare_random_cartoboost_zone_residuals.png)
+![Fare residuals by zone](assets/nyc_taxi_benchmarks/plots/fare_random_cartoboost_zone_residuals.png)
 
 ## Model metric comparisons
 
@@ -237,18 +236,18 @@ rows = [
 fig = plot_metric_comparison(
     rows,
     metric="rmse",
-    title="NYC taxi duration holdout RMSE",
+    title="CartoBoost duration holdout RMSE",
     ylabel="RMSE minutes",
 )
-save_figure(fig, "target/plots/taxi_duration_rmse.png", close=True)
+save_figure(fig, "target/plots/cartoboost_duration_rmse.png", close=True)
 ```
 
 The default sort places the lowest metric value first, which matches RMSE, MAE,
 WAPE, and most loss-style benchmark tables.
 
-Rendered taxi benchmark metric comparison:
+Rendered benchmark metric comparison:
 
-![NYC taxi benchmark metric summary](assets/nyc_taxi_benchmarks/metric_summary.png)
+![Benchmark metric summary](assets/nyc_taxi_benchmarks/metric_summary.png)
 
 ## Forecast plots
 
@@ -260,29 +259,29 @@ changepoint markers.
 from cartoboost.forecasting import ForecastArtifact
 from cartoboost.plotting import plot_forecast, save_figure
 
-artifact = ForecastArtifact.load("target/forecast-artifacts/pickup-demand")
+artifact = ForecastArtifact.load("target/forecast-artifacts/demand")
 
 fig = plot_forecast(
     artifact.forecast,
     history=history_rows,
     time_col="timestamp",
-    actual_col="pickup_count",
+    actual_col="demand",
     prediction_col="prediction",
     lower_col="lower_90",
     upper_col="upper_90",
-    series_id="pickup_zone_132",
+    series_id="zone_132",
     changepoints=["2026-03-01", "2026-04-15"],
     title="Pickup demand forecast",
 )
-save_figure(fig, "target/plots/pickup_zone_132_forecast.png", close=True)
+save_figure(fig, "target/plots/zone_132_forecast.png", close=True)
 ```
 
 For panel forecasts, pass `series_id` and `series_id_col` to focus the chart on
-one pickup zone, route, or lane. If interval columns are present, the function
+one entity, route, or lane. If interval columns are present, the function
 validates that every lower value is less than or equal to its upper value before
 drawing the band.
 
-Rendered real taxi lane-demand forecast examples:
+Rendered benchmark forecast examples:
 
 ![NYC taxi lane forecast lines](assets/nyc_taxi_benchmarks/forecasting_plots/nyc-taxi_forecast_lines.png)
 
@@ -299,14 +298,14 @@ from cartoboost.plotting import plot_forecast_components, save_figure
 
 component_rows = [
     {
-        "series_id": "pickup_zone_132",
+        "series_id": "zone_132",
         "timestamp": "2026-03-01",
         "trend": 120.0,
         "weekly": -8.0,
         "event": 0.0,
     },
     {
-        "series_id": "pickup_zone_132",
+        "series_id": "zone_132",
         "timestamp": "2026-03-02",
         "trend": 122.0,
         "weekly": 6.0,
@@ -317,11 +316,11 @@ component_rows = [
 fig = plot_forecast_components(
     component_rows,
     component_cols=["trend", "weekly", "event"],
-    series_id="pickup_zone_132",
+    series_id="zone_132",
     changepoints=["2026-03-01"],
     title="Pickup demand forecast components",
 )
-save_figure(fig, "target/plots/pickup_zone_132_components.png", close=True)
+save_figure(fig, "target/plots/zone_132_components.png", close=True)
 ```
 
 If `component_cols` is omitted, the helper infers numeric columns while skipping
@@ -332,7 +331,7 @@ stable across reruns.
 For component-style forecast reports, pair this plot with the forecast-line and
 horizon diagnostics so trend, seasonality, and holdout error are read together:
 
-![NYC taxi lane forecast horizon RMSE](assets/nyc_taxi_benchmarks/forecasting_plots/nyc-taxi_horizon_rmse_by_tool.png)
+![Benchmark forecast horizon RMSE](assets/nyc_taxi_benchmarks/forecasting_plots/nyc-taxi_horizon_rmse_by_tool.png)
 
 `plot_seasonality_curve` focuses on one or more periodic curves and supports
 optional lower/upper bands.
@@ -380,7 +379,7 @@ fig = plot_changepoint_effects(
 save_figure(fig, "target/plots/pickup_changepoints.png", close=True)
 ```
 
-For Prophet-style taxi demand reviews, render changepoints alongside forecast
+For Prophet-style demand reviews, render changepoints alongside forecast
 lines and component panels so step changes are visible in the same report.
 
 ## Horizon metrics
@@ -407,11 +406,11 @@ save_figure(fig, "target/plots/pickup_demand_horizon_rmse.png", close=True)
 ```
 
 Use this chart next to rolling-origin metric tables when a model wins on short
-horizons but loses as the taxi demand forecast moves further from the cutoff.
+horizons but loses as the demand forecast moves further from the cutoff.
 
-Rendered taxi horizon metric example:
+Rendered horizon metric example:
 
-![NYC taxi forecast horizon RMSE by model](assets/nyc_taxi_benchmarks/forecasting_plots/nyc-taxi_horizon_rmse_by_tool.png)
+![Forecast horizon RMSE by model](assets/nyc_taxi_benchmarks/forecasting_plots/nyc-taxi_horizon_rmse_by_tool.png)
 
 ## Backtest and interval diagnostics
 
@@ -458,12 +457,12 @@ save_figure(fig, "target/plots/pickup_demand_interval_calibration.png", close=Tr
 
 Coverage values are validated as probabilities between 0 and 1. The diagonal
 line marks perfectly calibrated intervals; points below it indicate
-under-coverage on the evaluated taxi demand rows.
+under-coverage on the evaluated demand rows.
 
 For a maintained forecast report, put interval calibration next to the same
 model-comparison image used for point metrics:
 
-![NYC taxi forecast model metric comparison](assets/nyc_taxi_benchmarks/forecasting_plots/nyc-taxi_tool_metric_comparison.png)
+![Forecast model metric comparison](assets/nyc_taxi_benchmarks/forecasting_plots/nyc-taxi_tool_metric_comparison.png)
 
 `plot_cutoff_predictions` overlays actual holdout values with the predictions
 emitted from each validation cutoff. This is useful when a rolling-origin metric
@@ -488,9 +487,9 @@ save_figure(fig, "target/plots/pickup_cutoff_predictions.png", close=True)
 ```
 
 The rendered forecast-line image shows the same idea at report scale: actual
-taxi lane demand remains visible while model forecasts are overlaid by horizon.
+demand remains visible while model forecasts are overlaid by horizon.
 
-![NYC taxi rolling forecast lines](assets/nyc_taxi_benchmarks/forecasting_plots/nyc-taxi_forecast_lines.png)
+![Rolling forecast lines](assets/nyc_taxi_benchmarks/forecasting_plots/nyc-taxi_forecast_lines.png)
 
 ## Diagnostic reports
 
@@ -509,7 +508,7 @@ plots = write_plot_report(
         {"model": "lightgbm", "rmse": 4.35},
         {"model": "mean", "rmse": 8.90},
     ],
-    prefix="taxi_fare",
+    prefix="cartoboost_fare",
 )
 
 print(plots["predicted_actual"])
@@ -525,12 +524,12 @@ include component and validation diagnostics in the same bundle.
 Rendered report bundles should include both quality and speed views when the
 claim compares model families:
 
-![NYC taxi prediction throughput](assets/nyc_taxi_benchmarks/prediction_throughput.png)
+![Benchmark prediction throughput](assets/nyc_taxi_benchmarks/prediction_throughput.png)
 
 ## Map visualizations
 
-The same `visualization` extra also enables map-focused diagnostics for taxi
-pickup/dropoff rows. Static maps use GeoPandas and Shapely; interactive maps use
+The same `visualization` extra also enables map-focused diagnostics for rows
+with coordinates. Static maps use GeoPandas and Shapely; interactive maps use
 PyDeck. These packages are optional and loaded only when a map helper is called.
 
 ```python
@@ -542,15 +541,15 @@ from cartoboost.plotting import (
 )
 
 pickup_rows = [
-    {"latitude": 40.644, "longitude": -73.782, "pickup_count": 184},
-    {"latitude": 40.758, "longitude": -73.985, "pickup_count": 96},
+    {"latitude": 40.644, "longitude": -73.782, "point_count": 184},
+    {"latitude": 40.758, "longitude": -73.985, "point_count": 96},
 ]
 
 fig = plot_spatial_points(
     pickup_rows,
     latitude_col="latitude",
     longitude_col="longitude",
-    value_col="pickup_count",
+    value_col="point_count",
     title="Pickup demand by zone centroid",
 )
 save_figure(fig, "target/plots/pickup_centroids.png", close=True)
@@ -565,18 +564,18 @@ route_rows = [
     }
 ]
 
-fig = plot_route_segments(route_rows, value_col="fare", title="Taxi fare by route")
+fig = plot_route_segments(route_rows, value_col="fare", title="CartoBoost fare by route")
 save_figure(fig, "target/plots/fare_routes.png", close=True)
 
 write_pydeck_point_map(
     pickup_rows,
     "target/plots/pickup_centroids.html",
-    value_col="pickup_count",
-    tooltip_cols=["pickup_count"],
+    value_col="point_count",
+    tooltip_cols=["point_count"],
 )
 ```
 
-Rendered static taxi route and zone diagnostics:
+Rendered static route and zone diagnostics:
 
 ![Taxi lane heatmap](assets/lane_level_tests/lane_heatmap.png)
 

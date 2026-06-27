@@ -1,10 +1,10 @@
-# Feature Catalog
+# CartoBoost Feature Catalog
 
 This page summarizes CartoBoost feature surfaces and the modeling reasons to use
 them. Detailed API contracts live in the linked topic pages and in the Python
 API reference.
 
-For taxi-trip science, choose features by the effect you need to measure:
+Choose features by the effect you need to measure:
 
 - dense numeric features for scalar facts such as distance, fare components,
   coordinates, and recent counts;
@@ -18,7 +18,7 @@ For taxi-trip science, choose features by the effect you need to measure:
 - SHAP explanations when you need an additive audit of how fitted features
   contributed to predictions.
 
-## Regression Estimator
+## CartoBoost Regressor
 
 `cartoboost.CartoBoostRegressor` is the main sklearn-style estimator for
 tabular, temporal, spatial, and sparse-set regression.
@@ -28,12 +28,12 @@ tabular, temporal, spatial, and sparse-set regression.
 | L2 regression | `loss="l2"` or `"squared_error"` | Mean-oriented fare, duration, or demand targets. |
 | L1 regression | `loss="l1"`, `"mae"`, or `"absolute_error"` | Robust median-like fits with constant leaves. |
 | Huber regression | `loss="huber"`, `huber_delta=...` | Robust squared-error compromise with constant leaves. |
-| Log-L2 regression | `loss="log_l2"`, `log_offset=1.0` | Positive skewed taxi targets such as fare or duration. |
-| Quantile regression | `loss="quantile"` or `"pinball"`, `quantile_alpha=...`; Rust `QuantileRegressorSet` for p10-p90 bundles | Conditional quantiles for delay or fare-risk analysis. |
+| Log-L2 regression | `loss="log_l2"`, `log_offset=1.0` | Positive skewed targets such as fare or duration. |
+| Quantile regression | `loss="quantile"` or `"pinball"`, `quantile_alpha=...` | Conditional quantiles for risk analysis. |
 | Constant leaves | `leaf_predictor="constant"` | Default tree leaf behavior. |
 | Linear leaves | `leaf_predictor="linear"`, `linear_leaf_features=[...]` | Local linear residual trends inside tree regions. |
 | Sample weights | `fit(..., sample_weight=...)` | Weighted studies, rebalancing, or survey-style emphasis. |
-| Monotonic and interaction constraints | `monotonic_constraints=[-1, 0, 1, ...]`; Rust `BoosterConfig.interaction_constraints` | Enforce known directional effects and allowed branch-level feature families in supported fits. |
+| Monotonic and interaction constraints | `monotonic_constraints=[-1, 0, 1, ...]` | Enforce known directional effects and allowed branch-level feature families in supported fits. |
 | Additive values | `predict_additive_values(...)` | Per-tree additive contributions whose row sum matches prediction. |
 | sklearn compatibility | `get_params`, `set_params`, `clone`, `Pipeline`, `GridSearchCV` | Standard estimator workflows. |
 | Artifacts | `save`, `load`, `save_weights`, `load_weights` | Versioned model and weights artifacts. |
@@ -43,7 +43,7 @@ See [Python API Reference](reference/python-api.md),
 [Parameters](user-guide/parameters.md), [Objectives](objectives.md),
 [Constraints](constraints.md), and [Model Artifacts](model_artifact.md).
 
-## Classification And Ranking Estimators
+## CartoBoost Classifier And Ranker
 
 `cartoboost.CartoBoostClassifier` and `cartoboost.CartoBoostRanker` extend the
 same tree modeling structure to discrete labels and grouped relevance labels.
@@ -58,14 +58,14 @@ same tree modeling structure to discrete labels and grouped relevance labels.
 | Pairwise ranking | `objective="pairwise_logit"` | Pairwise relevance optimization without NDCG weighting. |
 | Ranking metrics | `score_groups`, `ndcg_at_k`, `mean_average_precision`, `mean_reciprocal_rank` | Query-group evaluation with NDCG, MAP, and MRR. |
 
-See [Classification Quickstart](user-guide/classification-quickstart.md),
-[Ranking Quickstart](user-guide/ranking-quickstart.md), and
+See [CartoBoost Classifier](user-guide/boosting-models/cartoboost-classifier.md),
+[CartoBoost Ranker](user-guide/boosting-models/cartoboost-ranker.md), and
 [Python API Reference](reference/python-api.md).
 
 ## Native Categorical Features
 
-Regressor, classifier, and ranker wrappers can encode categorical columns while
-preserving the mapping in saved artifacts.
+CartoBoost regressor, classifier, and ranker wrappers can encode categorical
+columns while preserving the mapping in saved artifacts.
 
 | Feature | Public surface | Modeling use |
 | --- | --- | --- |
@@ -120,7 +120,7 @@ raise a clear install error when the extra is missing.
 See [Installation](installation.md), [Sparse Features](sparse_features.md), and
 [SHAP Support](shap.md).
 
-## Neural Embedding Models And Features
+## CartoBoost Neural Embedding Models And Features
 
 Neural embeddings are for stable, high-cardinality IDs that carry residual
 signal, such as pickup zones, dropoff zones, OD pairs, or zone-hour buckets.
@@ -135,9 +135,9 @@ They are not the same claim as cold-zone generalization; report the split.
 | Benchmark helper | `benchmark_neural_vs_cartoboost` | Quick held-out comparison between structured and neural-enhanced models. |
 | Artifacts | `save`, `load` on standalone models | Persist learned embedding model state. |
 
-See [Neural Embedding Models And Features](neural-features.md).
+See [CartoBoost Neural Embedding Models And Features](neural-features.md).
 
-## Graph Models And Features
+## CartoBoost Graph Models And Features
 
 Graph support is available both as direct standalone modeling and as optional
 feature generation for another estimator. Use it when zone, route, or temporal
@@ -153,15 +153,15 @@ relationships are part of the model, especially directed pickup-dropoff effects.
 | Graph schemas | `GraphSchema`, `EdgeType`, `DirectionalityConfig`, `DirectedMetaPath`, `TemporalEdge` | Validates directed heterogeneous graph contracts. |
 | Graph builders | `HomogeneousGraph`, `HeterogeneousGraph`, `SourceTargetPairNodes`, `materialize_source_target_pair_nodes` | Normalizes topology and preserves source-target pair identity. |
 | Walk generators | `MetaPathWalkGenerator`, `TemporalWalkGenerator`, `SignedEdgeSampler` | Directed, temporal, and signed walk utilities. |
-| Standalone graph regressors | `Node2VecStandaloneRegressor`, `GraphSageStandaloneRegressor`, `HeteroGraphSageStandaloneRegressor`, `HinSageStandaloneRegressor` | Direct graph regression without a boosted wrapper. |
-| Standalone link predictors | `Node2VecLinkPredictor`, `GraphSageLinkPredictor`, `HeteroGraphSageLinkPredictor`, `HinSageLinkPredictor` | Link scoring plus reports. |
+| CartoBoost graph regressors | `Node2VecStandaloneRegressor`, `GraphSageStandaloneRegressor`, `HeteroGraphSageStandaloneRegressor`, `HinSageStandaloneRegressor` | Direct graph regression without a boosted wrapper. |
+| CartoBoost link predictors | `Node2VecLinkPredictor`, `GraphSageLinkPredictor`, `HeteroGraphSageLinkPredictor`, `HinSageLinkPredictor` | Link scoring plus reports. |
 | Link metrics | `binary_auc`, `binary_average_precision`, `top_k_metrics`, `mean_reciprocal_rank`, `link_prediction_report` | Ranking and binary link-prediction diagnostics. |
 | Directional features | `DirectionalFeature`, `DirectionalityConfig` | Preserves `source -> target` semantics and reverse-flow contrasts. |
 | Graph regularization and rules | `CsrGraph`, `GraphLaplacian`, `GraphSmoother`, `GraphRegularizedBooster`, `GraphSplitRegularization`, `GraphLeafSmoothing`, `SymbolicRelationSet`, `RuleCompiler`, `MonotoneConstraintSet`, `InteractionConstraintSet` | Supplied sparse graphs, symbolic relation penalties, row-graph split scoring, graph-smoothed constant leaves, deterministic rule features, and split constraint checks for smoothing residuals, leaf values, and graph-aware predictions. |
 
-See [Graph Models And Features](graph-features.md).
+See [CartoBoost Graph Models And Features](graph-features.md).
 
-## General Utilities, Evaluation, And Forecasting
+## CartoBoost General Utilities, Evaluation, And Forecasting
 
 General utilities include single-series forecasts, Kalman filters,
 intermittent-demand methods, sequence reference utilities, and ordinary
@@ -186,7 +186,7 @@ shock propagation for market-belief adjustments.
 See [General Utilities](general_utilities.md), [Forecasting](forecasting.md),
 and the [forecasting model guides](user-guide/forecasting-models/index.md).
 
-## Command Line Interfaces
+## CartoBoost Command Line Interfaces
 
 | Command group | Public surface | Notes |
 | --- | --- | --- |
@@ -196,10 +196,9 @@ and the [forecasting model guides](user-guide/forecasting-models/index.md).
 Use Python for sparse-set, graph-derived, neural embedding, and custom
 forecasting workflows that need richer in-memory objects.
 
-See [CLI Reference](reference/cli.md), [CLI User Guide](user-guide/cli.md), and
-[Forecasting](forecasting.md).
+See [CLI Reference](reference/cli.md) and [Forecasting](forecasting.md).
 
-## Quality And Benchmark Reporting
+## CartoBoost Quality And Benchmark Reporting
 
 Benchmark claims should name the dataset, target, split, feature set, metric,
 model settings, and whether data is synthetic, generated acceptance data, or

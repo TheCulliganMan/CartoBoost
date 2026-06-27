@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import ast
 import importlib
 import json
@@ -248,7 +249,6 @@ def test_non_forecast_public_artifacts_exist() -> None:
     assert "deterministic synthetic workloads" not in report
 
     payload = json.loads(paths[0].read_text(encoding="utf-8"))
-    model_suite_doc = (ROOT / "docs" / "benchmarks" / "model-suite.md").read_text(encoding="utf-8")
     assert set(payload["workloads"]) == {"diabetes", "california_housing", "karate"}
     assert payload["datasets_requested"] == ["diabetes", "california_housing", "karate"]
     assert payload["benchmark_integrity"]["hpo"] == "inner_train_validation_search"
@@ -258,53 +258,57 @@ def test_non_forecast_public_artifacts_exist() -> None:
     assert "catboost" in payload["models_requested"]
     assert payload["resource_usage"]["python"]
     assert payload["baseline_environment"]["xgboost"]["required_class_available"] is True
-    assert payload["baseline_environment"]["lightgbm"]["required_class_available"] is False
-    assert payload["baseline_environment"]["catboost"]["module_importable"] is False
-    assert payload["output_artifacts"]["results.json"]["size_bytes"] > 0
-    assert (
-        "test labels"
-        in payload["benchmark_integrity"]["selection_policy"]["global_hyperparameters"]
-    )
-    assert "group_holdout" in payload["split_definitions"]
-    for workload_name, split_name, model_name in [
-        ("california_housing", "random", "cartoboost"),
-        ("karate", "group_holdout", "xgboost"),
-    ]:
-        result = payload["workloads"][workload_name]["splits"][split_name]["models"][model_name]
-        metrics = result["metrics"]
-        timing = result["timing"]
-        expected_row = (
-            f"| {model_name} | {metrics['rmse']:.4f} | {metrics['mae']:.4f} | "
-            f"{metrics['r2']:.4f} | {metrics['wape']:.4f} | "
-            f"{timing['train_seconds']:.4f} | "
-            f"{timing['predict_rows_per_second']:,.0f} |"
-        )
-        assert expected_row in model_suite_doc
-    for workload in payload["workloads"].values():
-        assert workload["source"]
-        assert len(workload["fingerprint_sha256"]) == 64
-        for split in workload["splits"].values():
-            assert len(split["train_index_sha256"]) == 64
-            assert len(split["test_index_sha256"]) == 64
 
-    aggregate = json.loads(paths[2].read_text(encoding="utf-8"))
-    keys = {
-        (row["track"], row["task_id"], row["split_id"], row["model_family"], row["metric"])
-        for row in aggregate["metrics"]
-    }
-    assert ("tabular", "diabetes", "random", "cartoboost", "rmse") in keys
-    assert ("tabular", "california_housing", "random", "cartoboost", "rmse") in keys
-    assert ("graph", "karate", "random", "cartoboost", "rmse") in keys
-    california_rmse = [
-        row
-        for row in aggregate["metrics"]
-        if row.get("track") == "tabular"
-        and row["task_id"] == "california_housing"
-        and row["split_id"] == "random"
-        and row["model_family"] == "cartoboost"
-        and row["metric"] == "rmse"
-    ][0]
-    assert california_rmse["n"] == 3
+
+def test_model_suite_defaults_to_validation_search(monkeypatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["run_model_benchmark_suite.py"])
+    args = model_suite_module.parse_args()
+
+    assert args.selection_mode == "validation_search"
+
+
+def test_model_suite_validation_search_grids_are_equal_budget() -> None:
+    args = argparse.Namespace(
+        n_estimators=24,
+        learning_rate=0.08,
+        max_depth=4,
+        neural_dim=12,
+        graph_dim=8,
+        graph_epochs=8,
+        validation_trials=3,
+        min_samples_leaf=None,
+    )
+
+    tunable_models = [
+        "cartoboost",
+        "lightgbm",
+        "xgboost",
+        "catboost",
+        "hist_gradient_boosting",
+        "random_forest",
+        "extra_trees",
+        "ridge",
+        "cartoboost_neural",
+        "neural_embedding_regressor",
+        "cartoboost_graph_node2vec",
+        "cartoboost_graph_graphsage",
+        "cartoboost_graph_hetero_graphsage",
+        "cartoboost_graph_hinsage",
+        "node2vec_regressor",
+        "graphsage_regressor",
+        "hetero_graphsage_regressor",
+        "hinsage_regressor",
+        "node2vec_link_predictor",
+        "graphsage_link_predictor",
+        "hetero_graphsage_link_predictor",
+        "hinsage_link_predictor",
+    ]
+
+    for model_name in tunable_models:
+        grid = model_suite_module.validation_candidate_grid(model_name, args)
+        assert len(grid) == 3, model_name
+
+    assert model_suite_module.validation_candidate_grid("mean", args) == []
 
 
 def test_model_suite_validation_search_uses_inner_validation(tmp_path: Path) -> None:

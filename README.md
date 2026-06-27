@@ -7,23 +7,21 @@
 [![Release](https://github.com/TheCulliganMan/CartoBoost/actions/workflows/release-version.yml/badge.svg)](https://github.com/TheCulliganMan/CartoBoost/actions/workflows/release-version.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-CartoBoost is a Python spatial boosting toolkit for regression,
-classification, grouped ranking, and forecasting problems where place, time,
-and movement structure matter. It is aimed at scientific and applied modeling
-workflows such as NYC taxi trip duration, fare estimation, airport-trip
-classification, candidate route ranking, pickup-zone demand, dropoff-zone
-demand, and pickup-to-dropoff lane forecasting.
+CartoBoost is a Python toolkit for regression, classification, grouped
+ranking, and forecasting problems where place, time, route structure, or
+repeated identifiers matter. It is aimed at scientific and applied modeling
+workflows such as mobility, logistics, demand forecasting, route ranking, and
+other structured prediction problems.
 
 Choose CartoBoost when a standard tabular booster is a serious baseline, but the
 study also needs model structure for:
 
 - cyclic time such as hour-of-day, weekday, or seasonal demand;
-- 2D spatial patterns such as corridors, neighborhoods, airports, hotspots, and
-  service boundaries;
-- list-valued memberships such as pickup zones, dropoff zones, route cells, H3
-  cells, or S2 cells;
-- directed movement such as `PULocationID -> DOLocationID`;
-- high-cardinality place or route IDs that may benefit from learned embeddings;
+- 2D spatial patterns such as corridors, neighborhoods, hotspots, and service
+  boundaries;
+- list-valued memberships such as zones, route cells, H3 cells, or S2 cells;
+- directed movement such as source to target flow;
+- high-cardinality place or route ids that may benefit from learned embeddings;
 - leakage-aware validation and reproducible benchmark comparisons.
 
 CartoBoost keeps a familiar estimator workflow, but the main goal is not to hide
@@ -35,13 +33,13 @@ baselines, and preserve the fitted artifacts that produced the result.
 CartoBoost is most useful when the scientific question is about structured
 temporal-spatial signal:
 
-- Does pickup hour interact with airport lanes when estimating taxi duration?
-- Do pickup and dropoff zone memberships change fare estimates after trip
-  distance and calendar features are included?
-- Does preserving route direction change OD-pair predictions compared with
-  unordered zone IDs?
+- Does hour-of-day interact with location context when estimating duration?
+- Do zone memberships change fare estimates after distance and calendar features
+  are included?
+- Does preserving route direction change source-target predictions compared with
+  unordered identifiers?
 - How do rolling-origin demand forecasts compare with naive, seasonal naive,
-  theta, ETS, or supervised lag baselines on the same taxi-lane split?
+  theta, ETS, or supervised lag baselines on the same split?
 - Do spatial splitters recover zone or corridor signal that an axis-only model
   approximates poorly?
 
@@ -67,8 +65,8 @@ CartoBoost supports:
   workflows for high-cardinality IDs.
 - node2vec, GraphSAGE, heterogeneous GraphSAGE, and typed-schema HinSAGE graph
   regressors, link predictors, and graph feature encoders.
-- Forecasting APIs for geographic and temporal single-series or panel taxi
-  demand, including rolling-origin backtests, naive/seasonal
+- Forecasting APIs for geographic and temporal single-series or panel demand,
+  including rolling-origin backtests, naive/seasonal
   naive/theta/optimized-theta/ETS/AutoARIMA models, supervised CartoBoost lag
   forecasting, weighted ensembles, CLI runs, and portable forecast artifacts.
 - General utilities outside the forecasting API, including single-series
@@ -102,17 +100,17 @@ python -c "import cartoboost; print(cartoboost.__version__)"
 cartoboost --help
 ```
 
-## Taxi Regression Workflow
+## Structured Regression Workflow
 
 Start with the scientific design:
 
-1. Define the target, such as transformed trip duration, fare amount, or pickup
-   demand.
-2. Hold out data in a way that matches deployment, usually out-of-time for taxi
-   trips or rolling-origin for demand forecasts.
+1. Define the target, such as transformed duration, fare amount, or demand.
+2. Hold out data in a way that matches deployment, usually out-of-time for
+   tabular rows or rolling-origin for demand forecasts.
 3. Compare against serious baselines on the same rows, such as LightGBM or
    XGBoost for tabular regression.
-4. Add CartoBoost structure only when it maps to a real place/time hypothesis.
+4. Add CartoBoost structure only when it maps to a real place, time, or
+   relationship hypothesis.
 
 Then fit the estimator:
 
@@ -131,10 +129,9 @@ model.fit(X_train, y_train)
 predictions = model.predict(X_validation)
 ```
 
-For NYC taxi data, dense columns might include trip distance, pickup hour,
-weekday, pickup coordinates, dropoff coordinates, airport-lane flags, or borough
-context. Add sparse-set columns when each row has route-cell or taxi-zone
-memberships.
+For structured mobility or operations data, dense columns might include trip
+distance, hour, weekday, coordinates, route context, or category flags. Add
+sparse-set columns when each row has route-cell, zone, or similar memberships.
 
 ```python
 schema = {
@@ -145,7 +142,7 @@ schema = {
         {"name": "pickup_y", "kind": "numeric"},
     ],
     "sparse_sets": [
-        {"name": "taxi_zones", "kind": "sparse_set"},
+        {"name": "zone_ids", "kind": "sparse_set"},
     ],
 }
 
@@ -160,7 +157,7 @@ model = CartoBoostRegressor(
 model.fit(
     X_train_dense,
     y_train,
-    sparse_sets={"taxi_zones": taxi_zones_train},
+    sparse_sets={"zone_ids": zone_ids_train},
     feature_schema=schema,
 )
 ```
@@ -175,19 +172,19 @@ Why these choices can matter:
   one-hot matrix.
 - fuzzy routing can reduce hard jumps near spatial or temporal boundaries.
 
-## Forecast Taxi Demand
+## Forecast Regular Series
 
-Use forecasting APIs when the target is future demand for pickup zones, dropoff
-zones, or pickup/dropoff lanes.
+Use forecasting APIs when the target is future demand, counts, or other regular
+series.
 
 ```python
 from cartoboost.forecasting import ForecastFrame, ThetaForecaster
 
 frame = ForecastFrame.from_pandas(
-    taxi_lane_demand,
-    timestamp_col="pickup_date",
-    target_col="pickup_trips",
-    series_id_col="pickup_dropoff_lane",
+    lane_demand,
+    timestamp_col="timestamp",
+    target_col="demand",
+    series_id_col="series_id",
     freq="D",
 )
 
@@ -201,15 +198,15 @@ Forecast outputs use deterministic columns: `series_id`, `timestamp`,
 quality claims, and compare against naive, seasonal, local, or external
 forecasting baselines on the same series and cutoff dates.
 
-## Graph And Neural Structure
+## Graph And Learned-ID Structure
 
 Use graph models when relationships are part of the observation process:
-pickup/dropoff lanes, directed OD-pair flows, zone hierarchies, or metapaths.
+directed flows, zone hierarchies, route networks, or metapaths.
 Direction is explicit, so `A -> B` and `B -> A` can be different facts,
 features, and embeddings.
 
-Use neural embedding models when high-cardinality IDs, such as taxi zones or
-route IDs, carry stable residual signal. Treat these as hypotheses to validate,
+Use neural embedding models when high-cardinality ids, such as locations or
+route ids, carry stable residual signal. Treat these as hypotheses to validate,
 not automatic upgrades.
 
 ```python
@@ -221,16 +218,16 @@ model = NeuralEmbeddingRegressor(
     final_model_kwargs={"n_estimators": 120, "splitters": ["axis", "periodic:24"]},
 )
 
-model.fit(X_train, y_train, ids=pickup_zone_ids_train)
-predictions = model.predict(X_validation, ids=pickup_zone_ids_validation)
+model.fit(X_train, y_train, ids=location_ids_train)
+predictions = model.predict(X_validation, ids=location_ids_validation)
 ```
 
 ## Benchmarks And Claims
 
 Benchmark reports should identify the dataset, target, feature set, split
 design, comparison models, metrics, and meaning of the result. In this repo,
-taxi-focused benchmarks track transformed trip duration, fare amount,
-pickup-zone demand, and daily pickup/dropoff lane demand.
+benchmarks track structured regression and forecasting tasks over real data
+families.
 
 Quality claims should come from real runs with fixed comparable settings. Record
 RMSE, MAE, R2, training time, prediction time, model settings, sample size,
@@ -245,14 +242,14 @@ incomplete for that claim.
 ## Save, Load, And Explain
 
 ```python
-model.save("taxi-duration.cartoboost.json")
-loaded = CartoBoostRegressor.load("taxi-duration.cartoboost.json")
+model.save("duration.cartoboost.json")
+loaded = CartoBoostRegressor.load("duration.cartoboost.json")
 
 explanation = loaded.explain_shap(
     X_validation_dense,
     background=X_train_dense,
-    sparse_sets={"taxi_zones": taxi_zones_validation},
-    background_sparse_sets={"taxi_zones": taxi_zones_train},
+    sparse_sets={"zone_ids": zone_ids_validation},
+    background_sparse_sets={"zone_ids": zone_ids_train},
 )
 ```
 
@@ -264,8 +261,8 @@ with whichever downstream model consumes their generated columns.
 ## CLI
 
 The CLI supports dense numeric CSV train, predict, eval, and inspect workflows.
-Use the Python API for list-valued sparse taxi-zone features and graph-derived
-feature pipelines.
+Use the Python API for list-valued sparse features and graph-derived feature
+pipelines.
 
 ```sh
 cartoboost train --data train.csv --config configs/regression.toml --model-out model.json

@@ -1,36 +1,23 @@
-# Graph Models And Features
+# CartoBoost Graph Models And Features
 
-Taxi trips are relational observations. A fare or duration row is not only a
-point in a table; it is evidence about directed movement from a pickup zone to a
-dropoff zone, about repeated origin-destination behavior, and about how zones
-interact under time-varying demand. Graph methods help when those relationships
-are part of the scientific question rather than incidental identifiers.
+This is the contract page for graph-related functionality. Use the
+[graph model guides](user-guide/graph-models/index.md) for examples and model
+selection. Use this page when you need the formal encoder, artifact, and
+directionality details.
 
-Use graph modeling when you need to study effects such as:
+Graph support has two entry points:
 
-- directional flow imbalance, for example `JFK -> Midtown` behaving differently
-  from `Midtown -> JFK`;
-- transfer of information between nearby or behaviorally similar taxi zones;
-- route-pair effects that remain after distance, hour, and zone-level features;
-- typed relations such as trip-to-zone, zone-to-time-bucket, or OD-pair-to-fare
-  bucket;
-- link likelihood or ranking, such as which dropoff zones are plausible from a
-  pickup zone under a fixed context.
+- CartoBoost graph models that fit, predict, score, save, and load as the
+  model artifact;
+- CartoBoost graph feature generators that emit dense graph-derived columns
+  for another estimator.
 
-Graph support has two independent entry points:
-
-- standalone graph models that fit, predict, score, save, and load without
-  `CartoBoostRegressor`;
-- graph feature generators that emit dense graph-derived columns for another
-  estimator when you explicitly want that workflow.
-
-Start with standalone graph models when the graph is the modeling surface you
-want to evaluate and ship. Use feature generation when graph embeddings are
-scientific covariates for a separate tabular model.
+Keep direction explicit. Source-target facts are usually not interchangeable
+with the reverse edge.
 
 ```mermaid
 flowchart LR
-    A["Typed graph + node features"] --> B["Standalone graph model"]
+    A["Typed graph + node features"] --> B["CartoBoost graph model"]
     B --> C["fit / predict / score"]
     C --> D["Graph artifact"]
 
@@ -50,15 +37,14 @@ flowchart LR
 
 The distinction matters for interpretation. Node2Vec asks whether observed flow
 contexts alone explain residual variation. GraphSAGE-style models ask whether
-zone attributes and neighbor aggregation explain the variation. HinSAGE asks
-whether typed scientific relations, such as `taxi_trip -> pickup_zone` and
-`pickup_dropoff_pair -> time_bucket`, are valid modeling structure.
+node attributes and neighbor aggregation explain the variation. HinSAGE asks
+whether typed scientific relations are valid modeling structure.
 
-## Standalone Graph Models
+## CartoBoost Graph Models
 
-Standalone graph regressors train the graph representation and row scorer as one
-artifact. Use them when the graph should be evaluated as a model, not merely as
-preprocessing.
+CartoBoost graph regressors train the graph representation and row scorer as
+one artifact. Use them when the graph should be evaluated as a model, not
+merely as preprocessing.
 
 Available regressors:
 
@@ -95,7 +81,7 @@ model.fit(
 )
 
 pred = model.predict(pickup, row_targets=dropoff, dense=distance_hour)
-model.save("taxi-node2vec-regressor.json")
+model.save("graph-node2vec-regressor.json")
 ```
 
 Use `GraphSageStandaloneRegressor` instead when zone attributes should shape
@@ -124,10 +110,10 @@ model.fit(
 )
 ```
 
-## Link Prediction
+## CartoBoost Link Prediction
 
-Use standalone link predictors when the question is about plausible movement or
-ranking rather than a continuous target. Examples include ranking likely
+Use CartoBoost link predictors when the question is about plausible movement
+or ranking rather than a continuous target. Examples include ranking likely
 dropoff zones from a pickup zone or scoring whether a route appears in a future
 time block.
 
@@ -153,11 +139,10 @@ report = predictor.report(candidate_pairs, labels=[1, 0], query_ids=[0, 0], k=1)
 
 ## Direction Is A Scientific Contract
 
-Taxi movement is usually asymmetric. Pickup-side demand, dropoff-side demand,
-airport access rules, bridges, congestion, and commute direction can all make
-`source -> target` meaningfully different from `target -> source`. Do not
-collapse directional market facts into one undirected edge unless the study
-explicitly assumes symmetry.
+Movement is usually asymmetric. Access rules, routing constraints, congestion,
+and direction can all make `source -> target` meaningfully different from
+`target -> source`. Do not collapse directional facts into one undirected edge
+unless the study explicitly assumes symmetry.
 
 Represent direction and role explicitly:
 
@@ -165,18 +150,18 @@ Represent direction and role explicitly:
 graph:
   directed: true
   node_types:
-    - pickup_zone
-    - dropoff_zone
-    - pickup_dropoff_pair
-    - taxi_trip
+    - source_zone
+    - target_zone
+    - source_target_pair
+    - trip
     - time_bucket
   edge_types:
-    - [pickup_zone, trips_to, dropoff_zone]
-    - [dropoff_zone, reverse_trips_to, pickup_zone]
-    - [taxi_trip, picked_up_in, pickup_zone]
-    - [taxi_trip, dropped_off_in, dropoff_zone]
-    - [taxi_trip, observed_on, pickup_dropoff_pair]
-    - [pickup_dropoff_pair, observed_in, time_bucket]
+    - [source_zone, trips_to, target_zone]
+    - [target_zone, reverse_trips_to, source_zone]
+    - [trip, picked_up_in, source_zone]
+    - [trip, dropped_off_in, target_zone]
+    - [trip, observed_on, source_target_pair]
+    - [source_target_pair, observed_in, time_bucket]
   directionality:
     materialize_reverse_edges: true
     preserve_source_target_roles: true
@@ -261,11 +246,11 @@ graph_embeddings:
     input_dim: 8
     node_type_count: 5
     edge_type_triples:
-      - [0, 0, 1]  # pickup_zone trips_to dropoff_zone
-      - [1, 1, 0]  # dropoff_zone reverse_trips_to pickup_zone
-      - [3, 2, 0]  # taxi_trip picked_up_in pickup_zone
-      - [3, 3, 1]  # taxi_trip dropped_off_in dropoff_zone
-      - [3, 4, 2]  # taxi_trip observed_on pickup_dropoff_pair
+      - [0, 0, 1]  # source_zone trips_to target_zone
+      - [1, 1, 0]  # target_zone reverse_trips_to source_zone
+      - [3, 2, 0]  # trip picked_up_in source_zone
+      - [3, 3, 1]  # trip dropped_off_in target_zone
+      - [3, 4, 2]  # trip observed_on source_target_pair
     neighbor_samples: [25, 25, 10, 10, 20]
     hidden_dims: [16]
     epochs: 20
@@ -336,8 +321,8 @@ contract. A `CsrGraph` stores sparse non-negative relations, `GraphLaplacian`
 scores roughness across connected observations, and `GraphSmoother` can smooth
 residual or leaf vectors against that graph.
 
-The generic Rust surface covers row graphs, symbolic relation groups, and split
-constraints:
+The underlying graph surface covers row graphs, symbolic relation groups, and
+split constraints:
 
 | Primitive | Purpose |
 | --- | --- |
@@ -363,12 +348,12 @@ leaf graph and update vector have a single unambiguous interpretation.
 
 Graph penalties are explicit model features, not hidden fallbacks. If the graph
 is missing, malformed, has the wrong node count, or contains invalid weights,
-the Rust path rejects it instead of silently training an unregularized model.
+the model rejects it instead of silently training an unregularized model.
 
 ## Network Embedding Primitives
 
 Node2Vec can also be used as a lower-level deterministic feature pipeline. The
-Rust primitives are:
+underlying primitives are:
 
 | Primitive | Purpose |
 | --- | --- |
@@ -390,8 +375,8 @@ direction:
 ```yaml
 meta_paths:
   - [pickup_zone, trips_to, dropoff_zone, reverse_trips_to, pickup_zone]
-  - [taxi_trip, observed_on, pickup_dropoff_pair, observed_in, time_bucket]
-  - [pickup_zone, pickup_hour_volume, time_bucket]
+  - [trip, observed_on, source_target_pair, observed_in, time_bucket]
+  - [source_zone, source_hour_volume, time_bucket]
 ```
 
 `DirectedMetaPath` validates node/relation/node paths against `GraphSchema`.

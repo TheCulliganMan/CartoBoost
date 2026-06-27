@@ -31,7 +31,7 @@ model = CartoBoostRegressor(
 )
 ```
 
-Rust `BoosterConfig.interaction_constraints` accepts sorted, deduplicated
+`BoosterConfig.interaction_constraints` accepts sorted, deduplicated
 feature-index groups. During split search, the active branch features plus the
 candidate split features must fit inside at least one group. Two-feature
 spatial splitters are checked as a pair. Dense features use their matrix column
@@ -50,7 +50,7 @@ Monotonic constraint support:
 - Dense features only.
 - Regression.
 
-Interaction constraints are enforced in the Rust tree split search for axis,
+Interaction constraints are enforced in the tree split search for axis,
 histogram-axis, diagonal 2D, Gaussian 2D, periodic, dense sparse-set, and
 list-valued sparse-set splitters. Groups must be sorted and in range; invalid
 groups fail before training.
@@ -58,14 +58,14 @@ groups fail before training.
 ## Temporal-Spatial Guidance
 
 Use constraints only when the direction is real, not just visually convenient.
-Trip distance, elapsed time, toll amount, or known service-level features can be
-good candidates. Latitude, longitude, zone ID, and taxi-zone IDs usually are
-not: their relationship to the target is often local, discontinuous, or
-directional only within a specific market.
+Trip distance, elapsed time, toll amount, or known service-level features can
+be good candidates. Latitude, longitude, zone ID, and similar location IDs
+usually are not: their relationship to the target is often local,
+discontinuous, or directional only within a specific market.
 
 For temporal-spatial effects, prefer spatial splitters, periodic splitters,
-sparse taxi-zone features, blocked evaluation, and residual diagnostics unless
-a monotonic rule is part of the problem definition.
+sparse location features, blocked evaluation, and residual diagnostics unless a
+monotonic rule is part of the problem definition.
 
 ## Validation
 

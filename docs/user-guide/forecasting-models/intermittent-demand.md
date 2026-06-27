@@ -1,0 +1,64 @@
+# Intermittent Demand
+
+`CrostonForecaster`, `SbaForecaster`, and `TsbForecaster` are fixed
+intermittent-demand methods for sparse non-negative series. Use them when zero
+values are real demand periods, not missing observations.
+
+## When To Use
+
+- The target is non-negative.
+- Many periods are true zeros.
+- Demand size and demand occurrence are more useful than smooth trend.
+- You need a transparent sparse-demand baseline before using a richer selector.
+
+Do not use these methods for missing-row problems. Fill or validate the time
+index first with `ForecastFrame`, then model true zero demand.
+
+## Pick A Method
+
+| Model | Use when |
+| --- | --- |
+| `CrostonForecaster` | Demand is intermittent and you want the basic Croston decomposition. |
+| `SbaForecaster` | You want Croston-style smoothing with SBA bias adjustment. |
+| `TsbForecaster` | Occurrence probability and demand size should be smoothed separately. |
+
+## Basic Fit
+
+```python
+from cartoboost.forecasting import CrostonForecaster, SbaForecaster, TsbForecaster
+
+demand = [0, 0, 4, 0, 0, 7, 0, 3, 0, 0, 0, 5]
+
+croston = CrostonForecaster(alpha=0.2).fit(demand)
+sba = SbaForecaster(alpha=0.2).fit(demand)
+tsb = TsbForecaster(alpha_demand=0.2, alpha_probability=0.1).fit(demand)
+
+croston_forecast = croston.predict(6)
+sba_forecast = sba.predict(6)
+tsb_forecast = tsb.predict(6)
+```
+
+## Panel Fit
+
+```python
+from cartoboost.forecasting import ForecastFrame, TsbForecaster
+
+frame = ForecastFrame.from_pandas(
+    sparse_panel,
+    timestamp_col="timestamp",
+    target_col="demand",
+    series_id_col="sku_id",
+    freq="D",
+)
+
+model = TsbForecaster(alpha_demand=0.2, alpha_probability=0.1)
+model.fit(frame)
+forecast = model.predict(14)
+```
+
+## Validation
+
+Compare intermittent-demand methods against naive, seasonal naive, and any
+selector that includes intermittent candidates. Report zero fraction,
+non-negative target validation, horizon metrics, and whether zeros represent
+true no-demand periods.

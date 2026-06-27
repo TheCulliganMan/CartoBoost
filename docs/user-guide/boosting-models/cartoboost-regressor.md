@@ -1,0 +1,40 @@
+# CartoBoost Regressor
+
+Use `CartoBoostRegressor` for numeric row-level targets when the effect of
+time, location, route membership, or other structure is part of the question.
+Typical uses include duration, fare, demand, or residual modeling.
+
+## Basic Fit
+
+```python
+from cartoboost import CartoBoostRegressor
+
+model = CartoBoostRegressor(
+    n_estimators=200,
+    learning_rate=0.04,
+    max_depth=5,
+    min_samples_leaf=20,
+    splitters=["axis", "diagonal_2d", "gaussian_2d", "periodic:24"],
+)
+model.fit(X_train, y_train)
+pred = model.predict(X_test)
+```
+
+## Common Controls
+
+| Scientific need | Parameter family |
+| --- | --- |
+| Dense tabular baseline | `splitters=None`, `["auto"]`, `["axis"]`, or `["axis_histogram:<bins>"]` |
+| Spatial boundaries in coordinates | `["axis", "diagonal_2d", "gaussian_2d"]` |
+| Wraparound time effects | `["axis", "periodic:24"]` or another `periodic:<period>` |
+| Sparse zones, routes, cells, or areas | `["axis", "sparse_set"]` plus `sparse_sets=` |
+| Native categorical labels or ordered tiers | `FeatureKind.CATEGORICAL` or `FeatureKind.ORDINAL` in `feature_schema=` |
+| Smooth changes near boundaries | `fuzzy=True`, `fuzzy_bandwidth=...`, `fuzzy_kernel=...` |
+| Outlier-resistant regression | `loss="mae"`, `loss="huber"`, or `loss="log_l2"` |
+| Conditional intervals or asymmetric service targets | `loss="quantile"`, `quantile_alpha=...` |
+| Local residual trend inside learned regions | `leaf_predictor="linear"`, `linear_leaf_features=[...]` |
+| Domain monotonicity | `monotonic_constraints=[...]` |
+
+Use [Parameters](../parameters.md), [Feature Schema](../../feature_schema.md),
+[Sparse Features](../../sparse_features.md), and [Spatial Modeling](../../spatial_modeling.md)
+for the contract details.

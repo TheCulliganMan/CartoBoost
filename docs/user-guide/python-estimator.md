@@ -2,20 +2,19 @@
 
 `CartoBoostRegressor` is the public Python estimator for row-level regression.
 It follows sklearn conventions for parameter inspection, cloning, pipelines,
-and grid search over the supported API surface, while the model behavior itself
-is implemented in Rust.
+and grid search over the supported API surface.
 
 ## Model The Scientific Structure First
 
-Start by deciding what structure the rows carry. For NYC taxi work, a row may
-represent one trip, one pickup-zone hour, one route aggregate, or a residual
-from another model. `CartoBoostRegressor` is most useful when the response is
+Start by deciding what structure the rows carry. A row may represent one
+observation, one time-bucket aggregate, one route aggregate, or a residual from
+another model. `CartoBoostRegressor` is most useful when the response is
 expected to vary with structured place/time effects:
 
 - Dense numeric measurements such as trip distance, projected pickup/dropoff
   coordinates, fare history, duration history, hour, and day features.
-- Sparse memberships such as `PULocationID`, `DOLocationID`, pickup-dropoff
-  route IDs, H3/S2 cells, service areas, or overlapping corridor definitions.
+- Sparse memberships such as route IDs, H3/S2 cells, service areas, or
+  overlapping corridor definitions.
 - Boundaries that are not purely axis-aligned, including local hotspots and
   radial neighborhoods.
 - Fuzzy regions where nearby coordinates or times should not jump abruptly at a
@@ -25,8 +24,8 @@ expected to vary with structured place/time effects:
 
 Use a baseline before adding specialized structure. A typical study starts with
 an axis-only or `auto` CartoBoost fit, compares against LightGBM or XGBoost on
-the same split and feature set, then adds spatial, periodic, sparse-set, fuzzy,
-or robust controls only when they answer a stated modeling question.
+the same split and feature set, then adds spatial, periodic, sparse-set,
+fuzzy, or robust controls only when they answer a stated modeling question.
 
 ## A Spatial-Temporal Regression Template
 
@@ -47,18 +46,18 @@ model = CartoBoostRegressor(
 model.fit(
     X_train_dense,
     y_train,
-    sparse_sets={"taxi_zones": taxi_zones_train},
+    sparse_sets={"zone_memberships": zone_memberships_train},
 )
 predictions = model.predict(
     X_test_dense,
-    sparse_sets={"taxi_zones": taxi_zones_test},
+    sparse_sets={"zone_memberships": zone_memberships_test},
 )
 ```
 
 Use dense columns for coordinates, projected x/y values, distances, and
-periodic time features. Use `sparse_sets=` for pickup zones, dropoff zones,
-grid cells, encoded H3 cells, service areas, or route memberships when a row
-can belong to zero, one, or many locations.
+periodic time features. Use `sparse_sets=` for zones, grid cells, service
+areas, or route memberships when a row can belong to zero, one, or many
+locations.
 
 For robust residuals, set `loss="mae"` or `loss="huber"`. For conditional
 intervals or service-level targets, use `loss="quantile"` with
@@ -115,7 +114,7 @@ prediction = model.predict(trips.select("trip_distance, hour"))
 Sparse-set columns are passed separately from dense features:
 
 ```python
-taxi_zones = [[132, 138], [161], [236], []]
+zone_memberships = [[132, 138], [161], [236], []]
 
 model = CartoBoostRegressor(
     n_estimators=2,
@@ -124,8 +123,8 @@ model = CartoBoostRegressor(
     min_samples_leaf=1,
     splitters=["sparse_set"],
 )
-model.fit(X_dense, y, sparse_sets={"taxi_zones": taxi_zones})
-predictions = model.predict(X_dense, sparse_sets={"taxi_zones": taxi_zones})
+model.fit(X_dense, y, sparse_sets={"zone_memberships": zone_memberships})
+predictions = model.predict(X_dense, sparse_sets={"zone_memberships": zone_memberships})
 ```
 
 Sparse IDs must be non-negative integers. Duplicate IDs inside a row are
@@ -143,14 +142,14 @@ schema = {
         {"name": "hour_of_day", "kind": "periodic", "period": 24},
     ],
     "sparse_sets": [
-        {"name": "taxi_zones", "kind": "sparse_set"},
+        {"name": "zone_memberships", "kind": "sparse_set"},
     ],
 }
 
 model.fit(
     X_dense,
     y,
-    sparse_sets={"taxi_zones": taxi_zones},
+    sparse_sets={"zone_memberships": zone_memberships},
     feature_schema=schema,
 )
 ```
@@ -214,8 +213,7 @@ routing, losses, or linear leaves only after the validation design is fixed.
 
 `predict_additive_values(X)` returns per-row additive components whose sums
 match `predict(X)`. Use these artifacts to inspect which fitted components
-move predictions for trips, zones, routes, or hours before turning the model
-into a scientific claim.
+move predictions before turning the model into a scientific claim.
 
 SHAP support is exposed through:
 

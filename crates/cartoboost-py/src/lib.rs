@@ -118,6 +118,7 @@ use std::path::PathBuf;
 
 type StringTypedEdges = Vec<(String, String, String)>;
 type PyWrmsseSeries = (String, Vec<f64>, Vec<f64>, Vec<f64>, f64);
+type CustomSeasonalitySpec = (String, f64, usize, Option<String>);
 type PyPortfolioDecisionRow = (String, String, f64, f64, f64);
 type PyKrigingPrediction = (f64, f64, f64, Vec<f64>);
 type PyDetailedKrigingPrediction = (f64, f64, f64, f64, Vec<f64>, Vec<usize>);
@@ -2755,7 +2756,7 @@ impl NativeNeuralPanelForecaster {
         daily_fourier_order: usize,
         weekly_fourier_order: usize,
         yearly_fourier_order: usize,
-        custom_seasonalities: Option<Vec<(String, f64, usize)>>,
+        custom_seasonalities: Option<Vec<CustomSeasonalitySpec>>,
         seasonality_mode: &str,
         events: Option<BTreeMap<String, Vec<i32>>>,
         event_mode: &str,
@@ -2816,6 +2817,42 @@ impl NativeNeuralPanelForecaster {
 
     fn predict(&self, py: Python<'_>, horizon: usize) -> PyResult<NativeForecastResult> {
         predict_forecaster_py(py, &self.model, horizon)
+    }
+
+    #[pyo3(signature = (horizon, frame=None))]
+    fn components_json(
+        &self,
+        py: Python<'_>,
+        horizon: usize,
+        frame: Option<&NativeForecastFrame>,
+    ) -> PyResult<String> {
+        let value = if let Some(frame) = frame {
+            let mut covariates = BTreeMap::new();
+            for row in frame.frame.rows() {
+                covariates.insert(
+                    (row.series_id.clone(), row.timestamp),
+                    row.covariates.clone(),
+                );
+            }
+            py.allow_threads(|| {
+                self.model
+                    .predict_components_json_value_with_known_future_covariates(
+                        horizon,
+                        Some(&covariates),
+                    )
+            })
+        } else {
+            py.allow_threads(|| self.model.predict_components_json_value(horizon))
+        };
+        value.map_err(to_py_value_error).and_then(|value| {
+            serde_json::to_string_pretty(&value)
+                .map_err(|err| PyRuntimeError::new_err(err.to_string()))
+        })
+    }
+
+    fn history_components_json(&self, py: Python<'_>) -> PyResult<String> {
+        py.allow_threads(|| self.model.history_components_json_string())
+            .map_err(to_py_value_error)
     }
 
     fn predict_with_known_future(
@@ -2911,7 +2948,7 @@ impl NativeLaneNeuralPanelForecaster {
         daily_fourier_order: usize,
         weekly_fourier_order: usize,
         yearly_fourier_order: usize,
-        custom_seasonalities: Option<Vec<(String, f64, usize)>>,
+        custom_seasonalities: Option<Vec<CustomSeasonalitySpec>>,
         seasonality_mode: &str,
         events: Option<BTreeMap<String, Vec<i32>>>,
         event_mode: &str,
@@ -2977,6 +3014,42 @@ impl NativeLaneNeuralPanelForecaster {
 
     fn predict(&self, py: Python<'_>, horizon: usize) -> PyResult<NativeForecastResult> {
         predict_forecaster_py(py, &self.model, horizon)
+    }
+
+    #[pyo3(signature = (horizon, frame=None))]
+    fn components_json(
+        &self,
+        py: Python<'_>,
+        horizon: usize,
+        frame: Option<&NativeForecastFrame>,
+    ) -> PyResult<String> {
+        let value = if let Some(frame) = frame {
+            let mut covariates = BTreeMap::new();
+            for row in frame.frame.rows() {
+                covariates.insert(
+                    (row.series_id.clone(), row.timestamp),
+                    row.covariates.clone(),
+                );
+            }
+            py.allow_threads(|| {
+                self.model
+                    .predict_components_json_value_with_known_future_covariates(
+                        horizon,
+                        &covariates,
+                    )
+            })
+        } else {
+            py.allow_threads(|| self.model.predict_components_json_value(horizon))
+        };
+        value.map_err(to_py_value_error).and_then(|value| {
+            serde_json::to_string_pretty(&value)
+                .map_err(|err| PyRuntimeError::new_err(err.to_string()))
+        })
+    }
+
+    fn history_components_json(&self, py: Python<'_>) -> PyResult<String> {
+        py.allow_threads(|| self.model.history_components_json_string())
+            .map_err(to_py_value_error)
     }
 
     fn predict_with_known_future(
@@ -9141,7 +9214,7 @@ fn neural_panel_config_from_parts(
     daily_fourier_order: usize,
     weekly_fourier_order: usize,
     yearly_fourier_order: usize,
-    custom_seasonalities: Option<Vec<(String, f64, usize)>>,
+    custom_seasonalities: Option<Vec<CustomSeasonalitySpec>>,
     seasonality_mode: &str,
     events: Option<BTreeMap<String, Vec<i32>>>,
     event_mode: &str,
@@ -9169,7 +9242,15 @@ fn neural_panel_config_from_parts(
     let custom_seasonalities = custom_seasonalities
         .unwrap_or_default()
         .into_iter()
-        .map(|(name, period, order)| (name, (period, order)))
+        .map(|(name, period, order, condition_name)| (name, (period, order), condition_name))
+        .collect::<Vec<_>>();
+    let custom_seasonality_conditions = custom_seasonalities
+        .iter()
+        .map(|(name, _, condition_name)| (name.clone(), condition_name.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let custom_seasonalities = custom_seasonalities
+        .into_iter()
+        .map(|(name, period_order, _condition_name)| (name, period_order))
         .collect();
     Ok(CoreNeuralPanelConfig {
         n_lags,
@@ -9182,6 +9263,7 @@ fn neural_panel_config_from_parts(
         weekly_fourier_order,
         yearly_fourier_order,
         custom_seasonalities,
+        custom_seasonality_conditions,
         seasonality_mode: parse_neural_panel_component_mode(seasonality_mode)?,
         events: events.unwrap_or_default(),
         event_mode: parse_neural_panel_component_mode(event_mode)?,

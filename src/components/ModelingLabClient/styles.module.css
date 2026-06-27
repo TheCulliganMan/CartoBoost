@@ -683,6 +683,44 @@ body:has(.shell) :global(.footer) {
   color: var(--lab-heading);
 }
 
+.benchmarkToggles {
+  background: var(--lab-panel);
+  border: 1px solid var(--lab-border);
+  border-radius: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0.55rem;
+}
+
+.benchmarkToggles label {
+  align-items: center;
+  background: var(--lab-panel-soft);
+  border: 1px solid var(--lab-border-strong);
+  border-radius: 8px;
+  color: var(--lab-text);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 0.78rem;
+  font-weight: 800;
+  gap: 0.35rem;
+  max-width: 100%;
+  min-height: 2rem;
+  padding: 0.3rem 0.45rem;
+}
+
+.benchmarkToggles input {
+  accent-color: #168f86;
+  flex: 0 0 auto;
+}
+
+.benchmarkToggles span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .chart svg {
   display: block;
   height: auto;
