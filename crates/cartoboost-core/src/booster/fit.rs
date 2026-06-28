@@ -7,7 +7,7 @@ use crate::objectives::{initial_margin_for_loss, pseudo_residual_for_loss};
 use crate::profile;
 use crate::tree::{
     FuzzyKernel, LeafPredictorKind, Model, PredictionTransform, SplitterKind,
-    TrainingConfigMetadata, TreeBuilder, MODEL_ARTIFACT_VERSION,
+    TrainingConfigMetadata, TrainingMetric, TreeBuilder, MODEL_ARTIFACT_VERSION,
 };
 use crate::{CartoBoostError, Result};
 use rayon::prelude::*;
@@ -126,6 +126,7 @@ impl Booster {
         let mut pred = vec![init_prediction; training_targets.len()];
         let mut residuals = vec![0.0; training_targets.len()];
         let mut trees = Vec::with_capacity(self.config.n_estimators);
+        let mut training_history = Vec::with_capacity(self.config.n_estimators);
         let builder = TreeBuilder {
             max_depth: self.config.max_depth,
             min_samples_leaf: self.config.min_samples_leaf,
@@ -152,7 +153,7 @@ impl Booster {
         } else {
             self.config.n_estimators
         };
-        for _ in 0..tree_count {
+        for iteration in 0..tree_count {
             profile::timed(profile::RESIDUAL, || {
                 residuals
                     .par_iter_mut()
@@ -200,6 +201,11 @@ impl Booster {
                 });
             }
             trees.push(tree);
+            training_history.push(TrainingMetric {
+                iteration: iteration + 1,
+                name: "train/rmse".to_string(),
+                value: weighted_rmse(training_targets, &pred, &weights),
+            });
         }
 
         let model = Model {
@@ -231,10 +237,26 @@ impl Booster {
                 graph_leaf_smoothing: self.config.graph_leaf_smoothing.clone(),
             }),
             prediction_transform,
+            training_history,
             trees,
         };
         profile::report("booster_fit", profile_started.elapsed());
         Ok(model)
+    }
+}
+
+fn weighted_rmse(targets: &[f64], predictions: &[f64], weights: &[f64]) -> f64 {
+    let mut loss = 0.0;
+    let mut weight_sum = 0.0;
+    for ((target, prediction), weight) in targets.iter().zip(predictions).zip(weights) {
+        let residual = target - prediction;
+        loss += weight * residual * residual;
+        weight_sum += weight;
+    }
+    if weight_sum <= 0.0 {
+        0.0
+    } else {
+        (loss / weight_sum).sqrt()
     }
 }
 

@@ -5,7 +5,7 @@ boundary may depend on time, location, route membership, or sparse signals.
 It fits binary logistic loss for two classes and multiclass logistic loss for
 three or more classes.
 
-## Basic Fit
+## Public Contract
 
 ```python
 from cartoboost import CartoBoostClassifier
@@ -21,6 +21,15 @@ clf = CartoBoostClassifier(
 clf.fit(X_train, binary_label)
 prob_positive = clf.predict_proba(X_test)[:, list(clf.classes_).index(1)]
 ```
+
+## Use When
+
+| Need | Better first choice |
+| --- | --- |
+| Binary or multiclass labels. | `CartoBoostClassifier` |
+| Numeric target values. | `CartoBoostRegressor` |
+| Ordered candidates within query groups. | `CartoBoostRanker` |
+| Calibrated uncertainty intervals. | Probabilistic and conformal models |
 
 ## Validation
 

@@ -1,7 +1,9 @@
 use crate::data::{validate_weights, Dataset};
 use crate::loss::LossConfig;
 use crate::objectives::{LambdaRankObjective, Objective, PairwiseLogitObjective};
-use crate::tree::{FuzzyKernel, LeafPredictorKind, ModelMetadata, SplitterKind, Tree, TreeBuilder};
+use crate::tree::{
+    FuzzyKernel, LeafPredictorKind, ModelMetadata, SplitterKind, TrainingMetric, Tree, TreeBuilder,
+};
 use crate::{CartoBoostError, Result};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -79,6 +81,8 @@ pub struct RankerModel {
     pub feature_schema: Option<crate::data::FeatureSchema>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub training_config: Option<RankerTrainingConfigMetadata>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub training_history: Vec<TrainingMetric>,
     pub trees: Vec<Tree>,
 }
 
@@ -128,6 +132,7 @@ impl Ranker {
         let init_score = objective.initial_margin(y, Some(&weights))?[0];
         let mut scores = vec![init_score; y.len()];
         let mut trees = Vec::with_capacity(self.config.n_estimators);
+        let mut training_history = Vec::with_capacity(self.config.n_estimators);
         let builder = TreeBuilder {
             max_depth: self.config.max_depth,
             min_samples_leaf: self.config.min_samples_leaf,
@@ -147,7 +152,7 @@ impl Ranker {
         };
         let fit_context = builder.fit_context(x);
 
-        for _ in 0..self.config.n_estimators {
+        for iteration in 0..self.config.n_estimators {
             let derivative_pairs =
                 objective.gradients_hessians(y, &scores, Some(&weights), Some(groups))?;
             let mut targets = vec![0.0; y.len()];
@@ -167,6 +172,22 @@ impl Ranker {
                 *score += self.config.learning_rate * tree.predict_dataset_row(x, row);
             });
             trees.push(tree);
+            let metrics = ranking_metrics(y, &scores, groups)?;
+            training_history.push(TrainingMetric {
+                iteration: iteration + 1,
+                name: "train/ndcg".to_string(),
+                value: metrics.ndcg,
+            });
+            training_history.push(TrainingMetric {
+                iteration: iteration + 1,
+                name: "train/map".to_string(),
+                value: metrics.map,
+            });
+            training_history.push(TrainingMetric {
+                iteration: iteration + 1,
+                name: "train/mrr".to_string(),
+                value: metrics.mrr,
+            });
         }
 
         Ok(RankerModel {
@@ -193,6 +214,7 @@ impl Ranker {
                 fuzzy_kernel: self.config.fuzzy_kernel,
                 objective: self.config.objective,
             }),
+            training_history,
             trees,
         })
     }

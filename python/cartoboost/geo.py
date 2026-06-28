@@ -6,15 +6,186 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from . import _native
+from ._native import (
+    CoordinateMatrix,
+    GeoSpatialWeights,
+    PanelIndex,
+    SplitManifest,
+    TimeIndex,
+    geo_buffered_spatial_cv,
+    geo_clockwise_bearing_unit_vector_value,
+    geo_group_spatial_cv,
+    geo_initial_bearing_unit_vector_latlng_value,
+    geo_rolling_origin_panel_split,
+    geo_spatial_block_cv,
+    geo_spatial_temporal_blocked_split,
+)
+
 __all__ = [
+    "CoordinateMatrix",
+    "GeoSpatialWeights",
+    "PanelIndex",
+    "SplitManifest",
+    "TimeIndex",
     "build_geo_sparse_sets",
     "build_zip_sparse_sets",
+    "clockwise_bearing_unit_vector",
+    "clockwise_bearing_unit_vectors",
     "coerce_geo_to_feature_id",
     "coerce_zip_to_feature_id",
+    "initial_bearing_unit_vector_latlng",
+    "initial_bearing_unit_vectors_latlng",
+    "local_frame_features",
+    "local_frame_feature_rows",
+    "route_latlng_points",
+    "radial_anchor_distances",
+    "radial_anchor_distance_rows",
+    "rbf_anchor_features",
+    "rbf_anchor_feature_rows",
+    "route_feature_vector",
+    "route_feature_rows",
+    "buffered_spatial_cv_manifest",
+    "group_spatial_cv_manifest",
+    "rolling_origin_panel_split_manifest",
+    "spatial_block_cv_manifest",
+    "spatial_temporal_blocked_split_manifest",
 ]
 
 
 _NON_DIGITS = re.compile(r"\D")
+
+
+def spatial_block_cv_manifest(
+    coords: CoordinateMatrix,
+    *,
+    n_folds: int,
+    dataset_fingerprint: str,
+    coordinate_crs_note: str,
+    model_version: str,
+    dependency_versions: Mapping[str, str],
+    random_seed: int | None = None,
+    split_id: str = "spatial_block_cv",
+) -> SplitManifest:
+    """Create a deterministic spatial block split manifest."""
+    return geo_spatial_block_cv(
+        coords,
+        n_folds,
+        dataset_fingerprint,
+        coordinate_crs_note,
+        model_version,
+        dict(dependency_versions),
+        random_seed,
+        split_id,
+    )
+
+
+def buffered_spatial_cv_manifest(
+    coords: CoordinateMatrix,
+    *,
+    n_folds: int,
+    buffer_distance: float,
+    dataset_fingerprint: str,
+    coordinate_crs_note: str,
+    model_version: str,
+    dependency_versions: Mapping[str, str],
+    random_seed: int | None = None,
+    split_id: str = "buffered_spatial_cv",
+) -> SplitManifest:
+    """Create a spatial block manifest with training rows buffered away from each test block."""
+    return geo_buffered_spatial_cv(
+        coords,
+        n_folds,
+        buffer_distance,
+        dataset_fingerprint,
+        coordinate_crs_note,
+        model_version,
+        dict(dependency_versions),
+        random_seed,
+        split_id,
+    )
+
+
+def group_spatial_cv_manifest(
+    groups: Sequence[str],
+    *,
+    n_folds: int,
+    dataset_fingerprint: str,
+    coordinate_crs_note: str,
+    model_version: str,
+    dependency_versions: Mapping[str, str],
+    random_seed: int | None = None,
+    split_id: str = "group_spatial_cv",
+) -> SplitManifest:
+    """Create a manifest that holds out complete spatial groups."""
+    return geo_group_spatial_cv(
+        list(groups),
+        n_folds,
+        dataset_fingerprint,
+        coordinate_crs_note,
+        model_version,
+        dict(dependency_versions),
+        random_seed,
+        split_id,
+    )
+
+
+def rolling_origin_panel_split_manifest(
+    panel: PanelIndex,
+    *,
+    min_train_size: int,
+    horizon: int,
+    step: int,
+    dataset_fingerprint: str,
+    coordinate_crs_note: str,
+    model_version: str,
+    dependency_versions: Mapping[str, str],
+    random_seed: int | None = None,
+    split_id: str = "rolling_origin_panel_split",
+) -> SplitManifest:
+    """Create a leakage-safe rolling-origin split manifest for panel rows."""
+    return geo_rolling_origin_panel_split(
+        panel,
+        min_train_size,
+        horizon,
+        step,
+        dataset_fingerprint,
+        coordinate_crs_note,
+        model_version,
+        dict(dependency_versions),
+        random_seed,
+        split_id,
+    )
+
+
+def spatial_temporal_blocked_split_manifest(
+    coords: CoordinateMatrix,
+    time: TimeIndex,
+    *,
+    n_spatial_folds: int,
+    min_train_time: int,
+    horizon: int,
+    dataset_fingerprint: str,
+    coordinate_crs_note: str,
+    model_version: str,
+    dependency_versions: Mapping[str, str],
+    random_seed: int | None = None,
+    split_id: str = "spatial_temporal_blocked_split",
+) -> SplitManifest:
+    """Create a manifest that blocks both held-out places and held-out time."""
+    return geo_spatial_temporal_blocked_split(
+        coords,
+        time,
+        n_spatial_folds,
+        min_train_time,
+        horizon,
+        dataset_fingerprint,
+        coordinate_crs_note,
+        model_version,
+        dict(dependency_versions),
+        random_seed,
+        split_id,
+    )
 
 
 def coerce_zip_to_feature_id(value: Any, *, strict: bool = False) -> int | None:
@@ -33,6 +204,224 @@ def coerce_geo_to_feature_id(
 ) -> int | None:
     """Convert an abstract geographic identifier to a deterministic non-negative ID."""
     return _coerce_geo_string(value, namespace=namespace, strict=strict)
+
+
+def clockwise_bearing_unit_vector(
+    origin: tuple[Any, Any],
+    destination: tuple[Any, Any],
+) -> tuple[float, float] | None:
+    """Return the planar clockwise bearing as ``(east, north)`` unit components.
+
+    Angles are measured clockwise from north, but the returned feature is a unit
+    vector rather than degrees. North is ``(0, 1)``, east is ``(1, 0)``, and
+    northwest is near ``(-0.707, 0.707)``. Identical points return ``None`` so
+    callers must handle zero-distance routes explicitly.
+    """
+
+    ox, oy = _coordinate_pair(origin, "origin")
+    dx, dy = _coordinate_pair(destination, "destination")
+    result = geo_clockwise_bearing_unit_vector_value(ox, oy, dx, dy)
+    return None if result is None else (float(result[0]), float(result[1]))
+
+
+def clockwise_bearing_unit_vectors(
+    origins: Sequence[tuple[Any, Any]],
+    destinations: Sequence[tuple[Any, Any]],
+) -> list[tuple[float, float] | None]:
+    """Vectorized planar clockwise bearing unit features for paired coordinates."""
+
+    origin_values = list(origins)
+    destination_values = list(destinations)
+    if len(origin_values) != len(destination_values):
+        raise ValueError("origins and destinations must have the same number of rows")
+    return [
+        clockwise_bearing_unit_vector(origin, destination)
+        for origin, destination in zip(origin_values, destination_values, strict=True)
+    ]
+
+
+def initial_bearing_unit_vector_latlng(
+    origin: tuple[Any, Any],
+    destination: tuple[Any, Any],
+) -> tuple[float, float] | None:
+    """Return the great-circle initial bearing as ``(east, north)`` components.
+
+    Coordinates are ``(latitude, longitude)`` pairs in degrees. The result uses
+    the same continuous bearing encoding as ``clockwise_bearing_unit_vector``.
+    """
+
+    origin_lat, origin_lng = _coordinate_pair(origin, "origin")
+    dest_lat, dest_lng = _coordinate_pair(destination, "destination")
+    result = geo_initial_bearing_unit_vector_latlng_value(
+        origin_lat,
+        origin_lng,
+        dest_lat,
+        dest_lng,
+    )
+    return None if result is None else (float(result[0]), float(result[1]))
+
+
+def initial_bearing_unit_vectors_latlng(
+    origins: Sequence[tuple[Any, Any]],
+    destinations: Sequence[tuple[Any, Any]],
+) -> list[tuple[float, float] | None]:
+    """Vectorized great-circle initial bearing unit features for lat/lng pairs."""
+
+    origin_values = list(origins)
+    destination_values = list(destinations)
+    if len(origin_values) != len(destination_values):
+        raise ValueError("origins and destinations must have the same number of rows")
+    return [
+        initial_bearing_unit_vector_latlng(origin, destination)
+        for origin, destination in zip(origin_values, destination_values, strict=True)
+    ]
+
+
+def route_feature_vector(
+    origin: tuple[Any, Any],
+    destination: tuple[Any, Any],
+) -> tuple[float, float, float, float, float] | None:
+    """Return ``(mid_x, mid_y, distance, bearing_east, bearing_north)``.
+
+    The helper is for planar or projected coordinates. Identical points return
+    ``None`` so zero-length routes stay explicit.
+    """
+
+    ox, oy = _coordinate_pair(origin, "origin")
+    dx, dy = _coordinate_pair(destination, "destination")
+    result = _native_geo_feature("geo_route_feature_vector_value")(ox, oy, dx, dy)
+    return None if result is None else tuple(float(value) for value in result)  # type: ignore[return-value]
+
+
+def route_feature_rows(
+    origins: Sequence[tuple[Any, Any]],
+    destinations: Sequence[tuple[Any, Any]],
+) -> list[tuple[float, float, float, float, float] | None]:
+    """Vectorized route midpoint, distance, and bearing features."""
+
+    origin_values = list(origins)
+    destination_values = list(destinations)
+    if len(origin_values) != len(destination_values):
+        raise ValueError("origins and destinations must have the same number of rows")
+    return [
+        route_feature_vector(origin, destination)
+        for origin, destination in zip(origin_values, destination_values, strict=True)
+    ]
+
+
+def route_latlng_points(route: Any) -> list[tuple[float, float]]:
+    """Extract decoded ``(latitude, longitude)`` route points.
+
+    Accepts direct coordinate sequences plus OSRM/Valhalla-style mappings when
+    geometry is already decoded into coordinate arrays. Encoded polyline strings
+    raise a clear error; callers should request GeoJSON/decoded shapes upstream.
+    """
+
+    candidate = route
+    coordinate_order = "latlng"
+    if isinstance(route, Mapping):
+        candidate, coordinate_order = _route_geometry_candidate(route)
+    points = [
+        _latlng_route_point(point, idx, coordinate_order=coordinate_order)
+        for idx, point in enumerate(candidate)
+    ]
+    if not points:
+        raise ValueError("route must contain at least one coordinate point")
+    return points
+
+
+def radial_anchor_distances(
+    point: tuple[Any, Any],
+    anchors: Sequence[tuple[Any, Any]],
+) -> list[float]:
+    """Return distances from one point to each anchor."""
+
+    px, py = _coordinate_pair(point, "point")
+    anchor_values = [
+        _coordinate_pair(anchor, f"anchors[{idx}]") for idx, anchor in enumerate(anchors)
+    ]
+    return [
+        float(value)
+        for value in _native_geo_feature("geo_radial_anchor_distances_value")(px, py, anchor_values)
+    ]
+
+
+def radial_anchor_distance_rows(
+    points: Sequence[tuple[Any, Any]],
+    anchors: Sequence[tuple[Any, Any]],
+) -> list[list[float]]:
+    """Return one radial-distance feature row per point."""
+
+    point_values = list(points)
+    anchor_values = list(anchors)
+    if not anchor_values:
+        raise ValueError("anchors must contain at least one coordinate pair")
+    return [radial_anchor_distances(point, anchor_values) for point in point_values]
+
+
+def rbf_anchor_features(
+    point: tuple[Any, Any],
+    anchors: Sequence[tuple[Any, Any]],
+    *,
+    length_scale: float,
+) -> list[float]:
+    """Return Gaussian radial-basis features from one point to each anchor."""
+
+    px, py = _coordinate_pair(point, "point")
+    anchor_values = [
+        _coordinate_pair(anchor, f"anchors[{idx}]") for idx, anchor in enumerate(anchors)
+    ]
+    return [
+        float(value)
+        for value in _native_geo_feature("geo_rbf_anchor_features_value")(
+            px,
+            py,
+            anchor_values,
+            _finite_float(length_scale, "length_scale"),
+        )
+    ]
+
+
+def rbf_anchor_feature_rows(
+    points: Sequence[tuple[Any, Any]],
+    anchors: Sequence[tuple[Any, Any]],
+    *,
+    length_scale: float,
+) -> list[list[float]]:
+    """Return one Gaussian radial-basis feature row per point."""
+
+    point_values = list(points)
+    anchor_values = list(anchors)
+    if not anchor_values:
+        raise ValueError("anchors must contain at least one coordinate pair")
+    return [
+        rbf_anchor_features(point, anchor_values, length_scale=length_scale)
+        for point in point_values
+    ]
+
+
+def local_frame_features(
+    point: tuple[Any, Any],
+    origin: tuple[Any, Any],
+    axis: tuple[Any, Any],
+) -> tuple[float, float] | None:
+    """Project a point into a local frame as ``(along_axis, cross_axis)``."""
+
+    px, py = _coordinate_pair(point, "point")
+    ox, oy = _coordinate_pair(origin, "origin")
+    ax, ay = _coordinate_pair(axis, "axis")
+    result = _native_geo_feature("geo_local_frame_features_value")(px, py, ox, oy, ax, ay)
+    return None if result is None else (float(result[0]), float(result[1]))
+
+
+def local_frame_feature_rows(
+    points: Sequence[tuple[Any, Any]],
+    origin: tuple[Any, Any],
+    axis: tuple[Any, Any],
+) -> list[tuple[float, float] | None]:
+    """Vectorized local-frame projection features."""
+
+    return [local_frame_features(point, origin, axis) for point in points]
 
 
 def build_zip_sparse_sets(
@@ -249,6 +638,96 @@ def _coerce_zip_string(value: Any, strict: bool) -> str | None:
 
     text = text.zfill(5)[:5]
     return text
+
+
+def _coordinate_pair(value: tuple[Any, Any], field_name: str) -> tuple[float, float]:
+    try:
+        first, second = value
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be a two-value coordinate pair") from exc
+    return _finite_float(first, f"{field_name}[0]"), _finite_float(second, f"{field_name}[1]")
+
+
+def _route_geometry_candidate(route: Mapping[str, Any]) -> tuple[Any, str]:
+    if "geometry" in route:
+        geometry = route["geometry"]
+        if isinstance(geometry, str):
+            raise ValueError(
+                "route geometry is an encoded polyline string; request decoded GeoJSON "
+                "coordinates from OSRM/Valhalla before route-cell encoding"
+            )
+        if isinstance(geometry, Mapping):
+            geometry_type = geometry.get("type")
+            if geometry_type not in (None, "LineString"):
+                raise ValueError("route geometry mapping must be a LineString")
+            if "coordinates" not in geometry:
+                raise ValueError("route geometry mapping must contain coordinates")
+            return geometry["coordinates"], "lonlat"
+        return geometry, "latlng"
+    if "shape" in route:
+        shape = route["shape"]
+        if isinstance(shape, str):
+            raise ValueError(
+                "route shape is an encoded polyline string; request decoded shape points "
+                "from Valhalla before route-cell encoding"
+            )
+        return shape, "latlng"
+    if "coordinates" in route:
+        return route["coordinates"], "lonlat"
+    if "points" in route:
+        return route["points"], "latlng"
+    raise ValueError("route mapping must contain decoded geometry, shape, coordinates, or points")
+
+
+def _latlng_route_point(point: Any, idx: int, *, coordinate_order: str) -> tuple[float, float]:
+    field_name = f"route[{idx}]"
+    if isinstance(point, Mapping):
+        if "lat" in point and "lon" in point:
+            return _finite_float(point["lat"], f"{field_name}.lat"), _finite_float(
+                point["lon"],
+                f"{field_name}.lon",
+            )
+        if "lat" in point and "lng" in point:
+            return _finite_float(point["lat"], f"{field_name}.lat"), _finite_float(
+                point["lng"],
+                f"{field_name}.lng",
+            )
+        if "latitude" in point and "longitude" in point:
+            return _finite_float(point["latitude"], f"{field_name}.latitude"), _finite_float(
+                point["longitude"],
+                f"{field_name}.longitude",
+            )
+        raise ValueError(f"{field_name} mapping must contain lat/lon coordinates")
+    first, second = _coordinate_pair(point, field_name)
+    if coordinate_order == "lonlat":
+        latitude, longitude = second, first
+    else:
+        latitude, longitude = first, second
+    if abs(latitude) <= 90.0 and abs(longitude) <= 180.0:
+        return latitude, longitude
+    raise ValueError(f"{field_name} must be a valid latitude/longitude point")
+
+
+def _finite_float(value: Any, field_name: str) -> float:
+    if isinstance(value, bool):
+        raise ValueError(f"{field_name} must be a finite coordinate")
+    try:
+        result = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be a finite coordinate") from exc
+    if not math.isfinite(result):
+        raise ValueError(f"{field_name} must be a finite coordinate")
+    return result
+
+
+def _native_geo_feature(name: str) -> Any:
+    func = getattr(_native, name, None)
+    if func is None:
+        raise RuntimeError(
+            f"cartoboost._native does not expose {name}; run `uv run --group dev maturin develop` "
+            "after native geo feature changes"
+        )
+    return func
 
 
 def _coerce_geo_string(value: Any, *, namespace: str, strict: bool) -> int | None:

@@ -62,4 +62,3 @@ def average_ranks(rows: Sequence[dict[str, float]], *, lower_is_better: bool) ->
         for rank, (model, _value) in enumerate(ordered, start=1):
             totals[model] = totals.get(model, 0.0) + rank
     return {model: total / len(rows) for model, total in sorted(totals.items())}
-

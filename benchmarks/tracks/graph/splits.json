@@ -1,6 +1,7 @@
 {
   "splits": [
-    {"id": "ogb_official_split", "kind": "public_fixed_split", "outer_folds": 1, "seeds": "benchmark_seeds", "hpo_scope": "train_validation_only"}
+    {"id": "ogb_official_split", "kind": "public_fixed_split", "outer_folds": 1, "seeds": "benchmark_seeds", "hpo_scope": "train_validation_only"},
+    {"id": "traffic_graph_rolling_origin_manifest_v1", "kind": "rolling_origin_graph_split", "outer_folds": 5, "seeds": "benchmark_seeds", "hpo_scope": "past_train_validation_only", "split_manifest_hash": "sha256:pending_real_run_manifest_hash"},
+    {"id": "synthetic_graph_diffusion_manifest_v1", "kind": "rolling_origin_graph_split", "outer_folds": 5, "seeds": "benchmark_seeds", "hpo_scope": "past_train_validation_only", "split_manifest_hash": "sha256:pending_generated_manifest_hash"}
   ]
 }
-

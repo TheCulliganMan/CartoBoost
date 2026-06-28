@@ -34,6 +34,12 @@ Taxi graph examples:
 - `05_neural_embedding_regression.py` fits dense and neural embedding
   regressors on repeated IDs, then demonstrates a cold-ID guard that falls back
   to dense CartoBoost when embeddings are unsupported.
+- `06_geo_causal_lift.py` builds a taxi pickup-zone intervention panel, runs
+  synthetic DID, GeoLift-style design, placebo checks, and spillover warnings.
+- `model_lab_geo_causal_request.json` is a browser/WASM request payload for
+  `runGeoCausalExperiment` in the modeling lab.
+- `model_lab_graph_forecast_request.json` is a browser/WASM request payload for
+  `runGraphForecast`, using directed pickup-zone flows and horizon-wise metrics.
 
 Suggested workflow:
 

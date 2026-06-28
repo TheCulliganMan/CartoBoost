@@ -1,3 +1,5 @@
+import {GeoFeatureExample} from '@site/src/components/ModelingLabClient';
+
 # Temporal-Spatial Modeling
 
 CartoBoost is built for regression problems where time, place, membership, or
@@ -34,6 +36,9 @@ CartoBoost-specific control directly tests a scientific hypothesis.
 | Pattern | CartoBoost feature path | Why it helps |
 | --- | --- | --- |
 | Hour-of-day, weekday, seasonality | Dense periodic feature with `periodic:<period>` | Preserves wraparound adjacency. |
+| Route bearing or directional drift | `clockwise_bearing_unit_vector` or `initial_bearing_unit_vector_latlng` | Encodes direction as continuous `(east, north)` columns so north and northwest are close without angle wraparound artifacts. |
+| Hub, airport, depot, or CBD proximity | `radial_anchor_distances` or `rbf_anchor_features` | Emits distance or smooth radial-basis columns around explicit anchors. |
+| Corridor-relative position | `local_frame_features` | Emits `along_axis` and `cross_axis` columns in a supplied local coordinate frame. |
 | Latitude/longitude or projected x/y | Dense numeric features with `diagonal_2d` or `gaussian_2d` | Learns spatial boundaries and neighborhoods without only stair-step axis cuts. |
 | Zones, encoded H3 cells | `sparse_sets={...}` with `splitters=["sparse_set"]` | Uses list-valued memberships directly. |
 | Smooth transitions near a boundary | `fuzzy=True` with `fuzzy_bandwidth` and optional `fuzzy_kernel` | Routes samples fractionally instead of forcing a hard left/right decision. |
@@ -81,17 +86,88 @@ coordinates, hour, distance, and taxi-zone memberships are part of the
 scientific design, and it saves those roles with the fitted artifact when the
 schema is provided.
 
-## Encoded H3 Or Grid Cells
+## Bearing Unit Features
 
-CartoBoost does not compute H3 cells from latitude and longitude. If you already
-have H3, S2, grid, zone, or corridor IDs, encode them as non-negative integers
-and pass them through a sparse-set column:
+Use bearing unit vectors when the direction from origin to destination matters.
+Do not feed raw degrees when wraparound continuity matters; 359 degrees and 0
+degrees should be nearly identical, not far apart. CartoBoost exposes Rust-backed
+helpers that return `(east, north)` unit components:
+
+```python
+from cartoboost import (
+    clockwise_bearing_unit_vector,
+    initial_bearing_unit_vector_latlng,
+)
+
+pickup_xy = (0.0, 0.0)
+dropoff_xy = (-3.0, 3.0)
+bearing_east, bearing_north = clockwise_bearing_unit_vector(pickup_xy, dropoff_xy)
+
+pickup_latlng = (40.7580, -73.9855)
+dropoff_latlng = (40.7804, -73.9570)
+route_east, route_north = initial_bearing_unit_vector_latlng(pickup_latlng, dropoff_latlng)
+```
+
+`clockwise_bearing_unit_vector` is for projected or planar `(x, y)` coordinates.
+`initial_bearing_unit_vector_latlng` is for `(latitude, longitude)` degrees and
+uses the great-circle initial bearing. Identical origin/destination points
+return `None`; benchmark feature generation should keep or filter those rows
+explicitly rather than silently replacing them.
+
+Route, radial, and local-frame helpers build on the same Rust geo primitives:
+
+```python
+from cartoboost import (
+    local_frame_features,
+    radial_anchor_distances,
+    rbf_anchor_features,
+    route_feature_vector,
+)
+
+mid_x, mid_y, distance, bearing_east, bearing_north = route_feature_vector(
+    (0.0, 0.0),
+    (3.0, 4.0),
+)
+
+anchors = [(0.0, 0.0), (4.0, -2.0), (-3.0, 3.0)]
+distance_to_hubs = radial_anchor_distances((1.0, 2.0), anchors)
+smooth_hub_features = rbf_anchor_features((1.0, 2.0), anchors, length_scale=3.0)
+along_corridor, cross_corridor = local_frame_features(
+    (2.0, 3.0),
+    origin=(0.0, 0.0),
+    axis=(1.0, 1.0),
+)
+```
+
+<GeoFeatureExample title="Geo feature encoder browser examples" />
+
+## Encoded Route And Grid Cells
+
+CartoBoost can encode latitude/longitude points and decoded route geometries
+into optional H3 or S2 sparse-set columns when the matching extra is installed.
+If you already have H3, S2, grid, zone, or corridor IDs, encode them as
+non-negative integers and pass them through a sparse-set column:
 
 ```python
 model.fit(
     X_dense,
     y,
     sparse_sets={"pickup_h3": [[617700169957507071], [617700169957507583]]},
+)
+```
+
+For routes returned by OSRM or Valhalla, request decoded coordinates first. OSRM
+GeoJSON route geometries use `[longitude, latitude]` coordinate pairs; direct
+Python route sequences use `(latitude, longitude)` pairs.
+
+```python
+from cartoboost import build_h3_route_sparse_sets
+
+route_sparse_sets = build_h3_route_sparse_sets(
+    osrm_routes,
+    name="route_h3",
+    resolution=9,
+    parent_resolutions=[5, 7],
 )
 ```
 

@@ -19,7 +19,9 @@ edge structure itself.
 
 <NeuralModelExample title="Node2Vec graph browser model" pipeline="node2vec" />
 
-## Python Regressor
+## Public Contract
+
+### Regressor
 
 ```python
 import numpy as np
@@ -45,7 +47,7 @@ pred = model.predict(source, row_targets=target, dense=dense)
 model.save("node2vec-regressor.json")
 ```
 
-## Python Link Predictor
+### Link Predictor
 
 ```python
 from cartoboost.graph import Node2VecLinkPredictor
@@ -57,6 +59,15 @@ candidate_pairs = [(0, 1), (0, 3), (3, 2)]
 scores = predictor.predict_scores(candidate_pairs)
 report = predictor.report(candidate_pairs, labels=[1, 1, 0], query_ids=[0, 0, 3], k=2)
 ```
+
+## Use When
+
+| Need | Better first choice |
+| --- | --- |
+| Graph topology is the main signal. | `Node2VecStandaloneRegressor` or `Node2VecLinkPredictor` |
+| Node attributes should drive representation learning. | GraphSAGE |
+| Relation ids matter. | HeteroGraphSAGE |
+| Node types and relation triples matter. | HinSAGE |
 
 ## Validation
 

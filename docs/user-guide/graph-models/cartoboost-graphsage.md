@@ -17,7 +17,9 @@ each node.
 
 <NeuralModelExample title="GraphSAGE browser model" pipeline="graphsage" />
 
-## Python Regressor
+## Public Contract
+
+### Regressor
 
 ```python
 import numpy as np
@@ -51,7 +53,7 @@ pred = model.predict(
 )
 ```
 
-## Python Link Predictor
+### Link Predictor
 
 ```python
 from cartoboost.graph import GraphSageLinkPredictor
@@ -63,6 +65,23 @@ scores = predictor.predict_scores(
     pairs=[(0, 1), (0, 3), (3, 2)],
 )
 ```
+
+## Use When
+
+| Need | Better first choice |
+| --- | --- |
+| Node attributes matter in a homogeneous graph. | `GraphSageStandaloneRegressor` or `GraphSageLinkPredictor` |
+| Only topology is available. | Node2Vec |
+| Relation ids matter. | HeteroGraphSAGE |
+| Node types and relation triples matter. | HinSAGE |
+
+## Compute Backend
+
+`GraphSageConfig` and `GraphSageFeatureEncoder.from_config(...)` accept
+`backend="auto"`, `"cpu"`, or an installed accelerated backend such as
+`"metal"`. On Apple-platform builds with native Metal support, Metal routes
+the dense GraphSAGE forward layers through the shared native backend kernel.
+Neighbor aggregation and training backpropagation remain CPU work.
 
 ## Validation
 

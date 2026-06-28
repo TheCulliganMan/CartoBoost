@@ -661,6 +661,8 @@ def test_real_native_save_load_restores_public_params_and_metadata(tmp_path):
         "random_state": None,
         "n_threads": None,
         "monotonic_constraints": None,
+        "tensorboard_log_dir": None,
+        "tensorboard_run_name": None,
     }
     assert restored.metadata_["library_name"] == "cartoboost-core"
     assert restored.training_config_["splitters"] == ["Gaussian2D"]

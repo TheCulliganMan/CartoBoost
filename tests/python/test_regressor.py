@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import cartoboost.tensorboard as tensorboard
 import pytest
 from cartoboost import CartoBoostRegressor
 
@@ -34,6 +35,33 @@ def test_fit_predict_and_roundtrip_native_backend(tmp_path: Path):
     loaded = CartoBoostRegressor.load(model_path)
 
     assert loaded.predict([[0.0], [3.0]]) == pytest.approx(predictions)
+
+
+def test_regressor_records_training_history_and_tensorboard_scalars(monkeypatch, tmp_path: Path):
+    calls = []
+
+    class Writer:
+        def __init__(self, path):
+            calls.append(("path", path))
+
+        def add_scalar(self, name, value, step):
+            calls.append((name, value, step))
+
+        def close(self):
+            calls.append(("close",))
+
+    monkeypatch.setattr(tensorboard, "_summary_writer_class", lambda: Writer)
+    model = CartoBoostRegressor(
+        n_estimators=3,
+        min_samples_leaf=1,
+        tensorboard_log_dir=tmp_path,
+        tensorboard_run_name="taxi-fare",
+    ).fit([[0.0], [1.0], [2.0], [3.0]], [0.0, 1.0, 2.0, 3.0])
+
+    assert model.training_history_
+    assert model.training_history_[0]["name"] == "train/rmse"
+    assert ("path", str(tmp_path / "taxi-fare")) in calls
+    assert any(call[0] == "train/rmse" and call[2] == 1 for call in calls)
 
 
 def test_quantile_native_backend_uses_quantile_initial_prediction_and_roundtrips(tmp_path: Path):

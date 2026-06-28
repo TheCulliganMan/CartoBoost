@@ -1,7 +1,7 @@
 use cartoboost_neural::{
-    GraphSageConfig, GraphSageEncoder, GraphSageModelArtifact, HeteroGraph, HeteroGraphSageConfig,
-    HeteroGraphSageEncoder, HeteroTypedEdge, HinSageConfig, HinSageEncoder, HinSageGraph,
-    HomogeneousGraph,
+    select_backend, GraphSageConfig, GraphSageEncoder, GraphSageModelArtifact, HeteroGraph,
+    HeteroGraphSageConfig, HeteroGraphSageEncoder, HeteroTypedEdge, HinSageConfig, HinSageEncoder,
+    HinSageGraph, HomogeneousGraph,
 };
 use tempfile::tempdir;
 
@@ -25,6 +25,7 @@ fn fits_graphsage_homogeneous_graph_and_tracks_loss_curve() {
         seed: 777,
         add_self_loop: true,
         l2_regularization: 0.0,
+        backend: select_backend(Some("cpu")).unwrap(),
     };
 
     let mut model = GraphSageEncoder::new(config.clone(), 2).expect("encoder should build");
@@ -65,6 +66,7 @@ fn graphsage_encode_reuses_fit_topology_for_same_graph() {
         seed: 91,
         add_self_loop: true,
         l2_regularization: 0.0,
+        backend: select_backend(Some("cpu")).unwrap(),
     };
     let mut model = GraphSageEncoder::new(config, 2).expect("encoder should build");
 
@@ -97,6 +99,7 @@ fn graphsage_dense_source_negative_sampling_completes() {
         seed: 92,
         add_self_loop: false,
         l2_regularization: 0.0,
+        backend: select_backend(Some("cpu")).unwrap(),
     };
     let mut model = GraphSageEncoder::new(config, 2).expect("encoder should build");
 
@@ -161,6 +164,7 @@ fn graphsage_without_layers_returns_raw_features() {
         seed: 123,
         add_self_loop: true,
         l2_regularization: 0.0,
+        backend: select_backend(Some("cpu")).unwrap(),
     };
 
     let mut model = GraphSageEncoder::new(config, 2).expect("encoder should build");
@@ -207,6 +211,7 @@ fn fits_hinsage_heterogeneous_graph_with_relation_conditioning() {
         negative_samples: 2,
         seed: 44,
         l2_regularization: 0.0,
+        backend: select_backend(Some("cpu")).unwrap(),
     };
 
     let mut encoder =
@@ -265,6 +270,7 @@ fn hetero_graphsage_encode_reuses_fit_topology_for_same_graph() {
         negative_samples: 1,
         seed: 93,
         l2_regularization: 0.0,
+        backend: select_backend(Some("cpu")).unwrap(),
     };
     let mut model = HeteroGraphSageEncoder::new(config, 2, 2).expect("encoder should build");
 
@@ -328,6 +334,7 @@ fn native_hinsage_validates_node_types_samples_neighbors_and_builds_link_embeddi
         seed: 99,
         l2_regularization: 0.0,
         neighbor_samples: vec![2, 0, 0],
+        backend: select_backend(Some("cpu")).unwrap(),
     };
 
     let mut encoder =
@@ -378,6 +385,7 @@ fn validates_feature_shape_failures_on_fit_and_encode() {
         seed: 123,
         add_self_loop: false,
         l2_regularization: 0.0,
+        backend: select_backend(Some("cpu")).unwrap(),
     };
     let mut encoder = GraphSageEncoder::new(config, 2).expect("encoder should build");
 
@@ -402,6 +410,7 @@ fn single_node_negative_sampler_case_is_stable() {
         seed: 8,
         add_self_loop: true,
         l2_regularization: 0.0,
+        backend: select_backend(Some("cpu")).unwrap(),
     };
     let mut encoder = GraphSageEncoder::new(config, 2).expect("encoder should build");
     let embedding = encoder
@@ -431,6 +440,7 @@ fn graphsage_artifact_roundtrip_preserves_state() {
         seed: 33,
         add_self_loop: true,
         l2_regularization: 0.0,
+        backend: select_backend(Some("cpu")).unwrap(),
     };
     let mut model = GraphSageEncoder::new(config.clone(), 2).unwrap();
     let _fitted = model.fit(&graph, &features).unwrap();
@@ -484,6 +494,7 @@ fn hinsage_artifact_roundtrip_preserves_state() {
         negative_samples: 1,
         seed: 12,
         l2_regularization: 0.0,
+        backend: select_backend(Some("cpu")).unwrap(),
     };
 
     let mut model = HeteroGraphSageEncoder::new(config, 2, 2).unwrap();
@@ -512,6 +523,7 @@ fn encoder_outputs_match_graphsage_loss_type_usage() {
         seed: 55,
         add_self_loop: false,
         l2_regularization: 0.0,
+        backend: select_backend(Some("cpu")).unwrap(),
     };
 
     let mut model = GraphSageEncoder::new(config, 2).expect("encoder should build");
@@ -527,4 +539,58 @@ fn encoder_outputs_match_graphsage_loss_type_usage() {
         .vectors()
         .iter()
         .all(|row| row.iter().all(|value| value.is_finite())));
+}
+
+#[cfg(all(
+    feature = "metal",
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "visionos"
+    )
+))]
+#[test]
+fn metal_graphsage_encode_graph_matches_cpu_backend() {
+    if !cartoboost_neural::available_backends()
+        .iter()
+        .any(|backend| backend == "metal")
+    {
+        return;
+    }
+    let graph =
+        HomogeneousGraph::from_directed_edges(4, &[(0, 1), (1, 2), (2, 3), (3, 0)]).unwrap();
+    let features = vec![
+        vec![0.1_f32, 0.2_f32, 0.3_f32],
+        vec![0.4_f32, 0.5_f32, 0.6_f32],
+        vec![0.7_f32, 0.8_f32, 0.9_f32],
+        vec![1.0_f32, 1.1_f32, 1.2_f32],
+    ];
+    let cpu_config = GraphSageConfig {
+        hidden_dims: vec![5, 3],
+        epochs: 0,
+        learning_rate: 0.01,
+        negative_samples: 0,
+        seed: 808,
+        add_self_loop: true,
+        l2_regularization: 0.0,
+        backend: select_backend(Some("cpu")).unwrap(),
+    };
+    let mut metal_config = cpu_config.clone();
+    metal_config.backend = select_backend(Some("metal")).unwrap();
+
+    let cpu = GraphSageEncoder::new(cpu_config, 3).unwrap();
+    let metal = GraphSageEncoder::new(metal_config, 3).unwrap();
+    let cpu_embedding = cpu.encode_graph(&graph, &features).unwrap();
+    let metal_embedding = metal.encode_graph(&graph, &features).unwrap();
+
+    for (cpu_row, metal_row) in cpu_embedding
+        .vectors()
+        .iter()
+        .zip(metal_embedding.vectors())
+    {
+        for (left, right) in cpu_row.iter().zip(metal_row) {
+            assert!((left - right).abs() < 1.0e-5);
+        }
+    }
 }

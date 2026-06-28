@@ -4,6 +4,7 @@ from typing import Any
 
 import numpy as np
 
+from .config import ExplanationAlgorithm, ExplanationDecomposition
 from .regressor import _tabular_column_mapping
 
 
@@ -13,9 +14,9 @@ def make_shap_explainer(
     *,
     sparse_sets: Any | None = None,
     sparse_id_vocabulary: dict[str, list[int]] | None = None,
-    algorithm: str = "auto",
+    algorithm: ExplanationAlgorithm = ExplanationAlgorithm.AUTO,
     feature_names: list[str] | None = None,
-    decomposition: str = "features",
+    decomposition: ExplanationDecomposition = ExplanationDecomposition.FEATURES,
     **kwargs: Any,
 ) -> Any:
     """Build a SHAP explainer for CartoBoost predictions.
@@ -26,7 +27,7 @@ def make_shap_explainer(
     shap = _import_shap()
     _validate_shap_model(model)
     decomposition = _validate_decomposition(decomposition)
-    if decomposition == "weights":
+    if decomposition == ExplanationDecomposition.WEIGHTS:
         adapter = _AdditiveWeightShapAdapter(
             model,
             background,
@@ -79,9 +80,9 @@ def explain_shap(
     sparse_sets: Any | None = None,
     background_sparse_sets: Any | None = None,
     sparse_id_vocabulary: dict[str, list[int]] | None = None,
-    algorithm: str = "auto",
+    algorithm: ExplanationAlgorithm = ExplanationAlgorithm.AUTO,
     feature_names: list[str] | None = None,
-    decomposition: str = "features",
+    decomposition: ExplanationDecomposition = ExplanationDecomposition.FEATURES,
     **kwargs: Any,
 ) -> Any:
     """Return a SHAP Explanation for CartoBoost predictions."""
@@ -130,10 +131,15 @@ def _validate_shap_model(model: Any) -> None:
         raise RuntimeError("CartoBoostRegressor is not fitted")
 
 
-def _validate_decomposition(decomposition: str) -> str:
-    if decomposition not in {"features", "weights"}:
-        raise ValueError("decomposition must be either 'features' or 'weights'")
-    return decomposition
+def _validate_decomposition(
+    decomposition: ExplanationDecomposition | str,
+) -> ExplanationDecomposition:
+    if isinstance(decomposition, ExplanationDecomposition):
+        return decomposition
+    try:
+        return ExplanationDecomposition(str(decomposition))
+    except ValueError as exc:
+        raise ValueError("decomposition must be either 'features' or 'weights'") from exc
 
 
 def _model_feature_names(model: Any) -> list[str] | None:

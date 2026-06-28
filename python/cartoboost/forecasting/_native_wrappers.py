@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -68,6 +69,49 @@ class NativeForecastWrapper:
 
     def get_params(self) -> dict[str, Any]:
         return dict(self._params)
+
+    def set_params(self, **params: Any) -> NativeForecastWrapper:
+        self._params.update(params)
+        self._native_model = None
+        self.is_fitted_ = False
+        return self
+
+    def score(self, values: Any, *, horizon: int | None = None) -> float:
+        actual = np.asarray(values, dtype=float).reshape(-1)
+        if actual.size == 0:
+            raise ValueError("values must contain at least one observation")
+        prediction = np.asarray(self.predict(int(horizon or actual.size)), dtype=float).reshape(-1)
+        if prediction.shape[0] != actual.shape[0]:
+            raise ValueError("prediction and values must have the same length")
+        return float(np.sqrt(np.mean((actual - prediction) ** 2)))
+
+    def save(self, path: str | Path) -> None:
+        self._check_is_fitted()
+        save = getattr(self._native_model, "save", None)
+        if not callable(save):
+            raise NotImplementedError(
+                f"Rust binding {self.native_class_name!r} does not expose save()."
+            )
+        save(str(path))
+
+    @classmethod
+    def load(cls, path: str | Path) -> NativeForecastWrapper:
+        native_class = _native_class(cls.native_class_name)
+        if native_class is None:
+            raise NotImplementedError(
+                f"Rust binding for {cls.__name__} is not available: "
+                f"cartoboost._native.{cls.native_class_name} is missing."
+            )
+        load = getattr(native_class, "load", None)
+        if not callable(load):
+            raise NotImplementedError(
+                f"Rust binding {cls.native_class_name!r} does not expose load()."
+            )
+        obj = cls.__new__(cls)
+        NativeForecastWrapper.__init__(obj)
+        obj._native_model = load(str(path))
+        obj.is_fitted_ = True
+        return obj
 
     def get_metadata(self) -> dict[str, Any]:
         self._check_is_fitted()

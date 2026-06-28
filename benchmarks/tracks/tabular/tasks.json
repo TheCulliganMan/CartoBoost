@@ -5,14 +5,18 @@
       "dataset_id": "sklearn_diabetes_regression_v1",
       "split_id": "iid_5fold_3seed",
       "primary_metric": "rmse",
-      "required_model_families": ["cartoboost", "lightgbm", "xgboost", "hist_gradient_boosting", "random_forest", "extra_trees", "ridge", "mean", "deep_tabular_baseline"]
+      "required_model_families": ["cartoboost", "lightgbm", "xgboost", "catboost", "hist_gradient_boosting", "random_forest", "extra_trees", "ridge", "mean", "deep_tabular_baseline"]
     },
     {
       "id": "california_housing_seed42_holdout",
       "dataset_id": "sklearn_california_housing_regression_seed42_5000_v1",
       "split_id": "seeded_80_20_holdout",
       "primary_metric": "rmse",
-      "required_model_families": ["cartoboost", "lightgbm", "xgboost", "hist_gradient_boosting", "random_forest", "extra_trees", "ridge", "mean"]
+      "claim_family": "california_housing_sanity",
+      "required_model_families": ["cartoboost", "lightgbm", "xgboost", "catboost", "hist_gradient_boosting", "random_forest", "extra_trees", "ridge", "mean"],
+      "required_diagnostics": ["spatial_block_error"],
+      "scorecard_outputs": ["leaderboard_json", "leaderboard_markdown"],
+      "resource_metrics": ["fit_wallclock_seconds", "predict_wallclock_seconds", "peak_memory_mb"]
     }
   ]
 }

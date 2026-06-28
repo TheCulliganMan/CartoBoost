@@ -21,7 +21,9 @@ except ImportError:  # pragma: no cover - lightweight fallback for core installs
         pass
 
 
+from ._artifacts import require_artifact_payload, versioned_artifact_payload
 from ._native import CartoBoostClassifier as _NativeClassifierModel
+from .config import FuzzyKernel, LeafPredictor, Objective
 from .regressor import (
     _as_sample_weight_array,
     _encode_sparse_columns,
@@ -37,6 +39,7 @@ from .regressor import (
     _sparse_names_from_feature_schema,
     _transform_categorical_features,
 )
+from .tensorboard import write_training_history
 
 
 class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
@@ -61,18 +64,20 @@ class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
         max_depth: int = 4,
         min_samples_leaf: int = 20,
         min_gain: float = 1e-8,
-        objective: str = "auto",
+        objective: Objective = Objective.AUTO,
         class_weight: dict[Any, float] | str | None = None,
         splitters: list[str] | None = None,
-        leaf_predictor: str = "constant",
+        leaf_predictor: LeafPredictor = LeafPredictor.CONSTANT,
         linear_leaf_features: list[str] | None = None,
         fuzzy: bool = False,
         fuzzy_bandwidth: float = 0.0,
-        fuzzy_kernel: str = "linear",
+        fuzzy_kernel: FuzzyKernel = FuzzyKernel.LINEAR,
         l2_regularization: float = 1.0,
         constant_l2_regularization: float = 0.0,
         random_state: int | None = None,
         n_threads: int | None = None,
+        tensorboard_log_dir: str | Path | None = None,
+        tensorboard_run_name: str | None = None,
     ) -> None:
         self.n_estimators = n_estimators
         self.learning_rate = learning_rate
@@ -91,6 +96,8 @@ class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
         self.constant_l2_regularization = constant_l2_regularization
         self.random_state = random_state
         self.n_threads = n_threads
+        self.tensorboard_log_dir = tensorboard_log_dir
+        self.tensorboard_run_name = tensorboard_run_name
         self._model: Any | None = None
 
     def get_params(self, deep: bool = True) -> dict[str, Any]:
@@ -118,6 +125,8 @@ class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
             "constant_l2_regularization": self.constant_l2_regularization,
             "random_state": self.random_state,
             "n_threads": self.n_threads,
+            "tensorboard_log_dir": self.tensorboard_log_dir,
+            "tensorboard_run_name": self.tensorboard_run_name,
         }
 
     def set_params(self, **params: Any) -> CartoBoostClassifier:
@@ -202,11 +211,11 @@ class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
             max_depth=int(self.max_depth),
             min_samples_leaf=int(self.min_samples_leaf),
             min_gain=float(self.min_gain),
-            objective=_resolved_objective(self.objective, self.n_classes_),
+            objective=_resolved_objective(self.objective.value, self.n_classes_),
             class_count=self.n_classes_,
             class_weights=class_weights,
             splitters=list(self.splitters or ["auto"]),
-            leaf_predictor=str(self.leaf_predictor),
+            leaf_predictor=self.leaf_predictor.value,
             linear_leaf_features=_resolve_linear_leaf_features(
                 self.linear_leaf_features,
                 dense_array.shape[1],
@@ -215,7 +224,7 @@ class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
             constant_l2_regularization=float(self.constant_l2_regularization),
             fuzzy=bool(self.fuzzy),
             fuzzy_bandwidth=float(self.fuzzy_bandwidth),
-            fuzzy_kernel=str(self.fuzzy_kernel),
+            fuzzy_kernel=self.fuzzy_kernel.value,
             n_threads=None if self.n_threads is None else int(self.n_threads),
         )
         model.fit_arrays(
@@ -234,6 +243,12 @@ class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
         )
         self.metadata_ = _json_attr(model, "metadata_json")
         self.training_config_ = _json_attr(model, "training_config_json")
+        self.training_history_ = _json_attr(model, "training_history_json") or []
+        write_training_history(
+            model,
+            self.tensorboard_log_dir,
+            run_name=self.tensorboard_run_name,
+        )
         self.requires_sparse_sets_ = bool(
             getattr(model, "requires_sparse_sets", bool(sparse_columns))
         )
@@ -312,6 +327,28 @@ class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
             return margins_array[:, 0]
         return margins_array
 
+    def score(
+        self,
+        X: Iterable[Iterable[float]],
+        y: Iterable[Any],
+        sparse_sets: Any | None = None,
+    ) -> float:
+        """Return classification accuracy.
+
+        Example:
+            >>> clf = CartoBoostClassifier(n_estimators=2, splitters=["axis"])
+            >>> clf.fit([[0.0], [1.0]], [0, 1])
+            CartoBoostClassifier(...)
+            >>> clf.score([[0.0], [1.0]], [0, 1]) >= 0.0
+            True
+        """
+
+        pred = np.asarray(self.predict(X, sparse_sets=sparse_sets), dtype=object)
+        truth = np.asarray(list(y), dtype=object)
+        if pred.shape[0] != truth.shape[0]:
+            raise ValueError("X predictions and y must have the same number of rows")
+        return float(np.mean(pred == truth))
+
     def save(self, path: str | Path) -> None:
         """Write a classifier artifact, including class labels and encoders.
 
@@ -328,13 +365,12 @@ class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
             native_path = Path(temp_dir) / "native-classifier.json"
             self._model.save(native_path)
             native_payload = json.loads(native_path.read_text(encoding="utf-8"))
-        payload = {
-            "artifact_type": "cartoboost.classifier",
-            "artifact_version": 1,
-            "classes": _jsonable_classes(self.classes_),
-            "categorical_encoder": getattr(self, "categorical_encoder_", None),
-            "native_model": native_payload,
-        }
+        payload = versioned_artifact_payload(
+            "cartoboost.classifier",
+            classes=_jsonable_classes(self.classes_),
+            categorical_encoder=getattr(self, "categorical_encoder_", None),
+            native_model=native_payload,
+        )
         path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
 
     def save_weights(self, path: str | Path, *, format: str = "auto") -> None:
@@ -368,6 +404,7 @@ class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
         path = Path(path)
         payload = json.loads(path.read_text(encoding="utf-8"))
         if payload.get("artifact_type") == "cartoboost.classifier":
+            require_artifact_payload(payload, "cartoboost.classifier")
             with tempfile.TemporaryDirectory() as temp_dir:
                 native_path = Path(temp_dir) / "native-classifier.json"
                 native_path.write_text(
@@ -414,6 +451,7 @@ class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
         estimator.n_sparse_sets_in_ = len(estimator.sparse_set_names_)
         estimator.metadata_ = _json_attr(native_model, "metadata_json")
         estimator.training_config_ = _json_attr(native_model, "training_config_json")
+        estimator.training_history_ = _json_attr(native_model, "training_history_json") or []
         estimator.requires_sparse_sets_ = bool(getattr(native_model, "requires_sparse_sets", False))
         estimator.is_fitted_ = True
         return estimator
@@ -473,7 +511,7 @@ class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
         min_gain = float(self.min_gain)
         if not math.isfinite(min_gain) or min_gain < 0:
             raise ValueError("min_gain must be finite and non-negative")
-        if self.objective not in {
+        if str(self.objective) not in {
             "auto",
             "binary",
             "binary_logloss",
@@ -492,7 +530,7 @@ class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
             )
         ):
             raise ValueError("class_weight must be None, 'balanced', or a label-to-weight mapping")
-        if self.leaf_predictor not in {"constant", "linear"}:
+        if self.leaf_predictor not in {LeafPredictor.CONSTANT, LeafPredictor.LINEAR}:
             raise ValueError("leaf_predictor must be 'constant' or 'linear'")
         if float(self.l2_regularization) < 0 or not math.isfinite(float(self.l2_regularization)):
             raise ValueError("l2_regularization must be finite and non-negative")
@@ -501,7 +539,7 @@ class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
             raise ValueError("constant_l2_regularization must be finite and non-negative")
         if float(self.fuzzy_bandwidth) < 0 or not math.isfinite(float(self.fuzzy_bandwidth)):
             raise ValueError("fuzzy_bandwidth must be finite and non-negative")
-        if self.fuzzy_kernel not in {
+        if str(self.fuzzy_kernel) not in {
             "linear",
             "triangular",
             "gaussian",

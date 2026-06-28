@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from .frequency import validate_horizon
@@ -31,6 +32,38 @@ class BaseForecaster:
     def predict(self, horizon: int, *_args: Any, **_kwargs: Any) -> Any:
         self._check_is_fitted()
         return self.validate_horizon(horizon)
+
+    def score(self, values: Any, *, horizon: int | None = None) -> float:
+        try:
+            import numpy as np
+        except ImportError as exc:  # pragma: no cover
+            raise ImportError("forecast score requires numpy") from exc
+        actual = np.asarray(values, dtype=float).reshape(-1)
+        prediction = np.asarray(self.predict(int(horizon or actual.size)), dtype=float).reshape(-1)
+        if prediction.shape[0] != actual.shape[0]:
+            raise ValueError("prediction and values must have the same length")
+        return float(np.sqrt(np.mean((actual - prediction) ** 2)))
+
+    def save(self, path: str | Path) -> None:
+        self._check_is_fitted()
+        native_model = getattr(self, "_model", None)
+        save = getattr(native_model, "save", None)
+        if not callable(save):
+            raise NotImplementedError(f"{self.__class__.__name__} does not expose save()")
+        save(str(path))
+
+    @classmethod
+    def load(cls, path: str | Path) -> BaseForecaster:
+        raise NotImplementedError(f"{cls.__name__} does not expose load()")
+
+    def get_params(self, deep: bool = True) -> dict[str, Any]:
+        del deep
+        return {}
+
+    def set_params(self, **params: Any) -> BaseForecaster:
+        if params:
+            raise ValueError(f"unknown parameters: {sorted(params)}")
+        return self
 
 
 class SingleSeriesForecasterMixin:

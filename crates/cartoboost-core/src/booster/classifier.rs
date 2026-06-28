@@ -3,7 +3,9 @@ use crate::loss::LossConfig;
 use crate::objectives::{
     BinaryLogLossObjective, MulticlassLogLossObjective, Objective, PredictionTransformKind,
 };
-use crate::tree::{FuzzyKernel, LeafPredictorKind, ModelMetadata, SplitterKind, Tree, TreeBuilder};
+use crate::tree::{
+    FuzzyKernel, LeafPredictorKind, ModelMetadata, SplitterKind, TrainingMetric, Tree, TreeBuilder,
+};
 use crate::{CartoBoostError, Result};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -80,6 +82,8 @@ pub struct ClassifierModel {
     pub class_values: Vec<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub training_config: Option<ClassifierTrainingConfigMetadata>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub training_history: Vec<TrainingMetric>,
     pub trees: Vec<Vec<Tree>>,
 }
 
@@ -138,6 +142,7 @@ impl Classifier {
             .par_chunks_mut(output_dimension)
             .for_each(|row| row.copy_from_slice(&init_margins));
         let mut trees = Vec::with_capacity(self.config.n_estimators);
+        let mut training_history = Vec::with_capacity(self.config.n_estimators);
         let builder = TreeBuilder {
             max_depth: self.config.max_depth,
             min_samples_leaf: self.config.min_samples_leaf,
@@ -157,7 +162,7 @@ impl Classifier {
         };
         let fit_context = builder.fit_context(x);
 
-        for _ in 0..self.config.n_estimators {
+        for iteration in 0..self.config.n_estimators {
             let derivative_pairs = objective.gradients_hessians(
                 y,
                 &raw_predictions,
@@ -189,6 +194,12 @@ impl Classifier {
                 iteration_trees.push(tree);
             }
             trees.push(iteration_trees);
+            let metric = objective.default_metric(y, &raw_predictions, None)?;
+            training_history.push(TrainingMetric {
+                iteration: iteration + 1,
+                name: format!("train/{}", metric.name),
+                value: metric.value,
+            });
         }
 
         Ok(ClassifierModel {
@@ -218,6 +229,7 @@ impl Classifier {
                 class_count,
                 class_weights: self.config.class_weights.clone(),
             }),
+            training_history,
             trees,
         })
     }

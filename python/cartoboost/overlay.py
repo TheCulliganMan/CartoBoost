@@ -4,13 +4,14 @@ from dataclasses import dataclass
 from typing import Any
 
 from ._native import weighted_overlay as _native_weighted_overlay
+from .config import OverlayKernel
 
 
 @dataclass(frozen=True)
 class OverlayConfig:
     weights: dict[str, float]
     zone_priority_multiplier: bool = True
-    kernel: str = "none"
+    kernel: OverlayKernel = OverlayKernel.NONE
     bandwidth_meters: float | None = None
     distance_alpha: float = 0.0
     precision: int = 6
@@ -23,7 +24,7 @@ def weighted_overlay(
     weights: dict[str, float],
     origin: tuple[float, float] | None = None,
     zone_priority_multiplier: bool = True,
-    kernel: str = "none",
+    kernel: OverlayKernel = OverlayKernel.NONE,
     bandwidth_meters: float | None = None,
     distance_alpha: float = 0.0,
     precision: int = 6,
@@ -35,7 +36,7 @@ def weighted_overlay(
         weights=weights,
         origin=origin,
         zone_priority_multiplier=zone_priority_multiplier,
-        kernel=kernel,
+        kernel=kernel.value,
         bandwidth_meters=bandwidth_meters,
         distance_alpha=distance_alpha,
         precision=precision,

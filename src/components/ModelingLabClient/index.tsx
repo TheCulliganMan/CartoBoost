@@ -81,6 +81,8 @@ type WasmModule = {
   runForecast: (request: unknown) => ForecastResponse;
   runRegressionModel: (request: unknown) => RegressionResponse;
   runNeuralModel: (request: unknown) => RegressionResponse;
+  runGeostatisticsModel?: (request: unknown) => GeostatisticsResponse;
+  runGeoFeatureExamples?: (request: unknown) => GeoFeatureResponse;
   runSequence?: (request: unknown) => unknown;
   runGeotemporalDiagnostics?: (request: unknown) => unknown;
   availableForecastModels?: () => WasmModelMetadata[];
@@ -122,6 +124,57 @@ type ForecastResponse = {
   quantiles?: {
     records: ForecastQuantileRecord[];
   };
+};
+
+type GeostatisticsResponse = {
+  predictions: {
+    x: number;
+    y: number;
+    mean: number;
+    variance: number;
+    std: number;
+    neighborIndices: number[];
+  }[];
+  metadata: Record<string, unknown>;
+};
+
+type GeoFeatureResponse = {
+  planar: BearingFeatureRow[];
+  latlng: BearingFeatureRow[];
+  routes: RouteFeatureRow[];
+  radial: AnchorFeatureRow[];
+  rbf: AnchorFeatureRow[];
+  localFrame: LocalFrameFeatureRow[];
+  metadata: Record<string, unknown>;
+};
+
+type BearingFeatureRow = {
+  label: string;
+  east?: number | null;
+  north?: number | null;
+  zeroDistance: boolean;
+};
+
+type RouteFeatureRow = {
+  label: string;
+  midX?: number | null;
+  midY?: number | null;
+  distance?: number | null;
+  bearingEast?: number | null;
+  bearingNorth?: number | null;
+  zeroDistance: boolean;
+};
+
+type AnchorFeatureRow = {
+  label: string;
+  values: number[];
+};
+
+type LocalFrameFeatureRow = {
+  label: string;
+  alongAxis?: number | null;
+  crossAxis?: number | null;
+  invalidAxis: boolean;
 };
 
 type ComparisonResult = {
@@ -314,22 +367,27 @@ export function ForecastModelExample({
 }: ForecastModelExampleProps): React.ReactElement {
   const wasmJsUrl = useBaseUrl('/wasm/cartoboost/cartoboost_wasm.js');
   const wasmBinaryUrl = useBaseUrl('/wasm/cartoboost/cartoboost_wasm_bg.wasm');
+  const taxiLaneSampleUrl = useBaseUrl('/samples/yellow_taxi_2024-01-single-lane-5000.parquet');
+  const taxiVariedRouteSampleUrl = useBaseUrl('/samples/yellow_taxi_2024-01-varied-routes-2500.parquet');
   const [status, setStatus] = useState('Ready to run in this page.');
   const [isRunning, setIsRunning] = useState(false);
   const [result, setResult] = useState<ForecastResponse | null>(null);
-  const frequency = sample === 'spatial' ? 'daily' : 'hourly';
-  const seasonLength = sample === 'spatial' ? 7 : 24;
-  const table = useMemo(() => embeddedForecastExampleTable(sample, frequency), [frequency, sample]);
+  const [table, setTable] = useState<ParsedTable>(() => embeddedForecastExampleTable(sample, 'hourly'));
+  const frequency = 'hourly';
+  const seasonLength = 24;
   const selectedModel = normalizedForecastModel(model);
 
   const runExample = useCallback(async () => {
     setIsRunning(true);
-    setStatus('Running forecast in this page.');
+    setStatus('Loading real taxi forecast sample.');
     try {
+      const nextTable = await loadDocsForecastExampleTable(sample, taxiLaneSampleUrl, taxiVariedRouteSampleUrl);
+      setTable(nextTable);
+      setStatus('Running forecast in this page.');
       const response = await runBrowserForecast({
         wasmJsUrl,
         wasmBinaryUrl,
-        table,
+        table: nextTable,
         timestampCol: 'timestamp',
         targetCol: 'target',
         seriesCol: 'series_id',
@@ -346,7 +404,7 @@ export function ForecastModelExample({
     } finally {
       setIsRunning(false);
     }
-  }, [frequency, horizon, seasonLength, selectedModel, table, wasmBinaryUrl, wasmJsUrl]);
+  }, [frequency, horizon, sample, seasonLength, selectedModel, taxiLaneSampleUrl, taxiVariedRouteSampleUrl, wasmBinaryUrl, wasmJsUrl]);
 
   const records = result?.forecast.records.slice(0, 6) ?? [];
   const hasSpatialCorrection = records.some((record) => typeof record.spatial_correction === 'number');
@@ -458,19 +516,274 @@ export function NeuralModelExample({pipeline, title}: NeuralModelExampleProps): 
   );
 }
 
+export function GeostatisticsModelExample({title}: {title: string}): React.ReactElement {
+  const wasmJsUrl = useBaseUrl('/wasm/cartoboost/cartoboost_wasm.js');
+  const wasmBinaryUrl = useBaseUrl('/wasm/cartoboost/cartoboost_wasm_bg.wasm');
+  const [status, setStatus] = useState('Ready to run in this page.');
+  const [isRunning, setIsRunning] = useState(false);
+  const [result, setResult] = useState<GeostatisticsResponse | null>(null);
+
+  const runExample = useCallback(async () => {
+    setIsRunning(true);
+    setStatus('Fitting nearest-neighbor GP interpolation in this page.');
+    try {
+      const wasmModule = await getInitializedWasmModule(wasmJsUrl, wasmBinaryUrl);
+      if (!wasmModule.runGeostatisticsModel) {
+        throw new Error('CartoBoost geostatistics Wasm export is not available from this bundle.');
+      }
+      const response = wasmModule.runGeostatisticsModel(geostatisticsExampleRequest());
+      setResult(response);
+      setStatus(`NNGP complete with ${response.predictions.length.toLocaleString()} uncertainty predictions.`);
+    } catch (error) {
+      setResult(null);
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsRunning(false);
+    }
+  }, [wasmBinaryUrl, wasmJsUrl]);
+
+  return (
+    <section
+      style={{
+        border: '1px solid var(--ifm-color-emphasis-300)',
+        borderRadius: 8,
+        padding: '1rem',
+        margin: '1rem 0',
+      }}
+    >
+      <div style={{display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap'}}>
+        <div>
+          <strong>{title}</strong>
+          <p style={{margin: '0.25rem 0 0'}}>
+            Runs nearest-neighbor GP interpolation with mean and standard deviation in the browser.
+          </p>
+        </div>
+        <button className="button button--primary" type="button" disabled={isRunning} onClick={() => void runExample()}>
+          {isRunning ? 'Running' : 'Run NNGP'}
+        </button>
+      </div>
+      <p style={{margin: '0.75rem 0'}}>{status}</p>
+      {result && (
+        <div style={{overflowX: 'auto'}}>
+          <table>
+            <thead>
+              <tr>
+                <th>pickup lon</th>
+                <th>pickup lat</th>
+                <th>mean</th>
+                <th>std</th>
+                <th>neighbors</th>
+              </tr>
+            </thead>
+            <tbody>
+              {result.predictions.slice(0, 6).map((row, index) => (
+                <tr key={`${row.x}-${row.y}-${index}`}>
+                  <td>{formatFixed(row.x, 4)}</td>
+                  <td>{formatFixed(row.y, 4)}</td>
+                  <td>{formatMetric(row.mean)}</td>
+                  <td>{formatMetric(row.std)}</td>
+                  <td>{row.neighborIndices.join(', ')}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+export function GeoFeatureExample({title}: {title: string}): React.ReactElement {
+  const wasmJsUrl = useBaseUrl('/wasm/cartoboost/cartoboost_wasm.js');
+  const wasmBinaryUrl = useBaseUrl('/wasm/cartoboost/cartoboost_wasm_bg.wasm');
+  const [status, setStatus] = useState('Ready to run in this page.');
+  const [isRunning, setIsRunning] = useState(false);
+  const [result, setResult] = useState<GeoFeatureResponse | null>(null);
+
+  const runExample = useCallback(async () => {
+    setIsRunning(true);
+    setStatus('Computing bearing unit-vector features in this page.');
+    try {
+      const wasmModule = await getInitializedWasmModule(wasmJsUrl, wasmBinaryUrl);
+      if (!wasmModule.runGeoFeatureExamples) {
+        throw new Error('CartoBoost geo feature Wasm export is not available from this bundle.');
+      }
+      const response = wasmModule.runGeoFeatureExamples(geoFeatureExampleRequest());
+      setResult(response);
+      setStatus(`Computed ${response.planar.length + response.latlng.length} bearing feature rows.`);
+    } catch (error) {
+      setResult(null);
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsRunning(false);
+    }
+  }, [wasmBinaryUrl, wasmJsUrl]);
+
+  return (
+    <section
+      style={{
+        border: '1px solid var(--ifm-color-emphasis-300)',
+        borderRadius: 8,
+        padding: '1rem',
+        margin: '1rem 0',
+      }}
+    >
+      <div style={{display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap'}}>
+        <div>
+          <strong>{title}</strong>
+          <p style={{margin: '0.25rem 0 0'}}>
+            Runs Rust geo feature helpers in Wasm and returns continuous <code>east</code>/<code>north</code> bearing columns.
+          </p>
+        </div>
+        <button className="button button--primary" type="button" disabled={isRunning} onClick={() => void runExample()}>
+          {isRunning ? 'Running' : 'Run geo features'}
+        </button>
+      </div>
+      <p style={{margin: '0.75rem 0'}}>{status}</p>
+      {result && (
+        <>
+          <BearingFeatureTable title="Projected coordinate routes" rows={result.planar} />
+          <BearingFeatureTable title="Latitude/longitude taxi routes" rows={result.latlng} />
+          <RouteFeatureTable rows={result.routes} />
+          <AnchorFeatureTable title="Radial distance features" rows={result.radial} />
+          <AnchorFeatureTable title="RBF anchor features" rows={result.rbf} />
+          <LocalFrameFeatureTable rows={result.localFrame} />
+        </>
+      )}
+    </section>
+  );
+}
+
+function BearingFeatureTable({title, rows}: {title: string; rows: BearingFeatureRow[]}): React.ReactElement {
+  return (
+    <div style={{overflowX: 'auto', marginTop: '0.75rem'}}>
+      <strong>{title}</strong>
+      <table>
+        <thead>
+          <tr>
+            <th>route</th>
+            <th>east</th>
+            <th>north</th>
+            <th>zero distance</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.label}>
+              <td>{row.label}</td>
+              <td>{typeof row.east === 'number' ? formatFixed(row.east, 4) : '-'}</td>
+              <td>{typeof row.north === 'number' ? formatFixed(row.north, 4) : '-'}</td>
+              <td>{row.zeroDistance ? 'true' : 'false'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function RouteFeatureTable({rows}: {rows: RouteFeatureRow[]}): React.ReactElement {
+  return (
+    <div style={{overflowX: 'auto', marginTop: '0.75rem'}}>
+      <strong>Route midpoint, distance, and bearing</strong>
+      <table>
+        <thead>
+          <tr>
+            <th>route</th>
+            <th>mid_x</th>
+            <th>mid_y</th>
+            <th>distance</th>
+            <th>bearing_east</th>
+            <th>bearing_north</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.label}>
+              <td>{row.label}</td>
+              <td>{typeof row.midX === 'number' ? formatFixed(row.midX, 4) : '-'}</td>
+              <td>{typeof row.midY === 'number' ? formatFixed(row.midY, 4) : '-'}</td>
+              <td>{typeof row.distance === 'number' ? formatFixed(row.distance, 4) : '-'}</td>
+              <td>{typeof row.bearingEast === 'number' ? formatFixed(row.bearingEast, 4) : '-'}</td>
+              <td>{typeof row.bearingNorth === 'number' ? formatFixed(row.bearingNorth, 4) : '-'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function AnchorFeatureTable({title, rows}: {title: string; rows: AnchorFeatureRow[]}): React.ReactElement {
+  const maxWidth = Math.max(0, ...rows.map((row) => row.values.length));
+  return (
+    <div style={{overflowX: 'auto', marginTop: '0.75rem'}}>
+      <strong>{title}</strong>
+      <table>
+        <thead>
+          <tr>
+            <th>point</th>
+            {Array.from({length: maxWidth}, (_, index) => (
+              <th key={index}>anchor_{index}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.label}>
+              <td>{row.label}</td>
+              {Array.from({length: maxWidth}, (_, index) => (
+                <td key={index}>{typeof row.values[index] === 'number' ? formatFixed(row.values[index], 4) : '-'}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function LocalFrameFeatureTable({rows}: {rows: LocalFrameFeatureRow[]}): React.ReactElement {
+  return (
+    <div style={{overflowX: 'auto', marginTop: '0.75rem'}}>
+      <strong>Local frame features</strong>
+      <table>
+        <thead>
+          <tr>
+            <th>point</th>
+            <th>along_axis</th>
+            <th>cross_axis</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.label}>
+              <td>{row.label}</td>
+              <td>{typeof row.alongAxis === 'number' ? formatFixed(row.alongAxis, 4) : '-'}</td>
+              <td>{typeof row.crossAxis === 'number' ? formatFixed(row.crossAxis, 4) : '-'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export function ForecastModelRosterExample(): React.ReactElement {
   const wasmJsUrl = useBaseUrl('/wasm/cartoboost/cartoboost_wasm.js');
   const wasmBinaryUrl = useBaseUrl('/wasm/cartoboost/cartoboost_wasm_bg.wasm');
+  const taxiLaneSampleUrl = useBaseUrl('/samples/yellow_taxi_2024-01-single-lane-5000.parquet');
+  const taxiVariedRouteSampleUrl = useBaseUrl('/samples/yellow_taxi_2024-01-varied-routes-2500.parquet');
   const [models, setModels] = useState<ModelOption[]>(fallbackModelOptions);
   const [model, setModel] = useState('auto_forecast');
   const [status, setStatus] = useState('Choose any forecast model and run the same route-demand example.');
   const [isRunning, setIsRunning] = useState(false);
   const [result, setResult] = useState<ForecastResponse | null>(null);
+  const [table, setTable] = useState<ParsedTable>(() => embeddedForecastExampleTable('lane', 'hourly'));
   const selectedModel = normalizedForecastModel(model);
   const sample = docsExampleSample(selectedModel);
-  const frequency = sample === 'spatial' ? 'daily' : 'hourly';
-  const seasonLength = sample === 'spatial' ? 7 : 24;
-  const table = useMemo(() => embeddedForecastExampleTable(sample, frequency), [frequency, sample]);
+  const frequency = 'hourly';
+  const seasonLength = 24;
 
   useEffect(() => {
     let cancelled = false;
@@ -492,12 +805,15 @@ export function ForecastModelRosterExample(): React.ReactElement {
 
   const runExample = useCallback(async () => {
     setIsRunning(true);
-    setStatus(`Running ${selectedModel} in this page.`);
+    setStatus('Loading real taxi forecast sample.');
     try {
+      const nextTable = await loadDocsForecastExampleTable(sample, taxiLaneSampleUrl, taxiVariedRouteSampleUrl);
+      setTable(nextTable);
+      setStatus(`Running ${selectedModel} in this page.`);
       const response = await runBrowserForecast({
         wasmJsUrl,
         wasmBinaryUrl,
-        table,
+        table: nextTable,
         timestampCol: 'timestamp',
         targetCol: 'target',
         seriesCol: 'series_id',
@@ -514,7 +830,7 @@ export function ForecastModelRosterExample(): React.ReactElement {
     } finally {
       setIsRunning(false);
     }
-  }, [frequency, models, seasonLength, selectedModel, table, wasmBinaryUrl, wasmJsUrl]);
+  }, [frequency, models, sample, seasonLength, selectedModel, taxiLaneSampleUrl, taxiVariedRouteSampleUrl, wasmBinaryUrl, wasmJsUrl]);
 
   const records = result?.forecast.records.slice(0, 5) ?? [];
   return (
@@ -639,6 +955,89 @@ function neuralExampleRequest(pipeline: NeuralModelExampleProps['pipeline']) {
   };
 }
 
+function geostatisticsExampleRequest() {
+  const observations = [
+    {x: -73.9851, y: 40.7589, value: 12.4},
+    {x: -73.9772, y: 40.7527, value: 10.8},
+    {x: -73.968, y: 40.759, value: 9.7},
+    {x: -73.9969, y: 40.742, value: 13.6},
+    {x: -74.006, y: 40.7128, value: 16.2},
+    {x: -73.9897, y: 40.7336, value: 14.1},
+    {x: -73.958, y: 40.8006, value: 8.9},
+    {x: -73.9496, y: 40.7831, value: 9.4},
+    {x: -73.9213, y: 40.7433, value: 11.7},
+    {x: -73.873, y: 40.7769, value: 21.5},
+    {x: -73.7903, y: 40.6437, value: 31.2},
+    {x: -73.8628, y: 40.7681, value: 23.0},
+  ];
+  return {
+    observations,
+    targets: [
+      {x: -73.981, y: 40.756},
+      {x: -73.99, y: 40.725},
+      {x: -73.94, y: 40.776},
+      {x: -73.88, y: 40.77},
+      {x: -73.81, y: 40.65},
+      {x: -74.02, y: 40.7},
+    ],
+    options: {
+      kernel: 'matern_3_2',
+      range: 0.045,
+      sill: 36.0,
+      nugget: 0.15,
+      nNeighbors: 6,
+    },
+  };
+}
+
+function geoFeatureExampleRequest() {
+  return {
+    planarRoutes: [
+      {label: 'north', origin: [0.0, 0.0], destination: [0.0, 4.0]},
+      {label: 'east', origin: [0.0, 0.0], destination: [4.0, 0.0]},
+      {label: 'northwest', origin: [0.0, 0.0], destination: [-3.0, 3.0]},
+      {label: 'same point', origin: [2.0, 2.0], destination: [2.0, 2.0]},
+    ],
+    latlngRoutes: [
+      {
+        label: 'Times Square to Upper East Side',
+        origin: [40.758, -73.9855],
+        destination: [40.7804, -73.957],
+      },
+      {
+        label: 'JFK to Midtown',
+        origin: [40.647, -73.7865],
+        destination: [40.7535, -73.9888],
+      },
+      {
+        label: 'LaGuardia to Upper West Side',
+        origin: [40.7769, -73.873],
+        destination: [40.7917, -73.973],
+      },
+    ],
+    radialPoints: [
+      {label: 'pickup midtown', point: [0.5, 2.0]},
+      {label: 'pickup west', point: [-2.0, 1.5]},
+      {label: 'pickup south', point: [0.0, -1.0]},
+    ],
+    anchors: [
+      {label: 'hub', point: [0.0, 0.0]},
+      {label: 'airport', point: [4.0, -2.0]},
+      {label: 'stadium', point: [-3.0, 3.0]},
+    ],
+    lengthScale: 3.0,
+    localFrame: {
+      origin: [0.0, 0.0],
+      axis: [1.0, 1.0],
+      points: [
+        {label: 'on corridor', point: [2.0, 2.0]},
+        {label: 'left of corridor', point: [0.0, 2.0]},
+        {label: 'right of corridor', point: [2.0, 0.0]},
+      ],
+    },
+  };
+}
+
 function ForecastExampleChart({records, table}: {records: ForecastRecord[]; table: ParsedTable}): React.ReactElement | null {
   const [hovered, setHovered] = useState<ForecastChartPoint | null>(null);
   const points = useMemo(() => forecastChartPoints(records, table), [records, table]);
@@ -752,12 +1151,12 @@ function ForecastExampleChart({records, table}: {records: ForecastRecord[]; tabl
 }
 
 function forecastChartPoints(records: ForecastRecord[], table: ParsedTable): ForecastChartPoint[] {
-  const firstSeries = records[0]?.series_id;
-  if (!firstSeries) {
+  const selectedSeries = selectForecastChartSeriesId(records, table);
+  if (!selectedSeries) {
     return [];
   }
   const actuals = table.rows
-    .filter((row) => row.series_id === firstSeries)
+    .filter((row) => row.series_id === selectedSeries)
     .map((row, index) => ({
       kind: 'actual' as const,
       label: 'Actual',
@@ -768,7 +1167,8 @@ function forecastChartPoints(records: ForecastRecord[], table: ParsedTable): For
     .filter((point) => Number.isFinite(point.value))
     .slice(-36);
   const forecasts = records
-    .filter((record) => record.series_id === firstSeries)
+    .filter((record) => record.series_id === selectedSeries)
+    .sort((left, right) => left.horizon - right.horizon || left.timestamp.localeCompare(right.timestamp))
     .map((record, index) => ({
       kind: 'forecast' as const,
       label: 'Forecast',
@@ -779,6 +1179,33 @@ function forecastChartPoints(records: ForecastRecord[], table: ParsedTable): For
     }))
     .filter((point) => Number.isFinite(point.value));
   return [...actuals, ...forecasts];
+}
+
+function selectForecastChartSeriesId(records: ForecastRecord[], table: ParsedTable): string | null {
+  const seriesIds = Array.from(new Set(records.map((record) => record.series_id).filter(Boolean)));
+  let best: {seriesId: string; score: number} | null = null;
+  for (const seriesId of seriesIds) {
+    const actuals = table.rows
+      .filter((row) => row.series_id === seriesId)
+      .map((row) => Number(row.target))
+      .filter((value) => Number.isFinite(value));
+    const forecasts = records
+      .filter((record) => record.series_id === seriesId)
+      .sort((left, right) => left.horizon - right.horizon || left.timestamp.localeCompare(right.timestamp))
+      .map((record) => record.prediction)
+      .filter((value) => Number.isFinite(value));
+    if (actuals.length === 0 || forecasts.length === 0) {
+      continue;
+    }
+    const recentActuals = actuals.slice(-36);
+    const range = Math.max(...recentActuals) - Math.min(...recentActuals);
+    const boundaryGap = Math.abs(actuals[actuals.length - 1] - forecasts[0]);
+    const score = boundaryGap / Math.max(range, 1);
+    if (!best || score < best.score) {
+      best = {seriesId, score};
+    }
+  }
+  return best?.seriesId ?? seriesIds[0] ?? null;
 }
 
 function chartPath(
@@ -4407,6 +4834,25 @@ function sortBacktestRows(a: BacktestResult, b: BacktestResult) {
     return -1;
   }
   return a.rmse - b.rmse;
+}
+
+async function loadDocsForecastExampleTable(sample: 'lane' | 'spatial', laneUrl: string, variedRouteUrl: string): Promise<ParsedTable> {
+  const isSpatial = sample === 'spatial';
+  const response = await fetch(isSpatial ? variedRouteUrl : laneUrl);
+  if (!response.ok) {
+    throw new Error(`Unable to load bundled taxi forecast sample (${response.status}).`);
+  }
+  return buildTaxiRouteHourSampleTable(
+    await parseParquetBuffer(
+      await response.arrayBuffer(),
+      isSpatial ? 'yellow_taxi_2024-01-varied-routes-2500.parquet' : 'yellow_taxi_2024-01-single-lane-5000.parquet',
+    ),
+    isSpatial ? TAXI_VARIED_ROUTE_SAMPLE_ROWS : TAXI_LANE_SAMPLE_ROWS,
+    {
+      balancedManhattanRoutes: isSpatial,
+      fileName: isSpatial ? 'yellow_taxi_2024-01-varied-routes-2500.parquet' : 'yellow_taxi_2024-01-single-lane-5000.parquet',
+    },
+  );
 }
 
 function embeddedForecastExampleTable(sample: 'lane' | 'spatial', frequency: 'daily' | 'hourly'): ParsedTable {

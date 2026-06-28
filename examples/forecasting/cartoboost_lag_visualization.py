@@ -9,7 +9,6 @@ from statistics import mean
 from typing import Any
 
 import pandas as pd
-
 from cartoboost.forecasting import CartoBoostLagForecaster
 
 LAGS = [1, 2, 24]

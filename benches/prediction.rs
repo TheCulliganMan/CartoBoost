@@ -45,6 +45,7 @@ fn synthetic_model(trees: usize) -> Model {
         feature_schema: None,
         target_name: None,
         training_config: None,
+        training_history: Vec::new(),
         prediction_transform: PredictionTransform::Identity,
         trees,
     }
@@ -89,6 +90,7 @@ fn synthetic_axis_model(trees: usize, feature_count: usize) -> Model {
         feature_schema: None,
         target_name: None,
         training_config: None,
+        training_history: Vec::new(),
         prediction_transform: PredictionTransform::Identity,
         trees,
     }

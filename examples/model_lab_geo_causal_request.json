@@ -1,0 +1,29 @@
+{
+  "interventionTime": "2026-03-08",
+  "seed": 11,
+  "placeboN": 8,
+  "spatialWeights": [
+    {"fromUnit": "pickup_zone_101", "toUnit": "pickup_zone_102", "weight": 1.0},
+    {"fromUnit": "pickup_zone_201", "toUnit": "pickup_zone_202", "weight": 0.4}
+  ],
+  "rows": [
+    {"unitId": "pickup_zone_101", "time": "2026-03-01", "outcome": 121.0, "treatment": false, "latitude": 40.71, "longitude": -74.0, "regionId": "pickup_zone_101"},
+    {"unitId": "pickup_zone_101", "time": "2026-03-02", "outcome": 123.0, "treatment": false, "latitude": 40.71, "longitude": -74.0, "regionId": "pickup_zone_101"},
+    {"unitId": "pickup_zone_101", "time": "2026-03-03", "outcome": 125.0, "treatment": false, "latitude": 40.71, "longitude": -74.0, "regionId": "pickup_zone_101"},
+    {"unitId": "pickup_zone_101", "time": "2026-03-04", "outcome": 127.0, "treatment": false, "latitude": 40.71, "longitude": -74.0, "regionId": "pickup_zone_101"},
+    {"unitId": "pickup_zone_101", "time": "2026-03-08", "outcome": 139.0, "treatment": true, "latitude": 40.71, "longitude": -74.0, "regionId": "pickup_zone_101"},
+    {"unitId": "pickup_zone_101", "time": "2026-03-09", "outcome": 141.0, "treatment": true, "latitude": 40.71, "longitude": -74.0, "regionId": "pickup_zone_101"},
+    {"unitId": "pickup_zone_102", "time": "2026-03-01", "outcome": 121.0, "treatment": false, "latitude": 40.73, "longitude": -73.98, "regionId": "pickup_zone_102"},
+    {"unitId": "pickup_zone_102", "time": "2026-03-02", "outcome": 123.0, "treatment": false, "latitude": 40.73, "longitude": -73.98, "regionId": "pickup_zone_102"},
+    {"unitId": "pickup_zone_102", "time": "2026-03-03", "outcome": 125.0, "treatment": false, "latitude": 40.73, "longitude": -73.98, "regionId": "pickup_zone_102"},
+    {"unitId": "pickup_zone_102", "time": "2026-03-04", "outcome": 127.0, "treatment": false, "latitude": 40.73, "longitude": -73.98, "regionId": "pickup_zone_102"},
+    {"unitId": "pickup_zone_102", "time": "2026-03-08", "outcome": 135.0, "treatment": false, "latitude": 40.73, "longitude": -73.98, "regionId": "pickup_zone_102"},
+    {"unitId": "pickup_zone_102", "time": "2026-03-09", "outcome": 137.0, "treatment": false, "latitude": 40.73, "longitude": -73.98, "regionId": "pickup_zone_102"},
+    {"unitId": "pickup_zone_201", "time": "2026-03-01", "outcome": 120.8, "treatment": false, "latitude": 40.8, "longitude": -73.94, "regionId": "pickup_zone_201"},
+    {"unitId": "pickup_zone_201", "time": "2026-03-02", "outcome": 122.8, "treatment": false, "latitude": 40.8, "longitude": -73.94, "regionId": "pickup_zone_201"},
+    {"unitId": "pickup_zone_201", "time": "2026-03-03", "outcome": 124.8, "treatment": false, "latitude": 40.8, "longitude": -73.94, "regionId": "pickup_zone_201"},
+    {"unitId": "pickup_zone_201", "time": "2026-03-04", "outcome": 126.8, "treatment": false, "latitude": 40.8, "longitude": -73.94, "regionId": "pickup_zone_201"},
+    {"unitId": "pickup_zone_201", "time": "2026-03-08", "outcome": 134.8, "treatment": false, "latitude": 40.8, "longitude": -73.94, "regionId": "pickup_zone_201"},
+    {"unitId": "pickup_zone_201", "time": "2026-03-09", "outcome": 136.8, "treatment": false, "latitude": 40.8, "longitude": -73.94, "regionId": "pickup_zone_201"}
+  ]
+}

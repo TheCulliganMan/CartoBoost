@@ -3,17 +3,22 @@
     {
       "id": "monash_transport_and_m4_v1",
       "source": "Monash forecasting repository, selected full public subsets",
-      "hash": "to_be_frozen",
+      "source_url": "https://forecastingdata.org/",
+      "source_identity": "Selected public Monash forecasting repository subsets with fixed rolling-origin cutoffs",
+      "hash": "sha256:pending_real_run_dataset_hash",
+      "hash_material": "canonical JSON mapping source filenames, source file hashes, selected groups, row counts, and time index bounds",
       "datasheet": "benchmarks/reports/dataset_card_template.md",
       "notes": "Full selected groups only; smoke samples must not support release claims."
     },
     {
       "id": "nyc_taxi_lane_demand_q1_2024_v1",
       "source": "NYC TLC lane demand panel derived from public trip records",
-      "hash": "to_be_frozen",
+      "source_url": "https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page",
+      "source_identity": "January 2024 yellow_tripdata parquet aggregated to pickup/dropoff lane demand with fixed hourly calendar",
+      "hash": "sha256:pending_real_run_dataset_hash",
+      "hash_material": "canonical JSON mapping TLC source files, aggregation config, lane ids, row counts, and source file hashes",
       "datasheet": "benchmarks/reports/dataset_card_template.md",
       "notes": "Pickup/dropoff lane demand with fixed frequency, filters, and rolling cutoffs."
     }
   ]
 }
-

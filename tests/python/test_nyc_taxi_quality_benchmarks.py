@@ -18,13 +18,16 @@ from scripts.run_nyc_taxi_quality_benchmarks import (  # noqa: E402
     ZoneContext,
     benchmark_needs_zone_centroids,
     build_real_tasks,
+    calibration_report_fields,
     cartoboost_schema,
     clean_tlc_frame,
     external_baseline_comparison,
     graph_augmented_split_features,
     pickup_demand_cold_zone_fraction,
     pickup_zone_diagnostics,
+    required_benchmark_dependencies,
     sample_tlc_frame,
+    validate_requested_benchmark_dependencies,
 )
 from scripts.run_nyc_taxi_quality_benchmarks import (  # noqa: E402
     output_artifact_manifest as nyc_output_artifact_manifest,
@@ -120,6 +123,15 @@ def test_nyc_taxi_quality_benchmark_synthetic_smoke(tmp_path: Path):
             assert np.isfinite(model["metrics"]["mae"])
             assert np.isfinite(model["metrics"]["r2"])
             assert np.isfinite(model["metrics"]["wape"])
+            calibration = model["calibration_report_fields"]
+            assert calibration["status"] == "not_computed"
+            assert set(calibration) == {
+                "status",
+                "coverage_by_horizon",
+                "coverage_by_spatial_block",
+                "width_by_horizon",
+                "residual_morans_i_after_calibration",
+            }
             diagnostics = model["segment_diagnostics"]["pickup_zone"]
             assert diagnostics["segment_key"] == "pickup_zone"
             assert diagnostics["segment_count"] > 0
@@ -152,6 +164,69 @@ def test_nyc_taxi_quality_benchmark_synthetic_smoke(tmp_path: Path):
     assert throughput.shape[0] >= 300
     assert throughput.shape[1] >= 500
     assert float(np.std(throughput[..., :3])) > 0.01
+
+
+def test_nyc_taxi_quality_benchmark_runs_autogeo_selector(tmp_path: Path):
+    repo_root = Path(__file__).resolve().parents[2]
+    output_dir = tmp_path / "nyc_taxi_autogeo"
+    script = repo_root / "scripts" / "run_nyc_taxi_quality_benchmarks.py"
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--synthetic-smoke",
+            "--tasks",
+            "duration",
+            "--models",
+            "autogeo",
+            "--output-dir",
+            str(output_dir),
+            "--no-plots",
+        ],
+        check=True,
+        cwd=repo_root,
+    )
+
+    results = json.loads((output_dir / "results.json").read_text(encoding="utf-8"))
+    assert results["model_roster"] == ["autogeo"]
+    task = results["tasks"]["duration"]
+    for split in task["splits"].values():
+        model = split["models"]["autogeo"]
+        assert model["status"] == "ok"
+        assert np.isfinite(model["metrics"]["rmse"])
+        config = model["config"]
+        assert config["selected_family"]
+        assert config["candidate_evaluations"]
+        assert config["inner_validation"]["uses_benchmark_holdout"] is False
+
+
+def test_nyc_taxi_quality_benchmark_requires_requested_baseline_dependencies(monkeypatch):
+    assert required_benchmark_dependencies(
+        ["lightgbm", "xgboost", "catboost", "hist_gradient_boosting", "mean"]
+    ) == {
+        "lightgbm": "LGBMRegressor",
+        "xgboost": "XGBRegressor",
+        "catboost": "CatBoostRegressor",
+        "sklearn": None,
+    }
+
+    from scripts import run_nyc_taxi_quality_benchmarks as module
+
+    def fake_dependency_status(import_name, class_name=None, *, distribution_name=None):
+        del class_name, distribution_name
+        return {
+            "package": import_name,
+            "import_name": import_name,
+            "version": None,
+            "module_importable": import_name != "lightgbm",
+            "required_class_available": import_name != "lightgbm",
+        }
+
+    monkeypatch.setattr(module, "dependency_status", fake_dependency_status)
+
+    with pytest.raises(RuntimeError, match=r"lightgbm.*uv sync --group bench --group dev"):
+        validate_requested_benchmark_dependencies(["lightgbm"])
 
 
 def test_nyc_taxi_public_doc_matches_maintained_artifact_rows():
@@ -230,7 +305,7 @@ def test_nyc_taxi_quality_benchmark_skips_optional_model_failures():
     assert "pickup_demand cold-zone spatial holdout" in source
 
 
-def test_nyc_taxi_quality_benchmark_reports_primary_cartoboost_vs_external_baseline():
+def test_nyc_taxi_quality_benchmark_reports_best_cartoboost_vs_external_baseline():
     payload = {
         "tasks": {
             "fare": {
@@ -276,17 +351,17 @@ def test_nyc_taxi_quality_benchmark_reports_primary_cartoboost_vs_external_basel
         {
             "task": "fare",
             "split": "random",
-            "cartoboost_model": "cartoboost",
-            "cartoboost_rmse": 0.15,
-            "cartoboost_wape": 0.11,
-            "cartoboost_r2": 0.86,
+            "cartoboost_model": "cartoboost_graph_node2vec",
+            "cartoboost_rmse": 0.13,
+            "cartoboost_wape": 0.10,
+            "cartoboost_r2": 0.89,
             "best_external_baseline": "ridge",
             "best_external_rmse": 0.14,
             "best_external_wape": 0.09,
             "best_external_r2": 0.88,
-            "rmse_delta_vs_external": 0.009999999999999981,
-            "r2_delta_vs_external": -0.020000000000000018,
-            "status": "external_lower_or_tied_rmse",
+            "rmse_delta_vs_external": -0.010000000000000009,
+            "r2_delta_vs_external": 0.010000000000000009,
+            "status": "cartoboost_lower_rmse",
         }
     ]
 
@@ -306,6 +381,23 @@ def test_pickup_zone_diagnostics_reports_quantiles_and_worst_segments():
     assert diagnostics["rmse_quantiles"]["max"] == pytest.approx(4.0)
     assert diagnostics["worst_rmse_segments"][0]["pickup_zone"] == 12
     assert diagnostics["largest_abs_bias_segments"][0]["pickup_zone"] == 12
+
+
+def test_calibration_report_fields_groups_interval_metrics():
+    fields = calibration_report_fields(
+        np.asarray([1.0, 2.0, 3.0, 4.0]),
+        np.asarray([0.0, 1.0, 4.0, 2.0]),
+        np.asarray([2.0, 3.0, 5.0, 3.0]),
+        horizons=np.asarray([1, 1, 2, 2]),
+        spatial_blocks=np.asarray(["a", "a", "b", "b"]),
+        residual_morans_i_after_calibration=0.04,
+    )
+
+    assert fields["status"] == "computed"
+    assert fields["coverage_by_horizon"] == {"1": 1.0, "2": 0.0}
+    assert fields["coverage_by_spatial_block"] == {"a": 1.0, "b": 0.0}
+    assert fields["width_by_horizon"] == {"1": 2.0, "2": 1.0}
+    assert fields["residual_morans_i_after_calibration"] == 0.04
 
 
 def test_repeated_nyc_quality_summary_reports_cis_and_paired_deltas():

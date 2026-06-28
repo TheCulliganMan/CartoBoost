@@ -16,6 +16,23 @@ function llmsTxtDocsPlugin(): Plugin {
   };
 }
 
+type DocsVersion = {
+  version: string;
+  ref: string;
+};
+
+const docsVersionsPath = path.join(process.cwd(), 'docs-versions.json');
+const docsVersions: DocsVersion[] = fs.existsSync(docsVersionsPath)
+  ? JSON.parse(fs.readFileSync(docsVersionsPath, 'utf8'))
+  : [];
+const docsVersionItems = [
+  { label: 'latest', to: '/docs' },
+  ...docsVersions.map(({ version }) => ({
+    label: version,
+    to: `/docs/${version}`,
+  })),
+];
+
 const config: Config = {
   title: 'CartoBoost',
   tagline: 'Temporal, spatial, geotemporal, and graph-aware regression',
@@ -142,6 +159,12 @@ const config: Config = {
         { to: '/modeling-lab', label: 'Modeling Lab', position: 'left' },
         { to: '/docs/reference/python-api', label: 'Reference', position: 'left' },
         { to: '/docs/benchmarks', label: 'Benchmarks', position: 'left' },
+        {
+          type: 'dropdown',
+          label: 'Docs',
+          position: 'right',
+          items: docsVersionItems,
+        },
         { type: 'search', position: 'right' },
         {
           href: 'https://github.com/TheCulliganMan/CartoBoost',

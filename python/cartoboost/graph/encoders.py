@@ -23,6 +23,7 @@ from .._native import (
 from .._native import (
     graph_compute_directional_features as _native_compute_directional_features,
 )
+from ..config import Backend
 from .builder import (
     HeterogeneousGraph,
     HomogeneousGraph,
@@ -34,6 +35,11 @@ from .builder import (
 from .config import GraphEmbeddingsConfig, GraphFeatureConfig
 from .features import GraphFeatureBundle
 from .schema import DirectionalityConfig
+
+DEFAULT_GRAPHSAGE_SEED = 0x5A17_9A4E_7F33_C0DE
+DEFAULT_HETEROGRAPHSAGE_SEED = 0x0D1A_2A3B_4C5D_6E7F
+DEFAULT_HINSAGE_SEED = 0xA11C_E5A6_5EED_1234
+DEFAULT_NODE2VEC_SEED = 0xA2B2_C2D2_E2F2_1234
 
 
 def _graph_embeddings_mapping(
@@ -163,9 +169,10 @@ class GraphSageConfig:
     epochs: int = 20
     learning_rate: float = 0.05
     negative_samples: int = 4
-    seed: int = 0x5A17_9A4E_7F33_C0DE
+    seed: int = DEFAULT_GRAPHSAGE_SEED
     add_self_loop: bool = True
     l2_regularization: float = 1e-5
+    backend: Backend = Backend.AUTO
 
 
 def _coerce_dim(value: int, name: str) -> int:
@@ -197,6 +204,7 @@ class GraphSageFeatureEncoder:
             seed=int(config.seed),
             add_self_loop=bool(config.add_self_loop),
             l2_regularization=float(config.l2_regularization),
+            backend=config.backend.value,
         )
         self.graph: HomogeneousGraph | None = None
 
@@ -266,9 +274,10 @@ class GraphSageFeatureEncoder:
                 epochs=int(config.get("epochs", 20)),
                 learning_rate=float(config.get("learning_rate", 0.05)),
                 negative_samples=int(config.get("negative_samples", 4)),
-                seed=int(config.get("seed", 0x5A17_9A4E_7F33_C0DE)),
+                seed=int(config.get("seed", DEFAULT_GRAPHSAGE_SEED)),
                 add_self_loop=bool(config.get("add_self_loop", True)),
                 l2_regularization=float(config.get("l2_regularization", 1e-5)),
+                backend=Backend(str(config.get("backend", "auto"))),
             )
         )
 
@@ -280,8 +289,9 @@ class HeteroGraphSageConfig:
     epochs: int = 20
     learning_rate: float = 0.05
     negative_samples: int = 4
-    seed: int = 0x0D1A_2A3B_4C5D_6E7F
+    seed: int = DEFAULT_HETEROGRAPHSAGE_SEED
     l2_regularization: float = 1e-5
+    backend: Backend = Backend.AUTO
 
 
 @dataclass(frozen=True)
@@ -293,9 +303,10 @@ class HinSageConfig:
     epochs: int = 20
     learning_rate: float = 0.05
     negative_samples: int = 4
-    seed: int = 0xA11C_E5A6_5EED_1234
+    seed: int = DEFAULT_HINSAGE_SEED
     l2_regularization: float = 1e-5
     neighbor_samples: list[int] = field(default_factory=list)
+    backend: Backend = Backend.AUTO
 
 
 @dataclass(frozen=True)
@@ -310,7 +321,7 @@ class Node2VecConfig:
     negative_samples: int = 5
     p: float = 1.0
     q: float = 1.0
-    seed: int = 0xA2B2_C2D2_E2F2_1234
+    seed: int = DEFAULT_NODE2VEC_SEED
     l2_regularization: float = 0.0
     normalize: bool = True
 
@@ -408,7 +419,7 @@ class Node2VecFeatureEncoder:
                 negative_samples=int(config.get("negative_samples", 5)),
                 p=float(config.get("p", 1.0)),
                 q=float(config.get("q", 1.0)),
-                seed=int(config.get("seed", 0xA2B2_C2D2_E2F2_1234)),
+                seed=int(config.get("seed", DEFAULT_NODE2VEC_SEED)),
                 l2_regularization=float(config.get("l2_regularization", 0.0)),
                 normalize=bool(config.get("normalize", True)),
             )
@@ -431,6 +442,7 @@ class HinSageFeatureEncoder:
             seed=int(config.seed),
             l2_regularization=float(config.l2_regularization),
             neighbor_samples=list(config.neighbor_samples),
+            backend=config.backend.value,
         )
 
     def fit(
@@ -513,9 +525,10 @@ class HinSageFeatureEncoder:
                 epochs=int(config.get("epochs", 20)),
                 learning_rate=float(config.get("learning_rate", 0.05)),
                 negative_samples=int(config.get("negative_samples", 4)),
-                seed=int(config.get("seed", 0xA11C_E5A6_5EED_1234)),
+                seed=int(config.get("seed", DEFAULT_HINSAGE_SEED)),
                 l2_regularization=float(config.get("l2_regularization", 1e-5)),
                 neighbor_samples=neighbor_samples,
+                backend=Backend(str(config.get("backend", "auto"))),
             )
         )
 
@@ -534,6 +547,7 @@ class HeteroGraphSageFeatureEncoder:
             negative_samples=int(config.negative_samples),
             seed=int(config.seed),
             l2_regularization=float(config.l2_regularization),
+            backend=config.backend.value,
         )
         self.graph: HeterogeneousGraph | None = None
 
@@ -574,6 +588,7 @@ class HeteroGraphSageFeatureEncoder:
                 negative_samples=int(self.config.negative_samples),
                 seed=int(self.config.seed),
                 l2_regularization=float(self.config.l2_regularization),
+                backend=self.config.backend.value,
             )
 
         feature_rows = ensure_node_features_shape(node_features, graph.node_count)
@@ -632,8 +647,9 @@ class HeteroGraphSageFeatureEncoder:
                 epochs=int(config.get("epochs", 20)),
                 learning_rate=float(config.get("learning_rate", 0.05)),
                 negative_samples=int(config.get("negative_samples", 4)),
-                seed=int(config.get("seed", 0x0D1A_2A3B_4C5D_6E7F)),
+                seed=int(config.get("seed", DEFAULT_HETEROGRAPHSAGE_SEED)),
                 l2_regularization=float(config.get("l2_regularization", 1e-5)),
+                backend=Backend(str(config.get("backend", "auto"))),
             )
         )
 

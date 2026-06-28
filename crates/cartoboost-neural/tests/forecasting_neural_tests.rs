@@ -1,17 +1,12 @@
-pub use cartoboost_neural::{NeuralError, Result};
-
-#[allow(dead_code, unused_imports)]
-#[path = "../src/forecasting/mod.rs"]
-mod forecasting;
-
 use cartoboost_core::forecasting::{
     CartoBoostLagForecaster, ForecastFrame, ForecastFrequency, ForecastPrediction, ForecastRow,
     Forecaster, LagFeatureConfig, SeasonalNaiveForecaster,
 };
 use cartoboost_core::BoosterConfig;
-use forecasting::{
-    LaneNeuralPanelConfig, LaneNeuralPanelForecaster, NBeatsConfig, NBeatsForecaster, NHiTSConfig,
-    NHiTSForecaster, NeuralPanelConfig, NeuralPanelForecaster, NeuralPanelMode, StandardScaler,
+use cartoboost_neural::{
+    ComponentMode, LaneNeuralPanelConfig, LaneNeuralPanelForecaster, NBeatsConfig,
+    NBeatsForecaster, NHiTSConfig, NHiTSForecaster, NeuralPanelConfig, NeuralPanelForecaster,
+    NeuralPanelMode, StandardScaler, TrendMode,
 };
 use std::collections::BTreeMap;
 
@@ -23,6 +18,7 @@ fn nbeats_forecaster_is_deterministic_on_cpu() {
         hidden_size: 6,
         epochs: 30,
         learning_rate: 0.01,
+        ..NBeatsConfig::default()
     };
     let mut first = NBeatsForecaster::new(config.clone()).expect("first model");
     let mut second = NBeatsForecaster::new(config).expect("second model");
@@ -50,6 +46,7 @@ fn nhits_forecaster_handles_panel_taxi_series() {
         epochs: 30,
         learning_rate: 0.01,
         pooling_size: 2,
+        ..NHiTSConfig::default()
     };
     let mut model = NHiTSForecaster::new(config).expect("model");
 
@@ -61,6 +58,135 @@ fn nhits_forecaster_handles_panel_taxi_series() {
     assert_eq!(predictions.predictions()[0].horizon, 1);
     assert_eq!(predictions.predictions()[1].horizon, 2);
     assert_eq!(predictions.predictions()[2].series_id, "PU3->DO4");
+}
+
+#[cfg(all(
+    feature = "metal",
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "visionos"
+    )
+))]
+#[test]
+fn metal_nbeats_predictions_match_cpu_backend() {
+    if !cartoboost_neural::available_backends()
+        .iter()
+        .any(|backend| backend == "metal")
+    {
+        return;
+    }
+    let frame = taxi_frame();
+    let mut cpu_config = NBeatsConfig {
+        input_size: 4,
+        hidden_size: 6,
+        epochs: 10,
+        learning_rate: 0.01,
+        ..NBeatsConfig::default()
+    };
+    cpu_config.backend = cartoboost_neural::select_backend(Some("cpu")).unwrap();
+    let mut metal_config = cpu_config.clone();
+    metal_config.backend = cartoboost_neural::select_backend(Some("metal")).unwrap();
+
+    let mut cpu = NBeatsForecaster::new(cpu_config).unwrap();
+    let mut metal = NBeatsForecaster::new(metal_config).unwrap();
+    cpu.fit(&frame).unwrap();
+    metal.fit(&frame).unwrap();
+    let cpu_predictions = cpu.predict(3).unwrap();
+    let metal_predictions = metal.predict(3).unwrap();
+    assert_forecasts_close(
+        metal_predictions.predictions(),
+        cpu_predictions.predictions(),
+        1.0e-4,
+    );
+}
+
+#[cfg(all(
+    feature = "metal",
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "visionos"
+    )
+))]
+#[test]
+fn metal_nhits_predictions_match_cpu_backend() {
+    if !cartoboost_neural::available_backends()
+        .iter()
+        .any(|backend| backend == "metal")
+    {
+        return;
+    }
+    let frame = taxi_frame();
+    let mut cpu_config = NHiTSConfig {
+        input_size: 4,
+        hidden_size: 6,
+        epochs: 10,
+        learning_rate: 0.01,
+        pooling_size: 2,
+        ..NHiTSConfig::default()
+    };
+    cpu_config.backend = cartoboost_neural::select_backend(Some("cpu")).unwrap();
+    let mut metal_config = cpu_config.clone();
+    metal_config.backend = cartoboost_neural::select_backend(Some("metal")).unwrap();
+
+    let mut cpu = NHiTSForecaster::new(cpu_config).unwrap();
+    let mut metal = NHiTSForecaster::new(metal_config).unwrap();
+    cpu.fit(&frame).unwrap();
+    metal.fit(&frame).unwrap();
+    let cpu_predictions = cpu.predict(3).unwrap();
+    let metal_predictions = metal.predict(3).unwrap();
+    assert_forecasts_close(
+        metal_predictions.predictions(),
+        cpu_predictions.predictions(),
+        1.0e-4,
+    );
+}
+
+#[cfg(all(
+    feature = "metal",
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "visionos"
+    )
+))]
+#[test]
+fn metal_neural_panel_predictions_match_cpu_backend() {
+    if !cartoboost_neural::available_backends()
+        .iter()
+        .any(|backend| backend == "metal")
+    {
+        return;
+    }
+    let frame = taxi_colon_frame();
+    let mut cpu_config = NeuralPanelConfig {
+        n_lags: 3,
+        n_forecasts: 2,
+        quantiles: vec![0.5],
+        ar_layers: vec![4],
+        epochs: 8,
+        learning_rate: 0.01,
+        ..NeuralPanelConfig::default()
+    };
+    cpu_config.backend = cartoboost_neural::select_backend(Some("cpu")).unwrap();
+    let mut metal_config = cpu_config.clone();
+    metal_config.backend = cartoboost_neural::select_backend(Some("metal")).unwrap();
+
+    let mut cpu = NeuralPanelForecaster::new(cpu_config).unwrap();
+    let mut metal = NeuralPanelForecaster::new(metal_config).unwrap();
+    cpu.fit(&frame).unwrap();
+    metal.fit(&frame).unwrap();
+    let cpu_predictions = cpu.predict(2).unwrap();
+    let metal_predictions = metal.predict(2).unwrap();
+    assert_forecasts_close(
+        metal_predictions.predictions(),
+        cpu_predictions.predictions(),
+        1.0e-4,
+    );
 }
 
 #[test]
@@ -175,10 +301,7 @@ fn neural_panel_window_construction_has_no_future_target_leakage() {
     let model = NeuralPanelForecaster::new(NeuralPanelConfig {
         n_lags: 2,
         n_forecasts: 2,
-        future_regressors: BTreeMap::from([(
-            "is_airport".to_string(),
-            forecasting::ComponentMode::Additive,
-        )]),
+        future_regressors: BTreeMap::from([("is_airport".to_string(), ComponentMode::Additive)]),
         ..NeuralPanelConfig::default()
     })
     .expect("model");
@@ -307,10 +430,7 @@ fn neural_panel_local_regressor_mode_fits_series_weights() {
     let mut model = NeuralPanelForecaster::new(NeuralPanelConfig {
         n_lags: 3,
         n_forecasts: 1,
-        future_regressors: BTreeMap::from([(
-            "airport_lane".to_string(),
-            forecasting::ComponentMode::Additive,
-        )]),
+        future_regressors: BTreeMap::from([("airport_lane".to_string(), ComponentMode::Additive)]),
         regressor_global_local: NeuralPanelMode::Local,
         local_l2: 0.0,
         ..NeuralPanelConfig::default()
@@ -346,7 +466,7 @@ fn neural_panel_ar_tail_changes_direct_forecast() {
     let mut model = NeuralPanelForecaster::new(NeuralPanelConfig {
         n_lags: 3,
         n_forecasts: 1,
-        trend: forecasting::TrendMode::Off,
+        trend: TrendMode::Off,
         seed: 11,
         ..NeuralPanelConfig::default()
     })
@@ -386,7 +506,7 @@ fn neural_panel_daily_fourier_component_changes_direct_forecast() {
     let base_config = NeuralPanelConfig {
         n_lags: 4,
         n_forecasts: 1,
-        trend: forecasting::TrendMode::Off,
+        trend: TrendMode::Off,
         seed: 17,
         ..NeuralPanelConfig::default()
     };
@@ -506,11 +626,8 @@ fn neural_panel_predict_with_known_future_regressors_uses_supplied_covariates() 
     let mut model = NeuralPanelForecaster::new(NeuralPanelConfig {
         n_lags: 3,
         n_forecasts: 1,
-        trend: forecasting::TrendMode::Off,
-        future_regressors: BTreeMap::from([(
-            "promo".to_string(),
-            forecasting::ComponentMode::Additive,
-        )]),
+        trend: TrendMode::Off,
+        future_regressors: BTreeMap::from([("promo".to_string(), ComponentMode::Additive)]),
         seed: 23,
         ..NeuralPanelConfig::default()
     })
@@ -572,11 +689,8 @@ fn neural_panel_predict_components_include_known_future_breakdown() {
     let mut model = NeuralPanelForecaster::new(NeuralPanelConfig {
         n_lags: 3,
         n_forecasts: 1,
-        trend: forecasting::TrendMode::Off,
-        future_regressors: BTreeMap::from([(
-            "promo".to_string(),
-            forecasting::ComponentMode::Additive,
-        )]),
+        trend: TrendMode::Off,
+        future_regressors: BTreeMap::from([("promo".to_string(), ComponentMode::Additive)]),
         seed: 23,
         ..NeuralPanelConfig::default()
     })
@@ -641,11 +755,8 @@ fn neural_panel_history_components_track_fitted_rows() {
     let mut model = NeuralPanelForecaster::new(NeuralPanelConfig {
         n_lags: 3,
         n_forecasts: 1,
-        trend: forecasting::TrendMode::Off,
-        future_regressors: BTreeMap::from([(
-            "promo".to_string(),
-            forecasting::ComponentMode::Additive,
-        )]),
+        trend: TrendMode::Off,
+        future_regressors: BTreeMap::from([("promo".to_string(), ComponentMode::Additive)]),
         seed: 23,
         ..NeuralPanelConfig::default()
     })
@@ -821,6 +932,25 @@ fn aligned_rmse(
         .sum::<f64>()
         / predictions.len() as f64;
     mse.sqrt()
+}
+
+fn assert_forecasts_close(
+    actual: &[ForecastPrediction],
+    expected: &[ForecastPrediction],
+    tol: f64,
+) {
+    assert_eq!(actual.len(), expected.len());
+    for (left, right) in actual.iter().zip(expected) {
+        assert_eq!(left.series_id, right.series_id);
+        assert_eq!(left.timestamp, right.timestamp);
+        assert_eq!(left.horizon, right.horizon);
+        assert!(
+            (left.mean - right.mean).abs() < tol,
+            "expected {} to be within {tol} of {}",
+            left.mean,
+            right.mean
+        );
+    }
 }
 
 fn timestamp(hour: u32) -> String {

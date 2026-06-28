@@ -6,10 +6,13 @@ from functools import cache
 from typing import Any
 
 from . import _native
+from .geo import route_latlng_points
 
 __all__ = [
+    "build_h3_route_sparse_sets",
     "build_h3_sparse_sets",
     "encode_h3_cells",
+    "encode_h3_route_cells",
     "expand_h3_sparse_set",
     "h3_parent_id",
     "latlng_to_h3_id",
@@ -78,6 +81,51 @@ def encode_h3_cells(
         latlng_to_h3_id(latitude, longitude, resolution=resolution)
         for latitude, longitude in zip(lat_values, lng_values, strict=True)
     ]
+
+
+def encode_h3_route_cells(
+    route: Any,
+    *,
+    resolution: int,
+    parent_resolutions: Iterable[int] = (),
+) -> list[int]:
+    """Encode one decoded OSRM/Valhalla route into sorted H3 sparse IDs."""
+
+    child_resolution = _normalize_resolution(resolution, "resolution")
+    parents = [_normalize_resolution(value, "parent_resolutions") for value in parent_resolutions]
+    _native.h3_validate_parent_resolutions_value(child_resolution, parents)
+    cells: list[int] = []
+    for latitude, longitude in route_latlng_points(route):
+        child = latlng_to_h3_id(latitude, longitude, resolution=child_resolution)
+        cells.append(child)
+        cells.extend(h3_parent_id(child, parent_resolution=parent) for parent in parents)
+    return [int(value) for value in _native.geo_assemble_route_sparse_rows_value([cells])[0]]
+
+
+def build_h3_route_sparse_sets(
+    routes: Iterable[Any],
+    *,
+    name: str = "route_h3",
+    resolution: int,
+    parent_resolutions: Iterable[int] = (),
+) -> dict[str, list[list[int]]]:
+    """Build one H3 sparse-set column from decoded route geometries."""
+
+    if not name:
+        raise ValueError("name must be non-empty")
+    route_values = list(routes)
+    if not route_values:
+        raise ValueError("routes must contain at least one row")
+    parents = tuple(parent_resolutions)
+    rows = [
+        encode_h3_route_cells(
+            route,
+            resolution=resolution,
+            parent_resolutions=parents,
+        )
+        for route in route_values
+    ]
+    return {name: [list(row) for row in _native.geo_assemble_route_sparse_rows_value(rows)]}
 
 
 def build_h3_sparse_sets(

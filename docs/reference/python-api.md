@@ -13,6 +13,9 @@ and keep artifacts that make the comparison reproducible.
 | Need | Primary entry points | Evidence to collect |
 | --- | --- | --- |
 | Row-level regression | `CartoBoostRegressor`, `FeatureSchema`, sparse sets | RMSE, MAE, R2 on the same split as baselines. |
+| Spatial econometrics | `SpatialWeights`, `SpatialLagRegressor`, `SpatialErrorRegressor`, `SpatialDurbinRegressor`, `SpatialTwoStageLeastSquares` | Residual Moran's I, rho/lambda, AIC/BIC where valid, and same-split holdout metrics. |
+| Scalable GP geostatistics | `NearestNeighborGPRegressor`, `ResidualNNGPRegressor`, `SpatialGaussianProcessRegressor` | Interpolation RMSE/MAE, uncertainty calibration, duplicate-coordinate policy, and prediction variance near versus far from training points. |
+| Geo-causal experiments | `GeoCausalPanel`, `SyntheticDIDEstimator`, `GeoLiftEstimator`, `GeoExperimentDesigner`, `SpatialPlaceboTester` | Treatment effect, unit/time weights, placebo distribution, spillover diagnostics, and explicit causal assumptions. |
 | Binary or multiclass classification | `CartoBoostClassifier`, sparse sets | Logloss, ROC-AUC or PR-AUC, Brier score, and calibration checks on the same split as baselines. |
 | Grouped ranking | `CartoBoostRanker`, grouped relevance labels | NDCG, MAP, MRR, and baseline ranking comparison by query group. |
 | Demand or time-series forecasting | `ForecastFrame`, `CartoBoostLagForecaster`, splitters, backtester | Rolling-origin or out-of-time RMSE, MAE, WAPE, horizon metrics. |
@@ -47,6 +50,8 @@ CartoBoostRegressor(
     random_state=None,
     n_threads=None,
     monotonic_constraints=None,
+    tensorboard_log_dir=None,
+    tensorboard_run_name=None,
 )
 ```
 
@@ -69,6 +74,9 @@ CartoBoostRegressor(
 `X`, `y`, `sample_weight`, and sparse-set tables may be NumPy arrays or
 dataframe-style objects. Install `cartoboost[duckdb]` to pass DuckDB relations
 directly, or `cartoboost[polars]` for Polars inputs.
+Set `tensorboard_log_dir` to write native per-iteration training scalars to
+TensorBoard event files; install `cartoboost[tensorboard]` for the optional
+writer dependency.
 
 Dense inputs may include categorical columns. Pandas categorical,
 string, or object columns are encoded during fit, and columns can be marked
@@ -82,6 +90,136 @@ chosen split and call `predict` only on the matching validation indices. If
 CartoBoost receives zone, hour, distance, or target-mean
 features, provide comparable encoded columns to LightGBM, XGBoost, or other
 baselines before interpreting a quality delta.
+
+## Spatial Econometrics
+
+```python
+SpatialWeights(
+    n_rows,
+    n_cols,
+    rows,
+    cols,
+    values,
+    row_standardize=True,
+)
+
+SpatialLagRegressor(row_standardize=True)
+SpatialErrorRegressor(row_standardize=True)
+SpatialDurbinRegressor(row_standardize=True)
+SpatialTwoStageLeastSquares(row_standardize=True)
+```
+
+### Methods
+
+| Method | Returns | Notes |
+| --- | --- | --- |
+| `fit(X, y, spatial_weights=W)` | `self` | Fits against sparse spatial weights. |
+| `predict(X, spatial_weights=W)` | `numpy.ndarray` | Requires row-compatible sparse weights. |
+| `summary()` | `dict` | Includes coefficients and diagnostics. |
+| `save(path)` | `None` | Writes a JSON model artifact. |
+| `Class.load(path)` | estimator | Loads the native spatial model artifact. |
+
+Diagnostics include residual Moran's I, `rho` or `lambda` when estimated,
+Gaussian log likelihood, AIC/BIC where valid, sigma squared, isolated rows, and
+Durbin direct/indirect/total effects. `SpatialWeights.from_neighbors(...)`
+builds sparse weights from adjacency dictionaries for areal units, store trade
+areas, service zones, and route cells.
+
+## Geo-Causal Experiments
+
+```python
+GeoCausalPanel(
+    rows,
+    unit_col="unit_id",
+    time_col="time",
+    outcome_col="outcome",
+    treatment_col="treatment",
+    covariate_cols=None,
+    latitude_col="latitude",
+    longitude_col="longitude",
+    region_col="region_id",
+    spatial_weights=None,
+)
+
+SyntheticDIDEstimator(intervention_time="2026-03-08", seed=13)
+GeoExperimentDesigner(intervention_time="2026-03-08", seed=13)
+GeoLiftEstimator(intervention_time="2026-03-08", seed=13)
+SpatialPlaceboTester(intervention_time="2026-03-08", seed=13)
+```
+
+### Methods
+
+| Method | Returns | Notes |
+| --- | --- | --- |
+| `SyntheticDIDEstimator.fit(panel)` | `self` | Fits native synthetic DID over the pre/post split. |
+| `SyntheticDIDEstimator.estimate_effect()` | `float` | Returns the average treatment effect estimate. |
+| `SyntheticDIDEstimator.placebo_test(n=100)` | `list[float]` | Runs deterministic pseudo-treated placebo assignments. |
+| `SyntheticDIDEstimator.summary()` | `dict` | Includes effect, weights, placebos, warnings, and assumptions. |
+| `SyntheticDIDEstimator.plot(kind="placebo")` | matplotlib axes | Python-only helper; requires `cartoboost[visualization]`. |
+| `GeoExperimentDesigner.fit(panel).summary(candidate_count, placebo_n)` | `dict` | Chooses balanced candidate test geos and estimates detectable lift. |
+| `SpatialPlaceboTester.fit(panel).summary()` | `dict` | Reports neighbor contamination, distances, and spatial exposure. |
+
+Use these APIs for marketing lift, policy rollout, store openings, and network
+changes. The summaries explicitly separate causal estimates from forecasts and
+should be reported with the stated assumptions and spillover warnings.
+
+## Geographic Feature Encoders
+
+```python
+build_geo_sparse_sets({"pickup_zone": pickup_zone_ids})
+build_zip_sparse_sets(origin_zip=origin_zip, destination_zip=destination_zip)
+
+build_h3_sparse_sets({"pickup_h3": (pickup_lat, pickup_lng)}, resolution=9)
+build_h3_route_sparse_sets(osrm_routes, name="route_h3", resolution=9)
+encode_h3_route_cells(route, resolution=9)
+
+build_s2_sparse_sets({"pickup_s2": (pickup_lat, pickup_lng)}, level=12)
+build_s2_route_sparse_sets(valhalla_routes, name="route_s2", level=12)
+encode_s2_route_cells(route, level=12)
+```
+
+H3 helpers require `cartoboost[h3]`; S2 helpers require `cartoboost[s2]`.
+Route encoders accept decoded route coordinate sequences, OSRM GeoJSON-style
+route mappings, or Valhalla-style decoded shape mappings. Encoded polyline
+strings raise `ValueError`; request decoded geometry from the routing engine
+before fitting sparse route-cell features.
+
+## Scalable GP Geostatistics
+
+```python
+NearestNeighborGPRegressor(
+    kernel="exponential",
+    range=1.0,
+    sill=1.0,
+    nugget=1e-6,
+    n_neighbors=16,
+    anisotropy_angle_degrees=0.0,
+    anisotropy_scaling=1.0,
+    brute_force_threshold=2048,
+    duplicate_tolerance=0.0,
+)
+
+SpatialGaussianProcessRegressor(...)
+ResidualNNGPRegressor(base_estimator, gp=None)
+```
+
+### Methods
+
+| Method | Returns | Notes |
+| --- | --- | --- |
+| `fit(X, y, coords=coords)` | `self` | Coordinates must be finite two-column point coordinates. Duplicate coordinates within `duplicate_tolerance` raise an error. |
+| `predict(X, coords=coords)` | `numpy.ndarray` | Returns local NNGP means. |
+| `predict(X, coords=coords, return_std=True)` | `(mean, std)` | Standard deviations are derived from nonnegative prediction variances. |
+| `predict(X, coords=coords, return_var=True)` | `(mean, variance)` | Returns variance directly. |
+| `predict_interval(X, coords=coords, coverage=0.9)` | `(lower, upper)` | Uses common Gaussian z-scores without requiring SciPy. |
+| `empirical_semivariogram(coords, values, ...)` | `list[dict]` | Returns lag bins with semivariance and pair counts. |
+| `binned_variogram(coords, values, ...)` | `list[dict]` | Alias for the binned empirical semivariogram utility. |
+| `fit_variogram_wls(bins, range_candidates=..., sill_candidates=...)` | `dict` | Weighted least-squares kernel/range/sill/nugget grid fit. |
+
+Use `NearestNeighborGPRegressor` for point interpolation and uncertainty maps.
+Use `ResidualNNGPRegressor` when a base estimator handles dense covariates and
+the remaining residual field should be modeled spatially. The implementation is
+CPU-only and does not require a GPU.
 
 ## `cartoboost.CartoBoostClassifier`
 
@@ -130,6 +268,7 @@ or a label-to-weight dict to weight gradients.
 Use the same feature columns and split definitions as the baseline CartoBoost classifier.
 Common labels include churn flag, high-delay bucket, cancellation risk class,
 or demand-surge class.
+Set `tensorboard_log_dir` to write native classifier training scalars.
 Categorical columns follow the same mapping behavior as the CartoBoost
 regressor and are saved with CartoBoost classifier class-label metadata.
 
@@ -183,6 +322,7 @@ training.
 Ranking labels are relevance scores within a group, not global regression
 targets. Common examples include ranking candidate items, route alternatives,
 or service actions within one query context.
+Set `tensorboard_log_dir` to write native NDCG, MAP, and MRR training scalars.
 Categorical ranker columns use train-side relevance labels for smoothed
 target-stat encoding and persist their mappings in CartoBoost ranker artifacts.
 
@@ -230,11 +370,11 @@ Forecasters:
 | `SpatialPiecewiseKrigingForecaster` | Piecewise seasonal CartoBoost base fused with cutoff-safe kriged regressors, residual kriging, or hybrid spatial correction; result JSON includes base mean, correction, variance, neighbors, components, and metadata. |
 | `PiecewiseLinearSeasonalForecaster` | Piecewise linear seasonal local model with linear, flat, or logistic growth, automatic or explicit changepoints, holiday tables and optional country holiday calendars normalized into event windows, Fourier seasonalities, conditional custom seasonalities, events, automatic extra-regressor standardization, per-component regularization, residual intervals, deterministic sampled trend uncertainty, external trend adjustments, residual shock propagation, fitted JSON round-trips, `components()` / `components_json()` forecast decomposition, and `history_components()` / `history_components_frame()` / `history_components_json()` fitted trend, movement, seasonality, event, and regressor diagnostics; interactive examples expose matching fitted artifact prediction and component helpers. |
 | `CartoBoostLagForecaster` | Global recursive forecaster using leakage-safe lag, rolling, calendar, static, and known-future features with `CartoBoostRegressor`. |
-| `NeuralPanelForecaster` | Neural panel forecaster with `n_lags`, `n_forecasts`, quantiles, trend, Fourier seasonality, event offsets, known-future regressors, lagged regressors, direct horizons, separate local/global/glocal seasonality, event, and regressor modes, median-first internal quantile residuals, and serializable metadata. |
+| `NeuralPanelForecaster` | Neural panel forecaster with `n_lags`, `n_forecasts`, quantiles, trend, Fourier seasonality, event offsets, known-future regressors, lagged regressors, direct horizons, separate local/global/glocal seasonality, event, and regressor modes, median-first internal quantile residuals, backend-dispatched dense prediction with `backend="auto"`, `"cpu"`, or available accelerators such as `"metal"` on Apple-platform builds, and serializable metadata. |
 | `LaneNeuralPanelForecaster` | Directional pair wrapper for `series_id="origin:destination"` panels; injects generated origin, destination, lane, and directional graph covariates into the panel model while keeping `A:B` distinct from `B:A`; `predict_for_lanes(horizon, series_ids)` applies fitted-lane fallback for explicit cold lane ids. |
 | `AutoForecaster` | Guarded model selector over reusable internal forecasting candidates with validation metadata and fitted artifacts. |
-| `NBeatsForecaster` | Deterministic N-BEATS style forecasting expert for regular forecast windows. |
-| `NHiTSForecaster` | Deterministic N-HiTS style forecasting expert with pooled history windows. |
+| `NBeatsForecaster` | Deterministic N-BEATS style forecasting expert for regular forecast windows with backend-dispatched dense prediction via `backend="auto"`, `"cpu"`, or available accelerators such as `"metal"` on Apple-platform builds. |
+| `NHiTSForecaster` | Deterministic N-HiTS style forecasting expert with pooled history windows and backend-dispatched dense prediction via `backend="auto"`, `"cpu"`, or available accelerators such as `"metal"` on Apple-platform builds. |
 | `WeightedEnsembleForecaster` | Combines aligned component forecasts with fixed weights. |
 | `BacktestWeightedEnsembleForecaster` | Reserved; raises clearly until backtest-weight learning is implemented. |
 
@@ -265,6 +405,40 @@ Evaluation and persistence:
 | `ForecastRegistry` / `ForecastModelSpec` | Named model construction and optional dependency validation. |
 | `ForecastArtifact` / `ForecastArtifactManifest` | JSON manifest plus CSV or Parquet forecast persistence. |
 | `ForecastingConfig` | Strict TOML config parsing for forecast runs. |
+
+Probabilistic and conformal layer:
+
+| Entry point | Notes |
+| --- | --- |
+| `QuantileCartoBoostRegressor(quantiles=(0.1, 0.5, 0.9), **regressor_params)` | Fits one `CartoBoostRegressor(loss="quantile")` per level and returns a `DistributionalForecastResult` with non-crossing quantiles. |
+| `ConformalIntervalRegressor(estimator, alpha=0.1)` | Wraps any estimator exposing `.fit/.predict`; fits only on train rows, calibrates on calibration residuals, and rejects holdout-leaking split order. |
+| `SpatialConformalRegressor(estimator, alpha=0.1)` | Adds group-specific conformal widths for H3, S2, route, pickup zone, or spatial-block ids with global-width fallback for unseen groups. |
+| `ForecastConformalCalibrator(alpha=0.1)` | Uses only residuals from cutoffs strictly before the forecast cutoff. |
+| `DistributionalForecastResult` | Carries `mean`, `median`, `quantiles`, `std`, interval lower/upper bounds, and calibration metadata. |
+| `pinball_loss`, `interval_coverage`, `mean_interval_width`, `crps_approximation`, `weighted_interval_score`, `pit_bins` | Distributional metrics backed by the native `cartoboost-prob` crate when the extension is available. |
+| `weighted_conformal_residual_quantile`, `group_conformal_residual_quantiles`, `nearest_conformal_residual_quantiles` | Calibration primitives for weighted, group/H3/S2, spatial-block, and nearest-residual conformal workflows. |
+| `benchmark_calibration_report_fields` | Emits coverage by horizon, coverage by spatial block, width by horizon, and residual Moran's I after calibration for benchmark artifacts. |
+
+Do not report geo model quality without calibration and spatial residual
+diagnostics. At minimum, report interval coverage, interval width, horizon or
+spatial-block coverage, and residual Moran's I on holdout rows.
+
+Unified model registry and geo selector:
+
+| Entry point | Notes |
+| --- | --- |
+| `cartoboost.models.ModelRegistry.defaults()` | Stable registry across `models`, `forecasting`, `geo`, `graph`, `causal`, and `prob` namespaces with typed metadata. |
+| `cartoboost.models.ModelSpec` / `ModelMetadata` | Constructor and metadata records for public model families. |
+| `cartoboost.AutoGeoModel` | Leakage-aware selector that inspects coordinates, graph structure, panel ids, time indexes, sparsity, and validation constraints before fitting eligible candidates. |
+| `cartoboost.GeoModelStack` | Explicit stack for tabular booster, optional spatial residual model, optional graph residual model, and optional conformal interval layer. |
+| `cartoboost.models.model_card(model)` | JSON-compatible lifecycle, params, and metadata summary for fitted or unfitted models. |
+| `cartoboost.causal` / `cartoboost.prob` | Stable aliases for geo-causal and probabilistic model namespaces. |
+| `cartoboost.experimental` | Unstable research adapter namespace; adapters require explicit backends and are excluded from the stable registry. |
+
+Python-owned JSON model artifacts include `artifact_type` and
+`artifact_version` fields. CI runs `scripts/check_artifact_compatibility.py` to
+verify nested version markers, save/load prediction drift, and explicit failure
+for unsupported artifact versions.
 
 `ForecastRegistry.defaults()` contains only constructible public forecast
 models with fit/predict behavior: `naive`, `seasonal_naive`,
@@ -394,6 +568,10 @@ feature workflows.
 `GraphSageEncoder` is for homogeneous graphs; `HeteroGraphSageEncoder` is for
 typed relations; `HinSageEncoder` is the typed-schema HinSAGE surface with
 relation-aware sampling and link feature construction.
+GraphSAGE-style encoders and standalone link predictors accept
+`backend="auto"`, `"cpu"`, or available accelerators such as `"metal"` for the
+shared dense forward and pair-score kernels on Apple-platform builds where the
+native Metal backend is compiled in.
 
 | Method | Returns | Notes |
 | --- | --- | --- |
@@ -583,17 +761,36 @@ Reads a GeoJSON file into a Python dictionary.
 ## Geo Encoding Helpers
 
 ```python
+cartoboost.clockwise_bearing_unit_vector((pickup_x, pickup_y), (dropoff_x, dropoff_y))
+cartoboost.initial_bearing_unit_vector_latlng(
+    (pickup_latitude, pickup_longitude),
+    (dropoff_latitude, dropoff_longitude),
+)
+cartoboost.route_feature_vector((pickup_x, pickup_y), (dropoff_x, dropoff_y))
+cartoboost.radial_anchor_distances((pickup_x, pickup_y), anchors)
+cartoboost.rbf_anchor_features((pickup_x, pickup_y), anchors, length_scale=3.0)
+cartoboost.local_frame_features((pickup_x, pickup_y), origin=(0.0, 0.0), axis=(1.0, 1.0))
 cartoboost.build_h3_sparse_sets(
     {"pickup_h3": (pickup_latitude, pickup_longitude)},
     resolution=9,
     parent_resolutions=[5, 7],
 )
+cartoboost.build_h3_route_sparse_sets(osrm_routes, name="route_h3", resolution=9)
 cartoboost.build_s2_sparse_sets(
     {"pickup_s2": (pickup_latitude, pickup_longitude)},
     level=12,
     parent_levels=[8, 10],
 )
+cartoboost.build_s2_route_sparse_sets(valhalla_routes, name="route_s2", level=12)
 ```
+
+Bearing helpers return continuous `(east, north)` unit-vector columns. Use the
+planar helper for projected coordinates and the latitude/longitude helper for
+great-circle initial bearings. Zero-distance pairs return `None`.
+Route helpers add midpoint and direct distance columns. H3/S2 route encoders
+turn decoded OSRM or Valhalla route geometries into variable-length sparse
+route-cell rows. Radial and RBF helpers emit one column per explicit anchor.
+Local-frame helpers emit `(along_axis, cross_axis)` for corridor-style features.
 
 These helpers return `sparse_sets` dictionaries suitable for
 `CartoBoostRegressor.fit(..., sparse_sets=...)`. H3 auto-encoding requires the

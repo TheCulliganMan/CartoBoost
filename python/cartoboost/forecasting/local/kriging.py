@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from ...config import Drift, Kernel
 from .._native_wrappers import NativeForecastWrapper
 
 CoordinateInput = Mapping[str, Sequence[float]] | Sequence[tuple[str, float, float]]
@@ -19,8 +20,8 @@ class KrigingForecaster(NativeForecastWrapper):
         range: float = 1.0,
         nugget: float = 1.0e-6,
         sill: float = 1.0,
-        variogram_model: str = "exponential",
-        drift: str = "ordinary",
+        variogram_model: Kernel = Kernel.EXPONENTIAL,
+        drift: Drift = Drift.ORDINARY,
         anisotropy_angle_degrees: float = 0.0,
         anisotropy_scaling: float = 1.0,
         max_neighbors: int | None = None,
@@ -34,8 +35,8 @@ class KrigingForecaster(NativeForecastWrapper):
             range=float(range),
             nugget=float(nugget),
             sill=float(sill),
-            variogram_model=str(variogram_model),
-            drift=str(drift),
+            variogram_model=variogram_model.value,
+            drift=drift.value,
             anisotropy_angle_degrees=float(anisotropy_angle_degrees),
             anisotropy_scaling=float(anisotropy_scaling),
             max_neighbors=None if max_neighbors is None else int(max_neighbors),
@@ -46,8 +47,8 @@ class KrigingForecaster(NativeForecastWrapper):
         self.range = float(range)
         self.nugget = float(nugget)
         self.sill = float(sill)
-        self.variogram_model = str(variogram_model)
-        self.drift = str(drift)
+        self.variogram_model = variogram_model
+        self.drift = drift
         self.anisotropy_angle_degrees = float(anisotropy_angle_degrees)
         self.anisotropy_scaling = float(anisotropy_scaling)
         self.max_neighbors = None if max_neighbors is None else int(max_neighbors)
@@ -71,8 +72,8 @@ class SpatialPiecewiseKrigingForecaster(NativeForecastWrapper):
         range: float = 1.0,
         nugget: float = 1.0e-6,
         sill: float = 1.0,
-        variogram_model: str = "exponential",
-        drift: str = "ordinary",
+        variogram_model: Kernel = Kernel.EXPONENTIAL,
+        drift: Drift = Drift.ORDINARY,
         anisotropy_angle_degrees: float = 0.0,
         anisotropy_scaling: float = 1.0,
         max_neighbors: int | None = None,
@@ -91,8 +92,8 @@ class SpatialPiecewiseKrigingForecaster(NativeForecastWrapper):
             range=float(range),
             nugget=float(nugget),
             sill=float(sill),
-            variogram_model=str(variogram_model),
-            drift=str(drift),
+            variogram_model=variogram_model.value,
+            drift=drift.value,
             anisotropy_angle_degrees=float(anisotropy_angle_degrees),
             anisotropy_scaling=float(anisotropy_scaling),
             max_neighbors=None if max_neighbors is None else int(max_neighbors),

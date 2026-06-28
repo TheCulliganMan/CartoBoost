@@ -1,14 +1,18 @@
 {
   "search_spaces": [
-    {"model_family": "cartoboost", "budget": "standard", "parameters": ["n_estimators", "learning_rate", "max_depth", "min_samples_leaf", "splitters", "zone_treatment"]},
+    {"model_family": "cartoboost", "budget": "standard", "parameters": ["n_estimators", "learning_rate", "max_depth", "min_samples_leaf", "splitters", "zone_treatment", "route_bearing_unit_vector", "radial_distance_features"]},
     {"model_family": "cartoboost_neural", "budget": "standard", "parameters": ["neural_dim", "n_estimators", "learning_rate", "max_depth", "zone_treatment"]},
     {"model_family": "cartoboost_graph", "budget": "standard", "parameters": ["graph_family", "graph_dim", "graph_epochs", "n_estimators", "learning_rate", "max_depth", "zone_treatment"]},
-    {"model_family": "lightgbm", "budget": "standard", "parameters": ["n_estimators", "learning_rate", "max_depth", "subsample", "train_only_target_encodings"]},
-    {"model_family": "xgboost", "budget": "standard", "parameters": ["n_estimators", "learning_rate", "max_depth", "tree_method", "max_bin", "subsample", "colsample_bytree", "train_only_target_encodings"]},
+    {"model_family": "lightgbm", "budget": "standard", "parameters": ["n_estimators", "learning_rate", "max_depth", "subsample", "train_only_target_encodings", "route_bearing_unit_vector", "radial_distance_features"]},
+    {"model_family": "xgboost", "budget": "standard", "parameters": ["n_estimators", "learning_rate", "max_depth", "tree_method", "max_bin", "subsample", "colsample_bytree", "train_only_target_encodings", "route_bearing_unit_vector", "radial_distance_features"]},
+    {"model_family": "catboost", "budget": "standard", "parameters": ["iterations", "learning_rate", "depth", "l2_leaf_reg", "train_only_target_encodings"]},
     {"model_family": "hist_gradient_boosting", "budget": "standard", "parameters": ["max_iter", "learning_rate", "max_leaf_nodes", "train_only_target_encodings"]},
     {"model_family": "random_forest", "budget": "standard", "parameters": ["n_estimators", "max_depth", "min_samples_leaf", "train_only_target_encodings"]},
     {"model_family": "extra_trees", "budget": "standard", "parameters": ["n_estimators", "max_depth", "min_samples_leaf", "train_only_target_encodings"]},
     {"model_family": "ridge", "budget": "fixed", "parameters": ["alpha", "train_only_target_encodings"]},
-    {"model_family": "mean", "budget": "fixed", "parameters": []}
+    {"model_family": "mean", "budget": "fixed", "parameters": []},
+    {"model_family": "pysal_spatial_regression", "budget": "standard", "parameters": ["weights", "model", "robust_errors"]},
+    {"model_family": "pykrige", "budget": "standard", "parameters": ["variogram_model", "nlags", "anisotropy_scaling"]},
+    {"model_family": "gstools", "budget": "standard", "parameters": ["covariance_model", "len_scale", "fit_variogram"]}
   ]
 }

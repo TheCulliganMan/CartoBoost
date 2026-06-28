@@ -11,7 +11,11 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 cartoboost-core = { path = "../cartoboost-core" }
-cartoboost-neural = { path = "../cartoboost-neural" }
+cartoboost-geo-causal = { path = "../cartoboost-geo-causal" }
+cartoboost-geo-core = { path = "../cartoboost-geo-core" }
+cartoboost-geostats = { path = "../cartoboost-geostats" }
+cartoboost-geo-st = { path = "../cartoboost-geo-st", features = ["webgpu"] }
+cartoboost-neural = { path = "../cartoboost-neural", features = ["webgpu"] }
 chrono.workspace = true
 console_error_panic_hook = "0.1"
 serde.workspace = true

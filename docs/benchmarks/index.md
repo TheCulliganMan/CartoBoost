@@ -17,6 +17,13 @@ topology, and lane-demand history. The benchmark docs separate real NYC TLC
 evidence from synthetic mechanism checks and report mixed results when external
 baselines are lower on a task.
 
+The benchmark manifests define the geo-modeling claim roster: NYC TLC
+zone/lane demand, METR-LA/PEMS graph forecasting, EPA air-quality
+interpolation, California housing sanity, synthetic spatial fields, synthetic
+graph diffusion, and synthetic geo-causal lift panels. Each family must declare
+leakage-safe splits, required competitors, diagnostics, leaderboard outputs,
+runtime, and memory before results can be promoted as benchmark evidence.
+
 ## Report Map
 
 | Report | Evidence type | What to inspect first |

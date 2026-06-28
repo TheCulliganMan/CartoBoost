@@ -7,7 +7,10 @@ use crate::graphsage::{
     HeteroTypedEdge, HinSageConfig, HinSageEncoder, HinSageGraph, HomogeneousGraph,
 };
 use crate::node2vec::{Node2VecConfig, Node2VecEncoder};
-use crate::{fit_embedding_table_with_options, GraphSageEncoderArtifact, Node2VecEncoderArtifact};
+use crate::{
+    backend_pair_sigmoid_scores_f32, fit_embedding_table_with_options, BackendSelection,
+    GraphSageEncoderArtifact, Node2VecEncoderArtifact,
+};
 use cartoboost_core::loss::LossConfig;
 use cartoboost_core::tree::{FuzzyKernel, LeafPredictorKind, SplitterKind};
 use cartoboost_core::{Booster, BoosterConfig, Dataset, Model};
@@ -997,7 +1000,7 @@ impl GraphSageLinkPredictor {
             .encoder
             .encode_graph(&graph, node_features)?
             .into_inner();
-        link_scores(&embeddings, pairs)
+        link_scores_with_backend(&embeddings, pairs, &self.config.backend)
     }
 
     pub fn save_artifact_json(&self, path: impl AsRef<Path>) -> Result<()> {
@@ -1096,7 +1099,7 @@ impl HeteroGraphSageLinkPredictor {
             .encoder
             .encode_graph(&graph, node_features)?
             .into_inner();
-        link_scores(&embeddings, pairs)
+        link_scores_with_backend(&embeddings, pairs, &self.config.backend)
     }
 
     pub fn save_artifact_json(&self, path: impl AsRef<Path>) -> Result<()> {
@@ -1346,23 +1349,22 @@ fn append_pair_features(row: &mut Vec<f64>, source: &[f32], target: &[f32]) {
 }
 
 fn link_scores(embeddings: &[Vec<f32>], pairs: &[(usize, usize)]) -> Result<Vec<f64>> {
-    pairs
-        .par_iter()
-        .map(|&(source, target)| {
-            let source_vec = embeddings.get(source).ok_or_else(|| {
-                NeuralError::InvalidArgument("source node id exceeds node count".to_string())
-            })?;
-            let target_vec = embeddings.get(target).ok_or_else(|| {
-                NeuralError::InvalidArgument("target node id exceeds node count".to_string())
-            })?;
-            let score = source_vec
-                .iter()
-                .zip(target_vec.iter())
-                .map(|(left, right)| f64::from(*left) * f64::from(*right))
-                .sum::<f64>();
-            Ok(1.0 / (1.0 + (-score).exp()))
-        })
-        .collect()
+    link_scores_with_backend(embeddings, pairs, &BackendSelection::default())
+}
+
+fn link_scores_with_backend(
+    embeddings: &[Vec<f32>],
+    pairs: &[(usize, usize)],
+    backend: &BackendSelection,
+) -> Result<Vec<f64>> {
+    backend_pair_sigmoid_scores_f32(backend, embeddings, pairs).map_err(|err| match err {
+        NeuralError::InvalidArgument(message)
+            if message.contains("pair scoring node ids must be within") =>
+        {
+            NeuralError::InvalidArgument("source or target node id exceeds node count".to_string())
+        }
+        other => other,
+    })
 }
 
 fn typed_edges(edges: &[(usize, usize, usize)]) -> Vec<HeteroTypedEdge> {

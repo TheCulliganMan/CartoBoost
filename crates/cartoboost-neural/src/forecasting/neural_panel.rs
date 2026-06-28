@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::scaler::StandardScaler;
-use crate::{NeuralError, Result};
+use crate::{backend_dense_layer_f32, BackendSelection, NeuralError, Result};
 
 type KnownFutureCovariates = BTreeMap<(String, NaiveDateTime), BTreeMap<String, f64>>;
 type KnownFutureCovariateIndex<'a> =
@@ -79,6 +79,8 @@ pub struct NeuralPanelConfig {
     pub learning_rate: f64,
     pub weight_decay: f64,
     pub newer_sample_weight: bool,
+    #[serde(default)]
+    pub backend: BackendSelection,
 }
 
 impl Default for NeuralPanelConfig {
@@ -113,6 +115,7 @@ impl Default for NeuralPanelConfig {
             learning_rate: 0.01,
             weight_decay: 0.0,
             newer_sample_weight: false,
+            backend: BackendSelection::default(),
         }
     }
 }
@@ -619,7 +622,7 @@ impl NeuralPanelForecaster {
                     "missing fitted timestamp tail for series '{series_id}'"
                 ))
             })?;
-            let stationary_effects = self.stationary_network_effects(series_id);
+            let stationary_effects = self.stationary_network_effects(series_id)?;
             let mut rows = Vec::with_capacity(horizon);
             for step in 1..=horizon {
                 let timestamp = frequency.advance(last_row.timestamp, step)?;
@@ -696,7 +699,7 @@ impl NeuralPanelForecaster {
         ForecastResult::new(predictions)
     }
 
-    fn stationary_network_effects(&self, series_id: &str) -> Vec<f64> {
+    fn stationary_network_effects(&self, series_id: &str) -> CoreResult<Vec<f64>> {
         let mut output = vec![0.0; self.config.n_forecasts];
         if let (Some(net), Some(tail)) = (&self.ar_net, self.target_tails.get(series_id)) {
             let start_index = tail.len().saturating_sub(self.config.n_lags);
@@ -708,15 +711,22 @@ impl NeuralPanelForecaster {
                     value - baseline
                 })
                 .collect::<Vec<_>>();
-            add_median_outputs(&mut output, &net.forward(&input), &self.config.quantiles);
+            let forward = self.forward_net(net, &input)?;
+            add_median_outputs(&mut output, &forward, &self.config.quantiles);
         }
         if let (Some(net), Some(tails)) =
             (&self.covar_net, self.lagged_covariate_tails.get(series_id))
         {
             let input = lagged_covariate_input(&self.config, tails);
-            add_median_outputs(&mut output, &net.forward(&input), &self.config.quantiles);
+            let forward = self.forward_net(net, &input)?;
+            add_median_outputs(&mut output, &forward, &self.config.quantiles);
         }
-        output
+        Ok(output)
+    }
+
+    fn forward_net(&self, net: &MlpState, input: &[f64]) -> CoreResult<Vec<f64>> {
+        net.forward(input, &self.config.backend)
+            .map_err(|err| CartoBoostError::InvalidInput(err.to_string()))
     }
 
     pub fn predict_quantiles_json_string(&self, horizon: usize) -> CoreResult<String> {
@@ -776,42 +786,37 @@ impl NeuralPanelForecaster {
                     )?;
                 let (ar_component, lagged_regressor_component) = if idx >= self.config.n_lags {
                     let lag_start = idx - self.config.n_lags;
-                    let ar_component = self
-                        .ar_net
-                        .as_ref()
-                        .map(|net| {
-                            let input = rows[lag_start..idx]
-                                .iter()
-                                .enumerate()
-                                .map(|(lag_idx, lag_row)| {
-                                    let baseline =
-                                        self.trend_baseline(series_id, lag_start + lag_idx);
-                                    scaler.transform(lag_row.target) - baseline
-                                })
-                                .collect::<Vec<_>>();
-                            net.forward(&input)
-                                .get(quantile_index)
-                                .copied()
-                                .unwrap_or(0.0)
-                        })
-                        .unwrap_or(0.0);
-                    let lagged_regressor_component = self
-                        .covar_net
-                        .as_ref()
-                        .map(|net| {
-                            let mut input = Vec::new();
-                            for (name, lag) in &self.config.lagged_regressors {
-                                let start = idx.saturating_sub(*lag);
-                                input.extend(rows[start..idx].iter().map(|history_row| {
-                                    history_row.covariates.get(name).copied().unwrap_or(0.0)
-                                }));
-                            }
-                            net.forward(&input)
-                                .get(quantile_index)
-                                .copied()
-                                .unwrap_or(0.0)
-                        })
-                        .unwrap_or(0.0);
+                    let ar_component = if let Some(net) = &self.ar_net {
+                        let input = rows[lag_start..idx]
+                            .iter()
+                            .enumerate()
+                            .map(|(lag_idx, lag_row)| {
+                                let baseline = self.trend_baseline(series_id, lag_start + lag_idx);
+                                scaler.transform(lag_row.target) - baseline
+                            })
+                            .collect::<Vec<_>>();
+                        self.forward_net(net, &input)?
+                            .get(quantile_index)
+                            .copied()
+                            .unwrap_or(0.0)
+                    } else {
+                        0.0
+                    };
+                    let lagged_regressor_component = if let Some(net) = &self.covar_net {
+                        let mut input = Vec::new();
+                        for (name, lag) in &self.config.lagged_regressors {
+                            let start = idx.saturating_sub(*lag);
+                            input.extend(rows[start..idx].iter().map(|history_row| {
+                                history_row.covariates.get(name).copied().unwrap_or(0.0)
+                            }));
+                        }
+                        self.forward_net(net, &input)?
+                            .get(quantile_index)
+                            .copied()
+                            .unwrap_or(0.0)
+                    } else {
+                        0.0
+                    };
                     (ar_component, lagged_regressor_component)
                 } else {
                     (0.0, 0.0)
@@ -914,7 +919,7 @@ impl NeuralPanelForecaster {
                         value - baseline
                     })
                     .collect::<Vec<_>>();
-                net.forward(&input)
+                self.forward_net(net, &input)?
             } else {
                 vec![0.0; output_width]
             };
@@ -924,7 +929,7 @@ impl NeuralPanelForecaster {
                         "missing fitted lagged covariate tail for series '{series_id}'"
                     ))
                 })?;
-                net.forward(&lagged_covariate_input(&self.config, tails))
+                self.forward_net(net, &lagged_covariate_input(&self.config, tails))?
             } else {
                 vec![0.0; output_width]
             };
@@ -1125,14 +1130,14 @@ impl NeuralPanelForecaster {
                             scaler.transform(*value) - baseline
                         })
                         .collect::<Vec<_>>();
-                    net.forward(&input)
+                    net.forward_cpu(&input)
                 })
                 .unwrap_or_else(|| vec![0.0; output_width]);
             let covar_output = self
                 .covar_net
                 .as_ref()
                 .map(|net| {
-                    net.forward(&lagged_covariate_input(
+                    net.forward_cpu(&lagged_covariate_input(
                         &self.config,
                         &window.lagged_covariates,
                     ))
@@ -2576,7 +2581,42 @@ impl MlpState {
         }
     }
 
-    fn forward(&self, input: &[f64]) -> Vec<f64> {
+    fn forward(&self, input: &[f64], backend: &BackendSelection) -> Result<Vec<f64>> {
+        let mut activation = padded_input(input, self.input_width);
+        for (layer_idx, layer) in self.layers.iter().enumerate() {
+            let is_last = layer_idx + 1 == self.layers.len();
+            let features = vec![activation
+                .iter()
+                .map(|value| *value as f32)
+                .collect::<Vec<_>>()];
+            let weights = (0..activation.len())
+                .flat_map(|input_idx| layer.weights.iter().map(move |row| row[input_idx] as f32))
+                .collect::<Vec<_>>();
+            let biases = layer
+                .biases
+                .iter()
+                .map(|value| *value as f32)
+                .collect::<Vec<_>>();
+            let rows = backend_dense_layer_f32(backend, &features, &weights, &biases)?;
+            activation = rows
+                .into_iter()
+                .next()
+                .expect("backend dense layer returns one row")
+                .into_iter()
+                .map(|value| {
+                    let value = f64::from(value);
+                    if is_last {
+                        value
+                    } else {
+                        value.max(0.0)
+                    }
+                })
+                .collect();
+        }
+        Ok(activation)
+    }
+
+    fn forward_cpu(&self, input: &[f64]) -> Vec<f64> {
         let mut activation = padded_input(input, self.input_width);
         for (layer_idx, layer) in self.layers.iter().enumerate() {
             let is_last = layer_idx + 1 == self.layers.len();
@@ -2734,7 +2774,7 @@ fn covar_training_examples(
                             scaler.transform(*value) - baseline(&window.series_id, idx)
                         })
                         .collect::<Vec<_>>();
-                    net.forward(&ar_input)
+                    net.forward_cpu(&ar_input)
                 })
                 .unwrap_or_else(|| vec![0.0; output_width]);
             let mut target = vec![0.0; output_width];

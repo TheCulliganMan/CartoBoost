@@ -141,6 +141,23 @@ h3_sparse_sets = build_h3_sparse_sets(
 )
 ```
 
+Decoded OSRM or Valhalla routes can be encoded as variable-length sparse rows
+of route cells. Request decoded GeoJSON/shape coordinates from the router first;
+CartoBoost rejects encoded polyline strings instead of guessing.
+
+```python
+from cartoboost import build_h3_route_sparse_sets
+
+route_sparse_sets = build_h3_route_sparse_sets(
+    osrm_routes,
+    name="route_h3",
+    resolution=9,
+    parent_resolutions=[5, 7],
+)
+
+model.fit(X_dense, y, sparse_sets=route_sparse_sets)
+```
+
 `FeatureSchema` accepts H3 sparse entries with resolution metadata:
 
 ```python
@@ -174,6 +191,8 @@ H3 rules:
 - `expand_h3_sparse_set` uses deterministic scaffold parent IDs for tests and
   schema exercises; `build_h3_sparse_sets` uses real H3 parent cells when the
   optional `h3` package is installed.
+- `build_h3_route_sparse_sets` accepts decoded route coordinate sequences, OSRM
+  GeoJSON-style route mappings, or Valhalla-style decoded shape mappings.
 - Sparse rows are sorted and deduplicated before they are returned to the
   estimator.
 
@@ -201,6 +220,19 @@ s2_sparse_sets = build_s2_sparse_sets(
 )
 ```
 
+Decoded route geometries can also be encoded as S2 sparse rows:
+
+```python
+from cartoboost import build_s2_route_sparse_sets
+
+route_sparse_sets = build_s2_route_sparse_sets(
+    valhalla_routes,
+    name="route_s2",
+    level=12,
+    parent_levels=[8, 10],
+)
+```
+
 `cartoboost.s2.normalize_s2_id` accepts non-negative integer S2 IDs plus decimal
 or `0x`-prefixed strings when cells are already encoded upstream. Auto-encoding
 requires the optional `s2sphere` package and raises `ImportError` if it is
@@ -214,6 +246,8 @@ S2 rules:
 - `parent_levels` must be strictly less than `level` in sparse-set builders.
 - S2 IDs may be non-negative integers, decimal strings, or `0x`-prefixed
   hexadecimal strings.
+- `build_s2_route_sparse_sets` accepts decoded route coordinate sequences, OSRM
+  GeoJSON-style route mappings, or Valhalla-style decoded shape mappings.
 - Sparse rows are sorted and deduplicated natively before they are returned to
   the estimator.
 

@@ -1,6 +1,12 @@
 [workspace]
 members = [
     "crates/cartoboost-core",
+    "crates/cartoboost-geo-core",
+    "crates/cartoboost-geo-causal",
+    "crates/cartoboost-geostats",
+    "crates/cartoboost-prob",
+    "crates/cartoboost-geo-st",
+    "crates/cartoboost-spatial-econ",
     "crates/cartoboost-neural",
     "crates/cartoboost-cli",
     "crates/cartoboost-py",
@@ -35,7 +41,7 @@ thiserror = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
-pyo3 = { version = "0.23", features = ["extension-module"] }
+pyo3 = "0.23"
 clap = { version = "4", features = ["derive"] }
 toml = "0.8"
 criterion = "0.5"

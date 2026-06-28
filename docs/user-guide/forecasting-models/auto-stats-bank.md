@@ -16,7 +16,7 @@ selector.
 Use `AutoStatsBank` as a selection layer, not as proof that a complex model is
 needed. Keep naive and seasonal naive in the comparison table.
 
-## Basic Fit
+## Public Contract
 
 ```python
 from cartoboost.forecasting import AutoStatsBank, ForecastFrame

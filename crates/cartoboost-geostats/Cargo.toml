@@ -1,0 +1,18 @@
+[package]
+name = "cartoboost-geostats"
+version = "0.2.32"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cartoboost-geo-core = { path = "../cartoboost-geo-core" }
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "geostats"
+path = "../../benches/geostats.rs"
+harness = false

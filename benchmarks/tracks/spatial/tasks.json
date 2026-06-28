@@ -3,23 +3,73 @@
     {
       "id": "fare_geotemporal_regression",
       "dataset_id": "nyc_tlc_yellow_taxi_q1_2024_v1",
-      "split_id": "random_and_pickup_zone_holdout_3seed",
+      "split_id": "pickup_zone_group_cv_manifest_v1",
       "primary_metric": "rmse",
-      "required_model_families": ["cartoboost", "cartoboost_neural", "cartoboost_graph", "lightgbm", "xgboost", "hist_gradient_boosting", "random_forest", "extra_trees", "ridge", "mean"]
+      "claim_family": "nyc_tlc_zone_lane_demand",
+      "required_model_families": ["cartoboost", "cartoboost_neural", "cartoboost_graph", "lightgbm", "xgboost", "catboost", "hist_gradient_boosting", "random_forest", "extra_trees", "ridge", "mean"],
+      "required_diagnostics": ["residual_morans_i", "spatial_block_error", "calibration_by_region", "interval_width_by_region"],
+      "feature_families": ["coordinate_xy", "route_bearing_unit_vector", "distance", "zone_sparse_ids"],
+      "scorecard_outputs": ["leaderboard_json", "leaderboard_markdown"],
+      "resource_metrics": ["fit_wallclock_seconds", "predict_wallclock_seconds", "peak_memory_mb"]
     },
     {
       "id": "duration_geotemporal_regression",
       "dataset_id": "nyc_tlc_yellow_taxi_q1_2024_v1",
-      "split_id": "random_and_pickup_zone_holdout_3seed",
+      "split_id": "pickup_zone_group_cv_manifest_v1",
       "primary_metric": "rmse",
-      "required_model_families": ["cartoboost", "cartoboost_neural", "cartoboost_graph", "lightgbm", "xgboost", "hist_gradient_boosting", "random_forest", "extra_trees", "ridge", "mean"]
+      "claim_family": "nyc_tlc_zone_lane_demand",
+      "required_model_families": ["cartoboost", "cartoboost_neural", "cartoboost_graph", "lightgbm", "xgboost", "catboost", "hist_gradient_boosting", "random_forest", "extra_trees", "ridge", "mean"],
+      "required_diagnostics": ["residual_morans_i", "spatial_block_error", "calibration_by_region", "interval_width_by_region"],
+      "feature_families": ["coordinate_xy", "route_bearing_unit_vector", "distance", "zone_sparse_ids"],
+      "scorecard_outputs": ["leaderboard_json", "leaderboard_markdown"],
+      "resource_metrics": ["fit_wallclock_seconds", "predict_wallclock_seconds", "peak_memory_mb"]
     },
     {
       "id": "pickup_demand_zone_time_regression",
       "dataset_id": "nyc_tlc_yellow_taxi_q1_2024_v1",
-      "split_id": "random_and_pickup_zone_holdout_3seed",
+      "split_id": "pickup_zone_buffered_cv_manifest_v1",
       "primary_metric": "rmse",
-      "required_model_families": ["cartoboost", "cartoboost_neural", "cartoboost_graph", "lightgbm", "xgboost", "hist_gradient_boosting", "random_forest", "extra_trees", "ridge", "mean"]
+      "claim_family": "nyc_tlc_zone_lane_demand",
+      "required_model_families": ["cartoboost", "cartoboost_neural", "cartoboost_graph", "lightgbm", "xgboost", "catboost", "hist_gradient_boosting", "random_forest", "extra_trees", "ridge", "mean"],
+      "required_diagnostics": ["residual_morans_i", "spatial_block_error", "calibration_by_region", "interval_width_by_region"],
+      "feature_families": ["coordinate_xy", "radial_distance", "zone_sparse_ids"],
+      "scorecard_outputs": ["leaderboard_json", "leaderboard_markdown"],
+      "resource_metrics": ["fit_wallclock_seconds", "predict_wallclock_seconds", "peak_memory_mb"]
+    },
+    {
+      "id": "epa_pm25_spatial_interpolation",
+      "dataset_id": "epa_air_quality_daily_pm25_v1",
+      "split_id": "epa_monitor_buffered_cv_manifest_v1",
+      "primary_metric": "rmse",
+      "claim_family": "epa_air_quality_interpolation",
+      "required_model_families": ["cartoboost", "lightgbm", "xgboost", "catboost", "hist_gradient_boosting", "pysal_spatial_regression", "pykrige", "gstools", "mean"],
+      "required_diagnostics": ["residual_morans_i", "variogram_plot", "spatial_block_error", "calibration_by_region", "interval_width_by_region"],
+      "feature_families": ["coordinate_xy", "radial_distance", "bearing_unit_vector"],
+      "scorecard_outputs": ["leaderboard_json", "leaderboard_markdown"],
+      "resource_metrics": ["fit_wallclock_seconds", "predict_wallclock_seconds", "peak_memory_mb"]
+    },
+    {
+      "id": "synthetic_spatial_field_interpolation",
+      "dataset_id": "synthetic_spatial_fields_v1",
+      "split_id": "synthetic_field_spatial_block_manifest_v1",
+      "primary_metric": "rmse",
+      "claim_family": "synthetic_spatial_fields",
+      "required_model_families": ["cartoboost", "lightgbm", "xgboost", "catboost", "hist_gradient_boosting", "pysal_spatial_regression", "pykrige", "gstools", "mean"],
+      "required_diagnostics": ["residual_morans_i", "variogram_plot", "spatial_block_error"],
+      "feature_families": ["coordinate_xy", "radial_distance", "bearing_unit_vector"],
+      "scorecard_outputs": ["leaderboard_json", "leaderboard_markdown"],
+      "resource_metrics": ["fit_wallclock_seconds", "predict_wallclock_seconds", "peak_memory_mb"]
+    },
+    {
+      "id": "synthetic_geo_causal_lift_panel",
+      "dataset_id": "synthetic_geo_causal_lift_panels_v1",
+      "split_id": "geo_causal_panel_rolling_origin_manifest_v1",
+      "primary_metric": "mae",
+      "claim_family": "synthetic_geo_causal_lift_panels",
+      "required_model_families": ["cartoboost", "pysal_spatial_regression", "ridge", "mean"],
+      "required_diagnostics": ["causal_placebo_summary", "spatial_block_error"],
+      "scorecard_outputs": ["leaderboard_json", "leaderboard_markdown"],
+      "resource_metrics": ["fit_wallclock_seconds", "predict_wallclock_seconds", "peak_memory_mb"]
     }
   ]
 }

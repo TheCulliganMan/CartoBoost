@@ -6,6 +6,7 @@ from typing import Any
 
 import numpy as np
 
+from ..config import Backend, ChoiceStrEnum
 from ._native_wrappers import NativeForecastWrapper
 from .frequency import require_pandas
 from .local.piecewise_linear import (
@@ -15,6 +16,33 @@ from .local.piecewise_linear import (
     _holiday_event_tuples,
 )
 from .schema import ForecastFrame
+
+
+class Trend(ChoiceStrEnum):
+    PIECEWISE_LINEAR = "piecewise_linear"
+    FLAT = "flat"
+    LINEAR = "linear"
+
+
+class SeasonalityMode(ChoiceStrEnum):
+    ADDITIVE = "additive"
+    MULTIPLICATIVE = "multiplicative"
+
+
+class ComponentMode(ChoiceStrEnum):
+    ADDITIVE = "additive"
+    MULTIPLICATIVE = "multiplicative"
+
+
+class PanelMode(ChoiceStrEnum):
+    GLOBAL = "global"
+    LOCAL = "local"
+
+
+class Loss(ChoiceStrEnum):
+    SMOOTH_L1 = "smooth_l1"
+    L2 = "l2"
+    HUBER = "huber"
 
 
 class NBeatsForecaster(NativeForecastWrapper):
@@ -29,6 +57,7 @@ class NBeatsForecaster(NativeForecastWrapper):
         hidden_size: int = 16,
         epochs: int = 80,
         learning_rate: float = 0.01,
+        backend: Backend = Backend.AUTO,
         **metadata: Any,
     ) -> None:
         _validate_common(input_size, hidden_size, epochs, learning_rate)
@@ -37,6 +66,7 @@ class NBeatsForecaster(NativeForecastWrapper):
             hidden_size=int(hidden_size),
             epochs=int(epochs),
             learning_rate=float(learning_rate),
+            backend=_choice_value(backend),
             metadata=dict(metadata),
         )
 
@@ -55,6 +85,7 @@ class NBeatsForecaster(NativeForecastWrapper):
             hidden_size=self._params["hidden_size"],
             epochs=self._params["epochs"],
             learning_rate=self._params["learning_rate"],
+            backend=self._params["backend"],
         )
 
 
@@ -71,6 +102,7 @@ class NHiTSForecaster(NativeForecastWrapper):
         epochs: int = 80,
         learning_rate: float = 0.01,
         pooling_size: int = 2,
+        backend: Backend = Backend.AUTO,
         **metadata: Any,
     ) -> None:
         _validate_common(input_size, hidden_size, epochs, learning_rate)
@@ -82,6 +114,7 @@ class NHiTSForecaster(NativeForecastWrapper):
             epochs=int(epochs),
             learning_rate=float(learning_rate),
             pooling_size=int(pooling_size),
+            backend=_choice_value(backend),
             metadata=dict(metadata),
         )
 
@@ -99,6 +132,7 @@ class NHiTSForecaster(NativeForecastWrapper):
             epochs=self._params["epochs"],
             learning_rate=self._params["learning_rate"],
             pooling_size=self._params["pooling_size"],
+            backend=self._params["backend"],
         )
 
 
@@ -113,7 +147,7 @@ class NeuralPanelForecaster(NativeForecastWrapper):
         n_lags: int = 8,
         n_forecasts: int = 1,
         quantiles: tuple[float, ...] | list[float] | None = None,
-        trend: str = "piecewise_linear",
+        trend: Trend = Trend.PIECEWISE_LINEAR,
         n_changepoints: int = 10,
         changepoints_range: float = 0.8,
         daily_fourier_order: int = 0,
@@ -122,29 +156,30 @@ class NeuralPanelForecaster(NativeForecastWrapper):
         custom_seasonalities: (
             list[tuple[str, float, int]] | list[tuple[str, float, int, str | None]] | None
         ) = None,
-        seasonality_mode: str = "additive",
+        seasonality_mode: SeasonalityMode = SeasonalityMode.ADDITIVE,
         events: dict[str, list[int]] | None = None,
         holidays: Any | None = None,
-        holidays_mode: str | None = None,
+        holidays_mode: SeasonalityMode | None = None,
         country_holidays: str | None = None,
         country_holiday_years: list[int] | tuple[int, ...] | None = None,
         country_holiday_subdivision: str | None = None,
-        event_mode: str = "additive",
-        future_regressors: dict[str, str] | None = None,
+        event_mode: ComponentMode = ComponentMode.ADDITIVE,
+        future_regressors: dict[str, ComponentMode] | None = None,
         lagged_regressors: dict[str, int] | None = None,
         ar_layers: list[int] | None = None,
         lagged_reg_layers: list[int] | None = None,
-        trend_mode: str = "global",
-        seasonality_global_local: str = "global",
-        event_global_local: str = "global",
-        regressor_global_local: str = "global",
+        trend_mode: PanelMode = PanelMode.GLOBAL,
+        seasonality_global_local: PanelMode = PanelMode.GLOBAL,
+        event_global_local: PanelMode = PanelMode.GLOBAL,
+        regressor_global_local: PanelMode = PanelMode.GLOBAL,
         local_l2: float = 0.0,
         seed: int = 0,
-        loss: str = "smooth_l1",
+        loss: Loss = Loss.SMOOTH_L1,
         epochs: int = 80,
         learning_rate: float = 0.01,
         weight_decay: float = 0.0,
         newer_sample_weight: bool = False,
+        backend: Backend = Backend.AUTO,
         **metadata: Any,
     ) -> None:
         _validate_panel(
@@ -158,7 +193,7 @@ class NeuralPanelForecaster(NativeForecastWrapper):
             weight_decay=weight_decay,
         )
         if holidays_mode is not None:
-            if event_mode is not None and event_mode != holidays_mode:
+            if event_mode is not None and _choice_value(event_mode) != _choice_value(holidays_mode):
                 raise ValueError("event_mode and holidays_mode must agree when both are set")
             event_mode = holidays_mode
         holiday_events, _ = _holiday_event_tuples(holidays, None)
@@ -178,31 +213,32 @@ class NeuralPanelForecaster(NativeForecastWrapper):
             n_lags=int(n_lags),
             n_forecasts=int(n_forecasts),
             quantiles=list(quantiles or (0.5,)),
-            trend=str(trend),
+            trend=_choice_value(trend),
             n_changepoints=int(n_changepoints),
             changepoints_range=float(changepoints_range),
             daily_fourier_order=int(daily_fourier_order),
             weekly_fourier_order=int(weekly_fourier_order),
             yearly_fourier_order=int(yearly_fourier_order),
             custom_seasonalities=_normalize_custom_seasonalities(custom_seasonalities),
-            seasonality_mode=str(seasonality_mode),
+            seasonality_mode=_choice_value(seasonality_mode),
             events=dict(events or {}),
-            event_mode=str(event_mode),
+            event_mode=_choice_value(event_mode) if event_mode is not None else None,
             future_regressors=future_regressors or {},
             lagged_regressors=dict(lagged_regressors or {}),
             ar_layers=list(ar_layers or ()),
             lagged_reg_layers=list(lagged_reg_layers or ()),
-            trend_mode=str(trend_mode),
-            seasonality_global_local=str(seasonality_global_local),
-            event_global_local=str(event_global_local),
-            regressor_global_local=str(regressor_global_local),
+            trend_mode=_choice_value(trend_mode),
+            seasonality_global_local=_choice_value(seasonality_global_local),
+            event_global_local=_choice_value(event_global_local),
+            regressor_global_local=_choice_value(regressor_global_local),
             local_l2=float(local_l2),
             seed=int(seed),
-            loss=str(loss),
+            loss=_choice_value(loss),
             epochs=int(epochs),
             learning_rate=float(learning_rate),
             weight_decay=float(weight_decay),
             newer_sample_weight=bool(newer_sample_weight),
+            backend=_choice_value(backend),
             metadata=dict(metadata),
         )
         self._holiday_events = holiday_events
@@ -218,11 +254,13 @@ class NeuralPanelForecaster(NativeForecastWrapper):
             args = self._coerce_holiday_fit_args(args)
         return super().fit(*args, **kwargs)
 
-    def add_future_regressor(self, name: str, mode: str = "additive") -> NeuralPanelForecaster:
+    def add_future_regressor(
+        self,
+        name: str,
+        mode: ComponentMode = ComponentMode.ADDITIVE,
+    ) -> NeuralPanelForecaster:
         self._ensure_unfitted()
-        normalized_mode = str(mode)
-        if normalized_mode not in {"additive", "multiplicative"}:
-            raise ValueError("mode must be 'additive' or 'multiplicative'")
+        normalized_mode = _choice_value(mode)
         self._params["future_regressors"][str(name)] = normalized_mode
         return self
 
@@ -475,12 +513,19 @@ NHITSForecaster = NHiTSForecaster
 NBEATSForecaster = NBeatsForecaster
 
 __all__ = [
+    "Backend",
+    "ChoiceStrEnum",
+    "ComponentMode",
+    "Loss",
     "LaneNeuralPanelForecaster",
     "NBeatsForecaster",
     "NBEATSForecaster",
     "NeuralPanelForecaster",
     "NHiTSForecaster",
+    "PanelMode",
+    "SeasonalityMode",
     "NHITSForecaster",
+    "Trend",
 ]
 
 
@@ -509,10 +554,16 @@ def _normalize_custom_seasonalities(
     return normalized
 
 
+def _choice_value(value: str | ChoiceStrEnum) -> str:
+    if isinstance(value, ChoiceStrEnum):
+        return value.value
+    return str(value)
+
+
 def _merge_future_regressors(
-    base: dict[str, str] | None,
-    holiday_regressors: dict[str, str],
-) -> dict[str, str]:
+    base: dict[str, ComponentMode] | None,
+    holiday_regressors: dict[str, ComponentMode],
+) -> dict[str, ComponentMode]:
     merged = dict(base or {})
     for name, mode in holiday_regressors.items():
         existing = merged.get(name)
@@ -524,8 +575,8 @@ def _merge_future_regressors(
 
 def _holiday_future_regressors(
     holidays: list[tuple[str, str, int | None, int | None]],
-    event_mode: str | None,
-) -> dict[str, str]:
+    event_mode: ComponentMode | None,
+) -> dict[str, ComponentMode]:
     if event_mode is None:
         return {}
     return {name: event_mode for name, *_ in holidays}

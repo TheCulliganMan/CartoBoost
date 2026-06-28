@@ -17,7 +17,7 @@ Use `NBeatsForecaster` first when recent history should be projected directly.
 Use `NHiTSForecaster` when pooled history windows may be useful for smoother or
 longer-horizon structure.
 
-## Basic Fit
+## Public Contract
 
 ```python
 from cartoboost.forecasting import ForecastFrame, NBeatsForecaster, NHiTSForecaster
@@ -50,6 +50,11 @@ nhits.fit(frame)
 nhits_forecast = nhits.predict(12)
 ```
 
+Set `backend="auto"` for ordinary runs. On Apple-platform wheels built with the
+native Metal feature, `backend="metal"` routes the deterministic dense
+inference layers through CartoBoost's shared Metal backend; invalid or
+unavailable accelerator requests fail instead of silently falling back to CPU.
+
 ## Use When
 
 | Situation | Better first choice |
@@ -68,6 +73,7 @@ nhits_forecast = nhits.predict(12)
 | `epochs` | Both | Number of deterministic training passes. |
 | `learning_rate` | Both | Optimization step size. |
 | `pooling_size` | `NHiTSForecaster` | Pooling factor for compressed history windows. |
+| `backend` | Both | `"auto"`, `"cpu"`, or an available accelerator such as `"metal"` for backend-dispatched dense prediction kernels. |
 
 ## Validation
 

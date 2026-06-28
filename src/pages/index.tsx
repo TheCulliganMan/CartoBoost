@@ -62,9 +62,6 @@ function HomepageHeader() {
           </Link>
         </div>
       </div>
-      <div className={styles.mapPanel} aria-label="CartoBoost route and signal illustration">
-        <img src={require('@site/static/img/route-signal.svg').default} alt="" />
-      </div>
     </header>
   );
 }

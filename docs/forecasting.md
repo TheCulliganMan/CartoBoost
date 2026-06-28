@@ -180,6 +180,7 @@ Use the model guides for modeling decisions:
 | Coordinate-aware panel borrowing | [Kriging](user-guide/forecasting-models/kriging.md) |
 | Temporal components plus spatial residual or regressor kriging | [Spatial Piecewise Kriging](user-guide/forecasting-models/spatial-piecewise-kriging.md) |
 | Shared supervised lag features across many panels | [CartoBoost Lag](user-guide/forecasting-models/cartoboost-lag.md) |
+| Directed graph sequence forecasting for roads, lanes, sensors, and zone flows | [Graph Spatiotemporal Forecasting](user-guide/forecasting-models/graph-spatiotemporal.md) |
 | Neural panel forecasting with directional ids | [Neural Panel](user-guide/forecasting-models/neural-panel.md) |
 | Guarded default selector over reusable candidates | [AutoForecaster](user-guide/forecasting-models/auto-forecaster.md) |
 | Fixed combinations of fitted models | [Weighted Ensembles](user-guide/forecasting-models/ensembles.md) |

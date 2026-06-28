@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from benchmarks.runners.significance import normal_mean_ci
+from benchmarks.runners.significance import normal_mean_ci  # noqa: E402
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:

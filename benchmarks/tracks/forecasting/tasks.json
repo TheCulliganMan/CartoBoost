@@ -5,15 +5,14 @@
       "dataset_id": "monash_transport_and_m4_v1",
       "split_id": "rolling_origin_fixed_horizon",
       "primary_metric": "mase",
-      "required_model_families": ["cartoboost", "cartoboost_lag", "statistical_forecaster", "global_forecaster"]
+      "required_model_families": ["cartoboost", "cartoboost_lag", "statistical_forecaster", "global_forecaster", "neuralforecast_baseline", "darts_baseline"]
     },
     {
       "id": "nyc_lane_demand_rolling_origin",
       "dataset_id": "nyc_taxi_lane_demand_q1_2024_v1",
       "split_id": "rolling_origin_fixed_horizon",
       "primary_metric": "rmse",
-      "required_model_families": ["cartoboost", "cartoboost_lag", "statistical_forecaster", "global_forecaster"]
+      "required_model_families": ["cartoboost", "cartoboost_lag", "statistical_forecaster", "global_forecaster", "neuralforecast_baseline", "darts_baseline"]
     }
   ]
 }
-

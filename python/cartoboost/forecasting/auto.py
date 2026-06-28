@@ -5,6 +5,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from ..config import Objective
 from ._native_wrappers import _native_class
 from .base import BaseForecaster
 from .schema import ForecastFrame
@@ -19,7 +20,7 @@ class AutoForecasterConfig:
     quantiles: tuple[float, ...] = ()
     n_threads: int | None = None
     no_hyperopt: bool = True
-    objective: str = "rmse_wape"
+    objective: Objective = Objective.RMSE_WAPE
     validation_window: int | None = None
     validation_origin_count: int = 2
     baseline_displacement_gain: float = 0.03
@@ -52,7 +53,7 @@ class AutoForecaster(BaseForecaster):
         season_length: int | None = None,
         quantiles: Sequence[float] | None = None,
         n_threads: int | None = None,
-        objective: str = "rmse_wape",
+        objective: Objective = Objective.RMSE_WAPE,
         validation_window: int | None = None,
         validation_origin_count: int = 2,
         baseline_displacement_gain: float = 0.03,
@@ -75,7 +76,7 @@ class AutoForecaster(BaseForecaster):
             season_length=season_length,
             quantiles=tuple(float(q) for q in (quantiles or ())),
             n_threads=n_threads,
-            objective=str(objective),
+            objective=objective.value,
             validation_window=validation_window,
             validation_origin_count=int(validation_origin_count),
             baseline_displacement_gain=float(baseline_displacement_gain),
@@ -186,6 +187,37 @@ class AutoForecaster(BaseForecaster):
     @property
     def metadata_(self) -> dict[str, Any]:
         return self.get_metadata()
+
+    def get_params(self, deep: bool = True) -> dict[str, Any]:
+        del deep
+        return {
+            "seed": self.config.seed,
+            "season_length": self.config.season_length,
+            "quantiles": self.config.quantiles,
+            "n_threads": self.config.n_threads,
+            "objective": self.config.objective,
+            "validation_window": self.config.validation_window,
+            "validation_origin_count": self.config.validation_origin_count,
+            "baseline_displacement_gain": self.config.baseline_displacement_gain,
+            "hard_winner_relative_gain": self.config.hard_winner_relative_gain,
+            "min_blend_weight": self.config.min_blend_weight,
+            "max_blend_weight": self.config.max_blend_weight,
+            "max_direct_horizon": self.config.max_direct_horizon,
+            "max_candidate_count": self.config.max_candidate_count,
+            "covariate_features": self.config.covariate_features,
+            "covariate_calendar_interactions": self.config.covariate_calendar_interactions,
+            "rich_calendar_features": self.config.rich_calendar_features,
+            "elapsed_calendar_features": self.config.elapsed_calendar_features,
+            "elapsed_calendar_periods": self.config.elapsed_calendar_periods,
+            "ewm_alpha_percents": self.config.ewm_alpha_percents,
+            "partial_rolling_mean_windows": self.config.partial_rolling_mean_windows,
+            **self.cartoboost_params,
+        }
+
+    def set_params(self, **params: Any) -> AutoForecaster:
+        updated = {**self.get_params(), **params}
+        self.__init__(**updated)
+        return self
 
     def _default_lags(self) -> list[int]:
         season = self.config.season_length

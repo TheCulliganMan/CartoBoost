@@ -211,6 +211,28 @@ pub fn assemble_sparse_column(
         .collect())
 }
 
+/// Return sorted, deduplicated sparse rows for route-derived cell memberships.
+///
+/// Each input row is the sequence of grid cells touched by one decoded route.
+/// Empty routes are invalid because silently treating a missing route as no
+/// membership would weaken route-context features.
+pub fn assemble_route_sparse_rows(route_cells: &[Vec<u64>]) -> Result<Vec<Vec<u64>>> {
+    route_cells
+        .par_iter()
+        .enumerate()
+        .map(|(idx, cells)| {
+            if cells.is_empty() {
+                return Err(invalid_input(format!(
+                    "route cell row {idx} must contain at least one cell"
+                )));
+            }
+            let mut row = cells.clone();
+            sort_dedup_ids(&mut row);
+            Ok(row)
+        })
+        .collect()
+}
+
 /// Validate a named coordinate feature against the expected row count.
 pub fn validate_equal_row_count(name: &str, actual: usize, expected: usize) -> Result<()> {
     if actual == expected {
@@ -318,5 +340,12 @@ mod tests {
             expected.dedup();
             assert_eq!(row, &expected);
         }
+    }
+
+    #[test]
+    fn assembles_route_sparse_rows_without_silent_empty_routes() {
+        let rows = assemble_route_sparse_rows(&[vec![3, 1, 3], vec![5, 4]]).unwrap();
+        assert_eq!(rows, vec![vec![1, 3], vec![4, 5]]);
+        assert!(assemble_route_sparse_rows(&[vec![]]).is_err());
     }
 }

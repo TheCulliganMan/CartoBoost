@@ -13,7 +13,6 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 
-
 Zone = tuple[str, float, float, float]
 
 
@@ -129,7 +128,7 @@ def write_variogram_plot(
     sizes = [35 + 18 * count for count in counts]
     axis.scatter(distances, semivariances, s=sizes, color="#2563eb", alpha=0.82)
     axis.plot(fitted_x, fitted_y, color="#dc2626", linewidth=2.2)
-    for distance, semivariance, count in zip(distances, semivariances, counts):
+    for distance, semivariance, count in zip(distances, semivariances, counts, strict=True):
         axis.text(distance, semivariance, f" n={count}", fontsize=8, va="center")
     axis.set_title(f"Empirical Variogram With Fitted {config['variogram_model'].title()} Model")
     axis.set_xlabel("lag distance")
@@ -156,10 +155,12 @@ def write_loo_plot(
     actual = [value for _, _, value in obs]
     predicted = [row["mean"] for row in predictions]
     errors = [
-        actual_value - predicted_value for actual_value, predicted_value in zip(actual, predicted)
+        actual_value - predicted_value
+        for actual_value, predicted_value in zip(actual, predicted, strict=True)
     ]
     std_errors = [
-        error / math.sqrt(max(row["variance"], 1.0e-12)) for error, row in zip(errors, predictions)
+        error / math.sqrt(max(row["variance"], 1.0e-12))
+        for error, row in zip(errors, predictions, strict=True)
     ]
 
     fig, axes = plt.subplots(1, 2, figsize=(10.6, 4.4))

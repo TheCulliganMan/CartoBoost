@@ -111,6 +111,14 @@ Use `seasonality_global_local`, `event_global_local`, and
 `regressor_global_local` to choose `global`, `local`, or `glocal` parameter
 sharing independently for Fourier terms, event offsets, and future regressors.
 
+## Backend Choice
+
+Set `backend="auto"` for ordinary runs. On Apple-platform wheels built with the
+native Metal feature, `backend="metal"` routes AR-Net and Covar-Net dense
+prediction layers through CartoBoost's shared Metal backend. Training updates
+and nonstationary feature construction remain deterministic Rust code.
+Requested accelerators that are not available in the installed build fail
+clearly instead of silently changing the run contract.
 
 ## Python Example
 
@@ -155,6 +163,7 @@ model = LaneNeuralPanelForecaster(
     learning_rate=0.01,
     weight_decay=0.001,
     newer_sample_weight=True,
+    backend="auto",
     seed=42,
 )
 model.fit(frame)

@@ -13,7 +13,7 @@ IDs, route pairs, account buckets, item IDs, or recurring operational groups.
 - Stable ids recur in both training and prediction data.
 - You want a direct model, not embedding features for another estimator.
 
-## Basic Fit
+## Public Contract
 
 ```python
 from cartoboost.neural import NeuralEmbeddingStandaloneRegressor
@@ -45,7 +45,7 @@ model.save("neural-standalone.json")
 
 <NeuralModelExample title="Neural embedding browser model" pipeline="embedding" />
 
-## Direct Contract
+## Inputs
 
 - `fit(ids, y, dense=None)` trains one supervised embedding model.
 - `predict(ids, dense=None)` returns one prediction per row.
