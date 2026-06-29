@@ -1,7 +1,16 @@
+#[cfg(all(
+    feature = "metal",
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "visionos"
+    )
+))]
+use cartoboost_geo_st::{available_compute_backends, select_compute_backend};
 use cartoboost_geo_st::{
-    available_compute_backends, graph_metrics, select_compute_backend,
-    synthetic_graph_diffusion_frame, traffic_style_fixture_frame, CsrAdjacency, DcrnnConfig,
-    DcrnnForecaster, GraphTemporalFrame,
+    graph_metrics, synthetic_graph_diffusion_frame, traffic_style_fixture_frame, CsrAdjacency,
+    DcrnnConfig, DcrnnForecaster, GraphTemporalFrame,
 };
 
 #[test]
