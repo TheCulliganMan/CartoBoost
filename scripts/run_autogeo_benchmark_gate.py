@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import resource
 import sys
 import tempfile
 import time
@@ -19,6 +18,11 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+try:
+    import resource
+except ImportError:  # pragma: no cover - exercised on Windows CI.
+    resource = None
 
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON_SOURCE = ROOT / "python"
@@ -389,6 +393,12 @@ def quadrant_groups(coords: np.ndarray) -> np.ndarray:
 
 
 def resource_usage_snapshot() -> dict[str, Any]:
+    if resource is None:
+        return {
+            "python": sys.version.split()[0],
+            "peak_memory_mb": None,
+            "process_cpu_seconds": None,
+        }
     usage = resource.getrusage(resource.RUSAGE_SELF)
     rss = float(usage.ru_maxrss)
     if sys.platform == "darwin":

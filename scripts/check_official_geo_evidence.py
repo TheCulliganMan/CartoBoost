@@ -147,6 +147,7 @@ def classify_synthetic_autogeo_gate() -> dict[str, Any]:
             "acceptance_passed": False,
             "artifact": None,
             "reason": "no local synthetic AutoGeo gate artifact found",
+            "counts_toward_final_acceptance": False,
         }
     artifact = max(artifacts, key=lambda path: path.stat().st_mtime)
     payload = json.loads(artifact.read_text(encoding="utf-8"))
