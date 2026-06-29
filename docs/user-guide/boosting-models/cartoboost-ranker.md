@@ -1,3 +1,5 @@
+import {RegressionModelExample} from '@site/src/components/ModelingLabClient';
+
 # CartoBoost Ranker
 
 Use `CartoBoostRanker` when rows are only comparable within a query group.
@@ -23,6 +25,15 @@ ranker.fit(X_train, relevance_train, groups=query_sizes_train)
 scores = ranker.predict(X_test)
 metrics = ranker.score_groups(X_test, relevance_test, groups=query_sizes_test)
 ```
+
+## Browser WASM Example
+
+The browser bundle currently exposes the shared boosted-tree runner through
+`runRegressionModel`. Use this example to inspect WASM split behavior and model
+visualization; use the Python ranker API above when query groups and ranking
+metrics are required.
+
+<RegressionModelExample title="Boosted tree browser ranking analog" mode="axis" loss="l2" />
 
 Rows for each query must be contiguous. Pass `groups` as group sizes or
 contiguous query ids, or set `group_col` when the query id is a column in `X`.

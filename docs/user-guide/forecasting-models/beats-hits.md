@@ -1,3 +1,5 @@
+import {ForecastModelExample} from '@site/src/components/ModelingLabClient';
+
 # N-BEATS And N-HiTS
 
 `NBeatsForecaster` and `NHiTSForecaster` are deterministic neural forecasting
@@ -49,6 +51,12 @@ nhits = NHiTSForecaster(
 nhits.fit(frame)
 nhits_forecast = nhits.predict(12)
 ```
+
+## Browser WASM Example
+
+<ForecastModelExample title="N-BEATS browser forecast" model="nbeats" />
+
+<ForecastModelExample title="N-HiTS browser forecast" model="nhits" />
 
 CPU is the default backend for ordinary runs. On Apple-platform wheels built with the
 native Metal feature, `backend="metal"` routes the deterministic dense

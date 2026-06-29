@@ -1,3 +1,5 @@
+import {RegressionModelExample} from '@site/src/components/ModelingLabClient';
+
 # CartoBoost Regressor
 
 Use `CartoBoostRegressor` for numeric row-level targets when the effect of
@@ -19,6 +21,10 @@ model = CartoBoostRegressor(
 model.fit(X_train, y_train)
 pred = model.predict(X_test)
 ```
+
+## Browser WASM Example
+
+<RegressionModelExample title="CartoBoost regressor browser model" mode="auto" loss="l2" />
 
 ## Use When
 

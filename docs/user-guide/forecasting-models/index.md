@@ -10,7 +10,7 @@ rolling-origin backtesting, artifacts, CLI workflows, or shared evidence rules.
 Start with the model whose assumptions match the forecast question, then prove
 it on the same rolling-origin split as the simpler baselines.
 
-## Run Any Forecast Model
+## Browser WASM Example
 
 <ForecastModelRosterExample />
 

@@ -1,3 +1,5 @@
+import {RegressionModelExample} from '@site/src/components/ModelingLabClient';
+
 # CartoBoost Classifier
 
 Use `CartoBoostClassifier` for binary or multiclass labels when the decision
@@ -21,6 +23,15 @@ clf = CartoBoostClassifier(
 clf.fit(X_train, binary_label)
 prob_positive = clf.predict_proba(X_test)[:, list(clf.classes_).index(1)]
 ```
+
+## Browser WASM Example
+
+The browser bundle currently exposes the shared boosted-tree runner through
+`runRegressionModel`. Use this example to inspect the same splitter, loss, and
+visualization path in WASM; use the Python classifier API above for class-label
+training and probability calibration.
+
+<RegressionModelExample title="Boosted tree browser classifier analog" mode="auto" loss="log_l2" />
 
 ## Use When
 

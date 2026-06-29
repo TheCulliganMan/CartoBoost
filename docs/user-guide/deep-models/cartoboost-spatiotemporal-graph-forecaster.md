@@ -1,3 +1,5 @@
+import {DeepModelWasmStatus} from '@site/src/components/ModelingLabClient';
+
 # CartoBoost SpatioTemporalGraphForecaster
 
 Use `SpatioTemporalGraphForecaster` when node-time targets live on directed
@@ -42,6 +44,10 @@ model = SpatioTemporalGraphForecaster(
 model.fit(frame)
 forecast = model.predict(2)
 ```
+
+## Browser WASM Example
+
+<DeepModelWasmStatus model="SpatioTemporalGraphForecaster" />
 
 ## When To Use
 

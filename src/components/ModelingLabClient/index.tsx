@@ -362,6 +362,91 @@ const fallbackModelOptions: ModelOption[] = [
   {value: 'naive', label: 'Naive', group: 'local'},
 ];
 
+export function RegressionModelExample({
+  title,
+  mode = 'axis',
+  loss = 'l2',
+}: {
+  title: string;
+  mode?: string;
+  loss?: string;
+}): React.ReactElement {
+  const wasmJsUrl = useBaseUrl('/wasm/cartoboost/cartoboost_wasm.js');
+  const wasmBinaryUrl = useBaseUrl('/wasm/cartoboost/cartoboost_wasm_bg.wasm');
+  const [status, setStatus] = useState('Ready to run in this page.');
+  const [isRunning, setIsRunning] = useState(false);
+  const [result, setResult] = useState<RegressionResponse | null>(null);
+
+  const runExample = useCallback(async () => {
+    setIsRunning(true);
+    setStatus('Running boosted tree model in this page.');
+    try {
+      const wasmModule = await getInitializedWasmModule(wasmJsUrl, wasmBinaryUrl);
+      const response = wasmModule.runRegressionModel(regressionExampleRequest(mode, loss));
+      setResult(response);
+      setStatus(`Model complete with ${response.metrics.holdoutRows.toLocaleString()} holdout rows.`);
+    } catch (error) {
+      setResult(null);
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsRunning(false);
+    }
+  }, [loss, mode, wasmBinaryUrl, wasmJsUrl]);
+
+  return (
+    <section
+      style={{
+        border: '1px solid var(--ifm-color-emphasis-300)',
+        borderRadius: 8,
+        padding: '1rem',
+        margin: '1rem 0',
+      }}
+    >
+      <div style={{display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap'}}>
+        <div>
+          <strong>{title}</strong>
+          <p style={{margin: '0.25rem 0 0'}}>
+            Runs <code>runRegressionModel</code> in Wasm with <code>{mode}</code> splitters and <code>{loss}</code> loss.
+          </p>
+        </div>
+        <button className="button button--primary" type="button" disabled={isRunning} onClick={() => void runExample()}>
+          {isRunning ? 'Running' : 'Run model'}
+        </button>
+      </div>
+      <p style={{margin: '0.75rem 0'}}>{status}</p>
+      {result && (
+        <>
+          <RegressionMetricSummary result={result} />
+          <CartoBoostModelVisualizer result={result} />
+          <RegressionPredictionChart result={result} />
+          <FeatureImportanceChart result={result} />
+          <RegressionPredictionTable result={result} />
+        </>
+      )}
+    </section>
+  );
+}
+
+export function DeepModelWasmStatus({model}: {model: string}): React.ReactElement {
+  return (
+    <section
+      style={{
+        border: '1px solid var(--ifm-color-emphasis-300)',
+        borderRadius: 8,
+        padding: '1rem',
+        margin: '1rem 0',
+      }}
+    >
+      <strong>{model} browser status</strong>
+      <p style={{margin: '0.5rem 0 0'}}>
+        This model is implemented in the native Rust/PyO3 deep surface. The current Wasm docs bundle does not expose a
+        dedicated browser runner for <code>{model}</code>; use the Python example on this page for fitting and serving, and
+        use the Modeling Lab for the related forecast, graph, neural, geostatistics, and regression Wasm runners.
+      </p>
+    </section>
+  );
+}
+
 export function ForecastModelExample({
   model,
   title,
@@ -385,12 +470,13 @@ export function ForecastModelExample({
     setStatus('Loading real taxi forecast sample.');
     try {
       const nextTable = await loadDocsForecastExampleTable(sample, taxiLaneSampleUrl, taxiVariedRouteSampleUrl);
+      const trainingTable = forecastExampleTrainingTable(nextTable, horizon, 'series_id');
       setTable(nextTable);
       setStatus('Running forecast in this page.');
       const response = await runBrowserForecast({
         wasmJsUrl,
         wasmBinaryUrl,
-        table: nextTable,
+        table: trainingTable,
         timestampCol: 'timestamp',
         targetCol: 'target',
         seriesCol: 'series_id',
@@ -400,7 +486,7 @@ export function ForecastModelExample({
         seasonLength,
       });
       setResult(response);
-      setStatus(`Forecast complete with ${response.forecast.records.length.toLocaleString()} rows.`);
+      setStatus(`Forecast complete with ${response.forecast.records.length.toLocaleString()} holdout rows.`);
     } catch (error) {
       setResult(null);
       setStatus(error instanceof Error ? error.message : String(error));
@@ -432,7 +518,12 @@ export function ForecastModelExample({
         </button>
       </div>
       <p style={{margin: '0.75rem 0'}}>{status}</p>
-      {result && <ForecastExampleChart records={result.forecast.records} table={table} />}
+      {result &&
+        (isSpatialPiecewiseKrigingModel(selectedModel) ? (
+          <SpatialForecastExampleDiagnostics records={result.forecast.records} />
+        ) : (
+          <ForecastExampleChart records={result.forecast.records} table={table} />
+        ))}
       {records.length > 0 && (
         <div style={{overflowX: 'auto'}}>
           <table>
@@ -958,6 +1049,65 @@ function neuralExampleRequest(pipeline: NeuralModelExampleProps['pipeline']) {
   };
 }
 
+function regressionExampleRequest(mode: string, loss: string) {
+  const rows = Array.from({length: 72}, (_, index) => {
+    const pickupLon = -74.02 + (index % 12) * 0.012;
+    const pickupLat = 40.68 + (Math.floor(index / 12) % 6) * 0.018;
+    const tripDistance = 0.9 + (index % 8) * 0.42;
+    const hour = (index * 3) % 24;
+    const airportZone = index % 9 === 0 ? 1 : 0;
+    const target =
+      4.5 +
+      tripDistance * 2.8 +
+      Math.sin((hour / 24) * Math.PI * 2) * 1.4 +
+      airportZone * 7.5 +
+      (pickupLon + 74.02) * 18 +
+      (pickupLat - 40.68) * 9;
+    return {
+      features: [
+        Number(pickupLon.toFixed(5)),
+        Number(pickupLat.toFixed(5)),
+        Number(tripDistance.toFixed(3)),
+        hour,
+        airportZone,
+      ],
+      sparseSets: [[100 + (index % 6), 200 + (index % 4)]],
+      target: Number(target.toFixed(3)),
+    };
+  });
+
+  return {
+    rows,
+    featureNames: ['pickup_lon', 'pickup_lat', 'trip_distance', 'pickup_hour', 'airport_zone'],
+    sparseFeatureNames: ['taxi_zone_memberships'],
+    options: {
+      holdoutFraction: 0.25,
+      splitterMode: mode,
+      loss,
+      quantileAlpha: 0.5,
+      huberDelta: 4,
+      logOffset: 1,
+      intervalLowerAlpha: 0.1,
+      intervalUpperAlpha: 0.9,
+      featureKinds: {
+        pickup_lon: 'spatial',
+        pickup_lat: 'spatial',
+        trip_distance: 'numeric',
+        pickup_hour: 'periodic',
+        airport_zone: 'numeric',
+      },
+      periodicPeriods: {
+        pickup_hour: 24,
+      },
+      nEstimators: 36,
+      learningRate: 0.07,
+      maxDepth: 3,
+      minSamplesLeaf: 3,
+      includeModelVisualization: true,
+    },
+  };
+}
+
 function geostatisticsExampleRequest() {
   const observations = [
     {x: -73.9851, y: 40.7589, value: 12.4},
@@ -1153,22 +1303,59 @@ function ForecastExampleChart({records, table}: {records: ForecastRecord[]; tabl
   );
 }
 
+function SpatialForecastExampleDiagnostics({records}: {records: ForecastRecord[]}): React.ReactElement | null {
+  if (records.length === 0) {
+    return null;
+  }
+  const predictions = records.map((record) => record.prediction).filter(Number.isFinite);
+  const corrections = records
+    .map((record) => record.spatial_correction)
+    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+  const variances = records
+    .map((record) => record.kriging_variance)
+    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+  const neighborCounts = records
+    .map((record) => record.selected_neighbors?.length)
+    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+  const seriesCount = new Set(records.map((record) => record.series_id)).size;
+  const rows = [
+    ['Series', seriesCount.toLocaleString()],
+    ['Prediction range', metricRange(predictions)],
+    ['Mean spatial correction', corrections.length > 0 ? formatMetric(mean(corrections)) : '-'],
+    ['Mean kriging variance', variances.length > 0 ? formatMetric(mean(variances)) : '-'],
+    ['Mean neighbors', neighborCounts.length > 0 ? formatMetric(mean(neighborCounts)) : '-'],
+  ];
+  return (
+    <section style={{margin: '1rem 0'}}>
+      <h3 style={{fontSize: '1rem', marginBottom: '0.5rem'}}>Spatial forecast diagnostics</h3>
+      <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '0.5rem'}}>
+        {rows.map(([label, value]) => (
+          <div key={label} style={{border: '1px solid var(--ifm-color-emphasis-200)', borderRadius: 8, padding: '0.75rem'}}>
+            <strong style={{display: 'block', fontSize: '0.85rem'}}>{label}</strong>
+            <span>{value}</span>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function metricRange(values: number[]) {
+  if (values.length === 0) {
+    return '-';
+  }
+  return `${formatMetric(Math.min(...values))} to ${formatMetric(Math.max(...values))}`;
+}
+
+function mean(values: number[]) {
+  return values.reduce((total, value) => total + value, 0) / values.length;
+}
+
 function forecastChartPoints(records: ForecastRecord[], table: ParsedTable): ForecastChartPoint[] {
   const selectedSeries = selectForecastChartSeriesId(records, table);
   if (!selectedSeries) {
     return [];
   }
-  const actuals = table.rows
-    .filter((row) => row.series_id === selectedSeries)
-    .map((row, index) => ({
-      kind: 'actual' as const,
-      label: 'Actual',
-      timestamp: row.timestamp,
-      value: Number(row.target),
-      index,
-    }))
-    .filter((point) => Number.isFinite(point.value))
-    .slice(-36);
   const forecasts = records
     .filter((record) => record.series_id === selectedSeries)
     .sort((left, right) => left.horizon - right.horizon || left.timestamp.localeCompare(right.timestamp))
@@ -1181,7 +1368,38 @@ function forecastChartPoints(records: ForecastRecord[], table: ParsedTable): For
       horizon: record.horizon,
     }))
     .filter((point) => Number.isFinite(point.value));
+  const firstForecastTimestamp = forecasts[0]?.timestamp;
+  const actuals = table.rows
+    .filter((row) => row.series_id === selectedSeries)
+    .filter((row) => !firstForecastTimestamp || row.timestamp < firstForecastTimestamp)
+    .map((row, index) => ({
+      kind: 'actual' as const,
+      label: 'Actual',
+      timestamp: row.timestamp,
+      value: Number(row.target),
+      index,
+    }))
+    .filter((point) => Number.isFinite(point.value))
+    .slice(-36);
   return [...actuals, ...forecasts];
+}
+
+function forecastExampleTrainingTable(table: ParsedTable, horizon: number, seriesCol: string): ParsedTable {
+  if (!seriesCol || !table.columns.includes(seriesCol) || horizon <= 0) {
+    return table;
+  }
+  const remainingBySeries = new Map<string, number>();
+  for (const row of table.rows) {
+    const seriesId = row[seriesCol] ?? '';
+    remainingBySeries.set(seriesId, (remainingBySeries.get(seriesId) ?? 0) + 1);
+  }
+  const rows = table.rows.filter((row) => {
+    const seriesId = row[seriesCol] ?? '';
+    const remaining = remainingBySeries.get(seriesId) ?? 0;
+    remainingBySeries.set(seriesId, remaining - 1);
+    return remaining > horizon;
+  });
+  return rows.length > 0 ? {...table, rows} : table;
 }
 
 function selectForecastChartSeriesId(records: ForecastRecord[], table: ParsedTable): string | null {
@@ -6053,7 +6271,7 @@ function buildSuggestedConfig({
   const targetingProfile = buildTargetingProfile(table, targetCol, timestampCol, seriesCol, featureCols, sparseFeatureCols, modelOptions);
   const rankedFeatures = rankFeatureRoles(table, targetCol, timestampCol, seriesCol, featureCols, sparseFeatureCols).slice(0, 20);
   const opportunityTargets = rankTargetOpportunities(table, targetCol, timestampCol, seriesCol, 20);
-  const modelSpecificOptions = browserForecastModelOptions(model, table, timestampCol, targetCol, seriesCol, horizon);
+  const modelSpecificOptions = browserForecastModelOptions(model, table, timestampCol, targetCol, seriesCol, horizon, seasonLength);
   return {
     cartoboostConfigVersion: 1,
     source: {
@@ -6236,15 +6454,16 @@ function browserForecastModelOptions(
   targetCol: string,
   seriesCol: string,
   horizon: number,
+  seasonLength: number,
 ) {
   if (isSpatialPiecewiseKrigingModel(model)) {
-    return spatialPiecewiseKrigingForecastOptions(table, timestampCol, targetCol, seriesCol, horizon);
+    return spatialPiecewiseKrigingForecastOptions(table, timestampCol, targetCol, seriesCol, horizon, seasonLength);
   }
   if (normalizedForecastModel(model) === 'kriging') {
     return coordinateForecastOptions(table);
   }
   if (isPiecewiseForecastModel(model)) {
-    return piecewiseForecastOptions(table, targetCol, seriesCol, [], horizon);
+    return piecewiseForecastOptions(table, targetCol, seriesCol, [], horizon, seasonLength);
   }
   if (isThetaForecastModel(model)) {
     return {thetaSeasonality: 'additive'};
@@ -6258,10 +6477,12 @@ function piecewiseForecastOptions(
   seriesCol: string,
   covariateColumns: string[],
   horizon: number,
+  seasonLength: number,
 ) {
   return {
     nChangepoints: 25,
     changepointRange: 1.0,
+    ...(seasonLength === 24 ? {dailyFourierOrder: 4} : {}),
     seasonalityMode: 'additive',
     holidaysMode: 'additive',
     extraRegressors: covariateColumns,
@@ -6271,11 +6492,12 @@ function piecewiseForecastOptions(
         .filter(([, direction]) => direction !== 0),
     ),
     futureRegressors: carriedFutureRegressors(table, covariateColumns, horizon),
-    futureRegressorsBySeries: carriedFutureRegressorsBySeries(
+    futureRegressorsBySeries: seasonalFutureRegressorsBySeries(
       table,
       covariateColumns,
       horizon,
       seriesCol,
+      seasonLength,
     ),
     intervalWidth: 0.8,
     quantileLevels: [0.1, 0.5, 0.9],
@@ -6292,10 +6514,14 @@ function spatialPiecewiseKrigingForecastOptions(
   targetCol: string,
   seriesCol: string,
   horizon: number,
+  seasonLength: number,
 ) {
-  const spatialRegressors = spatialRegressorColumns(table, [timestampCol, targetCol, seriesCol]);
+  const candidateRegressors = spatialRegressorColumns(table, [timestampCol, targetCol, seriesCol]);
+  const knownFutureRegressors = knownFutureRegressorColumns(candidateRegressors);
+  const knownFutureSet = new Set(knownFutureRegressors);
+  const spatialRegressors = candidateRegressors.filter((column) => !knownFutureSet.has(column));
   return {
-    ...piecewiseForecastOptions(table, targetCol, seriesCol, [], horizon),
+    ...piecewiseForecastOptions(table, targetCol, seriesCol, knownFutureRegressors, horizon, seasonLength),
     ...coordinateForecastOptions(table),
     includeHistoryComponents: false,
     includeQuantiles: false,
@@ -6328,6 +6554,22 @@ function spatialRegressorColumns(table: ParsedTable, excludedColumns: string[]) 
   return numericCovariateColumns(table, excludedColumns)
     .filter((column) => !isSpatialCoordinateColumn(column) && !isIdentifierColumn(column))
     .slice(0, 8);
+}
+
+function knownFutureRegressorColumns(columns: string[]) {
+  return columns.filter((column) => {
+    const normalized = column.toLowerCase();
+    return (
+      normalized === 'hour' ||
+      normalized === 'day_of_week' ||
+      normalized === 'dayofweek' ||
+      normalized === 'is_weekend' ||
+      normalized === 'is_commute_peak' ||
+      normalized === 'is_airport_lane' ||
+      normalized.endsWith('_hour') ||
+      normalized.endsWith('_dow')
+    );
+  });
 }
 
 function isSpatialCoordinateColumn(column: string) {
@@ -6412,6 +6654,58 @@ function carriedFutureRegressorsBySeries(
       ),
     ]),
   );
+}
+
+function seasonalFutureRegressorsBySeries(
+  table: ParsedTable,
+  columns: string[],
+  horizon: number,
+  seriesCol: string,
+  seasonLength: number,
+) {
+  if (!seriesCol || columns.length === 0) {
+    return {};
+  }
+  const rowsBySeries = new Map<string, Record<string, string>[]>();
+  for (const row of table.rows) {
+    const seriesId = String(row[seriesCol] ?? '');
+    if (!seriesId) {
+      continue;
+    }
+    const rows = rowsBySeries.get(seriesId) ?? [];
+    rows.push(row);
+    rowsBySeries.set(seriesId, rows);
+  }
+  const period = Math.max(1, Math.floor(seasonLength));
+  return Object.fromEntries(
+    Array.from(rowsBySeries.entries()).map(([seriesId, rows]) => [
+      seriesId,
+      Object.fromEntries(
+        columns
+          .map((column) => {
+            const fallback = lastFiniteColumnValue(rows, column);
+            const values = Array.from({length: horizon}, (_, offset) => {
+              const seasonalIndex = rows.length - period + (offset % period);
+              const seasonalRow = seasonalIndex >= 0 ? rows[seasonalIndex] : undefined;
+              const seasonalValue = seasonalRow ? Number(seasonalRow[column]) : NaN;
+              return Number.isFinite(seasonalValue) ? seasonalValue : fallback;
+            }).filter((value) => Number.isFinite(value));
+            return values.length === horizon ? ([column, values] as const) : null;
+          })
+          .filter((entry): entry is readonly [string, number[]] => entry !== null),
+      ),
+    ]),
+  );
+}
+
+function lastFiniteColumnValue(rows: Record<string, string>[], column: string) {
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const value = Number(rows[index][column]);
+    if (Number.isFinite(value)) {
+      return value;
+    }
+  }
+  return NaN;
 }
 
 function inferLogisticBoundRegressors(table: ParsedTable, targetCol: string, columns: string[]) {
@@ -6612,7 +6906,7 @@ function buildBrowserForecastRequest({
   model: string;
   seasonLength: number;
 }) {
-  const modelSpecificOptions = browserForecastModelOptions(model, table, timestampCol, targetCol, seriesCol, horizon);
+  const modelSpecificOptions = browserForecastModelOptions(model, table, timestampCol, targetCol, seriesCol, horizon, seasonLength);
   const browserAutoOptions = model === 'auto_forecast' ? {maxAutoCandidateCount: 4} : {};
   return {
     rows: table.rows.map((row) => ({

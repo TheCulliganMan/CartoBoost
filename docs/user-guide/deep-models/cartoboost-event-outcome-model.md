@@ -1,3 +1,5 @@
+import {DeepModelWasmStatus} from '@site/src/components/ModelingLabClient';
+
 # CartoBoost EventOutcomeModel
 
 Use `EventOutcomeModel` when the target is a binary event and the output should
@@ -16,6 +18,10 @@ probability = model.predict_proba(features_holdout)
 report = model.calibration_report(features_holdout, event_holdout)
 model.save("event-outcome.json")
 ```
+
+## Browser WASM Example
+
+<DeepModelWasmStatus model="EventOutcomeModel" />
 
 ## When To Use
 

@@ -1,3 +1,5 @@
+import {DeepModelWasmStatus} from '@site/src/components/ModelingLabClient';
+
 # CartoBoost DirectionalPairForecaster
 
 Use `DirectionalPairForecaster` when each row is an ordered source-target pair
@@ -28,6 +30,10 @@ model.fit(frame)
 prediction = model.predict(frame)
 score = model.score(frame)
 ```
+
+## Browser WASM Example
+
+<DeepModelWasmStatus model="DirectionalPairForecaster" />
 
 ## When To Use
 

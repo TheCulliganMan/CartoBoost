@@ -1,3 +1,5 @@
+import {DeepModelWasmStatus} from '@site/src/components/ModelingLabClient';
+
 # CartoBoost ConstrainedDecisionOptimizer
 
 Use `ConstrainedDecisionOptimizer` when each decision group has several scored
@@ -36,6 +38,10 @@ optimizer = ConstrainedDecisionOptimizer(
 )
 choice = optimizer.select(candidate_rows)
 ```
+
+## Browser WASM Example
+
+<DeepModelWasmStatus model="ConstrainedDecisionOptimizer" />
 
 ## When To Use
 

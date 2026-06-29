@@ -286,6 +286,7 @@ cartoboost eval --model model.json --data test_with_target.csv
 - [Graph Models And Features](docs/graph-features.md)
 - [Neural Model Guides](docs/user-guide/neural-models/index.md)
 - [Neural Embedding Models And Features](docs/neural-features.md)
+- [Deep Model Guides](docs/user-guide/deep-models.md)
 - [Feature Schema](docs/feature_schema.md)
 - [Sparse Features](docs/sparse_features.md)
 - [Model Artifacts](docs/model_artifact.md)

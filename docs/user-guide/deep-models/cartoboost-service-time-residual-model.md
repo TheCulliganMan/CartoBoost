@@ -1,3 +1,5 @@
+import {DeepModelWasmStatus} from '@site/src/components/ModelingLabClient';
+
 # CartoBoost ServiceTimeResidualModel
 
 Use `ServiceTimeResidualModel` when you already have a required baseline
@@ -27,6 +29,10 @@ model.fit(rows)
 prediction = model.predict(rows, return_interval=True)
 model.save("service-residual.json")
 ```
+
+## Browser WASM Example
+
+<DeepModelWasmStatus model="ServiceTimeResidualModel" />
 
 ## When To Use
 

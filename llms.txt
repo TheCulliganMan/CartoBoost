@@ -23,7 +23,7 @@ compare it against strong baselines on the same split.
 - Probabilistic and conformal forecasting guide: ./docs/user-guide/forecasting-models/probabilistic-conformal.md
 - Graph model guides: ./docs/user-guide/graph-models/index.md
 - Neural model guides: ./docs/user-guide/neural-models/index.md
-- Generic deep models: ./docs/user-guide/deep-models.md
+- Deep model guides: ./docs/user-guide/deep-models.md
 - Native deep backend selection and Metal availability: ./docs/user-guide/deep-models.md
 - Forecasting reference: ./docs/forecasting.md
 - Graph features contract: ./docs/graph-features.md

@@ -21,7 +21,7 @@ Use this directory as the navigation map for the user-facing docs site.
 - [Probabilistic and conformal forecasting guide](./user-guide/forecasting-models/probabilistic-conformal.md)
 - [CartoBoost Graph Model Guides](./user-guide/graph-models/index.md)
 - [CartoBoost Neural Model Guides](./user-guide/neural-models/index.md)
-- [Generic deep models](./user-guide/deep-models.md)
+- [Deep model guides](./user-guide/deep-models.md)
 - [Native deep backend selection and Metal availability](./user-guide/deep-models.md)
 - [Forecasting reference](./forecasting.md)
 - [Graph features contract](./graph-features.md)

@@ -1,3 +1,5 @@
+import {ForecastModelExample} from '@site/src/components/ModelingLabClient';
+
 # Intermittent Demand
 
 `CrostonForecaster`, `SbaForecaster`, and `TsbForecaster` are fixed
@@ -37,6 +39,10 @@ croston_forecast = croston.predict(6)
 sba_forecast = sba.predict(6)
 tsb_forecast = tsb.predict(6)
 ```
+
+## Browser WASM Example
+
+<ForecastModelExample title="Intermittent demand browser forecast" model="intermittent_demand" />
 
 ## Use When
 

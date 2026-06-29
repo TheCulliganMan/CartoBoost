@@ -1,3 +1,5 @@
+import {DeepModelWasmStatus} from '@site/src/components/ModelingLabClient';
+
 # CartoBoost ResponseCurveModel
 
 Use `ResponseCurveModel` when rows contain context features, candidate values,
@@ -31,6 +33,10 @@ curve = model.predict_curve(frame)
 response = model.predict_response(frame)
 best = model.best_candidate(frame)
 ```
+
+## Browser WASM Example
+
+<DeepModelWasmStatus model="ResponseCurveModel" />
 
 ## When To Use
 

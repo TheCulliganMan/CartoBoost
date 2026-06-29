@@ -1,3 +1,5 @@
+import {ForecastModelExample} from '@site/src/components/ModelingLabClient';
+
 # AutoStatsBank
 
 `AutoStatsBank` validates a fixed bank of local statistical forecasting
@@ -36,6 +38,10 @@ model = AutoStatsBank(
 model.fit(frame)
 forecast = model.predict(12)
 ```
+
+## Browser WASM Example
+
+<ForecastModelExample title="AutoStatsBank browser forecast" model="autostats_bank" />
 
 ## Use When
 
