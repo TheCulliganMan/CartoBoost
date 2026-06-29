@@ -934,6 +934,7 @@ fn aligned_rmse(
     mse.sqrt()
 }
 
+#[allow(dead_code)]
 fn assert_forecasts_close(
     actual: &[ForecastPrediction],
     expected: &[ForecastPrediction],
