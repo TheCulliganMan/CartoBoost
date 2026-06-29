@@ -1473,6 +1473,7 @@ impl Drop for CudaDeviceBuffer {
 }
 
 #[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
+#[allow(clippy::too_many_arguments)]
 fn cuda_launch_kernel(
     runtime: &CudaRuntime,
     function: CudaFunction,
@@ -1657,13 +1658,13 @@ fn cuda_affine_scores(
     with_cuda_runtime(|runtime| {
         runtime.with_compiled_kernel(SOURCE, "affine_scores_f32", |function| {
             let feature_buffer =
-                CudaDeviceBuffer::new(runtime, flat_features.len() * std::mem::size_of::<f32>())?;
+                CudaDeviceBuffer::new(runtime, std::mem::size_of_val(flat_features.as_slice()))?;
             let means_buffer =
-                CudaDeviceBuffer::new(runtime, means.len() * std::mem::size_of::<f32>())?;
+                CudaDeviceBuffer::new(runtime, std::mem::size_of_val(means.as_slice()))?;
             let weights_buffer =
-                CudaDeviceBuffer::new(runtime, weights.len() * std::mem::size_of::<f32>())?;
+                CudaDeviceBuffer::new(runtime, std::mem::size_of_val(weights.as_slice()))?;
             let intercepts_buffer =
-                CudaDeviceBuffer::new(runtime, intercepts.len() * std::mem::size_of::<f32>())?;
+                CudaDeviceBuffer::new(runtime, std::mem::size_of_val(intercepts.as_slice()))?;
             let output_buffer = CudaDeviceBuffer::new(runtime, rows * std::mem::size_of::<f32>())?;
             cuda_copy_to_device(runtime, &feature_buffer, &flat_features)?;
             cuda_copy_to_device(runtime, &means_buffer, &means)?;
@@ -1750,10 +1751,8 @@ fn cuda_dense_layer_f32(
         runtime.with_compiled_kernel(SOURCE, "dense_layer_f32", |function| {
             let feature_buffer =
                 CudaDeviceBuffer::new(runtime, flat_features.len() * std::mem::size_of::<f32>())?;
-            let weight_buffer =
-                CudaDeviceBuffer::new(runtime, weights.len() * std::mem::size_of::<f32>())?;
-            let bias_buffer =
-                CudaDeviceBuffer::new(runtime, biases.len() * std::mem::size_of::<f32>())?;
+            let weight_buffer = CudaDeviceBuffer::new(runtime, std::mem::size_of_val(weights))?;
+            let bias_buffer = CudaDeviceBuffer::new(runtime, std::mem::size_of_val(biases))?;
             let output_buffer =
                 CudaDeviceBuffer::new(runtime, rows * out_dim * std::mem::size_of::<f32>())?;
             cuda_copy_to_device(runtime, &feature_buffer, &flat_features)?;
@@ -2156,13 +2155,10 @@ impl RocmRuntime {
         )?;
 
         let mut module: HipModule = std::ptr::null_mut();
-        let load_result = self.check_hip(
+        self.check_hip(
             (self.hip_module_load_data)(&mut module, code.as_ptr().cast()),
             "failed to load the ROCm module",
-        );
-        if let Err(err) = load_result {
-            return Err(err);
-        }
+        )?;
 
         let mut function: HipFunction = std::ptr::null_mut();
         let function_result = self.check_hip(
@@ -2245,14 +2241,13 @@ impl RocmDeviceBuffer {
 impl Drop for RocmDeviceBuffer {
     fn drop(&mut self) {
         if !self.ptr.is_null() {
-            unsafe {
-                let _ = (self.free)(self.ptr);
-            }
+            let _ = (self.free)(self.ptr);
         }
     }
 }
 
 #[cfg(all(feature = "rocm", target_os = "linux"))]
+#[allow(clippy::too_many_arguments)]
 fn rocm_launch_kernel(
     runtime: &RocmRuntime,
     function: HipFunction,
@@ -2336,7 +2331,6 @@ fn rocm_vector_add_report(
 
     let left = (0..len).map(|idx| idx as f32 * 0.5).collect::<Vec<_>>();
     let right = (0..len).map(|idx| idx as f32 * 1.5).collect::<Vec<_>>();
-    let start = Instant::now();
     with_rocm_runtime(|runtime| {
         runtime.prepare_device()?;
         runtime.with_compiled_kernel(SOURCE, "vector_add_f32", |function| {
@@ -2436,18 +2430,17 @@ fn rocm_affine_scores(
         .iter()
         .map(|value| *value as f32)
         .collect::<Vec<_>>();
-    let start = Instant::now();
     with_rocm_runtime(|runtime| {
         runtime.prepare_device()?;
         runtime.with_compiled_kernel(SOURCE, "affine_scores_f32", |function| {
             let feature_buffer =
-                RocmDeviceBuffer::new(runtime, flat_features.len() * std::mem::size_of::<f32>())?;
+                RocmDeviceBuffer::new(runtime, std::mem::size_of_val(flat_features.as_slice()))?;
             let means_buffer =
-                RocmDeviceBuffer::new(runtime, means.len() * std::mem::size_of::<f32>())?;
+                RocmDeviceBuffer::new(runtime, std::mem::size_of_val(means.as_slice()))?;
             let weights_buffer =
-                RocmDeviceBuffer::new(runtime, weights.len() * std::mem::size_of::<f32>())?;
+                RocmDeviceBuffer::new(runtime, std::mem::size_of_val(weights.as_slice()))?;
             let intercepts_buffer =
-                RocmDeviceBuffer::new(runtime, intercepts.len() * std::mem::size_of::<f32>())?;
+                RocmDeviceBuffer::new(runtime, std::mem::size_of_val(intercepts.as_slice()))?;
             let output_buffer = RocmDeviceBuffer::new(runtime, rows * std::mem::size_of::<f32>())?;
             rocm_copy_to_device(runtime, &feature_buffer, &flat_features)?;
             rocm_copy_to_device(runtime, &means_buffer, &means)?;
@@ -2537,10 +2530,8 @@ fn rocm_dense_layer_f32(
         runtime.with_compiled_kernel(SOURCE, "dense_layer_f32", |function| {
             let feature_buffer =
                 RocmDeviceBuffer::new(runtime, flat_features.len() * std::mem::size_of::<f32>())?;
-            let weight_buffer =
-                RocmDeviceBuffer::new(runtime, weights.len() * std::mem::size_of::<f32>())?;
-            let bias_buffer =
-                RocmDeviceBuffer::new(runtime, biases.len() * std::mem::size_of::<f32>())?;
+            let weight_buffer = RocmDeviceBuffer::new(runtime, std::mem::size_of_val(weights))?;
+            let bias_buffer = RocmDeviceBuffer::new(runtime, std::mem::size_of_val(biases))?;
             let output_buffer =
                 RocmDeviceBuffer::new(runtime, rows * out_dim * std::mem::size_of::<f32>())?;
             rocm_copy_to_device(runtime, &feature_buffer, &flat_features)?;
@@ -3056,25 +3047,25 @@ fn webgpu_affine_scores(
     let (device, queue) = webgpu_request_device()?;
     let feature_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("webgpu-affine-features"),
-        size: (flat_features.len() * std::mem::size_of::<f32>()) as u64,
+        size: std::mem::size_of_val(flat_features.as_slice()) as u64,
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
     let means_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("webgpu-affine-means"),
-        size: (means.len() * std::mem::size_of::<f32>()) as u64,
+        size: std::mem::size_of_val(means.as_slice()) as u64,
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
     let weights_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("webgpu-affine-weights"),
-        size: (weights.len() * std::mem::size_of::<f32>()) as u64,
+        size: std::mem::size_of_val(weights.as_slice()) as u64,
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
     let intercepts_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("webgpu-affine-intercepts"),
-        size: (intercepts.len() * std::mem::size_of::<f32>()) as u64,
+        size: std::mem::size_of_val(intercepts.as_slice()) as u64,
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
