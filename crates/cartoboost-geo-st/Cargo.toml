@@ -15,7 +15,7 @@ tempfile = "3"
 
 [features]
 default = []
-cuda = []
-rocm = []
+cuda = ["cartoboost-neural/cuda"]
+rocm = ["cartoboost-neural/rocm"]
 metal = ["cartoboost-neural/metal"]
-webgpu = []
+webgpu = ["cartoboost-neural/webgpu"]

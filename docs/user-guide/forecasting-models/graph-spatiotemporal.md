@@ -70,7 +70,12 @@ horizon-level MAE, RMSE, and WAPE for the supplied cutoff.
 
 `backend="auto"` is the default. On Apple-platform wheels built with native
 Metal support, `backend="metal"` routes the DCRNN decoder head through the
-shared Metal affine kernel. Diffusion state updates, graph validation, and
+shared Metal affine kernel. On Linux or WSL wheels built with ROCm support,
+`backend="rocm"` routes the same decoder head through the shared HIP affine
+kernel. On Windows or Linux wheels built with CUDA support, `backend="cuda"`
+routes the same decoder head through the shared CUDA affine kernel. On builds
+with WebGPU enabled, `backend="webgpu"` routes the same decoder head through
+the shared WebGPU affine kernel. Diffusion state updates, graph validation, and
 training remain deterministic Rust code. If the requested accelerator is
 unavailable, construction fails with the available backend list.
 

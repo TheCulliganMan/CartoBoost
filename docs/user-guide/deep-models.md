@@ -34,9 +34,12 @@ On Apple-platform builds with the native Metal feature, `backend="metal"` is
 available for the shared dense, affine, and graph-score kernels used by the
 deep response, event, service-residual, graph, and neural forecasting surfaces.
 That includes macOS, iOS, tvOS, and visionOS builds where the native backend is
-compiled in.
-CUDA, ROCM, and WebGPU are not advertised by this helper until CartoBoost has
-verified native kernels for the requested operation on that backend.
+compiled in. On Linux or WSL builds with ROCm support compiled in and a usable
+HIP device present, `backend="rocm"` is advertised for the same verified shared
+kernels. On Windows or Linux builds with the CUDA driver and NVRTC available,
+`backend="cuda"` is advertised for the same verified shared kernels. `backend="webgpu"`
+is also advertised when the WebGPU backend feature is enabled and a compatible
+adapter is present.
 
 ## Validation Defaults
 

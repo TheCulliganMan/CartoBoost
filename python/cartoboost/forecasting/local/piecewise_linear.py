@@ -6,8 +6,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from .._native_wrappers import NativeForecastWrapper, _native_class
-from ..config import (
+from ...config import (
     ComponentMode,
     FitLoss,
     Growth,
@@ -15,6 +14,7 @@ from ..config import (
     SeasonalityMode,
     TrendUncertaintyPolicy,
 )
+from .._native_wrappers import NativeForecastWrapper, _native_class
 from ..frequency import require_pandas
 from .naive import _prediction_interval_levels
 

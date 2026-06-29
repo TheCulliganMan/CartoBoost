@@ -94,10 +94,15 @@ scores = predictor.predict_scores(
 
 `HinSageConfig` and `HinSageFeatureEncoder.from_config(...)` accept
 `backend="auto"`, `"cpu"`, or an installed accelerated backend such as
-`"metal"`. On Apple-platform builds with native Metal support, Metal routes
-the dense typed GraphSAGE forward layers through the shared native backend
-kernel. Schema validation, typed neighbor sampling, and training
-backpropagation remain CPU work.
+`"metal"`, `"rocm"`, `"cuda"`, or `"webgpu"`. On Apple-platform builds with
+native Metal support, Metal routes the dense typed GraphSAGE forward layers
+through the shared native backend kernel. On Linux or WSL builds with ROCm
+support compiled in, ROCm routes the same dense typed GraphSAGE forward layers
+through the shared HIP backend. On Windows or Linux builds with CUDA support,
+CUDA routes the same dense typed GraphSAGE forward layers through the shared
+CUDA backend. On builds with WebGPU enabled, WebGPU routes the same dense typed
+GraphSAGE forward layers through the shared WebGPU kernel. Schema validation,
+typed neighbor sampling, and training backpropagation remain CPU work.
 
 ## Validation
 
