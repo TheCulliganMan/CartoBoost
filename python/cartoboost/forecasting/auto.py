@@ -76,7 +76,7 @@ class AutoForecaster(BaseForecaster):
             season_length=season_length,
             quantiles=tuple(float(q) for q in (quantiles or ())),
             n_threads=n_threads,
-            objective=objective.value,
+            objective=str(objective),
             validation_window=validation_window,
             validation_origin_count=int(validation_origin_count),
             baseline_displacement_gain=float(baseline_displacement_gain),

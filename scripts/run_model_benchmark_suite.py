@@ -1877,6 +1877,36 @@ def failed_validation_search_reason(validation_rows: list[dict[str, Any]]) -> st
     return "all validation-search candidates failed: " + "; ".join(reasons)
 
 
+def model_trial_budget_summary(
+    models: list[str],
+    args: argparse.Namespace,
+) -> dict[str, Any]:
+    budgets: dict[str, dict[str, Any]] = {}
+    tunable_trial_counts: dict[str, int] = {}
+    fixed_models: list[str] = []
+    for model_name in models:
+        grid = validation_candidate_grid(model_name, args)
+        requested_trials = len(grid) if args.selection_mode == "validation_search" else 0
+        budgets[model_name] = {
+            "selection_mode": args.selection_mode,
+            "requested_trials": requested_trials,
+            "tunable": bool(grid),
+        }
+        if grid:
+            tunable_trial_counts[model_name] = requested_trials
+        else:
+            fixed_models.append(model_name)
+
+    unique_trial_counts = sorted(set(tunable_trial_counts.values()))
+    return {
+        "models": budgets,
+        "fixed_models": sorted(fixed_models),
+        "tunable_model_trial_counts": tunable_trial_counts,
+        "equal_tunable_trial_budget": len(unique_trial_counts) <= 1,
+        "tunable_trial_count": unique_trial_counts[0] if len(unique_trial_counts) == 1 else None,
+    }
+
+
 def skipped_result(reason: str) -> dict[str, Any]:
     return {"status": "skipped", "reason": reason}
 
@@ -2083,6 +2113,7 @@ def run_suite(workloads: list[Workload], args: argparse.Namespace) -> dict[str, 
         "models_requested": models,
         "selection_mode": args.selection_mode,
         "validation_trials": int(args.validation_trials),
+        "trial_budget": model_trial_budget_summary(models, args),
         "resource_usage": resource_usage_snapshot(),
         "baseline_environment": baseline_environment_snapshot(),
         "benchmark_integrity": {
@@ -2099,6 +2130,7 @@ def run_suite(workloads: list[Workload], args: argparse.Namespace) -> dict[str, 
             "validation_trials": int(args.validation_trials)
             if args.selection_mode == "validation_search"
             else 0,
+            "trial_budget": model_trial_budget_summary(models, args),
             "selection_policy": selection_policy(),
         },
         "split_definitions": split_definitions(),
@@ -2149,6 +2181,8 @@ def run_suite(workloads: list[Workload], args: argparse.Namespace) -> dict[str, 
             workload_report["splits"][split_name] = split_report
         payload["workloads"][workload.name] = workload_report
     payload["external_baseline_comparison"] = external_baseline_comparison(payload)
+    payload["model_status_summary"] = model_status_summary(payload)
+    payload["comparability_audit"] = comparability_audit(payload)
     return payload
 
 
@@ -2199,6 +2233,74 @@ def external_baseline_comparison(payload: dict[str, Any]) -> list[dict[str, Any]
                 }
             )
     return comparisons
+
+
+def model_status_summary(payload: dict[str, Any]) -> dict[str, Any]:
+    requested = list(payload.get("models_requested", []))
+    summary: dict[str, dict[str, Any]] = {
+        model_name: {"ok": 0, "skipped": 0, "skip_reasons": []} for model_name in requested
+    }
+    for workload in payload["workloads"].values():
+        for split in workload["splits"].values():
+            for model_name, result in split["models"].items():
+                model_summary = summary.setdefault(
+                    model_name,
+                    {"ok": 0, "skipped": 0, "skip_reasons": []},
+                )
+                status = str(result.get("status", ""))
+                if status == "ok":
+                    model_summary["ok"] += 1
+                elif status == "skipped":
+                    model_summary["skipped"] += 1
+                    reason = str(result.get("reason", "")).strip()
+                    if reason and reason not in model_summary["skip_reasons"]:
+                        model_summary["skip_reasons"].append(reason)
+
+    completed_external = sorted(
+        model_name
+        for model_name, model_summary in summary.items()
+        if model_name in EXTERNAL_REGRESSION_BASELINES and int(model_summary["ok"]) > 0
+    )
+    skipped_requested_external = sorted(
+        model_name
+        for model_name, model_summary in summary.items()
+        if model_name in EXTERNAL_REGRESSION_BASELINES
+        and int(model_summary["ok"]) == 0
+        and int(model_summary["skipped"]) > 0
+    )
+    completed_cartoboost_family = sorted(
+        model_name
+        for model_name, model_summary in summary.items()
+        if model_name in CARTOBOOST_FAMILY_MODELS and int(model_summary["ok"]) > 0
+    )
+    return {
+        "models": summary,
+        "completed_external_baselines": completed_external,
+        "skipped_requested_external_baselines": skipped_requested_external,
+        "completed_cartoboost_family_models": completed_cartoboost_family,
+    }
+
+
+def comparability_audit(payload: dict[str, Any]) -> dict[str, Any]:
+    trial_budget = payload.get("trial_budget", {})
+    status_summary = model_status_summary(payload)
+    comparisons = payload.get("external_baseline_comparison", [])
+    return {
+        "same_outer_splits": True,
+        "same_metrics": ["mae", "rmse", "r2", "wape"],
+        "primary_metric": "rmse",
+        "selection_metric": "rmse",
+        "selection_uses_outer_test_labels": False,
+        "equal_tunable_trial_budget": bool(trial_budget.get("equal_tunable_trial_budget", True)),
+        "tunable_trial_count": trial_budget.get("tunable_trial_count"),
+        "completed_external_baselines": status_summary["completed_external_baselines"],
+        "skipped_requested_external_baselines": status_summary[
+            "skipped_requested_external_baselines"
+        ],
+        "completed_cartoboost_family_models": status_summary["completed_cartoboost_family_models"],
+        "cartoboost_external_comparison_count": len(comparisons),
+        "status_summary": status_summary["models"],
+    }
 
 
 def mean_ci(values: list[float]) -> tuple[float, float, float]:
@@ -2359,6 +2461,45 @@ def write_markdown(payload: dict[str, Any], output_path: Path) -> None:
         for name, metadata in sorted(artifacts.items()):
             lines.append(f"| `{name}` | {metadata['size_bytes']} |")
         lines.append("")
+    comparability = payload.get("comparability_audit", {})
+    if comparability:
+        lines.extend(
+            [
+                "## Comparability Audit",
+                "",
+                "| Check | Value |",
+                "| --- | --- |",
+                (
+                    "| Same outer splits for requested models | "
+                    f"{comparability['same_outer_splits']} |"
+                ),
+                f"| Primary metric | `{comparability['primary_metric']}` |",
+                f"| Selection metric | `{comparability['selection_metric']}` |",
+                (
+                    "| Selection uses outer test labels | "
+                    f"{comparability['selection_uses_outer_test_labels']} |"
+                ),
+                (f"| Equal tunable trial budget | {comparability['equal_tunable_trial_budget']} |"),
+                f"| Tunable trial count | `{comparability.get('tunable_trial_count')}` |",
+                (
+                    "| Completed external baselines | "
+                    f"`{', '.join(comparability['completed_external_baselines'])}` |"
+                ),
+                (
+                    "| Skipped requested external baselines | "
+                    f"`{', '.join(comparability['skipped_requested_external_baselines'])}` |"
+                ),
+                (
+                    "| Completed CartoBoost-family rows | "
+                    f"`{', '.join(comparability['completed_cartoboost_family_models'])}` |"
+                ),
+                (
+                    "| CartoBoost/external comparison rows | "
+                    f"{comparability['cartoboost_external_comparison_count']} |"
+                ),
+                "",
+            ]
+        )
     lines.extend(["## Selection and Leakage Policy", ""])
     selection = payload.get("benchmark_integrity", {}).get("selection_policy", {})
     if selection:

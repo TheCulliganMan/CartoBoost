@@ -309,7 +309,7 @@ def test_autogeo_benchmark_gate_emits_required_evidence() -> None:
 
 def test_benchmark_navigation_links_resolve() -> None:
     docs = [
-        ROOT / "docs" / "README.md",
+        ROOT / "docs" / "index.md",
         ROOT / "docs" / "llms.txt",
         ROOT / "llms.txt",
     ]
@@ -471,6 +471,11 @@ def test_non_forecast_public_artifacts_exist() -> None:
     assert payload["repeat_seeds"] == [42, 43, 44]
     assert len(payload["repeated_external_baseline_comparison"]) == 4
     assert "catboost" in payload["models_requested"]
+    assert payload["trial_budget"]["equal_tunable_trial_budget"] is True
+    assert payload["trial_budget"]["tunable_trial_count"] == 3
+    assert payload["comparability_audit"]["equal_tunable_trial_budget"] is True
+    assert payload["comparability_audit"]["selection_uses_outer_test_labels"] is False
+    assert payload["comparability_audit"]["skipped_requested_external_baselines"] == []
     assert payload["resource_usage"]["python"]
     assert payload["baseline_environment"]["xgboost"]["required_class_available"] is True
 
@@ -557,9 +562,22 @@ def test_model_suite_validation_search_uses_inner_validation(tmp_path: Path) -> 
 
     assert payload["benchmark_integrity"]["hpo"] == "inner_train_validation_search"
     assert payload["benchmark_integrity"]["validation_trials"] == 2
+    assert payload["trial_budget"]["equal_tunable_trial_budget"] is True
+    assert payload["trial_budget"]["tunable_trial_count"] == 2
+    assert payload["trial_budget"]["models"]["cartoboost"]["requested_trials"] == 2
+    assert payload["trial_budget"]["models"]["ridge"]["requested_trials"] == 2
+    assert payload["trial_budget"]["models"]["mean"]["tunable"] is False
+    assert payload["comparability_audit"]["same_outer_splits"] is True
+    assert payload["comparability_audit"]["selection_uses_outer_test_labels"] is False
+    assert payload["comparability_audit"]["equal_tunable_trial_budget"] is True
+    assert payload["comparability_audit"]["completed_external_baselines"] == ["mean", "ridge"]
+    assert payload["model_status_summary"]["completed_external_baselines"] == ["mean", "ridge"]
     assert payload["resource_usage"]["python"]
     assert payload["baseline_environment"]["sklearn"]["module_importable"] is True
     assert payload["output_artifacts"]["results.md"]["size_bytes"] > 0
+    report = (output_dir / "results.md").read_text(encoding="utf-8")
+    assert "## Comparability Audit" in report
+    assert "Equal tunable trial budget" in report
     workload = payload["workloads"]["diabetes"]
     assert workload["source"] == "sklearn.datasets.load_diabetes bundled public regression dataset."
     assert len(workload["fingerprint_sha256"]) == 64

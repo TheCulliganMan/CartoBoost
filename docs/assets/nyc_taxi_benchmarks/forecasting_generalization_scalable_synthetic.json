@@ -51,6 +51,54 @@
     }
   },
   "cartoboost_version": "0.1.67",
+  "comparability_audit": {
+    "best_cartoboost_compared_to_best_library": true,
+    "candidate_selection": false,
+    "completed_cartoboost_models": [
+      "cartoboost_lag",
+      "cartoboost_auto_forecast"
+    ],
+    "completed_forecasting_library_models": [
+      "functime_snaive",
+      "functime_ridge",
+      "functime_lightgbm",
+      "xgboost_lag",
+      "lightgbm_lag"
+    ],
+    "completed_models": [
+      "cartoboost_lag",
+      "cartoboost_auto_forecast",
+      "functime_snaive",
+      "functime_ridge",
+      "functime_lightgbm",
+      "xgboost_lag",
+      "lightgbm_lag"
+    ],
+    "model_roster": "archived",
+    "primary_metric": "rmse",
+    "requested_models": [
+      "cartoboost_lag",
+      "cartoboost_auto_forecast",
+      "functime_snaive",
+      "functime_ridge",
+      "functime_lightgbm",
+      "xgboost_lag",
+      "lightgbm_lag"
+    ],
+    "same_forecast_rows": true,
+    "same_horizon": true,
+    "same_metrics": [
+      "mae",
+      "rmse",
+      "wape",
+      "r2",
+      "mase",
+      "smape"
+    ],
+    "selection_metric": "rmse",
+    "selection_uses_outer_test_labels": false,
+    "skipped_requested_models": []
+  },
   "comparison_libraries": [
     "functime",
     "statsforecast",

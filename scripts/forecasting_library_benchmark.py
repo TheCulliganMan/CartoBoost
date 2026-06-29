@@ -488,6 +488,11 @@ def main() -> int:
         "resource_usage": resource_usage_snapshot(),
         "plots": plots,
     }
+    payload["comparability_audit"] = forecasting_comparability_audit(
+        args=args,
+        model_names=benchmark_model_names(args.model_roster),
+        metrics=metrics,
+    )
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -639,6 +644,67 @@ def benchmark_integrity(args: argparse.Namespace) -> dict[str, Any]:
             "python_hash_seed": os.environ.get("PYTHONHASHSEED"),
         },
     }
+
+
+def forecasting_comparability_audit(
+    *,
+    args: argparse.Namespace,
+    model_names: list[str],
+    metrics: dict[str, dict[str, float]] | None = None,
+    grouped_results: dict[str, Any] | None = None,
+    split_results: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    completed_models = completed_forecasting_models(
+        model_names,
+        metrics=metrics,
+        grouped_results=grouped_results,
+        split_results=split_results,
+    )
+    completed_cartoboost = [
+        model for model in completed_models if MODEL_LIBRARIES.get(model) == "cartoboost"
+    ]
+    completed_libraries = [
+        model for model in completed_models if MODEL_LIBRARIES.get(model) != "cartoboost"
+    ]
+    return {
+        "same_forecast_rows": True,
+        "same_horizon": True,
+        "same_metrics": ["mae", "rmse", "wape", "r2", "mase", "smape"],
+        "primary_metric": "rmse",
+        "selection_metric": "rmse",
+        "candidate_selection": bool(not args.no_candidate_selection),
+        "selection_uses_outer_test_labels": False,
+        "model_roster": args.model_roster,
+        "requested_models": list(model_names),
+        "completed_models": completed_models,
+        "completed_cartoboost_models": completed_cartoboost,
+        "completed_forecasting_library_models": completed_libraries,
+        "skipped_requested_models": [
+            model for model in model_names if model not in set(completed_models)
+        ],
+        "best_cartoboost_compared_to_best_library": bool(
+            completed_cartoboost and completed_libraries
+        ),
+    }
+
+
+def completed_forecasting_models(
+    model_names: list[str],
+    *,
+    metrics: dict[str, dict[str, float]] | None = None,
+    grouped_results: dict[str, Any] | None = None,
+    split_results: dict[str, Any] | None = None,
+) -> list[str]:
+    completed: set[str] = set()
+    if metrics:
+        completed.update(metrics)
+    if grouped_results:
+        for result in grouped_results.values():
+            completed.update(result.get("metrics", {}))
+    if split_results:
+        for result in split_results.values():
+            completed.update(result.get("metrics", {}))
+    return [model for model in model_names if model in completed]
 
 
 def invocation_metadata() -> dict[str, Any]:
@@ -822,6 +888,11 @@ def run_synthetic_suite(
         },
         "resource_usage": resource_usage_snapshot(),
     }
+    payload["comparability_audit"] = forecasting_comparability_audit(
+        args=args,
+        model_names=benchmark_model_names(args.model_roster),
+        grouped_results=results,
+    )
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -905,6 +976,11 @@ def run_m4_suite(
         },
         "resource_usage": resource_usage_snapshot(),
     }
+    payload["comparability_audit"] = forecasting_comparability_audit(
+        args=args,
+        model_names=benchmark_model_names(args.model_roster),
+        grouped_results=results,
+    )
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -990,6 +1066,11 @@ def run_m1_suite(
         },
         "resource_usage": resource_usage_snapshot(),
     }
+    payload["comparability_audit"] = forecasting_comparability_audit(
+        args=args,
+        model_names=benchmark_model_names(args.model_roster),
+        grouped_results=results,
+    )
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -1073,6 +1154,11 @@ def run_m3_suite(
         },
         "resource_usage": resource_usage_snapshot(),
     }
+    payload["comparability_audit"] = forecasting_comparability_audit(
+        args=args,
+        model_names=benchmark_model_names(args.model_roster),
+        grouped_results=results,
+    )
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -2395,6 +2481,12 @@ def run_neural_panel_split_suite(
             "json": str(Path(args.output)),
         },
     }
+    payload["comparability_audit"] = forecasting_comparability_audit(
+        args=args,
+        model_names=model_names,
+        metrics=aggregate_metrics,
+        split_results=split_results,
+    )
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")

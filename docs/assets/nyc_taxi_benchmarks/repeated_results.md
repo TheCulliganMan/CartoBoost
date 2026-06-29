@@ -18,8 +18,21 @@ This report reruns the maintained NYC taxi benchmark and summarizes quality conf
 
 | Artifact | Size bytes |
 | --- | ---: |
-| `docs/assets/nyc_taxi_benchmarks/repeated_results.json` | 75582 |
-| `docs/assets/nyc_taxi_benchmarks/repeated_results.md` | 9152 |
+| `docs/assets/nyc_taxi_benchmarks/repeated_results.json` | 76148 |
+| `docs/assets/nyc_taxi_benchmarks/repeated_results.md` | 9681 |
+
+## Comparability Audit
+
+| Check | Value |
+| --- | --- |
+| Run count | 3 |
+| Same outer splits in every child run | True |
+| Any outer test-label selection | False |
+| Same feature-access policy in every child run | True |
+| Completed external baselines in all runs | `extra_trees, hist_gradient_boosting, mean, random_forest, ridge, xgboost` |
+| Skipped requested external baselines in any run | `catboost, lightgbm` |
+| Completed CartoBoost-family rows in all runs | `cartoboost` |
+| CartoBoost/external comparison rows | 15 |
 
 ## Quality Summary
 

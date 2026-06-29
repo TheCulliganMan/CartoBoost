@@ -47,7 +47,7 @@ class NeuralEmbeddingRegressor:
         self.support_prior_strength = float(support_prior_strength)
         self.neural_transformer = neural_transformer or NeuralEmbeddingFeatures(
             dim=dim,
-            fallback=fallback.value,
+            fallback=str(fallback),
             random_state=random_state,
             support_prior_strength=support_prior_strength,
         )

@@ -1,9 +1,29 @@
 /* tslint:disable */
 /* eslint-disable */
 
+export function availableDeepBackends(): any;
+
 export function availableForecastModels(): any;
 
+export function deepConstrainedDecisionSelect(candidates: any, objective: string, constraints: any, fallback: string): any;
+
+export function deepDirectionalPairPredict(rows: any): any;
+
+export function deepEventOutcomeFit(features: any, labels: Float64Array, backend?: string | null): any;
+
+export function deepEventOutcomePredict(artifact: any, features: any): any;
+
+export function deepResponseCurveFit(rows: any, response_type: string, monotone?: string | null, backend?: string | null): any;
+
+export function deepResponseCurvePredict(artifact: any, rows: any): any;
+
+export function deepServiceResidualFit(rows: any, backend?: string | null): any;
+
+export function deepServiceResidualPredict(artifact: any, rows: any): any;
+
 export function fitPiecewiseLinearSeasonalArtifact(request: any): any;
+
+export function geoSplitManifestHash(manifest_json: string): string;
 
 export function predictPiecewiseLinearSeasonalArtifact(artifact: string, horizon: number): any;
 
@@ -11,7 +31,15 @@ export function predictPiecewiseLinearSeasonalArtifactWithOptions(artifact: stri
 
 export function runForecast(request: any): any;
 
+export function runGeoCausalExperiment(request: any): any;
+
+export function runGeoFeatureExamples(request: any): any;
+
+export function runGeostatisticsModel(request: any): any;
+
 export function runGeotemporalDiagnostics(request: any): any;
+
+export function runGraphForecast(request: any): any;
 
 export function runNeuralModel(request: any): any;
 
@@ -23,21 +51,38 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
+    readonly availableDeepBackends: () => [number, number, number];
     readonly availableForecastModels: () => [number, number, number];
+    readonly deepConstrainedDecisionSelect: (a: any, b: number, c: number, d: any, e: number, f: number) => [number, number, number];
+    readonly deepDirectionalPairPredict: (a: any) => [number, number, number];
+    readonly deepEventOutcomeFit: (a: any, b: number, c: number, d: number, e: number) => [number, number, number];
+    readonly deepEventOutcomePredict: (a: any, b: any) => [number, number, number];
+    readonly deepResponseCurveFit: (a: any, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number];
+    readonly deepResponseCurvePredict: (a: any, b: any) => [number, number, number];
+    readonly deepServiceResidualFit: (a: any, b: number, c: number) => [number, number, number];
+    readonly deepServiceResidualPredict: (a: any, b: any) => [number, number, number];
     readonly fitPiecewiseLinearSeasonalArtifact: (a: any) => [number, number, number];
+    readonly geoSplitManifestHash: (a: number, b: number) => [number, number, number, number];
     readonly predictPiecewiseLinearSeasonalArtifact: (a: number, b: number, c: number) => [number, number, number];
     readonly predictPiecewiseLinearSeasonalArtifactWithOptions: (a: number, b: number, c: number, d: any) => [number, number, number];
     readonly runForecast: (a: any) => [number, number, number];
+    readonly runGeoCausalExperiment: (a: any) => [number, number, number];
+    readonly runGeoFeatureExamples: (a: any) => [number, number, number];
+    readonly runGeostatisticsModel: (a: any) => [number, number, number];
     readonly runGeotemporalDiagnostics: (a: any) => [number, number, number];
+    readonly runGraphForecast: (a: any) => [number, number, number];
     readonly runNeuralModel: (a: any) => [number, number, number];
     readonly runRegressionModel: (a: any) => [number, number, number];
     readonly runSequence: (a: any) => [number, number, number];
+    readonly wasm_bindgen__convert__closures_____invoke__h164c0d2c76578433: (a: number, b: number, c: any) => [number, number];
+    readonly wasm_bindgen__convert__closures_____invoke__h357099e7a95d3037: (a: number, b: number, c: any) => void;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_exn_store: (a: number) => void;
     readonly __externref_table_alloc: () => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __wbindgen_free: (a: number, b: number, c: number) => void;
+    readonly __wbindgen_destroy_closure: (a: number, b: number) => void;
     readonly __externref_table_dealloc: (a: number) => void;
     readonly __wbindgen_start: () => void;
 }

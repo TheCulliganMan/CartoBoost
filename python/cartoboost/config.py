@@ -6,6 +6,9 @@ from enum import Enum
 class ChoiceStrEnum(str, Enum):
     """String-valued enums for finite configuration choices."""
 
+    def __str__(self) -> str:
+        return self.value
+
 
 class Backend(ChoiceStrEnum):
     AUTO = "auto"
@@ -59,8 +62,12 @@ class LeafPredictor(ChoiceStrEnum):
 
 class FuzzyKernel(ChoiceStrEnum):
     LINEAR = "linear"
+    TRIANGULAR = "triangular"
     GAUSSIAN = "gaussian"
     EXPONENTIAL = "exponential"
+    BISQUARE = "bisquare"
+    EPANECHNIKOV = "epanechnikov"
+    TRICUBE = "tricube"
 
 
 class Growth(ChoiceStrEnum):

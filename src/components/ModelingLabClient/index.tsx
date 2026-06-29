@@ -214,6 +214,9 @@ type RunLogEntry = {
   message: string;
 };
 
+const BACKTEST_FORECAST_TIMEOUT_MS = 120_000;
+const MAX_PARALLEL_BACKTEST_WORKERS = 3;
+
 type RegressionResponse = {
   metadata: {
     model: string;
@@ -1366,6 +1369,7 @@ export default function ModelingLabClient(): React.ReactElement {
   const [runLog, setRunLog] = useState<RunLogEntry[]>([]);
   const [modelOptions, setModelOptions] = useState<ModelOption[]>(fallbackModelOptions);
   const presetAppliedRef = useRef(false);
+  const runLogIdRef = useRef(0);
   const [pendingLabRun, setPendingLabRun] = useState<PendingLabRun | null>(null);
 
   const previewRows = table?.rows.slice(0, 6) ?? [];
@@ -1376,7 +1380,8 @@ export default function ModelingLabClient(): React.ReactElement {
 
   const appendRunLog = useCallback((message: string) => {
     const timestamp = new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
-    setRunLog((current) => [{id: Date.now(), message: `${timestamp} ${message}`}, ...current].slice(0, 8));
+    runLogIdRef.current += 1;
+    setRunLog((current) => [{id: runLogIdRef.current, message: `${timestamp} ${message}`}, ...current].slice(0, 8));
   }, []);
 
   const scheduleRun = useCallback((runner: () => Promise<void>) => {
@@ -1764,12 +1769,13 @@ export default function ModelingLabClient(): React.ReactElement {
       appendRunLog(`Started ${runLabel} with ${roster.length.toLocaleString()} models.`);
       await waitForBrowserPaint();
       const nextResults: BacktestResult[] = [...backtestResults];
-      for (const [index, option] of roster.entries()) {
-        setRunProgress({label: `Backtesting ${option.label}`, current: index, total: roster.length});
+      let completed = 0;
+      await runWithConcurrency(roster, backtestConcurrency(), async (option, index) => {
+        setRunProgress({label: `Backtesting ${option.label}`, current: completed, total: roster.length});
         setStatus(`Backtesting ${option.label}.`);
         appendRunLog(`Backtesting ${option.label}.`);
-        await waitForBrowserPaint();
         const started = performance.now();
+        let result: BacktestResult;
         try {
           const response = await runBrowserForecast({
             wasmJsUrl,
@@ -1782,9 +1788,11 @@ export default function ModelingLabClient(): React.ReactElement {
             horizon,
             model: option.value,
             seasonLength,
+            isolatedWorker: true,
+            timeoutMs: BACKTEST_FORECAST_TIMEOUT_MS,
           });
           const metrics = evaluateHoldout(response.forecast.records, split.actuals);
-          nextResults.push({
+          result = {
             runId,
             runLabel,
             requestedModel: option.value,
@@ -1792,23 +1800,25 @@ export default function ModelingLabClient(): React.ReactElement {
             pipeline: option.group,
             response,
             ...metrics,
-          });
+          };
           appendRunLog(`Scored ${option.label} in ${formatElapsedMs(performance.now() - started)}.`);
         } catch (error) {
           appendRunLog(`${option.label} reported a constraint after ${formatElapsedMs(performance.now() - started)}.`);
-          nextResults.push({
+          result = {
             runId,
             runLabel,
             requestedModel: option.value,
             label: option.label,
             pipeline: option.group,
             error: error instanceof Error ? error.message : String(error),
-          });
+          };
         }
+        nextResults.push(result);
+        completed += 1;
         setBacktestResults([...nextResults]);
-        setRunProgress({label: `Checked ${option.label}`, current: index + 1, total: roster.length});
+        setRunProgress({label: `Checked ${option.label}`, current: completed, total: roster.length});
         await waitForBrowserPaint();
-      }
+      });
       const runRows = nextResults.filter((item) => item.runId === runId);
       const successes = runRows.filter((item) => item.rmse !== undefined).length;
       setStatus(`${runLabel} complete: ${successes.toLocaleString()} scored, ${(runRows.length - successes).toLocaleString()} reported constraints. Earlier plotted models were kept.`);
@@ -6546,6 +6556,8 @@ async function runBrowserForecast({
   horizon,
   model,
   seasonLength,
+  isolatedWorker = false,
+  timeoutMs,
 }: {
   wasmJsUrl: string;
   wasmBinaryUrl: string;
@@ -6557,10 +6569,51 @@ async function runBrowserForecast({
   horizon: number;
   model: string;
   seasonLength: number;
+  isolatedWorker?: boolean;
+  timeoutMs?: number;
+}) {
+  const request = buildBrowserForecastRequest({
+    table,
+    timestampCol,
+    targetCol,
+    seriesCol,
+    frequency,
+    horizon,
+    model,
+    seasonLength,
+  });
+  const response =
+    typeof Worker === 'undefined'
+      ? (await getInitializedWasmModule(wasmJsUrl, wasmBinaryUrl)).runForecast(request)
+      : isolatedWorker
+        ? await runForecastRequestInIsolatedWorker(wasmJsUrl, wasmBinaryUrl, request, timeoutMs)
+        : await runForecastRequestInWorker(wasmJsUrl, wasmBinaryUrl, request);
+  assertForecastResponseRecords(response, model);
+  return response;
+}
+
+function buildBrowserForecastRequest({
+  table,
+  timestampCol,
+  targetCol,
+  seriesCol,
+  frequency,
+  horizon,
+  model,
+  seasonLength,
+}: {
+  table: ParsedTable;
+  timestampCol: string;
+  targetCol: string;
+  seriesCol: string;
+  frequency: string;
+  horizon: number;
+  model: string;
+  seasonLength: number;
 }) {
   const modelSpecificOptions = browserForecastModelOptions(model, table, timestampCol, targetCol, seriesCol, horizon);
   const browserAutoOptions = model === 'auto_forecast' ? {maxAutoCandidateCount: 4} : {};
-  const request = {
+  return {
     rows: table.rows.map((row) => ({
       timestamp: row[timestampCol],
       target: Number(row[targetCol]),
@@ -6583,12 +6636,6 @@ async function runBrowserForecast({
       seriesIdCol: seriesCol || undefined,
     },
   };
-  const response =
-    typeof Worker === 'undefined'
-      ? (await getInitializedWasmModule(wasmJsUrl, wasmBinaryUrl)).runForecast(request)
-      : await runForecastRequestInWorker(wasmJsUrl, wasmBinaryUrl, request);
-  assertForecastResponseRecords(response, model);
-  return response;
 }
 
 function runForecastRequestInWorker(wasmJsUrl: string, wasmBinaryUrl: string, request: unknown): Promise<ForecastResponse> {
@@ -6600,6 +6647,48 @@ function runForecastRequestInWorker(wasmJsUrl: string, wasmBinaryUrl: string, re
   return new Promise((resolve, reject) => {
     client.pending.set(id, {resolve, reject});
     client.worker.postMessage({id, wasmJsUrl: absoluteWasmJsUrl, wasmBinaryUrl: absoluteWasmBinaryUrl, request});
+  });
+}
+
+function runForecastRequestInIsolatedWorker(
+  wasmJsUrl: string,
+  wasmBinaryUrl: string,
+  request: unknown,
+  timeoutMs = BACKTEST_FORECAST_TIMEOUT_MS,
+): Promise<ForecastResponse> {
+  const absoluteWasmJsUrl = absoluteBrowserUrl(wasmJsUrl);
+  const absoluteWasmBinaryUrl = absoluteBrowserUrl(wasmBinaryUrl);
+  const worker = new Worker(URL.createObjectURL(new Blob([forecastWorkerSource], {type: 'text/javascript'})), {type: 'module'});
+  let settled = false;
+  return new Promise((resolve, reject) => {
+    const finish = (callback: () => void) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      window.clearTimeout(timeout);
+      worker.terminate();
+      callback();
+    };
+    const timeout = window.setTimeout(() => {
+      finish(() => reject(new Error(`forecast worker timed out after ${formatElapsedMs(timeoutMs)}`)));
+    }, timeoutMs);
+    worker.onmessage = (event: MessageEvent<{id: number; response?: ForecastResponse; error?: string}>) => {
+      const {response, error} = event.data;
+      if (error) {
+        finish(() => reject(new Error(error)));
+        return;
+      }
+      if (!response) {
+        finish(() => reject(new Error('forecast worker returned an empty response')));
+        return;
+      }
+      finish(() => resolve(response));
+    };
+    worker.onerror = (event) => {
+      finish(() => reject(new Error(event.message || 'forecast worker failed')));
+    };
+    worker.postMessage({id: 1, wasmJsUrl: absoluteWasmJsUrl, wasmBinaryUrl: absoluteWasmBinaryUrl, request});
   });
 }
 
@@ -7098,6 +7187,29 @@ function evaluateHoldout(predictions: ForecastRecord[], actuals: HoldoutActual[]
 
 function normalizeTimestamp(value: string) {
   return value.length === 10 ? `${value}T00:00:00` : value.replace(' ', 'T').replace(/\.\d{3}Z$/, '');
+}
+
+function backtestConcurrency() {
+  const availableWorkers = typeof navigator === 'undefined' ? MAX_PARALLEL_BACKTEST_WORKERS : Math.max(1, (navigator.hardwareConcurrency ?? 2) - 1);
+  return Math.max(1, Math.min(MAX_PARALLEL_BACKTEST_WORKERS, availableWorkers));
+}
+
+async function runWithConcurrency<T>(
+  items: T[],
+  concurrency: number,
+  runner: (item: T, index: number) => Promise<void>,
+) {
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(1, concurrency), items.length);
+  await Promise.all(
+    Array.from({length: workerCount}, async () => {
+      while (nextIndex < items.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        await runner(items[index], index);
+      }
+    }),
+  );
 }
 
 async function waitForBrowserPaint() {

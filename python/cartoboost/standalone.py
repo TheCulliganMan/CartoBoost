@@ -68,7 +68,7 @@ class NeuralEmbeddingStandaloneRegressor:
     ) -> None:
         self._native = _NativeNeuralEmbeddingRegressor(
             dim=int(dim),
-            fallback=fallback.value,
+            fallback=str(fallback),
             random_state=None if random_state is None else int(random_state),
             support_prior_strength=float(support_prior_strength),
             n_estimators=int(n_estimators),

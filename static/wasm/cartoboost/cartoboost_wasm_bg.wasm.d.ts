@@ -1,20 +1,37 @@
 /* tslint:disable */
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
+export const availableDeepBackends: () => [number, number, number];
 export const availableForecastModels: () => [number, number, number];
+export const deepConstrainedDecisionSelect: (a: any, b: number, c: number, d: any, e: number, f: number) => [number, number, number];
+export const deepDirectionalPairPredict: (a: any) => [number, number, number];
+export const deepEventOutcomeFit: (a: any, b: number, c: number, d: number, e: number) => [number, number, number];
+export const deepEventOutcomePredict: (a: any, b: any) => [number, number, number];
+export const deepResponseCurveFit: (a: any, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number];
+export const deepResponseCurvePredict: (a: any, b: any) => [number, number, number];
+export const deepServiceResidualFit: (a: any, b: number, c: number) => [number, number, number];
+export const deepServiceResidualPredict: (a: any, b: any) => [number, number, number];
 export const fitPiecewiseLinearSeasonalArtifact: (a: any) => [number, number, number];
+export const geoSplitManifestHash: (a: number, b: number) => [number, number, number, number];
 export const predictPiecewiseLinearSeasonalArtifact: (a: number, b: number, c: number) => [number, number, number];
 export const predictPiecewiseLinearSeasonalArtifactWithOptions: (a: number, b: number, c: number, d: any) => [number, number, number];
 export const runForecast: (a: any) => [number, number, number];
+export const runGeoCausalExperiment: (a: any) => [number, number, number];
+export const runGeoFeatureExamples: (a: any) => [number, number, number];
+export const runGeostatisticsModel: (a: any) => [number, number, number];
 export const runGeotemporalDiagnostics: (a: any) => [number, number, number];
+export const runGraphForecast: (a: any) => [number, number, number];
 export const runNeuralModel: (a: any) => [number, number, number];
 export const runRegressionModel: (a: any) => [number, number, number];
 export const runSequence: (a: any) => [number, number, number];
+export const wasm_bindgen__convert__closures_____invoke__h164c0d2c76578433: (a: number, b: number, c: any) => [number, number];
+export const wasm_bindgen__convert__closures_____invoke__h357099e7a95d3037: (a: number, b: number, c: any) => void;
 export const __wbindgen_malloc: (a: number, b: number) => number;
 export const __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
 export const __wbindgen_exn_store: (a: number) => void;
 export const __externref_table_alloc: () => number;
 export const __wbindgen_externrefs: WebAssembly.Table;
 export const __wbindgen_free: (a: number, b: number, c: number) => void;
+export const __wbindgen_destroy_closure: (a: number, b: number) => void;
 export const __externref_table_dealloc: (a: number) => void;
 export const __wbindgen_start: () => void;

@@ -34,6 +34,7 @@ from scripts.run_nyc_taxi_quality_benchmarks import (  # noqa: E402
 )
 from scripts.run_repeated_nyc_taxi_benchmarks import (  # noqa: E402
     collect_quality,
+    repeated_comparability_audit,
 )
 from scripts.run_repeated_nyc_taxi_benchmarks import (  # noqa: E402
     output_artifact_manifest as repeated_output_artifact_manifest,
@@ -80,6 +81,12 @@ def test_nyc_taxi_quality_benchmark_synthetic_smoke(tmp_path: Path):
     assert results["feature_access_policy"]["baseline_feature_access"]
     assert set(results["split_definitions"]) == {"random", "spatial_holdout"}
     assert results["model_roster"] == ["mean"]
+    assert results["model_status_summary"]["completed_external_baselines"] == ["mean"]
+    assert results["comparability_audit"]["same_outer_splits"] is True
+    assert results["comparability_audit"]["selection_mode"] == "fixed_settings_no_hpo"
+    assert results["comparability_audit"]["selection_uses_outer_test_labels"] is False
+    assert results["comparability_audit"]["completed_external_baselines"] == ["mean"]
+    assert results["comparability_audit"]["skipped_requested_external_baselines"] == []
     assert results["resource_usage"]["python"]
     assert results["baseline_environment"]["sklearn"]["package"] == "scikit-learn"
     assert "module_importable" in results["baseline_environment"]["sklearn"]
@@ -147,6 +154,7 @@ def test_nyc_taxi_quality_benchmark_synthetic_smoke(tmp_path: Path):
 
     markdown = (output_dir / "results.md").read_text(encoding="utf-8")
     assert "NYC Taxi Model Quality Benchmarks" in markdown
+    assert "## Comparability Audit" in markdown
     assert "Trip duration" in markdown
     assert "Pickup-zone demand" in markdown
 
@@ -273,6 +281,12 @@ def test_nyc_taxi_maintained_artifacts_are_complete():
         if line
     ]
     assert len(results["external_baseline_comparison"]) == 5
+    assert results["comparability_audit"]["same_outer_splits"] is True
+    assert results["comparability_audit"]["selection_uses_outer_test_labels"] is False
+    assert results["comparability_audit"]["same_feature_access_policy"] is True
+    assert results["comparability_audit"]["completed_external_baselines"]
+    assert "mean" in results["comparability_audit"]["completed_external_baselines"]
+    assert results["model_status_summary"]["completed_external_baselines"]
     assert results["output_artifacts"]["results.jsonl"]["size_bytes"] == len(
         (artifact_dir / "results.jsonl").read_bytes().replace(b"\r\n", b"\n")
     )
@@ -287,6 +301,9 @@ def test_nyc_taxi_maintained_artifacts_are_complete():
 
     repeated = json.loads((artifact_dir / "repeated_results.json").read_text(encoding="utf-8"))
     assert repeated["seeds"] == [11, 29, 47]
+    assert repeated["comparability_audit"]["same_outer_splits"] is True
+    assert repeated["comparability_audit"]["selection_uses_outer_test_labels"] is False
+    assert repeated["comparability_audit"]["completed_external_baselines_all_runs"]
     assert repeated["output_artifacts"]["docs/assets/nyc_taxi_benchmarks/repeated_results.json"][
         "size_bytes"
     ] == len((artifact_dir / "repeated_results.json").read_bytes().replace(b"\r\n", b"\n"))
@@ -294,6 +311,43 @@ def test_nyc_taxi_maintained_artifacts_are_complete():
         "size_bytes"
     ] == len((artifact_dir / "repeated_results.md").read_bytes().replace(b"\r\n", b"\n"))
     assert repeated["quality"]
+
+
+def test_repeated_nyc_comparability_audit_intersects_child_runs():
+    audit = repeated_comparability_audit(
+        [
+            {
+                "comparability_audit": {
+                    "same_outer_splits": True,
+                    "selection_uses_outer_test_labels": False,
+                    "same_feature_access_policy": True,
+                    "completed_external_baselines": ["mean", "xgboost"],
+                    "skipped_requested_external_baselines": [],
+                    "completed_cartoboost_family_models": ["cartoboost"],
+                    "cartoboost_external_comparison_count": 2,
+                }
+            },
+            {
+                "comparability_audit": {
+                    "same_outer_splits": True,
+                    "selection_uses_outer_test_labels": False,
+                    "same_feature_access_policy": True,
+                    "completed_external_baselines": ["mean", "ridge"],
+                    "skipped_requested_external_baselines": ["lightgbm"],
+                    "completed_cartoboost_family_models": ["cartoboost"],
+                    "cartoboost_external_comparison_count": 1,
+                }
+            },
+        ]
+    )
+
+    assert audit["run_count"] == 2
+    assert audit["same_outer_splits"] is True
+    assert audit["selection_uses_outer_test_labels"] is False
+    assert audit["completed_external_baselines_all_runs"] == ["mean"]
+    assert audit["skipped_requested_external_baselines_any_run"] == ["lightgbm"]
+    assert audit["completed_cartoboost_family_models_all_runs"] == ["cartoboost"]
+    assert audit["cartoboost_external_comparison_rows"] == 3
 
 
 def test_nyc_taxi_quality_benchmark_skips_optional_model_failures():

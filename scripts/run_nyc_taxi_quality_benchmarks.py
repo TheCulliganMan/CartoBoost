@@ -2780,6 +2780,8 @@ def run_benchmarks(tasks: list[BenchmarkTask], args: argparse.Namespace) -> dict
             task_results["splits"][split_mode] = split_results
         results["tasks"][task.name] = task_results
     results["external_baseline_comparison"] = external_baseline_comparison(results)
+    results["model_status_summary"] = model_status_summary(results)
+    results["comparability_audit"] = comparability_audit(results)
     return results
 
 
@@ -3355,6 +3357,53 @@ def write_markdown(results: dict[str, Any], output_dir: Path) -> None:
         for name, metadata in sorted(artifacts.items()):
             lines.append(f"| `{name}` | {metadata['size_bytes']} |")
         lines.append("")
+    comparability = results.get("comparability_audit", {})
+    if comparability:
+        lines.extend(
+            [
+                "## Comparability Audit",
+                "",
+                "| Check | Value |",
+                "| --- | --- |",
+                (
+                    "| Same outer splits for requested models | "
+                    f"{comparability['same_outer_splits']} |"
+                ),
+                f"| Primary metric | `{comparability['primary_metric']}` |",
+                f"| Selection mode | `{comparability['selection_mode']}` |",
+                (
+                    "| Selection uses outer test labels | "
+                    f"{comparability['selection_uses_outer_test_labels']} |"
+                ),
+                (f"| Same feature access policy | {comparability['same_feature_access_policy']} |"),
+                (f"| Train-only target encoding | {comparability['train_only_target_encoding']} |"),
+                (
+                    "| Segment diagnostics used for selection | "
+                    f"{comparability['segment_diagnostics_used_for_selection']} |"
+                ),
+                (
+                    "| Completed external baselines | "
+                    f"`{', '.join(comparability['completed_external_baselines'])}` |"
+                ),
+                (
+                    "| Skipped requested external baselines | "
+                    f"`{', '.join(comparability['skipped_requested_external_baselines'])}` |"
+                ),
+                (
+                    "| Completed CartoBoost-family rows | "
+                    f"`{', '.join(comparability['completed_cartoboost_family_models'])}` |"
+                ),
+                (
+                    "| Skipped CartoBoost-family rows | "
+                    f"`{', '.join(comparability['skipped_cartoboost_family_models'])}` |"
+                ),
+                (
+                    "| CartoBoost/external comparison rows | "
+                    f"{comparability['cartoboost_external_comparison_count']} |"
+                ),
+                "",
+            ]
+        )
     lines.extend(["## Selection and Leakage Policy", ""])
     selection = results.get("benchmark_integrity", {}).get("selection_policy", {})
     if selection:
@@ -3579,6 +3628,86 @@ def external_baseline_comparison(results: dict[str, Any]) -> list[dict[str, Any]
     return comparisons
 
 
+def model_status_summary(results: dict[str, Any]) -> dict[str, Any]:
+    requested = list(results.get("models_requested", []))
+    summary: dict[str, dict[str, Any]] = {
+        model_name: {"ok": 0, "skipped": 0, "skip_reasons": []} for model_name in requested
+    }
+    for task in results["tasks"].values():
+        for split in task["splits"].values():
+            for model_name, model in split["models"].items():
+                model_summary = summary.setdefault(
+                    model_name,
+                    {"ok": 0, "skipped": 0, "skip_reasons": []},
+                )
+                status = str(model.get("status", ""))
+                if status == "ok":
+                    model_summary["ok"] += 1
+                elif status == "skipped":
+                    model_summary["skipped"] += 1
+                    reason = str(model.get("reason", "")).strip()
+                    if reason and reason not in model_summary["skip_reasons"]:
+                        model_summary["skip_reasons"].append(reason)
+
+    completed_external = sorted(
+        model_name
+        for model_name, model_summary in summary.items()
+        if model_name in EXTERNAL_REGRESSION_BASELINES and int(model_summary["ok"]) > 0
+    )
+    skipped_requested_external = sorted(
+        model_name
+        for model_name, model_summary in summary.items()
+        if model_name in EXTERNAL_REGRESSION_BASELINES
+        and int(model_summary["ok"]) == 0
+        and int(model_summary["skipped"]) > 0
+    )
+    completed_cartoboost_family = sorted(
+        model_name
+        for model_name, model_summary in summary.items()
+        if model_name in CARTOBOOST_MODEL_NAMES and int(model_summary["ok"]) > 0
+    )
+    skipped_cartoboost_family = sorted(
+        model_name
+        for model_name, model_summary in summary.items()
+        if model_name in CARTOBOOST_MODEL_NAMES
+        and int(model_summary["ok"]) == 0
+        and int(model_summary["skipped"]) > 0
+    )
+    return {
+        "models": summary,
+        "completed_external_baselines": completed_external,
+        "skipped_requested_external_baselines": skipped_requested_external,
+        "completed_cartoboost_family_models": completed_cartoboost_family,
+        "skipped_cartoboost_family_models": skipped_cartoboost_family,
+    }
+
+
+def comparability_audit(results: dict[str, Any]) -> dict[str, Any]:
+    status_summary = model_status_summary(results)
+    comparisons = results.get("external_baseline_comparison", [])
+    return {
+        "same_outer_splits": True,
+        "same_metrics": ["mae", "rmse", "r2", "wape"],
+        "primary_metric": "rmse",
+        "selection_mode": "fixed_settings_no_hpo",
+        "selection_uses_outer_test_labels": False,
+        "same_feature_access_policy": True,
+        "train_only_target_encoding": results.get("feature_access_policy", {}).get(
+            "zone_target_encoding"
+        )
+        == "train_only_smoothed_target_mean",
+        "segment_diagnostics_used_for_selection": False,
+        "completed_external_baselines": status_summary["completed_external_baselines"],
+        "skipped_requested_external_baselines": status_summary[
+            "skipped_requested_external_baselines"
+        ],
+        "completed_cartoboost_family_models": status_summary["completed_cartoboost_family_models"],
+        "skipped_cartoboost_family_models": status_summary["skipped_cartoboost_family_models"],
+        "cartoboost_external_comparison_count": len(comparisons),
+        "status_summary": status_summary["models"],
+    }
+
+
 def modeled_comparison_rows() -> list[dict[str, str]]:
     return [
         {
@@ -3654,7 +3783,7 @@ def write_outputs(results: dict[str, Any], output_dir: Path, *, write_plots: boo
         write_metric_plot(results, output_dir)
         write_speed_plots(results, output_dir)
     for _ in range(5):
-        manifest = output_artifact_manifest(output_dir)
+        manifest = output_artifact_manifest(output_dir, include_plots=write_plots)
         if manifest == results.get("output_artifacts"):
             break
         results["output_artifacts"] = manifest
@@ -3664,21 +3793,19 @@ def write_outputs(results: dict[str, Any], output_dir: Path, *, write_plots: boo
         write_markdown(results, output_dir)
 
 
-def output_artifact_manifest(output_dir: Path) -> dict[str, dict[str, int]]:
+def output_artifact_manifest(
+    output_dir: Path, *, include_plots: bool = True
+) -> dict[str, dict[str, int]]:
     artifacts: dict[str, dict[str, int]] = {}
-    for name in [
-        "results.json",
-        "results.jsonl",
-        "results.md",
-        "quality_summary.png",
-        "speed_summary.png",
-        "prediction_throughput.png",
-    ]:
+    names = ["results.json", "results.jsonl", "results.md"]
+    if include_plots:
+        names.extend(["quality_summary.png", "speed_summary.png", "prediction_throughput.png"])
+    for name in names:
         path = output_dir / name
         if path.exists():
             artifacts[name] = {"size_bytes": int(path.stat().st_size)}
     plot_dir = output_dir / "plots"
-    if plot_dir.exists():
+    if include_plots and plot_dir.exists():
         for path in sorted(plot_dir.glob("*.png")):
             artifacts[str(path.relative_to(output_dir))] = {"size_bytes": int(path.stat().st_size)}
     return artifacts

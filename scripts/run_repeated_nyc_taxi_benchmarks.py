@@ -466,6 +466,55 @@ def passes_xgboost_gate(row: dict[str, Any]) -> bool:
     )
 
 
+def repeated_comparability_audit(results: list[dict[str, Any]]) -> dict[str, Any]:
+    child_audits = [result.get("comparability_audit", {}) for result in results]
+    completed_external = sorted(
+        set.intersection(
+            *[
+                set(audit.get("completed_external_baselines", []))
+                for audit in child_audits
+                if audit.get("completed_external_baselines")
+            ]
+        )
+        if child_audits
+        else set()
+    )
+    skipped_external = sorted(
+        {
+            model
+            for audit in child_audits
+            for model in audit.get("skipped_requested_external_baselines", [])
+        }
+    )
+    completed_cartoboost = sorted(
+        set.intersection(
+            *[
+                set(audit.get("completed_cartoboost_family_models", []))
+                for audit in child_audits
+                if audit.get("completed_cartoboost_family_models")
+            ]
+        )
+        if child_audits
+        else set()
+    )
+    return {
+        "run_count": len(results),
+        "same_outer_splits": all(audit.get("same_outer_splits") is True for audit in child_audits),
+        "selection_uses_outer_test_labels": any(
+            audit.get("selection_uses_outer_test_labels") is True for audit in child_audits
+        ),
+        "same_feature_access_policy": all(
+            audit.get("same_feature_access_policy") is True for audit in child_audits
+        ),
+        "completed_external_baselines_all_runs": completed_external,
+        "skipped_requested_external_baselines_any_run": skipped_external,
+        "completed_cartoboost_family_models_all_runs": completed_cartoboost,
+        "cartoboost_external_comparison_rows": sum(
+            int(audit.get("cartoboost_external_comparison_count", 0)) for audit in child_audits
+        ),
+    }
+
+
 def write_markdown(summary: dict[str, Any], output: Path) -> None:
     lines = [
         "# Repeated NYC Taxi Benchmark",
@@ -510,6 +559,45 @@ def write_markdown(summary: dict[str, Any], output: Path) -> None:
         for name, metadata in sorted(artifacts.items()):
             lines.append(f"| `{name}` | {metadata['size_bytes']} |")
         lines.append("")
+    comparability = summary.get("comparability_audit", {})
+    if comparability:
+        lines.extend(
+            [
+                "## Comparability Audit",
+                "",
+                "| Check | Value |",
+                "| --- | --- |",
+                f"| Run count | {comparability['run_count']} |",
+                f"| Same outer splits in every child run | {comparability['same_outer_splits']} |",
+                (
+                    "| Any outer test-label selection | "
+                    f"{comparability['selection_uses_outer_test_labels']} |"
+                ),
+                (
+                    "| Same feature-access policy in every child run | "
+                    f"{comparability['same_feature_access_policy']} |"
+                ),
+                (
+                    "| Completed external baselines in all runs | "
+                    f"`{', '.join(comparability['completed_external_baselines_all_runs'])}` |"
+                ),
+                (
+                    "| Skipped requested external baselines in any run | "
+                    "`"
+                    f"{', '.join(comparability['skipped_requested_external_baselines_any_run'])}"
+                    "` |"
+                ),
+                (
+                    "| Completed CartoBoost-family rows in all runs | "
+                    f"`{', '.join(comparability['completed_cartoboost_family_models_all_runs'])}` |"
+                ),
+                (
+                    "| CartoBoost/external comparison rows | "
+                    f"{comparability['cartoboost_external_comparison_rows']} |"
+                ),
+                "",
+            ]
+        )
     lines.extend(
         [
             "## Quality Summary",
@@ -658,6 +746,7 @@ def main() -> None:
         },
         "ratios": ratios,
         "quality": quality,
+        "comparability_audit": repeated_comparability_audit(results),
     }
     summary["all_gates_pass"] = all(passes_xgboost_gate(row) for row in ratios.values())
     args.summary_json.parent.mkdir(parents=True, exist_ok=True)

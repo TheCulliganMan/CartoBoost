@@ -1955,8 +1955,7 @@ struct RocmRuntime {
     hip_memcpy_dto_h: extern "C" fn(*mut c_void, *const c_void, usize) -> RocmError,
     hip_module_load_data: extern "C" fn(*mut HipModule, *const c_void) -> RocmError,
     hip_module_unload: extern "C" fn(HipModule) -> RocmError,
-    hip_module_get_function:
-        extern "C" fn(*mut HipFunction, HipModule, *const c_char) -> RocmError,
+    hip_module_get_function: extern "C" fn(*mut HipFunction, HipModule, *const c_char) -> RocmError,
     hip_module_launch_kernel: extern "C" fn(
         HipFunction,
         u32,
@@ -3282,13 +3281,13 @@ fn webgpu_dense_layer_f32(
     });
     let weight_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("webgpu-dense-weights"),
-        size: (weights.len() * std::mem::size_of::<f32>()) as u64,
+        size: std::mem::size_of_val(weights) as u64,
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
     let bias_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("webgpu-dense-biases"),
-        size: (biases.len() * std::mem::size_of::<f32>()) as u64,
+        size: std::mem::size_of_val(biases) as u64,
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });

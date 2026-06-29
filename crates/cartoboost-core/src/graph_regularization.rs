@@ -187,7 +187,7 @@ impl CsrGraph {
             }
         }
         for row in &mut rows {
-            row.sort_by(|left, right| left.0.cmp(&right.0));
+            row.sort_by_key(|left| left.0);
         }
         let mut indptr = Vec::with_capacity(node_count + 1);
         let mut indices = Vec::new();

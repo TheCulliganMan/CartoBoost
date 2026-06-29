@@ -12,6 +12,38 @@
     }
   },
   "cartoboost_version": "0.1.66",
+  "comparability_audit": {
+    "best_cartoboost_compared_to_best_library": false,
+    "candidate_selection": true,
+    "completed_cartoboost_models": [
+      "cartoboost_lag",
+      "cartoboost_auto_forecast"
+    ],
+    "completed_forecasting_library_models": [],
+    "completed_models": [
+      "cartoboost_lag",
+      "cartoboost_auto_forecast"
+    ],
+    "model_roster": "cartoboost",
+    "primary_metric": "rmse",
+    "requested_models": [
+      "cartoboost_lag",
+      "cartoboost_auto_forecast"
+    ],
+    "same_forecast_rows": true,
+    "same_horizon": true,
+    "same_metrics": [
+      "mae",
+      "rmse",
+      "wape",
+      "r2",
+      "mase",
+      "smape"
+    ],
+    "selection_metric": "rmse",
+    "selection_uses_outer_test_labels": false,
+    "skipped_requested_models": []
+  },
   "comparison_libraries": [
     "functime",
     "statsforecast",
@@ -107,6 +139,10 @@
   ],
   "official_metrics": {
     "m6": {
+      "investment_ranking": [
+        "cartoboost_lag",
+        "cartoboost_auto_forecast"
+      ],
       "models": {
         "cartoboost_auto_forecast": {
           "asset_count": 95,
@@ -3529,20 +3565,16 @@
         "Rank probabilities are deterministic five-bucket distributions derived from predicted cumulative holdout returns.",
         "Decision rows are deterministic long/short selections for auditability; they are not an official M6 submission file."
       ],
+      "primary_ranking": [
+        "cartoboost_lag",
+        "cartoboost_auto_forecast"
+      ],
       "rank_bucket_count": 5,
       "ranking": [
         "cartoboost_lag",
         "cartoboost_auto_forecast"
       ],
-      "primary_ranking": [
-        "cartoboost_lag",
-        "cartoboost_auto_forecast"
-      ],
       "rps_ranking": [
-        "cartoboost_lag",
-        "cartoboost_auto_forecast"
-      ],
-      "investment_ranking": [
         "cartoboost_lag",
         "cartoboost_auto_forecast"
       ]

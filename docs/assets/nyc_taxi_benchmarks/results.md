@@ -40,30 +40,18 @@ settings.
 
 - dataset source: nyc_tlc_trip_records
 - source URL: https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page
-- dataset hash: 741a94b7345cd469a8dc6261b116910f39131f6e1ca0e824dd319e53ef6bd8c8
-- sample size: 30000
-- task rows: {'duration': 30000, 'fare': 30000, 'pickup_demand': 24650}
+- dataset hash: 7708e1f5350fce2c0de4c431df3d513ca372492888583968fdabeb8ed0b3a328
+- sample size: 100000
+- task rows: {'duration': 100000, 'fare': 100000, 'pickup_demand': 38932}
 - models requested: cartoboost, lightgbm, xgboost, catboost, hist_gradient_boosting, random_forest, extra_trees, ridge, mean
-- baseline estimators: 24
-- CartoBoost candidate estimators: 24
+- baseline estimators: 48
+- CartoBoost candidate estimators: 48
 - baseline max depth: 4
 - CartoBoost candidate max depth: 5
 - model workers: 1
 - zone treatment: target_mean
-- command arguments: `scripts/run_nyc_taxi_quality_benchmarks.py --output-dir docs/assets/nyc_taxi_benchmarks --no-download --no-plots --sample-size 30000 --tasks duration,fare,pickup_demand --models cartoboost,lightgbm,xgboost,catboost,hist_gradient_boosting,random_forest,extra_trees,ridge,mean --n-estimators 24 --cartoboost-n-estimators 24 --cartoboost-splitters axis_histogram:512,diagonal_2d,gaussian_2d,periodic:24,periodic:7,sparse_set --cartoboost-min-samples-leaf 20 --model-workers 1`
+- command arguments: `scripts/run_nyc_taxi_quality_benchmarks.py --no-plots --sample-size 100000 --months 1,2,3,4,5,6,7,8,9,10,11,12 --output-dir docs/assets/nyc_taxi_benchmarks --models cartoboost,lightgbm,xgboost,catboost,hist_gradient_boosting,random_forest,extra_trees,ridge,mean --n-estimators 48 --cartoboost-n-estimators 48 --tasks duration,fare,pickup_demand --model-workers 1`
 
-## Split Manifests
-
-| Task | Split | Split kind | Split manifest hash | Rows | CRS note |
-| --- | --- | --- | --- | ---: | --- |
-| duration | random | seeded_row_shuffle | `sha256:37a8a1b8d95de0461bb4b226a2092804755744082d199dafa88183ef7abdb431` | 30000 | No coordinate CRS applies to this random-row diagnostic split. |
-| duration | spatial_holdout | group_spatial_cv | `sha256:d29f8f08056097c37e031efa55bc076dc44e02f8f3301c49e5c88309af67cf2a` | 30000 | NYC TLC pickup/dropoff zone identifiers are treated as spatial groups; distance-buffered claims require projected taxi zone geometry. |
-| fare | random | seeded_row_shuffle | `sha256:be1874cbdc327ec965d7f6c8bef319e66d6d17d1b7a735885483dfe4ba004b6b` | 30000 | No coordinate CRS applies to this random-row diagnostic split. |
-| fare | spatial_holdout | group_spatial_cv | `sha256:4c8fd1695bab05f1310616a99c3cd7e3f019e9d673c01ed2376bab0571ebf973` | 30000 | NYC TLC pickup/dropoff zone identifiers are treated as spatial groups; distance-buffered claims require projected taxi zone geometry. |
-| pickup_demand | random | seeded_row_shuffle | `sha256:eb1796d5ac7d353a949c32527fd64c6883b6766c321400f610418208289e76d4` | 24650 | No coordinate CRS applies to this random-row diagnostic split. |
-| pickup_demand | spatial_holdout | group_spatial_cv | `sha256:35a6924ec908c8cc54ceb5ed31232c9c34352881ee422f1137523580550e93b4` | 24650 | NYC TLC pickup/dropoff zone identifiers are treated as spatial groups; distance-buffered claims require projected taxi zone geometry. |
-
-Legacy note: this artifact predates persisted row-index hashes, so the JSON records a legacy manifest hash over split identity, row counts, held-out pickup zones, dataset hash, seed, CRS note, model version, and dependency versions. New runs from `scripts/run_nyc_taxi_quality_benchmarks.py` also record `train_index_sha256` and `test_index_sha256` per split.
 ## Resource Usage
 
 | Field | Value |
@@ -88,121 +76,26 @@ Legacy note: this artifact predates persisted row-index hashes, so the JSON reco
 
 | Artifact | Size bytes |
 | --- | ---: |
-| `plots/duration_random_cartoboost_graph_graphsage_predicted_actual.png` | 82615 |
-| `plots/duration_random_cartoboost_graph_graphsage_zone_residuals.png` | 33439 |
-| `plots/duration_random_cartoboost_graph_hetero_graphsage_predicted_actual.png` | 84062 |
-| `plots/duration_random_cartoboost_graph_hetero_graphsage_zone_residuals.png` | 33439 |
-| `plots/duration_random_cartoboost_graph_hinsage_predicted_actual.png` | 82410 |
-| `plots/duration_random_cartoboost_graph_hinsage_zone_residuals.png` | 33439 |
-| `plots/duration_random_cartoboost_graph_node2vec_predicted_actual.png` | 82886 |
-| `plots/duration_random_cartoboost_graph_node2vec_zone_residuals.png` | 33439 |
-| `plots/duration_random_cartoboost_neural_predicted_actual.png` | 80798 |
-| `plots/duration_random_cartoboost_neural_zone_residuals.png` | 33439 |
-| `plots/duration_random_cartoboost_predicted_actual.png` | 80411 |
-| `plots/duration_random_cartoboost_reference_predicted_actual.png` | 81222 |
-| `plots/duration_random_cartoboost_reference_zone_residuals.png` | 33095 |
-| `plots/duration_random_cartoboost_zone_residuals.png` | 33439 |
-| `plots/duration_random_lightgbm_predicted_actual.png` | 79071 |
-| `plots/duration_random_lightgbm_zone_residuals.png` | 33265 |
-| `plots/duration_random_mean_predicted_actual.png` | 23830 |
-| `plots/duration_random_mean_zone_residuals.png` | 31807 |
-| `plots/duration_random_xgboost_predicted_actual.png` | 79883 |
-| `plots/duration_random_xgboost_zone_residuals.png` | 33197 |
-| `plots/duration_spatial_holdout_cartoboost_graph_graphsage_predicted_actual.png` | 85415 |
-| `plots/duration_spatial_holdout_cartoboost_graph_graphsage_zone_residuals.png` | 22720 |
-| `plots/duration_spatial_holdout_cartoboost_graph_hetero_graphsage_predicted_actual.png` | 85772 |
-| `plots/duration_spatial_holdout_cartoboost_graph_hetero_graphsage_zone_residuals.png` | 22720 |
-| `plots/duration_spatial_holdout_cartoboost_graph_hinsage_predicted_actual.png` | 84897 |
-| `plots/duration_spatial_holdout_cartoboost_graph_hinsage_zone_residuals.png` | 22720 |
-| `plots/duration_spatial_holdout_cartoboost_graph_node2vec_predicted_actual.png` | 85343 |
-| `plots/duration_spatial_holdout_cartoboost_graph_node2vec_zone_residuals.png` | 22720 |
-| `plots/duration_spatial_holdout_cartoboost_neural_predicted_actual.png` | 83507 |
-| `plots/duration_spatial_holdout_cartoboost_neural_zone_residuals.png` | 22720 |
-| `plots/duration_spatial_holdout_cartoboost_predicted_actual.png` | 82818 |
-| `plots/duration_spatial_holdout_cartoboost_reference_predicted_actual.png` | 84079 |
-| `plots/duration_spatial_holdout_cartoboost_reference_zone_residuals.png` | 23245 |
-| `plots/duration_spatial_holdout_cartoboost_zone_residuals.png` | 22720 |
-| `plots/duration_spatial_holdout_lightgbm_predicted_actual.png` | 82625 |
-| `plots/duration_spatial_holdout_lightgbm_zone_residuals.png` | 22766 |
-| `plots/duration_spatial_holdout_mean_predicted_actual.png` | 25059 |
-| `plots/duration_spatial_holdout_mean_zone_residuals.png` | 23994 |
-| `plots/duration_spatial_holdout_xgboost_predicted_actual.png` | 82208 |
-| `plots/duration_spatial_holdout_xgboost_zone_residuals.png` | 22787 |
-| `plots/fare_random_cartoboost_graph_graphsage_predicted_actual.png` | 61148 |
-| `plots/fare_random_cartoboost_graph_graphsage_zone_residuals.png` | 35097 |
-| `plots/fare_random_cartoboost_graph_hetero_graphsage_predicted_actual.png` | 62042 |
-| `plots/fare_random_cartoboost_graph_hetero_graphsage_zone_residuals.png` | 35097 |
-| `plots/fare_random_cartoboost_graph_hinsage_predicted_actual.png` | 60849 |
-| `plots/fare_random_cartoboost_graph_hinsage_zone_residuals.png` | 35097 |
-| `plots/fare_random_cartoboost_graph_node2vec_predicted_actual.png` | 61325 |
-| `plots/fare_random_cartoboost_graph_node2vec_zone_residuals.png` | 35097 |
-| `plots/fare_random_cartoboost_neural_predicted_actual.png` | 59314 |
-| `plots/fare_random_cartoboost_neural_zone_residuals.png` | 35097 |
-| `plots/fare_random_cartoboost_predicted_actual.png` | 58463 |
-| `plots/fare_random_cartoboost_reference_predicted_actual.png` | 60547 |
-| `plots/fare_random_cartoboost_reference_zone_residuals.png` | 31706 |
-| `plots/fare_random_cartoboost_zone_residuals.png` | 35097 |
-| `plots/fare_random_lightgbm_predicted_actual.png` | 58606 |
-| `plots/fare_random_lightgbm_zone_residuals.png` | 35161 |
-| `plots/fare_random_mean_predicted_actual.png` | 26760 |
-| `plots/fare_random_mean_zone_residuals.png` | 34116 |
-| `plots/fare_random_xgboost_predicted_actual.png` | 59208 |
-| `plots/fare_random_xgboost_zone_residuals.png` | 35157 |
-| `plots/fare_spatial_holdout_cartoboost_graph_graphsage_predicted_actual.png` | 70861 |
-| `plots/fare_spatial_holdout_cartoboost_graph_graphsage_zone_residuals.png` | 21755 |
-| `plots/fare_spatial_holdout_cartoboost_graph_hetero_graphsage_predicted_actual.png` | 70792 |
-| `plots/fare_spatial_holdout_cartoboost_graph_hetero_graphsage_zone_residuals.png` | 21755 |
-| `plots/fare_spatial_holdout_cartoboost_graph_hinsage_predicted_actual.png` | 69929 |
-| `plots/fare_spatial_holdout_cartoboost_graph_hinsage_zone_residuals.png` | 21755 |
-| `plots/fare_spatial_holdout_cartoboost_graph_node2vec_predicted_actual.png` | 70415 |
-| `plots/fare_spatial_holdout_cartoboost_graph_node2vec_zone_residuals.png` | 21755 |
-| `plots/fare_spatial_holdout_cartoboost_neural_predicted_actual.png` | 68961 |
-| `plots/fare_spatial_holdout_cartoboost_neural_zone_residuals.png` | 21755 |
-| `plots/fare_spatial_holdout_cartoboost_predicted_actual.png` | 68242 |
-| `plots/fare_spatial_holdout_cartoboost_reference_predicted_actual.png` | 69638 |
-| `plots/fare_spatial_holdout_cartoboost_reference_zone_residuals.png` | 22282 |
-| `plots/fare_spatial_holdout_cartoboost_zone_residuals.png` | 21755 |
-| `plots/fare_spatial_holdout_lightgbm_predicted_actual.png` | 67968 |
-| `plots/fare_spatial_holdout_lightgbm_zone_residuals.png` | 21768 |
-| `plots/fare_spatial_holdout_mean_predicted_actual.png` | 27023 |
-| `plots/fare_spatial_holdout_mean_zone_residuals.png` | 23871 |
-| `plots/fare_spatial_holdout_xgboost_predicted_actual.png` | 67825 |
-| `plots/fare_spatial_holdout_xgboost_zone_residuals.png` | 21757 |
-| `plots/pickup_demand_random_cartoboost_graph_graphsage_predicted_actual.png` | 84853 |
-| `plots/pickup_demand_random_cartoboost_graph_graphsage_zone_residuals.png` | 40190 |
-| `plots/pickup_demand_random_cartoboost_graph_hetero_graphsage_predicted_actual.png` | 84932 |
-| `plots/pickup_demand_random_cartoboost_graph_hetero_graphsage_zone_residuals.png` | 40231 |
-| `plots/pickup_demand_random_cartoboost_graph_hinsage_predicted_actual.png` | 83890 |
-| `plots/pickup_demand_random_cartoboost_graph_hinsage_zone_residuals.png` | 40231 |
-| `plots/pickup_demand_random_cartoboost_graph_node2vec_predicted_actual.png` | 84344 |
-| `plots/pickup_demand_random_cartoboost_graph_node2vec_zone_residuals.png` | 37132 |
-| `plots/pickup_demand_random_cartoboost_neural_predicted_actual.png` | 85236 |
-| `plots/pickup_demand_random_cartoboost_neural_zone_residuals.png` | 39983 |
-| `plots/pickup_demand_random_cartoboost_predicted_actual.png` | 84343 |
-| `plots/pickup_demand_random_cartoboost_reference_predicted_actual.png` | 91036 |
-| `plots/pickup_demand_random_cartoboost_reference_zone_residuals.png` | 34979 |
-| `plots/pickup_demand_random_cartoboost_zone_residuals.png` | 39983 |
-| `plots/pickup_demand_random_lightgbm_predicted_actual.png` | 87813 |
-| `plots/pickup_demand_random_lightgbm_zone_residuals.png` | 39292 |
-| `plots/pickup_demand_random_mean_predicted_actual.png` | 26220 |
-| `plots/pickup_demand_random_mean_zone_residuals.png` | 40035 |
-| `plots/pickup_demand_random_xgboost_predicted_actual.png` | 88929 |
-| `plots/pickup_demand_random_xgboost_zone_residuals.png` | 34913 |
-| `plots/pickup_demand_spatial_holdout_cartoboost_predicted_actual.png` | 65851 |
-| `plots/pickup_demand_spatial_holdout_cartoboost_reference_predicted_actual.png` | 64626 |
-| `plots/pickup_demand_spatial_holdout_cartoboost_reference_zone_residuals.png` | 20819 |
-| `plots/pickup_demand_spatial_holdout_cartoboost_zone_residuals.png` | 20721 |
-| `plots/pickup_demand_spatial_holdout_lightgbm_predicted_actual.png` | 65465 |
-| `plots/pickup_demand_spatial_holdout_lightgbm_zone_residuals.png` | 21110 |
-| `plots/pickup_demand_spatial_holdout_mean_predicted_actual.png` | 27059 |
-| `plots/pickup_demand_spatial_holdout_mean_zone_residuals.png` | 23382 |
-| `plots/pickup_demand_spatial_holdout_xgboost_predicted_actual.png` | 64212 |
-| `plots/pickup_demand_spatial_holdout_xgboost_zone_residuals.png` | 21078 |
-| `prediction_throughput.png` | 119853 |
-| `results.json` | 269603 |
-| `results.jsonl` | 48853 |
-| `results.md` | 20720 |
-| `speed_summary.png` | 121081 |
+| `results.json` | 268044 |
+| `results.jsonl` | 48828 |
+| `results.md` | 17790 |
+
+## Comparability Audit
+
+| Check | Value |
+| --- | --- |
+| Same outer splits for requested models | True |
+| Primary metric | `rmse` |
+| Selection mode | `fixed_settings_no_hpo` |
+| Selection uses outer test labels | False |
+| Same feature access policy | True |
+| Train-only target encoding | True |
+| Segment diagnostics used for selection | False |
+| Completed external baselines | `catboost, extra_trees, hist_gradient_boosting, lightgbm, mean, random_forest, ridge, xgboost` |
+| Skipped requested external baselines | `` |
+| Completed CartoBoost-family rows | `cartoboost` |
+| Skipped CartoBoost-family rows | `` |
+| CartoBoost/external comparison rows | 5 |
 
 ## Selection and Leakage Policy
 
@@ -213,7 +106,51 @@ Legacy note: this artifact predates persisted row-index hashes, so the JSON reco
 - neural feature gate: uses deterministic inner train/validation rows inside the training split only
 - segment diagnostics: computed after prediction and excluded from fitting, tuning, and model selection
 
-## Problem Metrics
+## CartoBoost vs External Baselines
+
+For each runnable learned-model split, this table compares the single primary `cartoboost` row with the lowest-RMSE external baseline that finished under the same task, split, data sample, target transformation, and global benchmark settings.
+
+| task | split | CartoBoost RMSE | CartoBoost WAPE | best external baseline | external RMSE | external WAPE | RMSE delta | R2 delta | result |
+| --- | --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | --- |
+| duration | random | 0.316428 | 0.036113 | hist_gradient_boosting | 0.328239 | 0.037575 | -0.011811 | 0.014469 | cartoboost_lower_rmse |
+| duration | spatial_holdout | 0.327583 | 0.037662 | hist_gradient_boosting | 0.343622 | 0.039971 | -0.016039 | 0.021349 | cartoboost_lower_rmse |
+| fare | random | 0.167022 | 0.037318 | hist_gradient_boosting | 0.172697 | 0.038730 | -0.005675 | 0.006727 | cartoboost_lower_rmse |
+| fare | spatial_holdout | 0.183040 | 0.041493 | lightgbm | 0.184542 | 0.042480 | -0.001502 | 0.001887 | cartoboost_lower_rmse |
+| pickup_demand | random | 0.529766 | 0.099725 | hist_gradient_boosting | 0.565712 | 0.106888 | -0.035945 | 0.006778 | cartoboost_lower_rmse |
+
+### What Each Comparison Row Models
+
+| task/split | prediction unit | target being modeled | validation question | modeling signal |
+| --- | --- | --- | --- | --- |
+| duration/random | one completed taxi trip | log trip duration in seconds | Can the model explain ordinary held-out trips drawn from the same month-wide trip distribution? | Base CartoBoost uses trip distance, passenger count, hour/weekday periodicity, pickup/dropoff zones, and route geometry. |
+| duration/spatial_holdout | one completed taxi trip from held-out pickup zones | log trip duration in seconds | Does the trip-duration structure transfer when pickup zones are held out? | The gain comes from spatial splitters and route geometry rather than memorizing the exact validation rows. |
+| fare/random | one completed taxi trip | log total fare amount | Can the model recover fare structure for ordinary held-out trips? | Distance, pickup/dropoff zones, hour/weekday effects, and cartometric route features align with how fares vary. |
+| fare/spatial_holdout | one completed taxi trip from held-out pickup zones | log total fare amount | Does fare modeling generalize to zones not present in the training pickup set? | Route and zone geometry carry transferable fare signal beyond target-mean zone encodings. |
+| pickup_demand/random | pickup zone x hour x weekday bucket | log pickup trip count | Can the model explain recurring zone-time demand for observed zones? | The node2vec row adds topology from observed pickup-zone relationships before modeling hour, weekday, and zone effects. |
+
+### Interpretation Notes
+
+- Fare and duration are primarily geotemporal row tasks. The base CartoBoost candidate uses native periodic hour/day splitters, diagonal and radial spatial splitters, and sparse-set taxi-zone membership. Those primitives let the model express pickup/dropoff geometry directly instead of asking an axis-only tabular baseline to approximate it through many rectangular cuts.
+- Pickup demand is a zone-time graph problem. Graph rows are kept as diagnostics for topology-sensitive behavior, but the public comparison summary keeps `cartoboost` as the single product row.
+- Graph and neural rows are not expected to improve every target. When the base geotemporal splitters already explain the signal, they match the base candidate and mainly add training cost. Their value is in workloads where ID residuals or source-target topology carry signal that ordinary dense columns do not expose.
+- The pickup-demand cold-zone spatial holdout intentionally skips learned models. That split removes all zone demand history, so a quality comparison would collapse to priors rather than test model structure.
+
+### Pickup-Zone Segment Diagnostics
+
+These diagnostics are computed after prediction on each holdout split. They summarize pickup-zone error distribution and are not used for training, model selection, or tuning.
+
+| task | split | model | pickup zones | zone rows min-max | zone RMSE p50 | zone RMSE p90 | worst zone RMSE |
+| --- | --- | --- | ---: | --- | ---: | ---: | ---: |
+| duration | random | cartoboost | 184 | 1-957 | 0.319366 | 0.597599 | 1.688514 |
+| duration | random | hist_gradient_boosting | 184 | 1-957 | 0.334915 | 0.625150 | 1.689792 |
+| duration | spatial_holdout | cartoboost | 46 | 1-3097 | 0.342112 | 0.599958 | 0.756333 |
+| duration | spatial_holdout | hist_gradient_boosting | 46 | 1-3097 | 0.366946 | 0.618498 | 0.727659 |
+| fare | random | cartoboost | 184 | 1-957 | 0.173822 | 0.371457 | 0.856359 |
+| fare | random | hist_gradient_boosting | 184 | 1-957 | 0.181868 | 0.404962 | 0.915290 |
+| fare | spatial_holdout | cartoboost | 46 | 1-3097 | 0.223480 | 0.396836 | 0.727161 |
+| fare | spatial_holdout | lightgbm | 46 | 1-3097 | 0.235632 | 0.418852 | 0.770520 |
+| pickup_demand | random | cartoboost | 257 | 1-46 | 0.470412 | 0.695883 | 3.232411 |
+| pickup_demand | random | hist_gradient_boosting | 257 | 1-46 | 0.495826 | 0.727797 | 3.247891 |
 
 ## Trip duration
 
@@ -223,29 +160,29 @@ Predict log trip duration from zone, trip, passenger, and time features.
 
 | model | status | RMSE | MAE | R2 | WAPE | train sec | predict sec | predict rows/sec | note |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| cartoboost | ok | 0.321631 | 0.244797 | 0.787495 | 0.037386 | 12.596562 | 0.006319 | 949498.55 | n_estimators=24 |
-| lightgbm | ok | 0.340456 | 0.260619 | 0.761891 | 0.039803 | 0.226092 | 0.002823 | 2125116.27 | n_estimators=24 |
-| xgboost | ok | 0.340162 | 0.260461 | 0.762302 | 0.039779 | 0.135500 | 0.002383 | 2517395.14 | n_estimators=24 |
-| catboost | ok | 0.358161 | 0.275918 | 0.736481 | 0.042139 | 0.366057 | 0.002001 | 2998563.75 |  |
-| hist_gradient_boosting | ok | 0.337427 | 0.258119 | 0.766108 | 0.039421 | 1.626485 | 0.005606 | 1070297.67 | n_estimators=24 |
-| random_forest | ok | 0.346062 | 0.266391 | 0.753984 | 0.040684 | 1.205274 | 0.021955 | 273282.64 | n_estimators=24 |
-| extra_trees | ok | 0.360183 | 0.279085 | 0.733498 | 0.042623 | 0.156392 | 0.015439 | 388616.77 | n_estimators=24 |
-| ridge | ok | 0.361002 | 0.277595 | 0.732285 | 0.042396 | 0.012554 | 0.000500 | 11998006.27 |  |
-| mean | ok | 0.697752 | 0.557510 | -0.000130 | 0.085145 | 0.000124 | 0.000033 | 181356799.71 |  |
+| cartoboost | ok | 0.316428 | 0.240482 | 0.809732 | 0.036113 | 26.370172 | 0.020450 | 978005.06 | n_estimators=48 |
+| lightgbm | ok | 0.334510 | 0.255696 | 0.787366 | 0.038398 | 0.356458 | 0.012722 | 1572131.39 | n_estimators=48 |
+| xgboost | ok | 0.333024 | 0.254586 | 0.789251 | 0.038231 | 1.044649 | 0.002995 | 6676773.05 | n_estimators=48 |
+| catboost | ok | 0.348982 | 0.268441 | 0.768569 | 0.040312 | 1.252617 | 0.034256 | 583840.74 |  |
+| hist_gradient_boosting | ok | 0.328239 | 0.250217 | 0.795263 | 0.037575 | 5.102143 | 0.097663 | 204785.93 | n_estimators=48 |
+| random_forest | ok | 0.380746 | 0.294479 | 0.724522 | 0.044222 | 1.792315 | 0.016735 | 1195073.31 | n_estimators=48 |
+| extra_trees | ok | 0.388196 | 0.302743 | 0.713638 | 0.045463 | 0.417526 | 0.032933 | 607292.07 | n_estimators=48 |
+| ridge | ok | 0.389498 | 0.303845 | 0.711713 | 0.045628 | 0.009262 | 0.000351 | 57027343.07 |  |
+| mean | ok | 0.725425 | 0.578521 | -0.000001 | 0.086876 | 0.000086 | 0.000016 | 1246724904.50 |  |
 
 ### spatial_holdout
 
 | model | status | RMSE | MAE | R2 | WAPE | train sec | predict sec | predict rows/sec | note |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| cartoboost | ok | 0.317218 | 0.244041 | 0.757616 | 0.037839 | 7.054656 | 0.009912 | 586030.16 | n_estimators=24 |
-| lightgbm | ok | 0.334555 | 0.258528 | 0.730397 | 0.040085 | 0.526899 | 0.003132 | 1854922.61 | n_estimators=24 |
-| xgboost | ok | 0.334581 | 0.258639 | 0.730355 | 0.040102 | 0.206545 | 0.002681 | 2166762.76 | n_estimators=24 |
-| catboost | ok | 0.347276 | 0.268227 | 0.709504 | 0.041589 | 0.736538 | 0.004659 | 1246822.85 |  |
-| hist_gradient_boosting | ok | 0.330881 | 0.255337 | 0.736287 | 0.039590 | 2.128190 | 0.010717 | 542014.93 | n_estimators=24 |
-| random_forest | ok | 0.339897 | 0.264278 | 0.721719 | 0.040977 | 0.275638 | 0.018946 | 306614.32 | n_estimators=24 |
-| extra_trees | ok | 0.353708 | 0.273389 | 0.698645 | 0.042389 | 0.074627 | 0.013747 | 422568.77 | n_estimators=24 |
-| ridge | ok | 0.354533 | 0.274377 | 0.697238 | 0.042542 | 0.003670 | 0.000257 | 22643547.99 |  |
-| mean | ok | 0.657256 | 0.519352 | -0.040539 | 0.080526 | 0.000047 | 0.000012 | 494381663.35 |  |
+| cartoboost | ok | 0.327583 | 0.251650 | 0.787195 | 0.037662 | 32.122466 | 0.021241 | 1106151.78 | n_estimators=48 |
+| lightgbm | ok | 0.350911 | 0.273336 | 0.755808 | 0.040908 | 0.355463 | 0.008594 | 2734133.16 | n_estimators=48 |
+| xgboost | ok | 0.352107 | 0.274287 | 0.754140 | 0.041050 | 0.198723 | 0.003227 | 7280878.71 | n_estimators=48 |
+| catboost | ok | 0.357080 | 0.278693 | 0.747147 | 0.041710 | 0.208939 | 0.002579 | 9111684.39 |  |
+| hist_gradient_boosting | ok | 0.343622 | 0.267074 | 0.765846 | 0.039971 | 1.279312 | 0.036958 | 635745.09 | n_estimators=48 |
+| random_forest | ok | 0.383294 | 0.300408 | 0.708659 | 0.044960 | 1.494925 | 0.018143 | 1295062.76 | n_estimators=48 |
+| extra_trees | ok | 0.387980 | 0.302913 | 0.701491 | 0.045334 | 0.400026 | 0.018050 | 1301753.51 | n_estimators=48 |
+| ridge | ok | 0.396865 | 0.310395 | 0.687662 | 0.046454 | 0.006602 | 0.000326 | 72184324.30 |  |
+| mean | ok | 0.710708 | 0.570193 | -0.001661 | 0.085336 | 0.000047 | 0.000012 | 1886006533.48 |  |
 
 ## Fare amount
 
@@ -255,29 +192,29 @@ Predict log total amount from zone, trip, passenger, and time features.
 
 | model | status | RMSE | MAE | R2 | WAPE | train sec | predict sec | predict rows/sec | note |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| cartoboost | ok | 0.174649 | 0.128754 | 0.889225 | 0.040675 | 4.617731 | 0.002592 | 2315149.79 | n_estimators=24 |
-| lightgbm | ok | 0.182229 | 0.136358 | 0.879402 | 0.043078 | 0.155377 | 0.002967 | 2022045.71 | n_estimators=24 |
-| xgboost | ok | 0.182710 | 0.136996 | 0.878764 | 0.043279 | 0.074185 | 0.000789 | 7608979.84 | n_estimators=24 |
-| catboost | ok | 0.196341 | 0.147281 | 0.859999 | 0.046529 | 0.060653 | 0.000909 | 6602178.27 |  |
-| hist_gradient_boosting | ok | 0.180789 | 0.134599 | 0.881300 | 0.042522 | 0.520524 | 0.005613 | 1068931.28 | n_estimators=24 |
-| random_forest | ok | 0.177191 | 0.129255 | 0.885978 | 0.040834 | 0.246418 | 0.016153 | 371459.53 | n_estimators=24 |
-| extra_trees | ok | 0.181030 | 0.133740 | 0.880984 | 0.042251 | 0.166193 | 0.015330 | 391377.71 | n_estimators=24 |
-| ridge | ok | 0.169843 | 0.123155 | 0.895239 | 0.038907 | 0.002752 | 0.000125 | 48128230.45 |  |
-| mean | ok | 0.524746 | 0.399845 | -0.000010 | 0.126318 | 0.000040 | 0.000009 | 679269951.26 |  |
+| cartoboost | ok | 0.167022 | 0.119828 | 0.902671 | 0.037318 | 34.642536 | 0.012961 | 1543075.93 | n_estimators=48 |
+| lightgbm | ok | 0.175487 | 0.126959 | 0.892555 | 0.039538 | 0.330189 | 0.008911 | 2244375.21 | n_estimators=48 |
+| xgboost | ok | 0.175270 | 0.127023 | 0.892820 | 0.039558 | 0.309359 | 0.002871 | 6965304.20 | n_estimators=48 |
+| catboost | ok | 0.184898 | 0.135921 | 0.880722 | 0.042329 | 0.179776 | 0.002433 | 8220726.55 |  |
+| hist_gradient_boosting | ok | 0.172697 | 0.124364 | 0.895945 | 0.038730 | 2.796062 | 0.198745 | 100631.59 | n_estimators=48 |
+| random_forest | ok | 0.199058 | 0.146641 | 0.861753 | 0.045668 | 3.033735 | 0.015076 | 1326630.14 | n_estimators=48 |
+| extra_trees | ok | 0.199227 | 0.148851 | 0.861519 | 0.046356 | 0.634004 | 0.033235 | 601779.00 | n_estimators=48 |
+| ridge | ok | 0.190073 | 0.139603 | 0.873952 | 0.043476 | 0.005763 | 0.000241 | 83131040.70 |  |
+| mean | ok | 0.535368 | 0.411833 | -0.000001 | 0.128255 | 0.000108 | 0.000016 | 1243476345.11 |  |
 
 ### spatial_holdout
 
 | model | status | RMSE | MAE | R2 | WAPE | train sec | predict sec | predict rows/sec | note |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| cartoboost | ok | 0.159090 | 0.120233 | 0.842719 | 0.039392 | 5.335479 | 0.003213 | 1808108.28 | n_estimators=24 |
-| lightgbm | ok | 0.166558 | 0.127097 | 0.827605 | 0.041641 | 0.195030 | 0.003623 | 1603551.48 | n_estimators=24 |
-| xgboost | ok | 0.167078 | 0.127587 | 0.826527 | 0.041801 | 0.074599 | 0.001055 | 5506813.76 | n_estimators=24 |
-| catboost | ok | 0.176206 | 0.134761 | 0.807054 | 0.044152 | 0.078187 | 0.001158 | 5014783.38 |  |
-| hist_gradient_boosting | ok | 0.163738 | 0.124610 | 0.833393 | 0.040826 | 1.312745 | 0.043642 | 133104.84 | n_estimators=24 |
-| random_forest | ok | 0.166072 | 0.124522 | 0.828609 | 0.040797 | 0.309378 | 0.012883 | 450901.35 | n_estimators=24 |
-| extra_trees | ok | 0.170498 | 0.129226 | 0.819354 | 0.042338 | 0.058362 | 0.015070 | 385476.33 | n_estimators=24 |
-| ridge | ok | 0.158739 | 0.119507 | 0.843411 | 0.039154 | 0.002610 | 0.000133 | 43814075.11 |  |
-| mean | ok | 0.425543 | 0.344144 | -0.125328 | 0.112751 | 0.000043 | 0.000010 | 603533346.78 |  |
+| cartoboost | ok | 0.183040 | 0.135017 | 0.885475 | 0.041493 | 42.293093 | 0.013867 | 1694346.67 | n_estimators=48 |
+| lightgbm | ok | 0.184542 | 0.138228 | 0.883588 | 0.042480 | 0.299597 | 0.008506 | 2762299.08 | n_estimators=48 |
+| xgboost | ok | 0.185297 | 0.138843 | 0.882634 | 0.042669 | 0.207475 | 0.003382 | 6948052.63 | n_estimators=48 |
+| catboost | ok | 0.198256 | 0.149298 | 0.865644 | 0.045883 | 0.380581 | 0.003476 | 6759411.87 |  |
+| hist_gradient_boosting | ok | 0.185264 | 0.138481 | 0.882676 | 0.042558 | 1.817673 | 0.037851 | 620742.27 | n_estimators=48 |
+| random_forest | ok | 0.207419 | 0.156159 | 0.852938 | 0.047991 | 1.390105 | 0.017240 | 1362916.55 | n_estimators=48 |
+| extra_trees | ok | 0.203642 | 0.154938 | 0.858245 | 0.047616 | 0.324294 | 0.017807 | 1319487.26 | n_estimators=48 |
+| ridge | ok | 0.318001 | 0.220567 | 0.654330 | 0.067785 | 0.005280 | 0.000267 | 87876568.72 |  |
+| mean | ok | 0.543820 | 0.421950 | -0.010920 | 0.129674 | 0.000047 | 0.000011 | 2152246877.38 |  |
 
 ## Pickup-zone demand
 
@@ -287,15 +224,15 @@ Predict log pickup trip count for a pickup zone, hour, and weekday bucket.
 
 | model | status | RMSE | MAE | R2 | WAPE | train sec | predict sec | predict rows/sec | note |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| cartoboost | ok | 0.598105 | 0.481325 | 0.914156 | 0.179037 | 2.057228 | 0.003394 | 1452580.89 | n_estimators=24 |
-| lightgbm | ok | 0.647961 | 0.521602 | 0.899248 | 0.194018 | 0.388376 | 0.003982 | 1238097.15 | n_estimators=24 |
-| xgboost | ok | 0.647344 | 0.521361 | 0.899440 | 0.193929 | 0.060264 | 0.000969 | 5087498.42 | n_estimators=24 |
-| catboost | ok | 0.705192 | 0.567393 | 0.880664 | 0.211051 | 0.058541 | 0.000837 | 5891547.35 |  |
-| hist_gradient_boosting | ok | 0.631339 | 0.515010 | 0.904351 | 0.191566 | 0.803042 | 0.005419 | 909775.88 | n_estimators=24 |
-| random_forest | ok | 0.645452 | 0.486077 | 0.900027 | 0.180804 | 0.086077 | 0.014975 | 329213.53 | n_estimators=24 |
-| extra_trees | ok | 0.697081 | 0.534807 | 0.883394 | 0.198930 | 0.032248 | 0.014625 | 337102.66 | n_estimators=24 |
-| ridge | ok | 0.800820 | 0.606266 | 0.846105 | 0.225510 | 0.001248 | 0.000093 | 53177763.11 |  |
-| mean | ok | 2.041944 | 1.752775 | -0.000560 | 0.651973 | 0.000021 | 0.000008 | 636128966.21 |  |
+| cartoboost | ok | 0.529766 | 0.400057 | 0.951693 | 0.099725 | 4.269394 | 0.004508 | 1727311.52 | n_estimators=48 |
+| lightgbm | ok | 0.595696 | 0.450784 | 0.938921 | 0.112371 | 0.168777 | 0.002265 | 3438160.55 | n_estimators=48 |
+| xgboost | ok | 0.598845 | 0.453007 | 0.938274 | 0.112925 | 0.101551 | 0.001002 | 7771428.32 | n_estimators=48 |
+| catboost | ok | 0.668529 | 0.512120 | 0.923073 | 0.127660 | 0.074800 | 0.000789 | 9874444.31 |  |
+| hist_gradient_boosting | ok | 0.565712 | 0.428789 | 0.944915 | 0.106888 | 0.683416 | 0.011492 | 677490.27 | n_estimators=48 |
+| random_forest | ok | 0.742919 | 0.569983 | 0.905000 | 0.142084 | 0.165537 | 0.017578 | 442937.94 | n_estimators=48 |
+| extra_trees | ok | 0.840772 | 0.675830 | 0.878326 | 0.168469 | 0.085754 | 0.016485 | 472312.94 | n_estimators=48 |
+| ridge | ok | 0.872242 | 0.688691 | 0.869048 | 0.171675 | 0.001717 | 0.000118 | 65750712.97 |  |
+| mean | ok | 2.410684 | 1.948451 | -0.000276 | 0.485705 | 0.000028 | 0.000010 | 781879969.76 |  |
 
 ### spatial_holdout
 
@@ -309,5 +246,5 @@ Predict log pickup trip count for a pickup zone, hour, and weekday bucket.
 | random_forest | skipped |  |  |  |  |  |  |  | learned models are not valid for pickup_demand cold-zone spatial holdout; the split removes all zone demand history, so predictions collapse to priors |
 | extra_trees | skipped |  |  |  |  |  |  |  | learned models are not valid for pickup_demand cold-zone spatial holdout; the split removes all zone demand history, so predictions collapse to priors |
 | ridge | skipped |  |  |  |  |  |  |  | learned models are not valid for pickup_demand cold-zone spatial holdout; the split removes all zone demand history, so predictions collapse to priors |
-| mean | ok | 2.088607 | 1.807484 | -0.002958 | 0.659779 | 0.000019 | 0.000007 | 688969813.15 |  |
+| mean | ok | 2.387509 | 1.973998 | -0.028338 | 0.538308 | 0.000026 | 0.000009 | 927995976.96 |  |
 

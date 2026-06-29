@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import json
 import subprocess
@@ -3239,6 +3240,9 @@ def test_forecasting_benchmark_docs_match_committed_artifacts():
     assert "provenance" not in docs
 
     taxi = json.loads((artifacts / "forecasting_library_benchmark_real.json").read_text())
+    assert taxi["comparability_audit"]["same_forecast_rows"] is True
+    assert taxi["comparability_audit"]["selection_uses_outer_test_labels"] is False
+    assert taxi["comparability_audit"]["completed_cartoboost_models"]
     taxi_auto = taxi["metrics"]["cartoboost_auto_forecast"]
     taxi_lag = taxi["metrics"]["cartoboost_lag"]
     assert (
@@ -3397,6 +3401,67 @@ def test_committed_forecasting_artifacts_include_provenance_fields():
         assert artifact["benchmark_integrity"]["seed"] == 42
         assert artifact["resource_usage"]["peak_rss_mb"] > 0.0
         assert artifact["resource_usage"]["process_cpu_seconds"] >= 0.0
+
+
+def test_maintained_forecasting_artifacts_include_comparability_audits():
+    repo_root = Path(__file__).resolve().parents[2]
+    artifacts = repo_root / "docs" / "assets" / "nyc_taxi_benchmarks"
+    missing = []
+    for path in sorted(artifacts.glob("forecasting*.json")):
+        artifact = json.loads(path.read_text())
+        audit = artifact.get("comparability_audit")
+        if not audit:
+            missing.append(path.name)
+            continue
+        assert audit["same_forecast_rows"] is True
+        assert audit["same_horizon"] is True
+        assert audit["selection_uses_outer_test_labels"] is False
+        assert audit["completed_models"], path.name
+        assert set(audit["completed_models"]) <= set(artifact["models"])
+
+    assert missing == []
+
+
+def test_forecasting_benchmark_comparability_audit_tracks_completed_models():
+    repo_root = Path(__file__).resolve().parents[2]
+    module_path = repo_root / "scripts" / "forecasting_library_benchmark.py"
+    spec = importlib.util.spec_from_file_location(
+        "forecasting_library_benchmark_comparability",
+        module_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    benchmark = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = benchmark
+    spec.loader.exec_module(benchmark)
+
+    args = argparse.Namespace(model_roster="full", no_candidate_selection=False)
+    model_names = [
+        "cartoboost_lag",
+        "cartoboost_auto_forecast",
+        "seasonal_naive",
+        "xgboost_lag",
+    ]
+    audit = benchmark.forecasting_comparability_audit(
+        args=args,
+        model_names=model_names,
+        metrics={
+            "cartoboost_lag": {"rmse": 1.0},
+            "cartoboost_auto_forecast": {"rmse": 0.8},
+            "seasonal_naive": {"rmse": 1.3},
+        },
+    )
+
+    assert audit["same_forecast_rows"] is True
+    assert audit["selection_uses_outer_test_labels"] is False
+    assert audit["candidate_selection"] is True
+    assert audit["completed_cartoboost_models"] == [
+        "cartoboost_lag",
+        "cartoboost_auto_forecast",
+    ]
+    assert audit["completed_forecasting_library_models"] == ["seasonal_naive"]
+    assert audit["skipped_requested_models"] == ["xgboost_lag"]
+    assert audit["best_cartoboost_compared_to_best_library"] is True
 
 
 def test_forecasting_benchmark_invocation_metadata_quotes_argv(monkeypatch):

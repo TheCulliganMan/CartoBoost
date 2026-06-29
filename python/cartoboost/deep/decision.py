@@ -28,9 +28,9 @@ class ConstrainedDecisionOptimizer:
         return loads(
             select(
                 dumps(candidate_frame),
-                self.objective.value,
+                str(self.objective),
                 dumps(self.constraints),
-                self.fallback.value,
+                str(self.fallback),
             )
         )
 

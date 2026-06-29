@@ -2307,10 +2307,32 @@
   "all_gates_pass": false,
   "output_artifacts": {
     "docs/assets/nyc_taxi_benchmarks/repeated_results.json": {
-      "size_bytes": 75582
+      "size_bytes": 76148
     },
     "docs/assets/nyc_taxi_benchmarks/repeated_results.md": {
-      "size_bytes": 9152
+      "size_bytes": 9681
     }
+  },
+  "comparability_audit": {
+    "run_count": 3,
+    "same_outer_splits": true,
+    "selection_uses_outer_test_labels": false,
+    "same_feature_access_policy": true,
+    "completed_external_baselines_all_runs": [
+      "extra_trees",
+      "hist_gradient_boosting",
+      "mean",
+      "random_forest",
+      "ridge",
+      "xgboost"
+    ],
+    "skipped_requested_external_baselines_any_run": [
+      "catboost",
+      "lightgbm"
+    ],
+    "completed_cartoboost_family_models_all_runs": [
+      "cartoboost"
+    ],
+    "cartoboost_external_comparison_rows": 15
   }
 }

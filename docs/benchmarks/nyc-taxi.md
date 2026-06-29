@@ -60,12 +60,11 @@ Generated artifacts:
 - `docs/assets/nyc_taxi_benchmarks/results.md`
 
 The JSON and Markdown artifacts record the runtime resource snapshot, baseline
-dependency status, split manifest hashes, and output artifact sizes. The current
-historical artifact includes a legacy split manifest hash for each task/split;
-new runs of `scripts/run_nyc_taxi_quality_benchmarks.py` also persist
-`train_index_sha256` and `test_index_sha256` per split. LightGBM and CatBoost
-are part of the maintained roster and are expected to run on the same footing as
-the other learned baselines in the validated environment.
+dependency status, split manifest hashes, comparability audit, and output
+artifact sizes. New runs of `scripts/run_nyc_taxi_quality_benchmarks.py`
+persist `train_index_sha256` and `test_index_sha256` per split. LightGBM and
+CatBoost are part of the maintained roster and run on the same footing as the
+other learned baselines in the validated environment.
 
 | Baseline | Package | Import | Version | Importable | Required class | Class available |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -73,6 +72,21 @@ the other learned baselines in the validated environment.
 | xgboost | xgboost | xgboost | `3.3.0` | true | XGBRegressor | true |
 | lightgbm | lightgbm | lightgbm | `4.6.0` | true | LGBMRegressor | true |
 | catboost | catboost | catboost | `1.2.10` | true | CatBoostRegressor | true |
+
+## Comparability Audit
+
+| Check | Result |
+| --- | --- |
+| Same outer splits for requested models | true |
+| Primary metric | RMSE |
+| Selection mode | Fixed settings, no HPO |
+| Selection uses outer test labels | false |
+| Same feature-access policy | true |
+| Train-only target encoding | true |
+| Segment diagnostics used for selection | false |
+| Completed external baselines | CatBoost, ExtraTrees, HistGradientBoosting, LightGBM, mean, RandomForest, Ridge, XGBoost |
+| Skipped requested external baselines | none |
+| CartoBoost/external comparison rows | 5 |
 
 ## Comparison Summary
 
@@ -82,11 +96,11 @@ same task, split, sample, target transformation, and global settings.
 
 | Task / split | CartoBoost RMSE | CartoBoost WAPE | Best external baseline | External RMSE | External WAPE | RMSE delta | R2 delta | Result |
 | --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | --- |
-| Duration / random | 0.321631 | 0.037386 | HistGradientBoosting | 0.337427 | 0.039421 | -0.015796 | +0.021386 | CartoBoost lower RMSE |
-| Duration / spatial holdout | 0.317218 | 0.037839 | HistGradientBoosting | 0.330881 | 0.039590 | -0.013663 | +0.021329 | CartoBoost lower RMSE |
-| Fare / random | 0.174649 | 0.040675 | Ridge | 0.169843 | 0.038907 | +0.004807 | -0.006014 | Ridge lower RMSE |
-| Fare / spatial holdout | 0.159090 | 0.039392 | Ridge | 0.158739 | 0.039154 | +0.000350 | -0.000692 | Ridge lower RMSE |
-| Pickup demand / random | 0.598105 | 0.179037 | HistGradientBoosting | 0.631339 | 0.191566 | -0.033234 | +0.009805 | CartoBoost lower RMSE |
+| Duration / random | 0.316428 | 0.036113 | HistGradientBoosting | 0.328239 | 0.037575 | -0.011811 | +0.014469 | CartoBoost lower RMSE |
+| Duration / spatial holdout | 0.327583 | 0.037662 | HistGradientBoosting | 0.343622 | 0.039971 | -0.016039 | +0.021349 | CartoBoost lower RMSE |
+| Fare / random | 0.167022 | 0.037318 | HistGradientBoosting | 0.172697 | 0.038730 | -0.005675 | +0.006727 | CartoBoost lower RMSE |
+| Fare / spatial holdout | 0.183040 | 0.041493 | LightGBM | 0.184542 | 0.042480 | -0.001502 | +0.001887 | CartoBoost lower RMSE |
+| Pickup demand / random | 0.529766 | 0.099725 | HistGradientBoosting | 0.565712 | 0.106888 | -0.035945 | +0.006778 | CartoBoost lower RMSE |
 
 The pickup-demand spatial holdout skips learned models because held-out pickup
 zones have no training-side demand history. Reporting learned-model scores there

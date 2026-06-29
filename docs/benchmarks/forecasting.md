@@ -13,11 +13,17 @@ lanes, daily aggregation, and a 7-day holdout.
 | Rank | Model | RMSE | MAE | WAPE | Artifact |
 | ---: | --- | ---: | ---: | ---: | --- |
 | 1 | `cartoboost_auto_forecast` | 39.033944 | 29.172619 | 0.093742 | `forecasting_library_benchmark_real.json` |
-| 2 | `cartoboost_lag` | 126.861048 | 85.685036 | 0.275335 | `forecasting_library_benchmark_real.json` |
+| 2 | `cartoboost_lag` | 125.811224 | 84.679383 | 0.272104 | `forecasting_library_benchmark_real.json` |
 
 Read: `cartoboost_auto_forecast` is the stronger current-code model on this
 real taxi lane-demand split. The run is short, so it is useful evidence for the
 taxi workflow, not a broad forecasting claim by itself.
+
+Comparability audit for `forecasting_library_benchmark_real.json`: both
+requested CartoBoost models score the same forecast rows and 7-day horizon,
+use the same metric set, select by RMSE without outer test-label selection, and
+record no skipped requested models. The roster is `cartoboost`, so this artifact
+does not compare against external forecasting-library baselines.
 
 ## Synthetic Demand Checks
 

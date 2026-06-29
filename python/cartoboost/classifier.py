@@ -211,11 +211,11 @@ class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
             max_depth=int(self.max_depth),
             min_samples_leaf=int(self.min_samples_leaf),
             min_gain=float(self.min_gain),
-            objective=_resolved_objective(self.objective.value, self.n_classes_),
+            objective=_resolved_objective(str(self.objective), self.n_classes_),
             class_count=self.n_classes_,
             class_weights=class_weights,
             splitters=list(self.splitters or ["auto"]),
-            leaf_predictor=self.leaf_predictor.value,
+            leaf_predictor=str(self.leaf_predictor),
             linear_leaf_features=_resolve_linear_leaf_features(
                 self.linear_leaf_features,
                 dense_array.shape[1],
@@ -224,7 +224,7 @@ class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
             constant_l2_regularization=float(self.constant_l2_regularization),
             fuzzy=bool(self.fuzzy),
             fuzzy_bandwidth=float(self.fuzzy_bandwidth),
-            fuzzy_kernel=self.fuzzy_kernel.value,
+            fuzzy_kernel=str(self.fuzzy_kernel),
             n_threads=None if self.n_threads is None else int(self.n_threads),
         )
         model.fit_arrays(

@@ -73,7 +73,7 @@ class NearestNeighborGPRegressor(RegressorMixin, BaseEstimator):
         coords_array = _as_coords(coords)
         y_array = _as_vector(y, "y")
         self._model = _NativeNearestNeighborGPRegressor(
-            kernel=self.kernel.value,
+            kernel=str(self.kernel),
             range=float(self.range),
             sill=float(self.sill),
             nugget=float(self.nugget),

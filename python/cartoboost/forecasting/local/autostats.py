@@ -23,7 +23,7 @@ class AutoStatsBank(NativeForecastWrapper):
             raise ValueError("season_length must be positive")
         if validation_window is not None and int(validation_window) <= 0:
             raise ValueError("validation_window must be positive when provided")
-        validation_objective = validation_objective.value
+        validation_objective = str(validation_objective)
         super().__init__(
             season_length=season_length,
             validation_window=None if validation_window is None else int(validation_window),

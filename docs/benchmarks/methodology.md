@@ -15,6 +15,9 @@ Each benchmark report should name:
 - sample size and task definitions;
 - train/test split or CV fold construction;
 - model roster and comparable estimator settings;
+- comparability audit covering shared rows or horizons, metric roster,
+  feature-access policy, skipped requested models, and whether any model
+  selection used holdout labels;
 - metric table with timing fields;
 - artifact paths for JSON, JSONL, markdown, and plots;
 - limitations that affect interpretation.

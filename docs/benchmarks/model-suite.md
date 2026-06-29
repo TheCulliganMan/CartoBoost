@@ -20,10 +20,10 @@ on diabetes, California housing, karate random, and karate group holdout.
 CartoBoost is close to XGBoost on the California housing sample, but
 HistGradientBoosting is clearly lower RMSE in this maintained run.
 
-The command requests LightGBM and CatBoost. This artifact records both as
-skipped in the local Python 3.13 benchmark environment: LightGBM is present as
-package metadata but `LGBMRegressor` is unavailable, and CatBoost is not
-installed. The completed external-baseline comparison therefore uses XGBoost,
+The refreshed artifact records a comparability audit in both JSON and Markdown.
+Every tunable requested model uses three inner-validation candidates, no model
+selects on outer test labels, and all requested external baselines complete in
+the local Python 3.13 benchmark environment: LightGBM, XGBoost, CatBoost,
 HistGradientBoosting, RandomForest, ExtraTrees, Ridge, and mean.
 
 ## Reproduce
@@ -51,9 +51,9 @@ Artifacts:
 - `docs/assets/model_benchmarks_public/results_aggregate.json`
 - `docs/assets/model_benchmarks_public/results.md`
 
-`results.json` and `results.md` include the runtime resource snapshot and output
-artifact sizes for this run: `results.json` 252,516 bytes, `results.jsonl`
-110,219 bytes, and `results.md` 17,311 bytes.
+`results.json` and `results.md` include the runtime resource snapshot,
+comparability audit, and output artifact sizes for this run: `results.json`
+329,988 bytes, `results.jsonl` 137,248 bytes, and `results.md` 18,616 bytes.
 
 ## Baseline Environment
 
@@ -61,8 +61,22 @@ artifact sizes for this run: `results.json` 252,516 bytes, `results.jsonl`
 | --- | --- | --- | --- | ---: |
 | scikit-learn | `scikit-learn` | `sklearn` | `1.9.0` |  |
 | XGBoost | `xgboost` | `xgboost` | `3.3.0` | true |
-| LightGBM | `lightgbm` | `lightgbm` | `4.6.0` | false |
-| CatBoost | `catboost` | `catboost` | not installed | false |
+| LightGBM | `lightgbm` | `lightgbm` | `4.6.0` | true |
+| CatBoost | `catboost` | `catboost` | `1.2.10` | true |
+
+## Comparability Audit
+
+| Check | Result |
+| --- | --- |
+| Same outer splits for requested models | true |
+| Primary and selection metric | RMSE |
+| Selection uses outer test labels | false |
+| Equal tunable trial budget | true |
+| Tunable trial count | 3 |
+| Completed external baselines | CatBoost, ExtraTrees, HistGradientBoosting, LightGBM, mean, RandomForest, Ridge, XGBoost |
+| Skipped requested external baselines | none |
+| Completed CartoBoost-family rows | `cartoboost`, `graphsage_regressor`, `node2vec_regressor` |
+| CartoBoost/external comparison rows | 4 |
 
 ## Selection and Leakage Policy
 

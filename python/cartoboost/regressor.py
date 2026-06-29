@@ -216,12 +216,12 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
             max_depth=int(self.max_depth),
             min_samples_leaf=int(self.min_samples_leaf),
             min_gain=float(self.min_gain),
-            loss=self.loss.value,
+            loss=str(self.loss),
             quantile_alpha=float(loss_params["quantile_alpha"]),
             huber_delta=float(loss_params["huber_delta"]),
             log_offset=float(loss_params["log_offset"]),
             splitters=list(self.splitters or ["auto"]),
-            leaf_predictor=self.leaf_predictor.value,
+            leaf_predictor=str(self.leaf_predictor),
             linear_leaf_features=_resolve_linear_leaf_features(
                 self.linear_leaf_features,
                 dense_array.shape[1],
@@ -230,7 +230,7 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
             constant_l2_regularization=float(self.constant_l2_regularization),
             fuzzy=bool(self.fuzzy),
             fuzzy_bandwidth=float(self.fuzzy_bandwidth),
-            fuzzy_kernel=self.fuzzy_kernel.value,
+            fuzzy_kernel=str(self.fuzzy_kernel),
             n_threads=None if self.n_threads is None else int(self.n_threads),
             monotonic_constraints=(
                 None

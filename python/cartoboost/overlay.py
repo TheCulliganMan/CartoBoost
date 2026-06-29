@@ -36,7 +36,7 @@ def weighted_overlay(
         weights=weights,
         origin=origin,
         zone_priority_multiplier=zone_priority_multiplier,
-        kernel=kernel.value,
+        kernel=str(kernel),
         bandwidth_meters=bandwidth_meters,
         distance_alpha=distance_alpha,
         precision=precision,

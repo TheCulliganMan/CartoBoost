@@ -11,14 +11,46 @@
       "rayon_num_threads_env": null
     }
   },
-  "cartoboost_version": "0.1.67",
+  "cartoboost_version": "0.2.32",
+  "comparability_audit": {
+    "best_cartoboost_compared_to_best_library": false,
+    "candidate_selection": true,
+    "completed_cartoboost_models": [
+      "cartoboost_lag",
+      "cartoboost_auto_forecast"
+    ],
+    "completed_forecasting_library_models": [],
+    "completed_models": [
+      "cartoboost_lag",
+      "cartoboost_auto_forecast"
+    ],
+    "model_roster": "cartoboost",
+    "primary_metric": "rmse",
+    "requested_models": [
+      "cartoboost_lag",
+      "cartoboost_auto_forecast"
+    ],
+    "same_forecast_rows": true,
+    "same_horizon": true,
+    "same_metrics": [
+      "mae",
+      "rmse",
+      "wape",
+      "r2",
+      "mase",
+      "smape"
+    ],
+    "selection_metric": "rmse",
+    "selection_uses_outer_test_labels": false,
+    "skipped_requested_models": []
+  },
   "comparison_libraries": [
     "functime",
     "statsforecast",
     "prophet",
     "external_trees"
   ],
-  "created_at": "2026-06-21T02:38:08.519554+00:00",
+  "created_at": "2026-06-29T12:31:44.556424+00:00",
   "dataset": {
     "aggregated_rows": 744,
     "clean_rows": 2827685,
@@ -47,7 +79,33 @@
   "dataset_hash": "2099de6b3e8dc1f625e96472c4d8b3828f23d070d841e1ec33bacfbe59534452",
   "fixture_source": "nyc-taxi",
   "forecasting_library_models": {},
-  "git_commit": "5cc35e209c9cf9012027bab18553a99f9f486073",
+  "git_commit": "c8dd720a4fd3d6040a6683d0fd1530fbac5f1cde",
+  "invocation": {
+    "argv": [
+      "scripts/forecasting_library_benchmark.py",
+      "--source",
+      "nyc-taxi",
+      "--year",
+      "2024",
+      "--months",
+      "1",
+      "--taxi-type",
+      "yellow",
+      "--lanes",
+      "24",
+      "--horizon",
+      "7",
+      "--no-download",
+      "--no-hyperopt",
+      "--model-roster",
+      "cartoboost",
+      "--output",
+      "docs/assets/nyc_taxi_benchmarks/forecasting_library_benchmark_real.json",
+      "--plot-dir",
+      "docs/assets/nyc_taxi_benchmarks/forecasting_plots"
+    ],
+    "command": "scripts/forecasting_library_benchmark.py --source nyc-taxi --year 2024 --months 1 --taxi-type yellow --lanes 24 --horizon 7 --no-download --no-hyperopt --model-roster cartoboost --output docs/assets/nyc_taxi_benchmarks/forecasting_library_benchmark_real.json --plot-dir docs/assets/nyc_taxi_benchmarks/forecasting_plots"
+  },
   "metrics": {
     "cartoboost_auto_forecast": {
       "bias": 10.779761904761905,
@@ -59,23 +117,26 @@
       "wape": 0.09374163191920737
     },
     "cartoboost_lag": {
-      "bias": 42.011572632583366,
-      "mae": 85.68503554016935,
-      "mase": 1.3611390165234813,
-      "r2": 0.4300861797963885,
-      "rmse": 126.86104813280062,
-      "smape": 0.24210888431311273,
-      "wape": 0.2753354112457146
+      "bias": 37.47101927268581,
+      "mae": 84.67938324147883,
+      "mase": 1.3451638515232582,
+      "r2": 0.43947966294577234,
+      "rmse": 125.81122418221005,
+      "smape": 0.23940875680438595,
+      "wape": 0.2721039054467779
     }
   },
   "model_libraries": {
     "cartoboost_auto_forecast": "cartoboost",
     "cartoboost_lag": "cartoboost",
+    "cartoboost_neural_panel": "cartoboost",
+    "cartoboost_piecewise_linear_seasonal": "cartoboost",
     "functime_lightgbm": "functime",
     "functime_ridge": "functime",
     "functime_snaive": "functime",
     "lightgbm_lag": "external_trees",
     "prophet_additive": "prophet",
+    "seasonal_naive": "baseline",
     "statsforecast_autoarima": "statsforecast",
     "statsforecast_autoces": "statsforecast",
     "statsforecast_autoets": "statsforecast",
@@ -121,6 +182,46 @@
         "axis_histogram:128",
         "periodic:7"
       ]
+    },
+    "cartoboost_neural_panel": {
+      "ar_layers": [
+        16
+      ],
+      "benchmark_profile": "Rust-native lane neural panel forecaster with directional lane ids, direct multi-horizon output, quantile metadata, and cold-identity benchmark fallback expansion.",
+      "embedding_dim": 8,
+      "future_regressors": [
+        "airport_lane when present"
+      ],
+      "lagged_reg_layers": [
+        8
+      ],
+      "lagged_regressors": [
+        "distance_miles when present"
+      ],
+      "local_l2": 0.1,
+      "n_forecasts": "benchmark horizon",
+      "n_lags": "min(28, minimum train history - benchmark horizon, two seasonal cycles)",
+      "quantiles": [
+        0.1,
+        0.5,
+        0.9
+      ],
+      "seed": 42,
+      "trend_mode": "glocal",
+      "weekly_fourier_order": 3
+    },
+    "cartoboost_piecewise_linear_seasonal": {
+      "benchmark_profile": "Rust-native piecewise-linear additive trend with weekly Fourier seasonality on daily benchmark panels; non-weekly season lengths use one generic Fourier cycle named benchmark_cycle",
+      "changepoint_l1_regularization": 0.0,
+      "changepoint_l2_regularization": 0.05,
+      "changepoint_range": 0.8,
+      "changepoints": 12,
+      "component_mode": "additive",
+      "daily_fourier_order": 0,
+      "growth": "linear",
+      "seasonality_l2_regularization": 0.01,
+      "weekly_fourier_order": 3,
+      "yearly_fourier_order": 0
     }
   },
   "models": [
@@ -149,11 +250,14 @@
     "model_libraries": {
       "cartoboost_auto_forecast": "cartoboost",
       "cartoboost_lag": "cartoboost",
+      "cartoboost_neural_panel": "cartoboost",
+      "cartoboost_piecewise_linear_seasonal": "cartoboost",
       "functime_lightgbm": "functime",
       "functime_ridge": "functime",
       "functime_snaive": "functime",
       "lightgbm_lag": "external_trees",
       "prophet_additive": "prophet",
+      "seasonal_naive": "baseline",
       "statsforecast_autoarima": "statsforecast",
       "statsforecast_autoces": "statsforecast",
       "statsforecast_autoets": "statsforecast",
@@ -176,20 +280,21 @@
     ],
     "winner": "cartoboost_auto_forecast"
   },
+  "requested_source": "nyc-taxi",
   "resource_usage": {
-    "peak_rss_mb": 2586.1875,
-    "process_cpu_seconds": 5.244336
+    "peak_rss_mb": 2598.28125,
+    "process_cpu_seconds": 8.301994
   },
   "source_file_hashes": {},
   "timing": {
     "candidate_selection": {
-      "calibration_seconds": 0.31092870800057426,
+      "calibration_seconds": 0.3020665410440415,
       "inner_candidate_losses": {
         "cartoboost_auto_forecast": {
           "cartoboost_auto_forecast": 366.70671588640215,
-          "cartoboost_lag": 133.36766370859107,
+          "cartoboost_lag": 133.55940087573708,
           "shared_calendar_dom": 69.47871376663983,
-          "shared_calendar_phase14": 84.7987463406882,
+          "shared_calendar_elapsed_phase": 84.7987463406882,
           "shared_drift": 428.3204658739305,
           "shared_half_drift": 210.8378619093381,
           "shared_seasonal_base": 69.47871376663983,
@@ -198,7 +303,7 @@
           "shared_seasonal_drift": 68.59883694129857
         },
         "cartoboost_lag": {
-          "cartoboost_lag": 133.36766370859107
+          "cartoboost_lag": 133.55940087573708
         }
       },
       "inner_losses": {
@@ -207,8 +312,8 @@
           "selected": 69.47871376663983
         },
         "cartoboost_lag": {
-          "raw": 133.36766370859107,
-          "selected": 133.36766370859107
+          "raw": 133.55940087573708,
+          "selected": 133.55940087573708
         }
       },
       "inner_origin_count": 1.0,
@@ -218,11 +323,13 @@
           "selected": 69.47871376663983
         },
         "cartoboost_lag": {
-          "raw": 133.36766370859107,
-          "selected": 133.36766370859107
+          "raw": 133.55940087573708,
+          "selected": 133.55940087573708
         }
       },
       "low_support_guarded": {},
+      "m6_raw_auto_guarded": {},
+      "magnitude_guarded": {},
       "native_auto_raw_keep": false,
       "objective": "rmse",
       "origin_consistency_guarded": {},
@@ -234,7 +341,7 @@
       "validation_cache_hits": 0.0,
       "validation_cache_misses": 0.0
     },
-    "load_seconds": 1.2034803749993443,
+    "load_seconds": 2.109204459004104,
     "models": {
       "cartoboost_auto_forecast": {
         "fit_predict_seconds": 0.0,
@@ -244,14 +351,14 @@
         "total_seconds": 0.0
       },
       "cartoboost_lag": {
-        "feature_count": 115.0,
-        "feature_seconds": 0.0011038329976145178,
-        "fit_predict_seconds": 0.23024404200259596,
-        "fit_seconds": 0.22832324999035336,
-        "predict_seconds": 0.0019207920122426003,
-        "total_seconds": 0.23134787500021048
+        "feature_count": 109.0,
+        "feature_seconds": 0.007858167053200305,
+        "fit_predict_seconds": 0.13776283396873623,
+        "fit_seconds": 0.1347295839805156,
+        "predict_seconds": 0.003033249988220632,
+        "total_seconds": 0.14562100102193654
       }
     },
-    "total_seconds": 1.7504543339891825
+    "total_seconds": 2.5814842500258237
   }
 }
