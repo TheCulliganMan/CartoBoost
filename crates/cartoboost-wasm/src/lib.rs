@@ -1385,6 +1385,21 @@ fn forecast_model_registry() -> Vec<BrowserForecastModel> {
             pipeline: "demand",
         },
         BrowserForecastModel {
+            name: "croston",
+            label: "Croston",
+            pipeline: "demand",
+        },
+        BrowserForecastModel {
+            name: "sba",
+            label: "SBA",
+            pipeline: "demand",
+        },
+        BrowserForecastModel {
+            name: "tsb",
+            label: "TSB",
+            pipeline: "demand",
+        },
+        BrowserForecastModel {
             name: "stl_cartoboost",
             label: "STL + ARIMA",
             pipeline: "decomposition",

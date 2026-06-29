@@ -7,6 +7,8 @@ weekly effects, and deterministic event spikes. The real-data path aggregates
 NYC TLC trip records into the same lane-demand shape.
 """
 
+# ruff: noqa: E402, I001
+
 from __future__ import annotations
 
 import argparse
@@ -34,29 +36,29 @@ try:
 except ImportError:  # pragma: no cover - exercised on Windows CI.
     resource = None
 
-from cartoboost import __version__, _native
-from cartoboost.forecasting.global_models import CartoBoostLagForecaster
-from cartoboost.forecasting.local import AutoStatsBank, PiecewiseLinearSeasonalForecaster
-from cartoboost.forecasting.neural import LaneNeuralPanelForecaster
-from cartoboost.forecasting.schema import ForecastFrame
-from cartoboost.metrics import m_competition_metrics
-from cartoboost.metrics.rank_portfolio import (
-    portfolio_summary as native_portfolio_summary,
-)
-from cartoboost.metrics.rank_portfolio import (
-    rank_hit_rates as native_rank_hit_rates,
-)
-from cartoboost.metrics.rank_portfolio import (
-    rank_probability_calibration as native_rank_probability_calibration,
-)
-from cartoboost.metrics.wrmsse import m5_equal_level_wrmsse, rmsse_scale, wrmsse
-
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON_SOURCE = ROOT / "python"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 if str(PYTHON_SOURCE) not in sys.path:
     sys.path.insert(0, str(PYTHON_SOURCE))
+
+from cartoboost import __version__, _native, croston_forecast, sba_forecast, tsb_forecast  # noqa: E402
+from cartoboost.forecasting.global_models import CartoBoostLagForecaster  # noqa: E402
+from cartoboost.forecasting.local import AutoStatsBank, PiecewiseLinearSeasonalForecaster  # noqa: E402
+from cartoboost.forecasting.neural import LaneNeuralPanelForecaster  # noqa: E402
+from cartoboost.forecasting.schema import ForecastFrame  # noqa: E402
+from cartoboost.metrics import m_competition_metrics  # noqa: E402
+from cartoboost.metrics.rank_portfolio import (
+    portfolio_summary as native_portfolio_summary,
+)  # noqa: E402
+from cartoboost.metrics.rank_portfolio import (
+    rank_hit_rates as native_rank_hit_rates,
+)
+from cartoboost.metrics.rank_portfolio import (
+    rank_probability_calibration as native_rank_probability_calibration,
+)
+from cartoboost.metrics.wrmsse import m5_equal_level_wrmsse, rmsse_scale, wrmsse  # noqa: E402
 
 DEFAULT_CACHE_DIR = ROOT / "data" / "nyc_taxi"
 DEFAULT_FORECASTING_CACHE_DIR = ROOT / "data" / "forecasting_benchmarks"
@@ -117,6 +119,11 @@ CARTOBOOST_BENCHMARK_MODELS = [
     "cartoboost_lag",
     "cartoboost_auto_forecast",
 ]
+INTERMITTENT_BENCHMARK_MODELS = [
+    "croston",
+    "sba",
+    "tsb",
+]
 SEASONAL_NAIVE_BENCHMARK_MODEL = "seasonal_naive"
 NEURAL_PANEL_BENCHMARK_MODEL = "cartoboost_neural_panel"
 PIECEWISE_LINEAR_BENCHMARK_MODEL = "cartoboost_piecewise_linear_seasonal"
@@ -129,6 +136,7 @@ FORECASTING_LIBRARY_MODELS = {
 MODEL_LIBRARIES = {
     SEASONAL_NAIVE_BENCHMARK_MODEL: "baseline",
     **{model: "cartoboost" for model in CARTOBOOST_BENCHMARK_MODELS},
+    **{model: "intermittent" for model in INTERMITTENT_BENCHMARK_MODELS},
     NEURAL_PANEL_BENCHMARK_MODEL: "cartoboost",
     PIECEWISE_LINEAR_BENCHMARK_MODEL: "cartoboost",
     **{model: "functime" for model in FUNCTIME_MODELS},
@@ -340,6 +348,7 @@ def main() -> int:
             "full",
             "scalable",
             "cartoboost",
+            "intermittent",
             "piecewise",
             "prophet-comparison",
             "neural-panel",
@@ -349,8 +358,9 @@ def main() -> int:
             "Forecast model roster. Use scalable for full M5-style panels where "
             "per-series Prophet/StatsForecast models are impractical. Use piecewise "
             "for only the native piecewise-linear model, or prophet-comparison for "
-            "the native piecewise-linear model and Prophet only. Use neural-panel "
-            "for seasonal naive, CartoBoost lag, and the Rust-native lane neural model."
+            "the native piecewise-linear model and Prophet only. Use intermittent "
+            "for Croston, SBA, and TSB. Use neural-panel for seasonal naive, "
+            "CartoBoost lag, and the Rust-native lane neural model."
         ),
     )
     parser.add_argument(
@@ -773,6 +783,8 @@ def windows_peak_rss_mb() -> float:
 def benchmark_model_names(roster: str) -> list[str]:
     if roster == "cartoboost":
         return list(CARTOBOOST_BENCHMARK_MODELS)
+    if roster == "intermittent":
+        return list(INTERMITTENT_BENCHMARK_MODELS)
     if roster == "piecewise":
         return [PIECEWISE_LINEAR_BENCHMARK_MODEL]
     if roster == "prophet-comparison":
@@ -793,7 +805,7 @@ def benchmark_model_names(roster: str) -> list[str]:
 
 
 def forecasting_library_models_for_roster(roster: str) -> dict[str, list[str]]:
-    if roster in {"cartoboost", "piecewise", "neural-panel"}:
+    if roster in {"cartoboost", "intermittent", "piecewise", "neural-panel"}:
         return {}
     if roster == "prophet-comparison":
         return {"prophet": PROPHET_MODELS}
@@ -2746,8 +2758,6 @@ def quality_summary(
         model_names = list(metrics)
     cartoboost_models = [name for name in model_names if MODEL_LIBRARIES.get(name) == "cartoboost"]
     library_models = [name for name in model_names if name not in cartoboost_models]
-    best_cartoboost_model = min(cartoboost_models, key=lambda name: metrics[name]["rmse"])
-    cartoboost_rmse = metrics[best_cartoboost_model]["rmse"]
     best_rmse = min(row["rmse"] for row in metrics.values())
     tied_best_models = [
         name for name, row in metrics.items() if np.isclose(row["rmse"], best_rmse, rtol=1e-12)
@@ -2770,11 +2780,26 @@ def quality_summary(
         "rmse_ranking": sorted(metrics, key=lambda name: metrics[name]["rmse"]),
         "mae_ranking": sorted(metrics, key=lambda name: metrics[name]["mae"]),
         "wape_ranking": sorted(metrics, key=lambda name: metrics[name]["wape"]),
-        "best_cartoboost_model": best_cartoboost_model,
-        "cartoboost_rmse": cartoboost_rmse,
-        "cartoboost_mae": metrics[best_cartoboost_model]["mae"],
-        "cartoboost_wape": metrics[best_cartoboost_model]["wape"],
     }
+    if cartoboost_models:
+        best_cartoboost_model = min(cartoboost_models, key=lambda name: metrics[name]["rmse"])
+        summary.update(
+            {
+                "best_cartoboost_model": best_cartoboost_model,
+                "cartoboost_rmse": metrics[best_cartoboost_model]["rmse"],
+                "cartoboost_mae": metrics[best_cartoboost_model]["mae"],
+                "cartoboost_wape": metrics[best_cartoboost_model]["wape"],
+            }
+        )
+    else:
+        summary.update(
+            {
+                "best_cartoboost_model": None,
+                "cartoboost_rmse": None,
+                "cartoboost_mae": None,
+                "cartoboost_wape": None,
+            }
+        )
     if library_models:
         best_library_model = min(library_models, key=lambda name: metrics[name]["rmse"])
         library_rmse = metrics[best_library_model]["rmse"]
@@ -2785,17 +2810,40 @@ def quality_summary(
                 "best_forecasting_library_rmse": library_rmse,
                 "best_forecasting_library_mae": metrics[best_library_model]["mae"],
                 "best_forecasting_library_wape": metrics[best_library_model]["wape"],
-                "rmse_delta_vs_best_forecasting_library": cartoboost_rmse - library_rmse,
-                "rmse_ratio_vs_best_forecasting_library": cartoboost_rmse / library_rmse,
-                "rmse_reduction_vs_best_forecasting_library": 1.0 - cartoboost_rmse / library_rmse,
-                "mae_delta_vs_best_forecasting_library": metrics[best_cartoboost_model]["mae"]
-                - metrics[best_library_model]["mae"],
-                "mae_reduction_vs_best_forecasting_library": 1.0
-                - metrics[best_cartoboost_model]["mae"] / metrics[best_library_model]["mae"],
-                "wape_reduction_vs_best_forecasting_library": 1.0
-                - metrics[best_cartoboost_model]["wape"] / metrics[best_library_model]["wape"],
             }
         )
+        if cartoboost_models:
+            cartoboost_rmse = metrics[best_cartoboost_model]["rmse"]
+            summary.update(
+                {
+                    "rmse_delta_vs_best_forecasting_library": cartoboost_rmse - library_rmse,
+                    "rmse_ratio_vs_best_forecasting_library": cartoboost_rmse / library_rmse,
+                    "rmse_reduction_vs_best_forecasting_library": 1.0
+                    - cartoboost_rmse / library_rmse,
+                    "mae_delta_vs_best_forecasting_library": metrics[best_cartoboost_model]["mae"]
+                    - metrics[best_library_model]["mae"],
+                    "mae_reduction_vs_best_forecasting_library": 1.0
+                    - metrics[best_cartoboost_model]["mae"] / metrics[best_library_model]["mae"],
+                    "wape_reduction_vs_best_forecasting_library": 1.0
+                    - metrics[best_cartoboost_model]["wape"] / metrics[best_library_model]["wape"],
+                }
+            )
+        else:
+            summary.update(
+                {
+                    "best_forecasting_library": MODEL_LIBRARIES[best_library_model],
+                    "best_forecasting_library_model": best_library_model,
+                    "best_forecasting_library_rmse": library_rmse,
+                    "best_forecasting_library_mae": metrics[best_library_model]["mae"],
+                    "best_forecasting_library_wape": metrics[best_library_model]["wape"],
+                    "rmse_delta_vs_best_forecasting_library": None,
+                    "rmse_ratio_vs_best_forecasting_library": None,
+                    "rmse_reduction_vs_best_forecasting_library": None,
+                    "mae_delta_vs_best_forecasting_library": None,
+                    "mae_reduction_vs_best_forecasting_library": None,
+                    "wape_reduction_vs_best_forecasting_library": None,
+                }
+            )
     for library, library_model_names in FORECASTING_LIBRARY_MODELS.items():
         available_models = [name for name in library_model_names if name in metrics]
         if not available_models:
@@ -3608,6 +3656,23 @@ def forecast_model_roster(
         )
         forecast_frames.append(cartoboost_predictions)
         model_timing["cartoboost_lag"] = cartoboost_timing
+    if any(model in model_names for model in INTERMITTENT_BENCHMARK_MODELS):
+        intermittent_predictions, intermittent_timing = intermittent_forecasts(
+            train,
+            horizon,
+            model_names=model_names,
+        )
+        forecast_frames.append(
+            intermittent_predictions.select(
+                "series_id",
+                "timestamp",
+                "horizon",
+                *[model for model in INTERMITTENT_BENCHMARK_MODELS if model in model_names],
+            )
+        )
+        model_timing.update(
+            {model: timing for model, timing in intermittent_timing.items() if model in model_names}
+        )
     if "cartoboost_auto_forecast" in model_names:
         if source == "m5" and skip_m5_raw_auto_candidate:
             pl = require_polars()
@@ -6299,6 +6364,46 @@ def seasonal_naive_forecast_frame(
         )
         history = pl.concat([history, append_frame], how="vertical")
     return pl.concat(forecast_frames, how="vertical")
+
+
+def intermittent_forecasts(
+    train: Any,
+    horizon: int,
+    *,
+    model_names: list[str],
+) -> tuple[Any, dict[str, Any]]:
+    pl = require_polars()
+    histories = lane_date_value_history(train)
+    records = []
+    timing: dict[str, Any] = {}
+    for series_id, (dates, values) in histories.items():
+        last_date = dates[-1]
+        series_predictions = {}
+        if "croston" in model_names:
+            series_predictions["croston"] = croston_forecast(values, horizon)
+        if "sba" in model_names:
+            series_predictions["sba"] = sba_forecast(values, horizon)
+        if "tsb" in model_names:
+            series_predictions["tsb"] = tsb_forecast(values, horizon)
+        for step in range(1, horizon + 1):
+            timestamp = last_date + timedelta(days=step)
+            row = {
+                "series_id": series_id,
+                "timestamp": timestamp,
+                "horizon": step,
+            }
+            for name, predictions in series_predictions.items():
+                row[name] = float(predictions[step - 1])
+            records.append(row)
+    for name in model_names:
+        timing[name] = {
+            "fit_seconds": 0.0,
+            "predict_seconds": 0.0,
+            "fit_predict_seconds": 0.0,
+            "total_seconds": 0.0,
+            "baseline": True,
+        }
+    return pl.DataFrame(records), timing
 
 
 def calendar_profile_forecast_frame(

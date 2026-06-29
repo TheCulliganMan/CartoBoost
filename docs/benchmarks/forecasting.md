@@ -41,6 +41,48 @@ benchmark suite. They are not real TLC data.
 
 Read: the current scalable synthetic checks favor CartoBoost.
 
+## Intermittent Demand Checks
+
+The intermittent-demand suite exercises the fixed Croston, SBA, and TSB
+forecasters on four taxi-shaped synthetic problems with sparse zero-heavy
+series. It is a library-only roster, so there is no CartoBoost row in this run.
+
+Rerun command:
+
+```bash
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 uv run --no-sync --group dev --group bench python scripts/forecasting_library_benchmark.py \
+  --suite \
+  --source polars \
+  --days 120 \
+  --lanes 4 \
+  --horizon 7 \
+  --suite-folds 2 \
+  --model-roster intermittent \
+  --no-candidate-selection \
+  --no-hyperopt \
+  --output target/forecasting_intermittent_suite.json
+```
+
+| Rank | Model | Mean RMSE Ratio | Wins/Ties | Top-3 Finishes |
+| ---: | --- | ---: | ---: | ---: |
+| 1 | `croston` | 1.000000 | 4 | 4 |
+| 2 | `tsb` | 1.000020 | 0 | 4 |
+| 3 | `sba` | 1.163766 | 0 | 4 |
+
+Per-problem RMSE:
+
+| Problem | `croston` | `sba` | `tsb` |
+| --- | ---: | ---: | ---: |
+| `airport_calendar_events` | 2.628365 | 3.128337 | 2.628444 |
+| `borough_monthly_pulses` | 3.052133 | 3.478771 | 3.052177 |
+| `route_mix_shift` | 2.703933 | 3.171921 | 2.703990 |
+| `taxi_weekly` | 2.760485 | 3.180032 | 2.760527 |
+
+Read: Croston is the strongest fixed intermittent-demand baseline in this
+current synthetic taxi-shaped suite, with TSB effectively tied on RMSE and SBA
+consistently behind both. This is implementation evidence for the intermittent
+roster path, not a real-data taxi demand claim.
+
 ## NeuralPanel Lane Split Suite
 
 `NeuralPanelForecaster` has a dedicated taxi-lane split suite for checking

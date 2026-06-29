@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT))
 aggregate_module = importlib.import_module("benchmarks.runners.aggregate_results")
 manifest_module = importlib.import_module("benchmarks.runners.manifest")
 model_suite_module = importlib.import_module("scripts.run_model_benchmark_suite")
+forecasting_benchmark_module = importlib.import_module("scripts.forecasting_library_benchmark")
 autogeo_gate_module = importlib.import_module("scripts.run_autogeo_benchmark_gate")
 artifact_gate_module = importlib.import_module("scripts.check_artifact_compatibility")
 official_geo_evidence_module = importlib.import_module("scripts.check_official_geo_evidence")
@@ -133,6 +134,7 @@ def test_non_forecast_required_baselines_are_concrete() -> None:
         "mean",
         "deep_tabular_baseline",
     ]
+    assert "intermittent" not in baselines
     assert baselines["spatial"] == [
         "cartoboost",
         "cartoboost_neural",
@@ -158,6 +160,14 @@ def test_non_forecast_required_baselines_are_concrete() -> None:
         "pytorch_geometric_temporal_baseline",
         "dcrnn_baseline",
         "mean",
+    ]
+
+
+def test_forecasting_benchmark_intermittent_roster_is_exposed() -> None:
+    assert forecasting_benchmark_module.benchmark_model_names("intermittent") == [
+        "croston",
+        "sba",
+        "tsb",
     ]
 
 
