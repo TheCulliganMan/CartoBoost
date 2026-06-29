@@ -1561,9 +1561,9 @@ fn cuda_vector_add_report(
     with_cuda_runtime(|runtime| {
         runtime.with_compiled_kernel(SOURCE, "vector_add_f32", |function| {
             let left_buffer =
-                CudaDeviceBuffer::new(runtime, left.len() * std::mem::size_of::<f32>())?;
+                CudaDeviceBuffer::new(runtime, std::mem::size_of_val(left.as_slice()))?;
             let right_buffer =
-                CudaDeviceBuffer::new(runtime, right.len() * std::mem::size_of::<f32>())?;
+                CudaDeviceBuffer::new(runtime, std::mem::size_of_val(right.as_slice()))?;
             let output_buffer = CudaDeviceBuffer::new(runtime, len * std::mem::size_of::<f32>())?;
             cuda_copy_to_device(runtime, &left_buffer, &left)?;
             cuda_copy_to_device(runtime, &right_buffer, &right)?;
@@ -1750,7 +1750,7 @@ fn cuda_dense_layer_f32(
     with_cuda_runtime(|runtime| {
         runtime.with_compiled_kernel(SOURCE, "dense_layer_f32", |function| {
             let feature_buffer =
-                CudaDeviceBuffer::new(runtime, flat_features.len() * std::mem::size_of::<f32>())?;
+                CudaDeviceBuffer::new(runtime, std::mem::size_of_val(flat_features.as_slice()))?;
             let weight_buffer = CudaDeviceBuffer::new(runtime, std::mem::size_of_val(weights))?;
             let bias_buffer = CudaDeviceBuffer::new(runtime, std::mem::size_of_val(biases))?;
             let output_buffer =
@@ -1844,11 +1844,13 @@ fn cuda_pair_sigmoid_scores_f32(
     with_cuda_runtime(|runtime| {
         runtime.with_compiled_kernel(SOURCE, "pair_sigmoid_scores_f32", |function| {
             let embedding_buffer =
-                CudaDeviceBuffer::new(runtime, flat_embeddings.len() * std::mem::size_of::<f32>())?;
+                CudaDeviceBuffer::new(runtime, std::mem::size_of_val(flat_embeddings.as_slice()))?;
             let pair_buffer =
                 CudaDeviceBuffer::new(runtime, pair_indices.len() * std::mem::size_of::<u32>())?;
-            let output_buffer =
-                CudaDeviceBuffer::new(runtime, pairs.len() * std::mem::size_of::<f32>())?;
+            let output_buffer = CudaDeviceBuffer::new(
+                runtime,
+                pairs.len().saturating_mul(std::mem::size_of::<f32>()),
+            )?;
             cuda_copy_to_device(runtime, &embedding_buffer, &flat_embeddings)?;
             cuda_copy_to_device(runtime, &pair_buffer, &pair_indices)?;
             let mut embedding_ptr = embedding_buffer.as_device_ptr();
@@ -2331,13 +2333,14 @@ fn rocm_vector_add_report(
 
     let left = (0..len).map(|idx| idx as f32 * 0.5).collect::<Vec<_>>();
     let right = (0..len).map(|idx| idx as f32 * 1.5).collect::<Vec<_>>();
+    let start = Instant::now();
     with_rocm_runtime(|runtime| {
         runtime.prepare_device()?;
         runtime.with_compiled_kernel(SOURCE, "vector_add_f32", |function| {
             let left_buffer =
-                RocmDeviceBuffer::new(runtime, left.len() * std::mem::size_of::<f32>())?;
+                RocmDeviceBuffer::new(runtime, std::mem::size_of_val(left.as_slice()))?;
             let right_buffer =
-                RocmDeviceBuffer::new(runtime, right.len() * std::mem::size_of::<f32>())?;
+                RocmDeviceBuffer::new(runtime, std::mem::size_of_val(right.as_slice()))?;
             let output_buffer = RocmDeviceBuffer::new(runtime, len * std::mem::size_of::<f32>())?;
             rocm_copy_to_device(runtime, &left_buffer, &left)?;
             rocm_copy_to_device(runtime, &right_buffer, &right)?;
@@ -2529,7 +2532,7 @@ fn rocm_dense_layer_f32(
         runtime.prepare_device()?;
         runtime.with_compiled_kernel(SOURCE, "dense_layer_f32", |function| {
             let feature_buffer =
-                RocmDeviceBuffer::new(runtime, flat_features.len() * std::mem::size_of::<f32>())?;
+                RocmDeviceBuffer::new(runtime, std::mem::size_of_val(flat_features.as_slice()))?;
             let weight_buffer = RocmDeviceBuffer::new(runtime, std::mem::size_of_val(weights))?;
             let bias_buffer = RocmDeviceBuffer::new(runtime, std::mem::size_of_val(biases))?;
             let output_buffer =
@@ -2627,11 +2630,13 @@ fn rocm_pair_sigmoid_scores_f32(
         runtime.prepare_device()?;
         runtime.with_compiled_kernel(SOURCE, "pair_sigmoid_scores_f32", |function| {
             let embedding_buffer =
-                RocmDeviceBuffer::new(runtime, flat_embeddings.len() * std::mem::size_of::<f32>())?;
+                RocmDeviceBuffer::new(runtime, std::mem::size_of_val(flat_embeddings.as_slice()))?;
             let pair_buffer =
                 RocmDeviceBuffer::new(runtime, pair_indices.len() * std::mem::size_of::<u32>())?;
-            let output_buffer =
-                RocmDeviceBuffer::new(runtime, pairs.len() * std::mem::size_of::<f32>())?;
+            let output_buffer = RocmDeviceBuffer::new(
+                runtime,
+                pairs.len().saturating_mul(std::mem::size_of::<f32>()),
+            )?;
             rocm_copy_to_device(runtime, &embedding_buffer, &flat_embeddings)?;
             rocm_copy_to_device(runtime, &pair_buffer, &pair_indices)?;
             let pairs_arg = pairs.len() as u32;
@@ -2851,13 +2856,13 @@ fn webgpu_vector_add_report(
     let (device, queue) = webgpu_request_device()?;
     let left_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("webgpu-vector-left"),
-        size: (left.len() * std::mem::size_of::<f32>()) as u64,
+        size: std::mem::size_of_val(left.as_slice()) as u64,
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
     let right_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("webgpu-vector-right"),
-        size: (right.len() * std::mem::size_of::<f32>()) as u64,
+        size: std::mem::size_of_val(right.as_slice()) as u64,
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
@@ -3266,7 +3271,7 @@ fn webgpu_dense_layer_f32(
     let (device, queue) = webgpu_request_device()?;
     let feature_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("webgpu-dense-features"),
-        size: (flat_features.len() * std::mem::size_of::<f32>()) as u64,
+        size: std::mem::size_of_val(flat_features.as_slice()) as u64,
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
@@ -3469,7 +3474,7 @@ fn webgpu_pair_sigmoid_scores_f32(
     let (device, queue) = webgpu_request_device()?;
     let embedding_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("webgpu-pair-embeddings"),
-        size: (flat_embeddings.len() * std::mem::size_of::<f32>()) as u64,
+        size: std::mem::size_of_val(flat_embeddings.as_slice()) as u64,
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
@@ -3481,7 +3486,7 @@ fn webgpu_pair_sigmoid_scores_f32(
     });
     let output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("webgpu-pair-output"),
-        size: (pairs.len() * std::mem::size_of::<f32>()) as u64,
+        size: pairs.len().saturating_mul(std::mem::size_of::<f32>()) as u64,
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
         mapped_at_creation: false,
     });
