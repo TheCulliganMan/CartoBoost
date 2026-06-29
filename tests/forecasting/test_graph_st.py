@@ -88,7 +88,7 @@ def test_graph_temporal_frame_and_dcrnn_delegate_to_native(monkeypatch):
     assert model.fit(frame).predict(2).shape == (2, 2)
     assert model.backtest(frame, train_size=2)["by_horizon"][0]["mae"] == 0.1
     assert calls[0][0] == "frame"
-    assert calls[1] == ("init", (3, 5, 7, 0.2, 1.0, 0.2, 0.0001, "auto"))
+    assert calls[1] == ("init", (3, 5, 7, 0.2, 1.0, 0.2, 0.0001, "cpu"))
     assert calls[2][0] == "fit"
 
 

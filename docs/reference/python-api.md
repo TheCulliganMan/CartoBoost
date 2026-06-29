@@ -370,11 +370,11 @@ Forecasters:
 | `SpatialPiecewiseKrigingForecaster` | Piecewise seasonal CartoBoost base fused with cutoff-safe kriged regressors, residual kriging, or hybrid spatial correction; result JSON includes base mean, correction, variance, neighbors, components, and metadata. |
 | `PiecewiseLinearSeasonalForecaster` | Piecewise linear seasonal local model with linear, flat, or logistic growth, automatic or explicit changepoints, holiday tables and optional country holiday calendars normalized into event windows, Fourier seasonalities, conditional custom seasonalities, events, automatic extra-regressor standardization, per-component regularization, residual intervals, deterministic sampled trend uncertainty, external trend adjustments, residual shock propagation, fitted JSON round-trips, `components()` / `components_json()` forecast decomposition, and `history_components()` / `history_components_frame()` / `history_components_json()` fitted trend, movement, seasonality, event, and regressor diagnostics; interactive examples expose matching fitted artifact prediction and component helpers. |
 | `CartoBoostLagForecaster` | Global recursive forecaster using leakage-safe lag, rolling, calendar, static, and known-future features with `CartoBoostRegressor`. |
-| `NeuralPanelForecaster` | Neural panel forecaster with `n_lags`, `n_forecasts`, quantiles, trend, Fourier seasonality, event offsets, known-future regressors, lagged regressors, direct horizons, separate local/global/glocal seasonality, event, and regressor modes, median-first internal quantile residuals, backend-dispatched dense prediction with `backend="auto"`, `"cpu"`, or available accelerators such as `"metal"`, `"rocm"`, `"cuda"`, or `"webgpu"` on supported builds, and serializable metadata. |
+| `NeuralPanelForecaster` | Neural panel forecaster with `n_lags`, `n_forecasts`, quantiles, trend, Fourier seasonality, event offsets, known-future regressors, lagged regressors, direct horizons, separate local/global/glocal seasonality, event, and regressor modes, median-first internal quantile residuals, CPU-default backend-dispatched dense prediction with optional explicit accelerators such as `"metal"`, `"rocm"`, or `"cuda"` on supported builds, and serializable metadata. |
 | `LaneNeuralPanelForecaster` | Directional pair wrapper for `series_id="origin:destination"` panels; injects generated origin, destination, lane, and directional graph covariates into the panel model while keeping `A:B` distinct from `B:A`; `predict_for_lanes(horizon, series_ids)` applies fitted-lane fallback for explicit cold lane ids. |
 | `AutoForecaster` | Guarded model selector over reusable internal forecasting candidates with validation metadata and fitted artifacts. |
-| `NBeatsForecaster` | Deterministic N-BEATS style forecasting expert for regular forecast windows with backend-dispatched dense prediction via `backend="auto"`, `"cpu"`, or available accelerators such as `"metal"`, `"rocm"`, `"cuda"`, or `"webgpu"` on supported builds. |
-| `NHiTSForecaster` | Deterministic N-HiTS style forecasting expert with pooled history windows and backend-dispatched dense prediction via `backend="auto"`, `"cpu"`, or available accelerators such as `"metal"`, `"rocm"`, `"cuda"`, or `"webgpu"` on supported builds. |
+| `NBeatsForecaster` | Deterministic N-BEATS style forecasting expert for regular forecast windows with CPU-default backend-dispatched dense prediction and optional explicit accelerators such as `"metal"`, `"rocm"`, or `"cuda"` on supported builds. |
+| `NHiTSForecaster` | Deterministic N-HiTS style forecasting expert with pooled history windows and CPU-default backend-dispatched dense prediction and optional explicit accelerators such as `"metal"`, `"rocm"`, or `"cuda"` on supported builds. |
 | `WeightedEnsembleForecaster` | Combines aligned component forecasts with fixed weights. |
 | `BacktestWeightedEnsembleForecaster` | Reserved; raises clearly until backtest-weight learning is implemented. |
 
@@ -569,8 +569,8 @@ feature workflows.
 typed relations; `HinSageEncoder` is the typed-schema HinSAGE surface with
 relation-aware sampling and link feature construction.
 GraphSAGE-style encoders and standalone link predictors accept
-`backend="auto"`, `"cpu"`, or available accelerators such as `"metal"`,
-`"rocm"`, `"cuda"`, or `"webgpu"` for the shared dense forward and pair-score
+`backend="cpu"` by default, `backend="auto"` as a CPU-resolving alias, or
+available accelerators such as `"metal"`, `"rocm"`, or `"cuda"` for the shared dense forward and pair-score
 kernels on supported builds where the corresponding native backend is compiled
 in.
 

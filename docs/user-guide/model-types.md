@@ -27,6 +27,7 @@ claims.
 | Is the target one regular time series with its own history? | Local forecasters such as `SeasonalNaiveForecaster`, `ThetaForecaster`, `ETSForecaster`, `AutoARIMAForecaster`, or `KalmanForecaster` | [CartoBoost Forecasting Model Guides](forecasting-models/index.md) |
 | Are many related series forecast from shared lag features? | `CartoBoostLagForecaster` | [CartoBoost Lag](forecasting-models/cartoboost-lag.md) |
 | Are road, lane, sensor, or zone-flow series connected by a directed graph? | `DCRNNForecaster` with `GraphTemporalFrame` | [Graph Spatiotemporal Forecasting](forecasting-models/graph-spatiotemporal.md) |
+| Do regular forecast windows need a compact neural baseline? | `NBeatsForecaster` or `NHiTSForecaster` | [N-BEATS And N-HiTS](forecasting-models/beats-hits.md) |
 | Should nearby coordinates borrow signal for a forecast panel? | `KrigingForecaster` | [Kriging](forecasting-models/kriging.md) |
 | Do point observations need scalable GP interpolation with uncertainty? | `NearestNeighborGPRegressor` or `SpatialGaussianProcessRegressor` | [Scalable GP Geostatistics](geostatistics-models.md) |
 | Should a base tabular model get a probabilistic spatial residual correction? | `ResidualNNGPRegressor` | [Scalable GP Geostatistics](geostatistics-models.md) |

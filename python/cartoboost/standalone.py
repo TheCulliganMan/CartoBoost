@@ -243,7 +243,7 @@ class GraphSageStandaloneRegressor:
         max_depth: int = 4,
         min_samples_leaf: int = 2,
         min_gain: float = 0.0,
-        backend: Backend = Backend.AUTO,
+        backend: Backend = Backend.CPU,
     ) -> None:
         self._native = _NativeGraphSageRegressor(
             input_dim=int(input_dim),
@@ -350,7 +350,7 @@ class HeteroGraphSageStandaloneRegressor:
         max_depth: int = 4,
         min_samples_leaf: int = 2,
         min_gain: float = 0.0,
-        backend: Backend = Backend.AUTO,
+        backend: Backend = Backend.CPU,
     ) -> None:
         self._native = _NativeHeteroGraphSageRegressor(
             input_dim=int(input_dim),
@@ -440,7 +440,7 @@ class HinSageStandaloneRegressor:
         max_depth: int = 4,
         min_samples_leaf: int = 2,
         min_gain: float = 0.0,
-        backend: Backend = Backend.AUTO,
+        backend: Backend = Backend.CPU,
     ) -> None:
         self._native = _NativeHinSageRegressor(
             input_dim=int(input_dim),

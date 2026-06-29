@@ -14,19 +14,15 @@ pub fn select_compute_backend(requested: Option<&str>) -> Result<ComputeBackendS
     let requested = requested.unwrap_or("auto").to_ascii_lowercase();
     if !matches!(
         requested.as_str(),
-        "auto" | "cpu" | "cuda" | "rocm" | "metal" | "webgpu"
+        "auto" | "cpu" | "cuda" | "rocm" | "metal"
     ) {
         return Err(GeoStError::InvalidBackend(format!(
-            "unknown backend {requested:?}; expected auto, cpu, cuda, rocm, metal, or webgpu"
+            "unknown backend {requested:?}; expected auto, cpu, cuda, rocm, or metal"
         )));
     }
     let available = available_compute_backends();
     let selected = if requested == "auto" {
-        available
-            .iter()
-            .find(|name| name.as_str() != "cpu")
-            .cloned()
-            .unwrap_or_else(|| "cpu".to_string())
+        "cpu".to_string()
     } else if available.iter().any(|name| name == &requested) {
         requested.clone()
     } else {
@@ -941,4 +937,28 @@ fn graph_distances(adjacency: &CsrAdjacency, nodes: usize) -> Vec<Vec<usize>> {
         }
     }
     all
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auto_compute_backend_selects_cpu() {
+        let selection = select_compute_backend(Some("auto")).unwrap();
+        assert_eq!(selection.requested, "auto");
+        assert_eq!(selection.selected, "cpu");
+
+        let default_selection = select_compute_backend(None).unwrap();
+        assert_eq!(default_selection.requested, "auto");
+        assert_eq!(default_selection.selected, "cpu");
+    }
+
+    #[test]
+    fn webgpu_compute_backend_is_not_selectable() {
+        let err = select_compute_backend(Some("webgpu")).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("expected auto, cpu, cuda, rocm, or metal"));
+    }
 }

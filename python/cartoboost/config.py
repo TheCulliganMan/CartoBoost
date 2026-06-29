@@ -16,7 +16,6 @@ class Backend(ChoiceStrEnum):
     CUDA = "cuda"
     ROCM = "rocm"
     METAL = "metal"
-    WEBGPU = "webgpu"
 
 
 class FallbackMode(ChoiceStrEnum):

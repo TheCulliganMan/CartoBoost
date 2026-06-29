@@ -100,18 +100,23 @@ test(
       for (const model of availableForecastModels() as Array<{name: string}>) {
         const started = performance.now();
         const autoOptions = model.name === 'auto_forecast' ? {maxAutoCandidateCount: 4} : {};
-        const response = runForecast({
-          rows,
-          frequency: 'hourly',
-          horizon: 14,
-          model: model.name,
-          options: {...options, ...autoOptions},
-          metadata: {
-            timestampCol: 'timestamp',
-            targetCol: 'target',
-            seriesIdCol: 'series_id',
-          },
-        }) as {metadata: {warning?: unknown}; forecast: {records: ForecastRecord[]}};
+        const response = runWithTimeout(
+          () =>
+            runForecast({
+              rows,
+              frequency: 'hourly',
+              horizon: 14,
+              model: model.name,
+              options: {...options, ...autoOptions},
+              metadata: {
+                timestampCol: 'timestamp',
+                targetCol: 'target',
+                seriesIdCol: 'series_id',
+              },
+            }) as {metadata: {warning?: unknown}; forecast: {records: ForecastRecord[]}},
+          30_000,
+          `${samplePath} ${model.name}`,
+        );
         const elapsedMs = Math.round(performance.now() - started);
         console.log(`${samplePath} ${model.name} ${elapsedMs}ms ${response.forecast.records.length} records`);
 
@@ -231,4 +236,15 @@ function isManhattanCoordinate(lat: number, lon: number): boolean {
     lon >= manhattanBounds.minLon &&
     lon <= manhattanBounds.maxLon
   );
+}
+
+function runWithTimeout<T>(fn: () => T, timeoutMs: number, label: string): T {
+  const started = performance.now();
+  const result = fn();
+  const elapsedMs = performance.now() - started;
+  assert.ok(
+    elapsedMs <= timeoutMs,
+    `${label} exceeded ${timeoutMs}ms browser roster freeze guard (${Math.round(elapsedMs)}ms)`,
+  );
+  return result;
 }

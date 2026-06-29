@@ -100,7 +100,7 @@ class DCRNNForecaster:
         teacher_forcing_start: float = 1.0,
         teacher_forcing_end: float = 0.2,
         ridge: float = 0.0001,
-        backend: Backend = Backend.AUTO,
+        backend: Backend = Backend.CPU,
     ) -> None:
         native_class = _native_class(self.native_class_name)
         if native_class is None:

@@ -14,8 +14,8 @@ cartoboost-core = { path = "../cartoboost-core" }
 cartoboost-geo-causal = { path = "../cartoboost-geo-causal" }
 cartoboost-geo-core = { path = "../cartoboost-geo-core" }
 cartoboost-geostats = { path = "../cartoboost-geostats" }
-cartoboost-geo-st = { path = "../cartoboost-geo-st", features = ["webgpu"] }
-cartoboost-neural = { path = "../cartoboost-neural", features = ["webgpu"] }
+cartoboost-geo-st = { path = "../cartoboost-geo-st" }
+cartoboost-neural = { path = "../cartoboost-neural" }
 chrono.workspace = true
 console_error_panic_hook = "0.1"
 serde.workspace = true

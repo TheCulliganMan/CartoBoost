@@ -50,15 +50,13 @@ nhits.fit(frame)
 nhits_forecast = nhits.predict(12)
 ```
 
-Set `backend="auto"` for ordinary runs. On Apple-platform wheels built with the
+CPU is the default backend for ordinary runs. On Apple-platform wheels built with the
 native Metal feature, `backend="metal"` routes the deterministic dense
 inference layers through CartoBoost's shared Metal backend. On Linux or WSL
 wheels built with ROCm support, `backend="rocm"` routes the same dense
 inference layers through CartoBoost's shared HIP backend. On builds with
 CUDA support, `backend="cuda"` routes the same dense inference layers through
-CartoBoost's shared CUDA backend. On builds with WebGPU enabled,
-`backend="webgpu"` routes the same dense inference layers through the shared
-WebGPU backend. Invalid or unavailable accelerator requests fail instead of
+CartoBoost's shared CUDA backend. Invalid or unavailable accelerator requests fail instead of
 silently falling back to CPU.
 
 ## Use When
@@ -79,7 +77,7 @@ silently falling back to CPU.
 | `epochs` | Both | Number of deterministic training passes. |
 | `learning_rate` | Both | Optimization step size. |
 | `pooling_size` | `NHiTSForecaster` | Pooling factor for compressed history windows. |
-| `backend` | Both | `"auto"`, `"cpu"`, or an available accelerator such as `"metal"`, `"rocm"`, `"cuda"`, or `"webgpu"` for backend-dispatched dense prediction kernels. |
+| `backend` | Both | `"cpu"` by default, `"auto"` as a CPU-resolving alias, or an available accelerator such as `"metal"`, `"rocm"`, or `"cuda"` for backend-dispatched dense prediction kernels. |
 
 ## Validation
 

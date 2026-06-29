@@ -29,9 +29,10 @@ it on the same rolling-origin split as the simpler baselines.
 | [CartoBoost Lag](cartoboost-lag.md) | Learn one supervised lag model across many related series. | Use when many aligned panels should share lag structure. |
 | [Graph Spatiotemporal Forecasting](graph-spatiotemporal.md) | Forecast sensor, route, road, or zone-flow panels on a directed graph. | Use when upstream/downstream graph structure should improve forecasts beyond panel-only baselines. |
 | [Probabilistic And Conformal](probabilistic-conformal.md) | Add calibrated uncertainty to regressors, spatial models, residual hybrids, and forecasts. | Use when interval coverage and width matter alongside point accuracy. |
+| [N-BEATS And N-HiTS](beats-hits.md) | Fit deterministic neural window experts for regular forecast windows. | Use as neural baselines against seasonal naive, local statistical models, and `CartoBoostLagForecaster`. |
 | [Neural Panel](neural-panel.md) | Fit a neural panel forecaster with direct multi-horizon output for related series. | Includes an interactive example for `neural_panel`. |
-| `AutoStatsBank` | Validate a deterministic statistical expert bank. | Useful when a local statistical selector is the model being tested. |
-| `CrostonForecaster`, `SbaForecaster`, `TsbForecaster` | Forecast sparse non-negative demand series with fixed intermittent-demand methods. | Use when zeros are meaningful demand periods rather than missing rows. |
+| [AutoStatsBank](auto-stats-bank.md) | Validate a deterministic statistical expert bank. | Useful when a local statistical selector is the model being tested. |
+| [Intermittent Demand](intermittent-demand.md) | Forecast sparse non-negative demand with fixed Croston, SBA, or TSB methods. | Use when zeros are meaningful demand periods rather than missing rows. |
 | [AutoForecaster](auto-forecaster.md) | Use the guarded default selector over lag, direct, residual-corrected, intermittent, and classical candidates. | Includes diagrams for validation, gating, prediction, and metadata inspection. |
 | [Weighted Ensembles](ensembles.md) | Combine fitted forecasters with explicit weights. | Components and weights must be named explicitly. |
 
@@ -53,6 +54,7 @@ Choose the model whose assumptions match the signal you can defend:
 | Many related series share lag, rolling, calendar, or trend structure. | CartoBoost lag | Learns one supervised model from many aligned panel examples. |
 | Roads, lanes, sensors, or zone flows diffuse over a directed graph. | [Graph spatiotemporal forecasting](graph-spatiotemporal.md) | Applies diffusion convolution over directed CSR adjacency and reports horizon, node, and graph-distance errors. |
 | Geo model quality must include calibrated uncertainty. | [Probabilistic and conformal models](probabilistic-conformal.md) | Separates base fitting from calibration and reports coverage, width, PIT bins, horizon/block coverage, and residual Moran's I. |
+| Fixed regular windows should be tested with a compact neural expert. | [N-BEATS or N-HiTS](beats-hits.md) | Provides deterministic neural baselines for direct window learning before moving to richer panel or graph models. |
 | Directional series need direct multi-horizon neural forecasts with id direction preserved. | [Neural Panel](neural-panel.md) | Builds leak-free lag windows from `ForecastFrame`, keeps directional ids distinct, injects generated lane embedding/graph covariates, and stores component, normalization, quantile, series-id, and train-cutoff metadata. |
 | Pickup demand is sparse with many true zero periods. | Croston, SBA, or TSB | Uses intermittent-demand smoothing instead of generic trend extrapolation. |
 | A local statistical bank should choose among reusable non-benchmark candidates. | AutoStatsBank | Runs validation over a deterministic statistical expert bank. |
@@ -101,6 +103,7 @@ classical, and decomposition-style candidates. Use the dedicated guide pages
 for the model-specific use cases:
 
 - [Piecewise Linear Seasonal](piecewise-linear-seasonal.md)
+- [N-BEATS And N-HiTS](beats-hits.md)
 - [Neural Panel](neural-panel.md)
 - [Graph Spatiotemporal Forecasting](graph-spatiotemporal.md)
 - [Spatial Piecewise Kriging](spatial-piecewise-kriging.md)

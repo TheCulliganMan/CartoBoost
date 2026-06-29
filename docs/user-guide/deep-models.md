@@ -22,10 +22,10 @@ against a simpler baseline under the same split.
 
 ## Backend Choice
 
-Deep model constructors accept `backend="auto"` where the model supports an
-accelerated backend. Use `auto` for ordinary workflows. Request a specific
-backend only when the environment has been provisioned for it and the run needs
-that hardware contract.
+Deep model constructors default to `backend="cpu"`. `backend="auto"` is accepted
+as a CPU-resolving alias for ordinary workflows. Request a specific accelerator
+only when the environment has been provisioned for it and the run needs that
+hardware contract.
 
 Use `cartoboost.deep.available_deep_backends()` to inspect the installed wheel.
 If a requested accelerator is unavailable, treat that as an environment error
@@ -37,9 +37,7 @@ That includes macOS, iOS, tvOS, and visionOS builds where the native backend is
 compiled in. On Linux or WSL builds with ROCm support compiled in and a usable
 HIP device present, `backend="rocm"` is advertised for the same verified shared
 kernels. On Windows or Linux builds with the CUDA driver and NVRTC available,
-`backend="cuda"` is advertised for the same verified shared kernels. `backend="webgpu"`
-is also advertised when the WebGPU backend feature is enabled and a compatible
-adapter is present.
+`backend="cuda"` is advertised for the same verified shared kernels.
 
 ## Validation Defaults
 

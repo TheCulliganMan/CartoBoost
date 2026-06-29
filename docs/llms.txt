@@ -16,6 +16,8 @@ Use this directory as the navigation map for the user-facing docs site.
 - [CartoBoost Boosting Model Guides](./user-guide/boosting-models/index.md)
 - [CartoBoost Forecasting Model Guides](./user-guide/forecasting-models/index.md)
 - [Graph Spatiotemporal Forecasting](./user-guide/forecasting-models/graph-spatiotemporal.md)
+- [N-BEATS and N-HiTS neural forecasting](./user-guide/forecasting-models/beats-hits.md)
+- [Neural panel forecasting](./user-guide/forecasting-models/neural-panel.md)
 - [Probabilistic and conformal forecasting guide](./user-guide/forecasting-models/probabilistic-conformal.md)
 - [CartoBoost Graph Model Guides](./user-guide/graph-models/index.md)
 - [CartoBoost Neural Model Guides](./user-guide/neural-models/index.md)

@@ -105,7 +105,7 @@ def test_neural_forecaster_wrappers_delegate_to_native_bindings(install_fake_nat
             "hidden_size": 4,
             "epochs": 5,
             "learning_rate": 0.2,
-            "backend": "auto",
+            "backend": "cpu",
         },
     )
     assert native.calls[1][1].rows[-1] == ("__single__", "1970-01-04T00:00:00", 4.0)
@@ -131,7 +131,7 @@ def test_nhits_forecaster_wrapper_delegates_to_native_binding(install_fake_nativ
             "epochs": 6,
             "learning_rate": 0.1,
             "pooling_size": 2,
-            "backend": "auto",
+            "backend": "cpu",
         },
     )
     assert native.calls[1][1].rows[-1] == (

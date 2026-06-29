@@ -1270,6 +1270,7 @@ type NeuralModelExampleProps = {
 const TAXI_LANE_SAMPLE_ROWS = 5000;
 const TAXI_VARIED_ROUTE_SAMPLE_ROWS = 2500;
 const VISUALIZED_MODEL_MAX_ROWS = 800;
+const VISUALIZED_NEURAL_MAX_ROWS = 240;
 const TAXI_ZONE_CENTROIDS: Record<string, {lat: number; lon: number}> = {
   4: {lat: 40.723752, lon: -73.976968},
   7: {lat: 40.761493, lon: -73.919694},
@@ -4997,7 +4998,7 @@ function buildTargetingProfile(
   const graphTargetCol = guessColumn(table.columns, ['dropoff_zone_id', 'DOLocationID', 'target_node', 'target_id', 'destination']) ?? '';
   const graphWeightCol = guessColumn(table.columns, ['edge_weight', 'weight', 'trip_count']) ?? '';
   const neuralIdCol = guessColumn(table.columns, ['pickup_zone_id', 'PULocationID', 'zone_id', 'id']) ?? '';
-  const neuralPipeline = hasGraph ? 'hinsage' : 'embedding';
+  const neuralPipeline = 'embedding';
   const reasons = [
     `${featureCols.length.toLocaleString()} dense features selected`,
     `${sparseFeatureCols.length.toLocaleString()} sparse sets selected`,
@@ -6855,15 +6856,18 @@ async function runBrowserNeural({
   graphTargetCol: string;
   graphWeightCol: string;
 }) {
-  const graphTopology = buildGraphTopology(table, graphSourceCol, graphTargetCol, featureCols);
+  const needsGraphTopology = graphNeuralPipelines.has(neuralPipeline);
+  const graphTopology = needsGraphTopology
+    ? buildGraphTopology(table, graphSourceCol, graphTargetCol, featureCols)
+    : null;
   const rows = sampleModelRows(
     table.rows
       .map((row, rowIndex) => ({
         id: neuralIdCol ? parseBrowserId(row[neuralIdCol]) : undefined,
-        source: graphSourceCol ? graphTopology.nodeIndex.get(row[graphSourceCol]) : undefined,
-        targetNode: graphTargetCol ? graphTopology.nodeIndex.get(row[graphTargetCol]) : undefined,
+        source: graphSourceCol && graphTopology ? graphTopology.nodeIndex.get(row[graphSourceCol]) : undefined,
+        targetNode: graphTargetCol && graphTopology ? graphTopology.nodeIndex.get(row[graphTargetCol]) : undefined,
         edgeWeight: graphWeightCol ? Number(row[graphWeightCol]) : undefined,
-        edgeType: graphTopology.edgeTypesByRow[rowIndex] ?? 0,
+        edgeType: graphTopology?.edgeTypesByRow[rowIndex] ?? 0,
         dense: featureCols.map((column) => Number(row[column])),
         target: Number(row[targetCol]),
       }))
@@ -6877,7 +6881,7 @@ async function runBrowserNeural({
         }
         return row.id !== undefined;
       }),
-    VISUALIZED_MODEL_MAX_ROWS,
+    VISUALIZED_NEURAL_MAX_ROWS,
   );
   if (rows.length < 4) {
     throw new Error('CartoBoost neural modeling needs at least four usable rows.');
@@ -6886,9 +6890,9 @@ async function runBrowserNeural({
   return wasmModule.runNeuralModel({
     rows,
     denseFeatureNames: featureCols,
-    nodeFeatures: graphTopology.nodeFeatures,
-    nodeTypes: graphTopology.nodeTypes,
-    edgeTypeTriples: graphTopology.edgeTypeTriples,
+    nodeFeatures: graphTopology?.nodeFeatures ?? [],
+    nodeTypes: graphTopology?.nodeTypes ?? [],
+    edgeTypeTriples: graphTopology?.edgeTypeTriples ?? [],
     pipeline: neuralPipeline,
     options: {
       holdoutFraction: 0.2,

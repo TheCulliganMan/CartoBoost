@@ -23,7 +23,7 @@ model = ResponseCurveModel(
     response_type="binary",
     monotone="decreasing",
     calibration="isotonic",
-    backend="auto",
+    backend="cpu",
 )
 model.fit(frame)
 

@@ -56,7 +56,7 @@ model = DCRNNForecaster(
     hidden_size=8,
     epochs=160,
     learning_rate=0.03,
-    backend="auto",
+    backend="cpu",
 )
 model.fit(frame)
 
@@ -68,14 +68,13 @@ model.save("graph-forecast.json")
 `forecast` is a numeric array with shape `[horizon, node]`. `backtest` returns
 horizon-level MAE, RMSE, and WAPE for the supplied cutoff.
 
-`backend="auto"` is the default. On Apple-platform wheels built with native
+`backend="cpu"` is the default. `backend="auto"` is accepted as a CPU-resolving
+alias. On Apple-platform wheels built with native
 Metal support, `backend="metal"` routes the DCRNN decoder head through the
 shared Metal affine kernel. On Linux or WSL wheels built with ROCm support,
 `backend="rocm"` routes the same decoder head through the shared HIP affine
 kernel. On Windows or Linux wheels built with CUDA support, `backend="cuda"`
-routes the same decoder head through the shared CUDA affine kernel. On builds
-with WebGPU enabled, `backend="webgpu"` routes the same decoder head through
-the shared WebGPU affine kernel. Diffusion state updates, graph validation, and
+routes the same decoder head through the shared CUDA affine kernel. Diffusion state updates, graph validation, and
 training remain deterministic Rust code. If the requested accelerator is
 unavailable, construction fails with the available backend list.
 

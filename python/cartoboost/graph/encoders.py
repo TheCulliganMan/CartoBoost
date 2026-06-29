@@ -172,7 +172,7 @@ class GraphSageConfig:
     seed: int = DEFAULT_GRAPHSAGE_SEED
     add_self_loop: bool = True
     l2_regularization: float = 1e-5
-    backend: Backend = Backend.AUTO
+    backend: Backend = Backend.CPU
 
 
 def _coerce_dim(value: int, name: str) -> int:
@@ -277,7 +277,7 @@ class GraphSageFeatureEncoder:
                 seed=int(config.get("seed", DEFAULT_GRAPHSAGE_SEED)),
                 add_self_loop=bool(config.get("add_self_loop", True)),
                 l2_regularization=float(config.get("l2_regularization", 1e-5)),
-                backend=Backend(str(config.get("backend", "auto"))),
+                backend=Backend(str(config.get("backend", "cpu"))),
             )
         )
 
@@ -291,7 +291,7 @@ class HeteroGraphSageConfig:
     negative_samples: int = 4
     seed: int = DEFAULT_HETEROGRAPHSAGE_SEED
     l2_regularization: float = 1e-5
-    backend: Backend = Backend.AUTO
+    backend: Backend = Backend.CPU
 
 
 @dataclass(frozen=True)
@@ -306,7 +306,7 @@ class HinSageConfig:
     seed: int = DEFAULT_HINSAGE_SEED
     l2_regularization: float = 1e-5
     neighbor_samples: list[int] = field(default_factory=list)
-    backend: Backend = Backend.AUTO
+    backend: Backend = Backend.CPU
 
 
 @dataclass(frozen=True)
@@ -528,7 +528,7 @@ class HinSageFeatureEncoder:
                 seed=int(config.get("seed", DEFAULT_HINSAGE_SEED)),
                 l2_regularization=float(config.get("l2_regularization", 1e-5)),
                 neighbor_samples=neighbor_samples,
-                backend=Backend(str(config.get("backend", "auto"))),
+                backend=Backend(str(config.get("backend", "cpu"))),
             )
         )
 
@@ -649,7 +649,7 @@ class HeteroGraphSageFeatureEncoder:
                 negative_samples=int(config.get("negative_samples", 4)),
                 seed=int(config.get("seed", DEFAULT_HETEROGRAPHSAGE_SEED)),
                 l2_regularization=float(config.get("l2_regularization", 1e-5)),
-                backend=Backend(str(config.get("backend", "auto"))),
+                backend=Backend(str(config.get("backend", "cpu"))),
             )
         )
 

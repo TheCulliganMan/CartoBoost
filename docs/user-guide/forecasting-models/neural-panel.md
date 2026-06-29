@@ -113,20 +113,18 @@ sharing independently for Fourier terms, event offsets, and future regressors.
 
 ## Backend Choice
 
-Set `backend="auto"` for ordinary runs. On Apple-platform wheels built with the
+CPU is the default backend for ordinary runs. On Apple-platform wheels built with the
 native Metal feature, `backend="metal"` routes AR-Net and Covar-Net dense
 prediction layers through CartoBoost's shared Metal backend. On Linux or WSL
 wheels built with ROCm support, `backend="rocm"` routes the same dense
 prediction layers through CartoBoost's shared HIP backend. On Windows or Linux
 wheels built with CUDA support, `backend="cuda"` routes the same dense
-prediction layers through CartoBoost's shared CUDA backend. On builds with
-WebGPU enabled, `backend="webgpu"` routes the same dense prediction layers
-through the shared WebGPU backend. Training updates and nonstationary feature
+prediction layers through CartoBoost's shared CUDA backend. Training updates and nonstationary feature
 construction remain deterministic Rust code. Requested accelerators that are
 not available in the installed build fail clearly instead of silently changing
 the run contract.
 
-## Python Example
+## Public Contract
 
 ```python
 from cartoboost.forecasting import ForecastFrame, LaneNeuralPanelForecaster
@@ -169,7 +167,7 @@ model = LaneNeuralPanelForecaster(
     learning_rate=0.01,
     weight_decay=0.001,
     newer_sample_weight=True,
-    backend="auto",
+    backend="cpu",
     seed=42,
 )
 model.fit(frame)
@@ -181,7 +179,19 @@ Do not use this model when only a handful of observations exist per lane, when
 future-known regressors are unavailable at forecast time, or when the main need
 is an easily audited local statistical baseline.
 
-## Benchmark Check
+## Validation
+
+Validate neural panel forecasts with rolling-origin splits and the same
+baselines used for the rest of the forecasting family. At minimum, compare
+against seasonal naive and `CartoBoostLagForecaster`; for directional lane
+work, include split views for ordinary rolling-origin lanes, cold lanes, cold
+origins, and sparse-tail lanes when those cases matter for the claim.
+
+Report RMSE, MAE, WAPE, horizon metrics, quantile diagnostics when quantiles
+are enabled, train time, prediction time, model settings, sample size, split
+boundaries, and whether the data is real or generated acceptance data.
+
+The maintained benchmark entry point can emit the neural panel split artifact:
 
 ```bash
 uv run --group dev python scripts/forecasting_library_benchmark.py \

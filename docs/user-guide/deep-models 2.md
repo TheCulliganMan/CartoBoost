@@ -24,15 +24,13 @@ frames, pandas conversion, file IO, and sklearn-style ergonomics.
 
 ## Compute Backends
 
-Deep model constructors accept `backend="auto"` by default. Valid backend names
-are `auto`, `cpu`, `cuda`, `rocm`, `metal`, and `webgpu`. `auto` selects an
-available accelerator when the native build advertises one and otherwise uses
-CPU. Explicit accelerator requests hard-fail if that backend is not present in
-the build, so benchmark runs do not silently fall back to weaker hardware.
+Deep model constructors default to `backend="cpu"`. Valid backend names are
+`auto`, `cpu`, `cuda`, `rocm`, and `metal`. `auto` is accepted as a CPU-resolving
+alias. Explicit accelerator requests hard-fail if that backend is not present
+in the build, so benchmark runs do not silently fall back to weaker hardware.
 
 Use `cartoboost.deep.available_deep_backends()` to inspect Python wheel support.
-Wasm builds expose `availableDeepBackends()` and include `webgpu` in the backend
-contract for browser runtimes.
+Wasm builds expose `availableDeepBackends()` and default browser runtimes to CPU.
 
 Use `cartoboost.deep.backend_dispatch_report("metal", len=1048576)` to verify
 that the local native extension can dispatch a Metal command buffer. The report
@@ -63,7 +61,7 @@ model = ResponseCurveModel(
     response_type="binary",
     monotone="decreasing",
     calibration="isotonic",
-    backend="auto",
+    backend="cpu",
 )
 model.fit(frame)
 curve = model.predict_curve(frame)

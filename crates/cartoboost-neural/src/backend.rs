@@ -38,9 +38,8 @@ impl ComputeBackend {
             "cuda" => Ok(Self::Cuda),
             "rocm" => Ok(Self::Rocm),
             "metal" => Ok(Self::Metal),
-            "webgpu" => Ok(Self::Webgpu),
             other => Err(NeuralError::InvalidArgument(format!(
-                "unknown compute backend {other:?}; expected auto, cpu, cuda, rocm, metal, or webgpu"
+                "unknown compute backend {other:?}; expected auto, cpu, cuda, rocm, or metal"
             ))),
         }
     }
@@ -90,11 +89,7 @@ pub fn select_backend(requested: Option<&str>) -> Result<BackendSelection> {
     let requested_backend = ComputeBackend::parse(requested)?;
     let available = available_backends();
     let selected = match requested_backend {
-        ComputeBackend::Auto => available
-            .iter()
-            .find(|name| name.as_str() != "cpu")
-            .cloned()
-            .unwrap_or_else(|| "cpu".to_string()),
+        ComputeBackend::Auto => "cpu".to_string(),
         ComputeBackend::Cpu => "cpu".to_string(),
         ComputeBackend::Cuda
         | ComputeBackend::Rocm
@@ -161,10 +156,6 @@ pub fn available_backends() -> Vec<String> {
     #[cfg(all(feature = "rocm", target_os = "linux"))]
     if rocm_available() {
         backends.push("rocm".to_string());
-    }
-    #[cfg(feature = "webgpu")]
-    if webgpu_available() {
-        backends.push("webgpu".to_string());
     }
     backends
 }
@@ -3646,6 +3637,25 @@ fn webgpu_pair_sigmoid_scores_f32(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auto_backend_selects_cpu_even_when_accelerators_are_available() {
+        let selection = select_backend(Some("auto")).unwrap();
+        assert_eq!(selection.requested, "auto");
+        assert_eq!(selection.selected, "cpu");
+
+        let default_selection = select_backend(None).unwrap();
+        assert_eq!(default_selection.requested, "auto");
+        assert_eq!(default_selection.selected, "cpu");
+    }
+
+    #[test]
+    fn webgpu_backend_is_not_selectable() {
+        let err = select_backend(Some("webgpu")).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("expected auto, cpu, cuda, rocm, or metal"));
+    }
 
     #[test]
     fn cpu_dispatch_report_matches_expected_checksum() {
