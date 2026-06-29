@@ -22,6 +22,7 @@ fn model_fixture(trees: usize) -> Model {
         feature_schema: None,
         target_name: Some("target".to_string()),
         training_config: None,
+        training_history: Vec::new(),
         prediction_transform: PredictionTransform::Identity,
         trees,
     }

@@ -5,6 +5,8 @@ use cartoboost_core::{CartoBoostError, Result as CoreResult};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
+use crate::{backend_dense_layer_f32, BackendSelection};
+
 use super::dataloader::WindowDataset;
 use super::scaler::StandardScaler;
 use super::validate_window_config;
@@ -15,6 +17,7 @@ pub struct NBeatsConfig {
     pub hidden_size: usize,
     pub epochs: usize,
     pub learning_rate: f64,
+    pub backend: BackendSelection,
 }
 
 impl Default for NBeatsConfig {
@@ -24,6 +27,7 @@ impl Default for NBeatsConfig {
             hidden_size: 16,
             epochs: 80,
             learning_rate: 0.01,
+            backend: BackendSelection::default(),
         }
     }
 }
@@ -46,7 +50,12 @@ impl NBeatsForecaster {
             ));
         }
         Ok(Self {
-            model: DeterministicMlp::new(config.input_size, config.hidden_size, 0.017),
+            model: DeterministicMlp::new(
+                config.input_size,
+                config.hidden_size,
+                0.017,
+                config.backend.clone(),
+            ),
             config,
             scaler: None,
             frequency: None,
@@ -82,7 +91,12 @@ impl Forecaster for NBeatsForecaster {
                 )
             })
             .collect::<Vec<_>>();
-        self.model = DeterministicMlp::new(self.config.input_size, self.config.hidden_size, 0.017);
+        self.model = DeterministicMlp::new(
+            self.config.input_size,
+            self.config.hidden_size,
+            0.017,
+            self.config.backend.clone(),
+        );
         self.model
             .fit(&examples, self.config.epochs, self.config.learning_rate);
         self.scaler = Some(scaler);
@@ -123,7 +137,10 @@ impl Forecaster for NBeatsForecaster {
             let mut history = tail.clone();
             for step in 1..=horizon {
                 let scaled_input = scaler.transform_slice(&history);
-                let scaled_prediction = self.model.predict(&scaled_input);
+                let scaled_prediction = self
+                    .model
+                    .predict_with_backend(&scaled_input)
+                    .map_err(|err| CartoBoostError::InvalidInput(err.to_string()))?;
                 let mean = scaler.inverse_transform(scaled_prediction);
                 let timestamp = frequency.advance(last_row.timestamp, step)?;
                 predictions.push(ForecastPrediction {
@@ -151,6 +168,7 @@ impl Forecaster for NBeatsForecaster {
             "hidden_size": self.config.hidden_size,
             "epochs": self.config.epochs,
             "learning_rate": self.config.learning_rate,
+            "backend": self.config.backend,
         })
     }
 }
@@ -163,10 +181,16 @@ pub(crate) struct DeterministicMlp {
     b1: Vec<f64>,
     w2: Vec<f64>,
     b2: f64,
+    backend: BackendSelection,
 }
 
 impl DeterministicMlp {
-    pub(crate) fn new(input_size: usize, hidden_size: usize, phase: f64) -> Self {
+    pub(crate) fn new(
+        input_size: usize,
+        hidden_size: usize,
+        phase: f64,
+        backend: BackendSelection,
+    ) -> Self {
         let mut w1 = vec![0.0; input_size * hidden_size];
         for hidden in 0..hidden_size {
             for input in 0..input_size {
@@ -185,6 +209,7 @@ impl DeterministicMlp {
             b1,
             w2,
             b2: 0.0,
+            backend,
         }
     }
 
@@ -196,14 +221,9 @@ impl DeterministicMlp {
         }
     }
 
-    pub(crate) fn predict(&self, input: &[f64]) -> f64 {
-        let hidden = self.hidden(input);
-        self.b2
-            + hidden
-                .iter()
-                .zip(&self.w2)
-                .map(|(activation, weight)| activation * weight)
-                .sum::<f64>()
+    pub(crate) fn predict_with_backend(&self, input: &[f64]) -> crate::Result<f64> {
+        let hidden = self.hidden_with_backend(input)?;
+        Ok(self.output_from_hidden(&hidden))
     }
 
     fn train_one(&mut self, input: &[f64], target: f64, learning_rate: f64) {
@@ -231,6 +251,15 @@ impl DeterministicMlp {
         }
     }
 
+    fn output_from_hidden(&self, hidden: &[f64]) -> f64 {
+        self.b2
+            + hidden
+                .iter()
+                .zip(&self.w2)
+                .map(|(activation, weight)| activation * weight)
+                .sum::<f64>()
+    }
+
     fn hidden(&self, input: &[f64]) -> Vec<f64> {
         (0..self.hidden_size)
             .map(|hidden_idx| {
@@ -245,5 +274,37 @@ impl DeterministicMlp {
                 linear.tanh()
             })
             .collect()
+    }
+
+    fn hidden_with_backend(&self, input: &[f64]) -> crate::Result<Vec<f64>> {
+        if input.len() < self.input_size {
+            return Err(crate::NeuralError::InvalidArgument(
+                "NBEATS input is shorter than input_size".to_string(),
+            ));
+        }
+        let features = vec![input
+            .iter()
+            .take(self.input_size)
+            .map(|value| *value as f32)
+            .collect::<Vec<_>>()];
+        let weights = (0..self.input_size)
+            .flat_map(|input_idx| {
+                (0..self.hidden_size)
+                    .map(move |hidden_idx| self.w1[hidden_idx * self.input_size + input_idx] as f32)
+            })
+            .collect::<Vec<_>>();
+        let biases = self
+            .b1
+            .iter()
+            .map(|value| *value as f32)
+            .collect::<Vec<_>>();
+        let linear = backend_dense_layer_f32(&self.backend, &features, &weights, &biases)?;
+        Ok(linear
+            .into_iter()
+            .next()
+            .expect("backend dense layer returns one row")
+            .into_iter()
+            .map(|value| f64::from(value).tanh())
+            .collect())
     }
 }

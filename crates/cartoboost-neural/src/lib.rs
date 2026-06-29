@@ -1,4 +1,6 @@
 pub mod artifact;
+pub mod backend;
+pub mod deep;
 pub mod encoder;
 mod error;
 pub mod features;
@@ -13,6 +15,20 @@ pub use artifact::{
     build_embedding_table_artifact, write_embedding_table_artifact, ArtifactFallbackKind,
     EmbeddingChecksum, EmbeddingIdType, EmbeddingRow, EmbeddingTable, EmbeddingTableArtifact,
     EmbeddingTableMetadata, FallbackStrategy,
+};
+pub use backend::{
+    available_backends, backend_affine_scores, backend_dense_layer_f32, backend_dispatch_report,
+    backend_pair_sigmoid_scores_f32, select_backend, BackendDispatchReport, BackendSelection,
+    ComputeBackend,
+};
+pub use deep::{
+    constrained_decision_select, directional_pair_predictions, event_outcome_fit,
+    event_outcome_fit_with_backend, event_outcome_predict, response_curve_fit,
+    response_curve_fit_with_backend, response_curve_predict, service_residual_fit,
+    service_residual_fit_with_backend, service_residual_predict, DeepDecisionChoice,
+    DeepDirectionalPairRow, DeepEventArtifact, DeepEventPrediction, DeepResponseArtifact,
+    DeepResponsePrediction, DeepResponseRow, DeepServiceResidualArtifact,
+    DeepServiceResidualPrediction, DeepServiceResidualRow,
 };
 pub use encoder::{EmbeddingTableEncoder, NeuralEncoder};
 pub use error::{NeuralError, Result};

@@ -7,7 +7,7 @@ only within-group comparisons matter.
 The CartoBoost ranker uses pairwise logistic or LambdaRank objectives and
 reports grouped metrics from predictions.
 
-## Basic Fit
+## Public Contract
 
 ```python
 from cartoboost import CartoBoostRanker
@@ -26,6 +26,15 @@ metrics = ranker.score_groups(X_test, relevance_test, groups=query_sizes_test)
 
 Rows for each query must be contiguous. Pass `groups` as group sizes or
 contiguous query ids, or set `group_col` when the query id is a column in `X`.
+
+## Use When
+
+| Need | Better first choice |
+| --- | --- |
+| Rank candidates within each query. | `CartoBoostRanker` |
+| Predict an absolute score or amount. | `CartoBoostRegressor` |
+| Predict a class label or probability. | `CartoBoostClassifier` |
+| Forecast future time points. | Forecasting models |
 
 ## Validation
 

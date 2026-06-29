@@ -8,16 +8,36 @@ compare it against strong baselines on the same split.
 
 - README: ./README.md
 - Docs home: ./docs/index.md
+- Versioned docs manifest: ./docs-versions.json
 - Getting started: ./docs/getting-started.md
 - Choose a model: ./docs/user-guide/model-types.md
+- Unified model registry and AutoGeoModel: ./docs/user-guide/model-types.md
+- Geo-causal experiment models: ./docs/user-guide/geo-causal-models.md
+- Spatial econometrics models: ./docs/user-guide/spatial-econometrics.md
+- Scalable GP geostatistics models: ./docs/user-guide/geostatistics-models.md
 - Boosting model guides: ./docs/user-guide/boosting-models/index.md
 - Forecasting model guides: ./docs/user-guide/forecasting-models/index.md
+- Probabilistic and conformal forecasting guide: ./docs/user-guide/forecasting-models/probabilistic-conformal.md
 - Graph model guides: ./docs/user-guide/graph-models/index.md
 - Neural model guides: ./docs/user-guide/neural-models/index.md
+- Generic deep models: ./docs/user-guide/deep-models.md
+- Native deep backend selection and Metal availability: ./docs/user-guide/deep-models.md
 - Forecasting reference: ./docs/forecasting.md
 - Graph features contract: ./docs/graph-features.md
 - Neural features contract: ./docs/neural-features.md
+- Sparse H3/S2 and route-cell features: ./docs/sparse_features.md
+- Spatial modeling and bearing unit-vector features: ./docs/spatial_modeling.md
+- Geo evaluation standard: ./docs/user-guide/geo-evaluation-standard.md
 - Benchmarks: ./docs/benchmarks/index.md
+- Benchmark methodology and geo manifest contract: ./docs/benchmarks/methodology.md
+- Release gate audit: ./scripts/check_release_gates.py
+- Public API contract audit: ./scripts/check_public_api_contract.py
+- Artifact compatibility audit: ./scripts/check_artifact_compatibility.py
+- Docs example audit: ./scripts/check_docs_examples.py
+- Official geo evidence audit: ./scripts/check_official_geo_evidence.py
+- Performance threshold audit: ./scripts/check_performance_thresholds.py
+- AutoGeo benchmark gate: ./scripts/run_autogeo_benchmark_gate.py
+- NYC TLC quality benchmark harness: ./scripts/run_nyc_taxi_quality_benchmarks.py
 - Model benchmark suite: ./docs/benchmarks/model-suite.md
 - NYC taxi benchmark report: ./docs/benchmarks/nyc-taxi.md
 
@@ -26,9 +46,30 @@ compare it against strong baselines on the same split.
 - `cartoboost.CartoBoostRegressor`
 - `cartoboost.CartoBoostClassifier`
 - `cartoboost.CartoBoostRanker`
+- `cartoboost.AutoGeoModel`
+- `cartoboost.GeoModelStack`
+- `cartoboost.models.*`
+- `cartoboost.SpatialWeights`
+- `cartoboost.SpatialLagRegressor`
+- `cartoboost.SpatialErrorRegressor`
+- `cartoboost.SpatialDurbinRegressor`
+- `cartoboost.SpatialTwoStageLeastSquares`
+- `cartoboost.GeoCausalPanel`
+- `cartoboost.SyntheticDIDEstimator`
+- `cartoboost.GeoLiftEstimator`
+- `cartoboost.GeoExperimentDesigner`
+- `cartoboost.SpatialPlaceboTester`
+- `cartoboost.NearestNeighborGPRegressor`
+- `cartoboost.ResidualNNGPRegressor`
+- `cartoboost.SpatialGaussianProcessRegressor`
 - `cartoboost.forecasting.*`
 - `cartoboost.graph.*`
+- `cartoboost.geo`
+- `cartoboost.causal.*`
+- `cartoboost.prob.*`
+- `cartoboost.experimental.*`
 - `cartoboost.neural.*`
+- `cartoboost.deep.*`
 - `cartoboost.plotting`
 
 ## Usage Notes
@@ -39,3 +80,5 @@ compare it against strong baselines on the same split.
   routing, logistics, and demand forecasting.
 - Keep benchmark claims tied to maintained artifacts, exact commands, and
   comparable baselines.
+- TensorBoard scalar logging is optional on the boosting estimators via
+  `tensorboard_log_dir`; install `cartoboost[tensorboard]` for event writing.

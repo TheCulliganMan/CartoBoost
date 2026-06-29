@@ -22,7 +22,7 @@ index first with `ForecastFrame`, then model true zero demand.
 | `SbaForecaster` | You want Croston-style smoothing with SBA bias adjustment. |
 | `TsbForecaster` | Occurrence probability and demand size should be smoothed separately. |
 
-## Basic Fit
+## Public Contract
 
 ```python
 from cartoboost.forecasting import CrostonForecaster, SbaForecaster, TsbForecaster
@@ -37,6 +37,15 @@ croston_forecast = croston.predict(6)
 sba_forecast = sba.predict(6)
 tsb_forecast = tsb.predict(6)
 ```
+
+## Use When
+
+| Situation | Better first choice |
+| --- | --- |
+| Many periods are true zero demand. | `CrostonForecaster`, `SbaForecaster`, or `TsbForecaster` |
+| Rows are missing rather than true zero demand. | Fix the time index before modeling. |
+| Demand is dense and seasonal. | `SeasonalNaiveForecaster`, `AutoStatsBank`, or `AutoForecaster` |
+| Sparse demand should be selected automatically inside a broader panel roster. | `AutoForecaster` |
 
 ## Panel Fit
 

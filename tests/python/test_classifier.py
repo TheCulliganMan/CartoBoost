@@ -25,6 +25,8 @@ def test_binary_classifier_fit_predict_proba_and_roundtrip(tmp_path: Path):
     assert probabilities.shape == (4, 2)
     assert np.allclose(probabilities.sum(axis=1), 1.0)
     assert decisions.shape == (4,)
+    assert classifier.training_history_
+    assert classifier.training_history_[0]["name"] == "train/logloss"
     assert (
         probabilities[0, classifier.classes_.tolist().index("high")]
         < probabilities[3, classifier.classes_.tolist().index("high")]

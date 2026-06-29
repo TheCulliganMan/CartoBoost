@@ -4,7 +4,7 @@ import {NeuralModelExample} from '@site/src/components/ModelingLabClient';
 
 Use `NeuralEmbeddingRegressor` when you want one wrapper that learns ID
 embeddings, appends them to the dense row features, and fits a CartoBoost
-regressor. This is the browser/Wasm `embedding` pipeline.
+regressor.
 
 ## When To Use
 
@@ -18,7 +18,7 @@ regressor. This is the browser/Wasm `embedding` pipeline.
 
 <NeuralModelExample title="Neural embedding regressor browser model" pipeline="embedding" />
 
-## Python Fit
+## Public Contract
 
 ```python
 from cartoboost.neural import NeuralEmbeddingRegressor
@@ -39,6 +39,14 @@ pred = model.predict(X_valid, ids=valid_ids)
 | `X` | Dense row features for the final regressor. |
 | `y` | Numeric target. |
 | `ids` | Stable high-cardinality IDs used to learn embedding vectors. |
+
+## Use When
+
+| Need | Better surface |
+| --- | --- |
+| Serve the supervised ID model directly. | `NeuralEmbeddingStandaloneRegressor` |
+| Generate reusable embedding columns. | `NeuralEmbeddingFeatures` |
+| Fit embeddings and a CartoBoost regressor together. | `NeuralEmbeddingRegressor` |
 
 ## Validation
 

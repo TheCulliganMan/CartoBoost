@@ -6,6 +6,8 @@ import json
 from collections.abc import Sequence
 from typing import Any
 
+from .config import Drift, Kernel
+
 
 def series_forecast(
     model: str, values: Sequence[float], horizon: int, **params: Any
@@ -298,8 +300,8 @@ def ordinary_kriging_predict(
     range: float = 1.0,
     nugget: float = 1.0e-6,
     sill: float = 1.0,
-    variogram_model: str = "exponential",
-    drift: str = "ordinary",
+    variogram_model: Kernel = Kernel.EXPONENTIAL,
+    drift: Drift = Drift.ORDINARY,
     anisotropy_angle_degrees: float = 0.0,
     anisotropy_scaling: float = 1.0,
     max_neighbors: int | None = None,
@@ -318,8 +320,8 @@ def ordinary_kriging_predict(
     target_rows = [(float(x), float(y)) for x, y in targets]
     uses_advanced_config = (
         float(sill) != 1.0
-        or str(variogram_model) != "exponential"
-        or str(drift) != "ordinary"
+        or variogram_model != Kernel.EXPONENTIAL
+        or drift != Drift.ORDINARY
         or float(anisotropy_angle_degrees) != 0.0
         or float(anisotropy_scaling) != 1.0
         or max_neighbors is not None
@@ -333,8 +335,8 @@ def ordinary_kriging_predict(
             float(range),
             float(nugget),
             float(sill),
-            str(variogram_model),
-            str(drift),
+            variogram_model.value,
+            drift.value,
             float(anisotropy_angle_degrees),
             float(anisotropy_scaling),
             None if max_neighbors is None else int(max_neighbors),
@@ -375,8 +377,8 @@ def ordinary_kriging_leave_one_out(
     range: float = 1.0,
     nugget: float = 1.0e-6,
     sill: float = 1.0,
-    variogram_model: str = "exponential",
-    drift: str = "ordinary",
+    variogram_model: Kernel = Kernel.EXPONENTIAL,
+    drift: Drift = Drift.ORDINARY,
     anisotropy_angle_degrees: float = 0.0,
     anisotropy_scaling: float = 1.0,
     max_neighbors: int | None = None,
@@ -391,8 +393,8 @@ def ordinary_kriging_leave_one_out(
         float(range),
         float(nugget),
         float(sill),
-        str(variogram_model),
-        str(drift),
+        variogram_model.value,
+        drift.value,
         float(anisotropy_angle_degrees),
         float(anisotropy_scaling),
         None if max_neighbors is None else int(max_neighbors),
@@ -466,8 +468,8 @@ def ordinary_kriging_leave_one_out_diagnostics(
     range: float = 1.0,
     nugget: float = 1.0e-6,
     sill: float = 1.0,
-    variogram_model: str = "exponential",
-    drift: str = "ordinary",
+    variogram_model: Kernel = Kernel.EXPONENTIAL,
+    drift: Drift = Drift.ORDINARY,
     anisotropy_angle_degrees: float = 0.0,
     anisotropy_scaling: float = 1.0,
     max_neighbors: int | None = None,
@@ -482,8 +484,8 @@ def ordinary_kriging_leave_one_out_diagnostics(
         float(range),
         float(nugget),
         float(sill),
-        str(variogram_model),
-        str(drift),
+        variogram_model.value,
+        drift.value,
         float(anisotropy_angle_degrees),
         float(anisotropy_scaling),
         None if max_neighbors is None else int(max_neighbors),

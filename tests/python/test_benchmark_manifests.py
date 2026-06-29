@@ -17,15 +17,36 @@ sys.path.insert(0, str(ROOT))
 aggregate_module = importlib.import_module("benchmarks.runners.aggregate_results")
 manifest_module = importlib.import_module("benchmarks.runners.manifest")
 model_suite_module = importlib.import_module("scripts.run_model_benchmark_suite")
+autogeo_gate_module = importlib.import_module("scripts.run_autogeo_benchmark_gate")
+artifact_gate_module = importlib.import_module("scripts.check_artifact_compatibility")
+official_geo_evidence_module = importlib.import_module("scripts.check_official_geo_evidence")
+performance_gate_module = importlib.import_module("scripts.check_performance_thresholds")
+release_gate_module = importlib.import_module("scripts.check_release_gates")
 significance_module = importlib.import_module("benchmarks.runners.significance")
 
 aggregate = aggregate_module.aggregate
+autogeo_build_workloads = autogeo_gate_module.build_workloads
+autogeo_run_workload = autogeo_gate_module.run_workload
+check_artifact_compatibility = artifact_gate_module.check_artifact_compatibility
+official_geo_evidence_report = official_geo_evidence_module.official_geo_evidence_report
+check_performance_thresholds = performance_gate_module.check_performance_thresholds
 read_jsonl = aggregate_module.read_jsonl
 load_all_tracks = manifest_module.load_all_tracks
 load_config = manifest_module.load_config
+validate_official_geo_benchmark_suite = manifest_module.validate_official_geo_benchmark_suite
 validate_configs = manifest_module.validate_configs
 failed_validation_search_reason = model_suite_module.failed_validation_search_reason
 repeated_external_comparison_summary = model_suite_module.repeated_external_comparison_summary
+required_benchmark_dependencies = model_suite_module.required_benchmark_dependencies
+validate_requested_benchmark_dependencies = (
+    model_suite_module.validate_requested_benchmark_dependencies
+)
+check_benchmark_dependencies = release_gate_module.check_benchmark_dependencies
+check_ci_release_gates = release_gate_module.check_ci_release_gates
+check_external_baseline_install_metadata = (
+    release_gate_module.check_external_baseline_install_metadata
+)
+check_publish_artifact_attestation = release_gate_module.check_publish_artifact_attestation
 average_ranks = significance_module.average_ranks
 paired_bootstrap_ci = significance_module.paired_bootstrap_ci
 
@@ -48,6 +69,55 @@ def test_sklearn_dependency_is_optional_extra() -> None:
     )
 
 
+def test_benchmark_dependency_group_covers_intended_baselines() -> None:
+    text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    bench_block = re.search(r"\[dependency-groups\]\s+bench = \[(.*?)\]", text, re.S)
+    assert bench_block is not None
+    bench = bench_block.group(1)
+
+    for dependency in [
+        "catboost>=1.2",
+        "darts>=0.30",
+        "esda>=2.6",
+        "gstools>=1.6",
+        "libpysal>=4.10",
+        "lightgbm>=4.0",
+        "neuralforecast>=1.7",
+        "pykrige>=1.7",
+        "scikit-learn>=1.2",
+        "spreg>=1.4",
+        "xgboost>=2.0",
+    ]:
+        assert f'"{dependency}"' in bench
+
+
+def test_model_suite_requires_requested_baseline_dependencies(monkeypatch) -> None:
+    assert required_benchmark_dependencies(
+        ["mean", "xgboost", "lightgbm", "catboost", "ridge"],
+        ["diabetes"],
+    ) == {
+        "xgboost": "XGBRegressor",
+        "lightgbm": "LGBMRegressor",
+        "catboost": "CatBoostRegressor",
+        "sklearn": None,
+    }
+
+    def fake_dependency_status(import_name, class_name=None, *, distribution_name=None):
+        del class_name, distribution_name
+        return {
+            "package": import_name,
+            "import_name": import_name,
+            "version": None,
+            "module_importable": import_name != "catboost",
+            "required_class_available": import_name != "catboost",
+        }
+
+    monkeypatch.setattr(model_suite_module, "dependency_status", fake_dependency_status)
+
+    with pytest.raises(RuntimeError, match=r"catboost.*uv sync --group bench --group dev"):
+        validate_requested_benchmark_dependencies(["catboost"], [])
+
+
 def test_non_forecast_required_baselines_are_concrete() -> None:
     baselines = load_config("required_baselines")
 
@@ -55,6 +125,7 @@ def test_non_forecast_required_baselines_are_concrete() -> None:
         "cartoboost",
         "lightgbm",
         "xgboost",
+        "catboost",
         "hist_gradient_boosting",
         "random_forest",
         "extra_trees",
@@ -68,11 +139,15 @@ def test_non_forecast_required_baselines_are_concrete() -> None:
         "cartoboost_graph",
         "lightgbm",
         "xgboost",
+        "catboost",
         "hist_gradient_boosting",
         "random_forest",
         "extra_trees",
         "ridge",
         "mean",
+        "pysal_spatial_regression",
+        "pykrige",
+        "gstools",
     ]
     assert baselines["graph"] == [
         "cartoboost",
@@ -80,6 +155,8 @@ def test_non_forecast_required_baselines_are_concrete() -> None:
         "node2vec_baseline",
         "graphsage_baseline",
         "tabularized_graph_baseline",
+        "pytorch_geometric_temporal_baseline",
+        "dcrnn_baseline",
         "mean",
     ]
 
@@ -99,6 +176,135 @@ def test_non_forecast_dataset_identities_are_frozen() -> None:
         == "sklearn_california_housing_regression_seed42_5000_v1"
     )
     assert specs["graph"].datasets["datasets"][0]["id"] == "zachary_karate_club_78_edge_v1"
+
+
+def test_spatial_benchmark_splits_require_geo_manifests() -> None:
+    spatial = {spec.name: spec for spec in load_all_tracks()}["spatial"]
+    split_ids = {split["id"] for split in spatial.splits["splits"]}
+
+    assert split_ids == {
+        "pickup_zone_group_cv_manifest_v1",
+        "pickup_zone_buffered_cv_manifest_v1",
+        "epa_monitor_buffered_cv_manifest_v1",
+        "synthetic_field_spatial_block_manifest_v1",
+        "geo_causal_panel_rolling_origin_manifest_v1",
+    }
+    for split in spatial.splits["splits"]:
+        assert split["kind"] in {
+            "group_spatial_cv",
+            "buffered_spatial_cv",
+            "spatial_block_cv",
+            "rolling_origin_panel_split",
+        }
+        assert split["random_row_split_allowed"] is False
+        assert split["split_manifest_hash"].startswith("sha256:")
+        assert "random" not in split["id"]
+
+
+def test_official_geo_benchmark_claims_are_declared() -> None:
+    specs = load_all_tracks()
+
+    validate_official_geo_benchmark_suite(specs)
+
+    tasks = [task for spec in specs for task in spec.tasks["tasks"] if "claim_family" in task]
+    assert {task["claim_family"] for task in tasks} == {
+        "nyc_tlc_zone_lane_demand",
+        "metr_la_pems_graph_forecasting",
+        "epa_air_quality_interpolation",
+        "california_housing_sanity",
+        "synthetic_spatial_fields",
+        "synthetic_graph_diffusion",
+        "synthetic_geo_causal_lift_panels",
+    }
+    for task in tasks:
+        assert {"leaderboard_json", "leaderboard_markdown"} <= set(task["scorecard_outputs"])
+        assert {
+            "fit_wallclock_seconds",
+            "predict_wallclock_seconds",
+            "peak_memory_mb",
+        } <= set(task["resource_metrics"])
+
+
+def test_release_gates_cover_benchmark_dependencies_and_workflows() -> None:
+    assert check_benchmark_dependencies()["passed"] is True
+    assert check_external_baseline_install_metadata()["passed"] is True
+    assert check_ci_release_gates()["passed"] is True
+    assert check_publish_artifact_attestation()["passed"] is True
+
+
+def test_performance_thresholds_are_enforced() -> None:
+    report = check_performance_thresholds()
+
+    assert report["passed"] is True
+    assert report["missing_groups"] == []
+    assert report["failed_benchmarks"] == []
+    assert {row["benchmark"].split("/", 1)[0] for row in report["checked"]} >= {
+        "data_loading",
+        "prediction",
+        "serialize",
+        "training",
+    }
+    assert all(row["headroom_ratio"] > 1.0 for row in report["checked"])
+
+
+def test_artifact_compatibility_gate_rejects_unsupported_versions() -> None:
+    report = check_artifact_compatibility()
+
+    assert report["passed"] is True
+    assert {row["key"] for row in report["cases"]} >= {
+        "models.cartoboost_regressor",
+        "models.auto_geo_model",
+        "models.geo_model_stack",
+        "geo.nngp",
+        "geo.residual_nngp",
+        "prob.conformal_interval",
+        "prob.spatial_conformal",
+    }
+    for row in report["cases"]:
+        assert row["version_markers"]
+        assert row["roundtrip_max_abs_diff"] <= 1e-10
+        assert row["unsupported_version_rejected"] is True
+        assert "unsupported" in row["unsupported_version_error"].lower()
+
+
+def test_official_geo_evidence_audit_does_not_count_synthetic_gate_as_acceptance() -> None:
+    report = official_geo_evidence_report()
+
+    assert report["audit_passed"] is True
+    assert report["acceptance_passed"] is False
+    assert report["real_autogeo_family_wins"] < report["required_real_autogeo_family_wins"]
+    assert report["synthetic_autogeo_gate"]["counts_toward_final_acceptance"] is False
+    assert "synthetic gates" in report["claim_policy"].lower()
+    assert set(report["families"]) == {
+        "nyc_tlc_zone_lane_demand",
+        "metr_la_pems_graph_forecasting",
+        "epa_air_quality_interpolation",
+        "california_housing_sanity",
+        "synthetic_spatial_fields",
+        "synthetic_graph_diffusion",
+        "synthetic_geo_causal_lift_panels",
+    }
+
+
+def test_autogeo_benchmark_gate_emits_required_evidence() -> None:
+    pytest.importorskip("sklearn.dummy", exc_type=ImportError)
+    workload = autogeo_build_workloads(sample_size=60, seed=17)[0]
+    result = autogeo_run_workload(workload, seed=17, n_splits=5, tie_tolerance=0.02)
+
+    assert result["split_manifest"]["random_row_split_allowed"] is False
+    assert result["split_manifest"]["train_index_sha256"].startswith("sha256:")
+    assert result["timing"]["fit_wallclock_seconds"] > 0.0
+    assert result["timing"]["predict_wallclock_seconds"] >= 0.0
+    assert result["serialization"]["roundtrip_max_abs_diff"] <= 1e-10
+    assert result["acceptance"]["required_diagnostics_present"] is True
+    assert result["diagnostics"]["residual_morans_i"] is not None
+    assert result["diagnostics"]["mean_interval_width"] > 0.0
+    assert result["diagnostics"]["interval_coverage"] >= 0.0
+    assert {row["model"] for row in result["baselines"]} == {
+        "mean",
+        "ridge",
+        "hist_gradient_boosting",
+    }
 
 
 def test_benchmark_navigation_links_resolve() -> None:
@@ -218,6 +424,15 @@ def test_v02_public_python_apis_have_docstring_examples() -> None:
                     missing.append(f"{path.relative_to(ROOT)}:{node.name}")
 
     assert missing == []
+
+
+def test_geo_system_docs_examples_are_executable() -> None:
+    from scripts import check_docs_examples
+
+    assert check_docs_examples.check_docs_reference_contract()["passed"] is True
+    assert check_docs_examples.run_model_choice_example()["passed"] is True
+    assert check_docs_examples.run_geo_evaluation_example()["passed"] is True
+    assert check_docs_examples.run_probabilistic_conformal_example()["passed"] is True
 
 
 def test_non_forecast_benchmark_docs_use_public_evidence_language() -> None:

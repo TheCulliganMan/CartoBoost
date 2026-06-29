@@ -28,6 +28,11 @@ def test_ranker_fit_predict_metrics_and_roundtrip(tmp_path: Path):
     assert metrics["ndcg"] > 0.9
     assert metrics["map"] > 0.9
     assert metrics["mrr"] > 0.9
+    assert {row["name"] for row in ranker.training_history_} >= {
+        "train/ndcg",
+        "train/map",
+        "train/mrr",
+    }
 
     model_path = tmp_path / "ranker.json"
     ranker.save(model_path)

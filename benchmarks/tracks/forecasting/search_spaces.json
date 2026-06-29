@@ -3,6 +3,8 @@
     {"model_family": "cartoboost", "budget": "standard", "parameters": ["n_estimators", "learning_rate", "max_depth", "lag_windows", "seasonal_lags"]},
     {"model_family": "cartoboost_lag", "budget": "standard", "parameters": ["n_estimators", "learning_rate", "max_depth", "lag_windows", "seasonal_lags", "interval_method"]},
     {"model_family": "statistical_forecaster", "budget": "standard", "parameters": ["model", "season_length", "trend", "damped", "auto_order"]},
-    {"model_family": "global_forecaster", "budget": "standard", "parameters": ["architecture", "context_length", "layers", "learning_rate", "dropout"]}
+    {"model_family": "global_forecaster", "budget": "standard", "parameters": ["architecture", "context_length", "layers", "learning_rate", "dropout"]},
+    {"model_family": "neuralforecast_baseline", "budget": "standard", "parameters": ["model", "input_size", "horizon", "learning_rate", "max_steps"]},
+    {"model_family": "darts_baseline", "budget": "standard", "parameters": ["model", "input_chunk_length", "output_chunk_length", "n_epochs", "learning_rate"]}
   ]
 }

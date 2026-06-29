@@ -16,7 +16,11 @@
 - Seeds:
 - Primary metrics:
 - Secondary metrics:
-- Calibration or interval metrics:
+- Calibration report fields:
+  - coverage_by_horizon:
+  - coverage_by_spatial_block:
+  - width_by_horizon:
+  - residual_morans_i_after_calibration:
 - Subgroup slices:
 
 ## Compute
@@ -35,4 +39,3 @@
 - Known instability:
 - Recommended use:
 - Non-recommended use:
-

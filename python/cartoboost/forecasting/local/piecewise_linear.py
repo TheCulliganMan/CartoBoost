@@ -6,6 +6,14 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from ...config import (
+    ComponentMode,
+    FitLoss,
+    Growth,
+    RegulatorStandardization,
+    SeasonalityMode,
+    TrendUncertaintyPolicy,
+)
 from .._native_wrappers import NativeForecastWrapper, _native_class
 from ..frequency import require_pandas
 from .naive import _prediction_interval_levels
@@ -28,10 +36,10 @@ class PiecewiseLinearSeasonalForecaster(NativeForecastWrapper):
     def __init__(
         self,
         *,
-        growth: str = "linear",
-        component_mode: str = "additive",
-        seasonality_mode: str | None = None,
-        holidays_mode: str | None = None,
+        growth: Growth = Growth.LINEAR,
+        component_mode: ComponentMode = ComponentMode.ADDITIVE,
+        seasonality_mode: SeasonalityMode | None = None,
+        holidays_mode: SeasonalityMode | None = None,
         changepoints: int | Sequence[str] | None = 25,
         n_changepoints: int | None = None,
         changepoint_range: float = 1.0,
@@ -61,11 +69,11 @@ class PiecewiseLinearSeasonalForecaster(NativeForecastWrapper):
         country_holidays: str | None = None,
         country_holiday_years: Sequence[int] | None = None,
         country_holiday_subdivision: str | None = None,
-        event_mode: str | None = None,
+        event_mode: ComponentMode | None = None,
         extra_regressors: Sequence[str] = (),
         regressor_modes: Mapping[str, str] | None = None,
         extra_regressor_monotonic_constraints: Mapping[str, int] | None = None,
-        regressor_standardization: str = "auto",
+        regressor_standardization: RegulatorStandardization = RegulatorStandardization.AUTO,
         future_regressors: Mapping[str, Sequence[float]] | None = None,
         future_regressors_by_series: Mapping[str, Mapping[str, Sequence[float]]] | None = None,
         trend_adjustments: Mapping[int, float] | None = None,
@@ -76,7 +84,7 @@ class PiecewiseLinearSeasonalForecaster(NativeForecastWrapper):
         prediction_interval_levels: list[float] | tuple[float, ...] = (),
         quantile_levels: list[float] | tuple[float, ...] = (),
         uncertainty_samples: int = 0,
-        trend_uncertainty_policy: str = "laplace",
+        trend_uncertainty_policy: TrendUncertaintyPolicy = TrendUncertaintyPolicy.LAPLACE,
         trend_uncertainty_scale: float = 1.0,
         coefficient_uncertainty_scale: float = 1.0,
         uncertainty_seed: int = 0xC4B0_0575_A11C_E123,
@@ -84,33 +92,35 @@ class PiecewiseLinearSeasonalForecaster(NativeForecastWrapper):
         floor: float = 0.0,
         cap_regressor: str | None = None,
         floor_regressor: str | None = None,
-        fit_loss: str = "squared",
+        fit_loss: FitLoss = FitLoss.SQUARED,
         huber_delta: float = 1.345,
         irls_iterations: int = 5,
     ) -> None:
-        growth = _validate_choice("growth", growth, {"linear", "flat", "logistic"})
+        growth = _validate_choice("growth", growth, {g.value for g in Growth})
         if seasonality_mode is not None:
             seasonality_mode = _validate_choice(
-                "seasonality_mode", seasonality_mode, {"additive", "multiplicative"}
+                "seasonality_mode", seasonality_mode, {g.value for g in SeasonalityMode}
             )
             component_mode = seasonality_mode
         component_mode = _validate_choice(
-            "component_mode", component_mode, {"additive", "multiplicative"}
+            "component_mode", component_mode, {g.value for g in ComponentMode}
         )
         if holidays_mode is not None:
             holidays_mode = _validate_choice(
-                "holidays_mode", holidays_mode, {"additive", "multiplicative"}
+                "holidays_mode", holidays_mode, {g.value for g in SeasonalityMode}
             )
             if (
                 event_mode is not None
-                and _validate_choice("event_mode", event_mode, {"additive", "multiplicative"})
+                and _validate_choice("event_mode", event_mode, {g.value for g in ComponentMode})
                 != holidays_mode
             ):
                 raise ValueError("event_mode and holidays_mode must agree when both are set")
             event_mode = holidays_mode
-        fit_loss = _validate_choice("fit_loss", fit_loss, {"squared", "huber"})
+        fit_loss = _validate_choice("fit_loss", fit_loss, {g.value for g in FitLoss})
         regressor_standardization = _validate_choice(
-            "regressor_standardization", regressor_standardization, {"auto", "none"}
+            "regressor_standardization",
+            regressor_standardization,
+            {g.value for g in RegulatorStandardization},
         )
         changepoint_count, explicit_changepoints = _normalize_changepoints(
             changepoints, n_changepoints, changepoint_timestamps
@@ -138,7 +148,9 @@ class PiecewiseLinearSeasonalForecaster(NativeForecastWrapper):
         if huber_delta <= 0.0:
             raise ValueError("huber_delta must be positive")
         trend_uncertainty_policy = _validate_choice(
-            "trend_uncertainty_policy", trend_uncertainty_policy, {"laplace", "normal"}
+            "trend_uncertainty_policy",
+            trend_uncertainty_policy,
+            {g.value for g in TrendUncertaintyPolicy},
         )
         trend_uncertainty_scale = float(trend_uncertainty_scale)
         if trend_uncertainty_scale < 0.0:

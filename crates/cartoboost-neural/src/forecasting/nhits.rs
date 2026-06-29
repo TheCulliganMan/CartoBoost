@@ -9,6 +9,7 @@ use super::dataloader::WindowDataset;
 use super::nbeats::DeterministicMlp;
 use super::scaler::StandardScaler;
 use super::validate_window_config;
+use crate::BackendSelection;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct NHiTSConfig {
@@ -17,6 +18,7 @@ pub struct NHiTSConfig {
     pub epochs: usize,
     pub learning_rate: f64,
     pub pooling_size: usize,
+    pub backend: BackendSelection,
 }
 
 impl Default for NHiTSConfig {
@@ -27,6 +29,7 @@ impl Default for NHiTSConfig {
             epochs: 80,
             learning_rate: 0.01,
             pooling_size: 2,
+            backend: BackendSelection::default(),
         }
     }
 }
@@ -55,7 +58,12 @@ impl NHiTSForecaster {
         }
         let pooled_size = pooled_len(config.input_size, config.pooling_size);
         Ok(Self {
-            model: DeterministicMlp::new(pooled_size, config.hidden_size, 0.031),
+            model: DeterministicMlp::new(
+                pooled_size,
+                config.hidden_size,
+                0.031,
+                config.backend.clone(),
+            ),
             config,
             scaler: None,
             frequency: None,
@@ -98,6 +106,7 @@ impl Forecaster for NHiTSForecaster {
             pooled_len(self.config.input_size, self.config.pooling_size),
             self.config.hidden_size,
             0.031,
+            self.config.backend.clone(),
         );
         self.model
             .fit(&examples, self.config.epochs, self.config.learning_rate);
@@ -139,9 +148,11 @@ impl Forecaster for NHiTSForecaster {
             let mut history = tail.clone();
             for step in 1..=horizon {
                 let scaled_input = scaler.transform_slice(&history);
+                let pooled = pool(&scaled_input, self.config.pooling_size);
                 let scaled_prediction = self
                     .model
-                    .predict(&pool(&scaled_input, self.config.pooling_size));
+                    .predict_with_backend(&pooled)
+                    .map_err(|err| CartoBoostError::InvalidInput(err.to_string()))?;
                 let mean = scaler.inverse_transform(scaled_prediction);
                 predictions.push(ForecastPrediction {
                     series_id: series_id.clone(),
@@ -169,6 +180,7 @@ impl Forecaster for NHiTSForecaster {
             "epochs": self.config.epochs,
             "learning_rate": self.config.learning_rate,
             "pooling_size": self.config.pooling_size,
+            "backend": self.config.backend,
         })
     }
 }

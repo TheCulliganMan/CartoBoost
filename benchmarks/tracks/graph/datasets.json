@@ -11,6 +11,36 @@
       "edge_count": 78,
       "datasheet": "benchmarks/reports/dataset_card_template.md",
       "notes": "Small frozen public graph task used for graph-runner plumbing and baseline policy validation; not a broad graph benchmark by itself."
+    },
+    {
+      "id": "metr_la_traffic_speed_v1",
+      "source": "METR-LA traffic speed sensor graph",
+      "source_url": "https://github.com/liyaguang/DCRNN",
+      "source_identity": "METR-LA sensor speed time series with fixed adjacency and rolling-origin forecast split manifest",
+      "hash": "sha256:pending_real_run_dataset_hash",
+      "hash_material": "canonical JSON mapping METR-LA source filenames, adjacency hash, row counts, and time index bounds",
+      "datasheet": "benchmarks/reports/dataset_card_template.md",
+      "notes": "Traffic graph forecasting benchmark; release claims require frozen source file hashes and fixed rolling-origin split manifests."
+    },
+    {
+      "id": "pems_bay_traffic_speed_v1",
+      "source": "PEMS-BAY traffic speed sensor graph",
+      "source_url": "https://github.com/liyaguang/DCRNN",
+      "source_identity": "PEMS-BAY sensor speed time series with fixed adjacency and rolling-origin forecast split manifest",
+      "hash": "sha256:pending_real_run_dataset_hash",
+      "hash_material": "canonical JSON mapping PEMS-BAY source filenames, adjacency hash, row counts, and time index bounds",
+      "datasheet": "benchmarks/reports/dataset_card_template.md",
+      "notes": "Traffic graph forecasting benchmark; release claims require frozen source file hashes and fixed rolling-origin split manifests."
+    },
+    {
+      "id": "synthetic_graph_diffusion_v1",
+      "source": "CartoBoost generated graph diffusion panels",
+      "source_url": "benchmarks/runners",
+      "source_identity": "Seeded graph diffusion simulations over fixed graph families, time windows, diffusion rates, and shocks",
+      "hash": "sha256:pending_generated_manifest_hash",
+      "hash_material": "canonical JSON of generator version, graph seeds, adjacency lists, diffusion parameters, time index, and targets",
+      "datasheet": "benchmarks/reports/dataset_card_template.md",
+      "notes": "Synthetic graph diffusion stress benchmark for horizon error and graph-distance residual decay."
     }
   ]
 }

@@ -1,0 +1,21 @@
+[package]
+name = "cartoboost-geo-st"
+version = "0.2.32"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cartoboost-neural = { path = "../cartoboost-neural" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[features]
+default = []
+cuda = ["cartoboost-neural/cuda"]
+rocm = ["cartoboost-neural/rocm"]
+metal = ["cartoboost-neural/metal"]
+webgpu = ["cartoboost-neural/webgpu"]

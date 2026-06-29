@@ -24,9 +24,18 @@ pub struct Model {
     pub target_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub training_config: Option<TrainingConfigMetadata>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub training_history: Vec<TrainingMetric>,
     #[serde(default)]
     pub prediction_transform: PredictionTransform,
     pub trees: Vec<Tree>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TrainingMetric {
+    pub iteration: usize,
+    pub name: String,
+    pub value: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

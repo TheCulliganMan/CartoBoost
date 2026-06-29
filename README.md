@@ -4,7 +4,7 @@
 [![Python](https://img.shields.io/pypi/pyversions/cartoboost.svg)](https://pypi.org/project/cartoboost/)
 [![CI](https://github.com/TheCulliganMan/CartoBoost/actions/workflows/ci.yml/badge.svg)](https://github.com/TheCulliganMan/CartoBoost/actions/workflows/ci.yml)
 [![Docs](https://github.com/TheCulliganMan/CartoBoost/actions/workflows/pages.yml/badge.svg)](https://github.com/TheCulliganMan/CartoBoost/actions/workflows/pages.yml)
-[![Release](https://github.com/TheCulliganMan/CartoBoost/actions/workflows/release-version.yml/badge.svg)](https://github.com/TheCulliganMan/CartoBoost/actions/workflows/release-version.yml)
+[![Release](https://github.com/TheCulliganMan/CartoBoost/actions/workflows/publish-pypi.yml/badge.svg)](https://github.com/TheCulliganMan/CartoBoost/actions/workflows/publish-pypi.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 CartoBoost is a Python toolkit for regression, classification, grouped
@@ -85,8 +85,8 @@ Optional integrations stay optional:
 
 ```sh
 uv add "cartoboost[explain]"  # SHAP support
-uv add "cartoboost[h3]"       # H3 lat/lon encoder
-uv add "cartoboost[s2]"       # S2 lat/lon encoder
+uv add "cartoboost[h3]"       # H3 point and decoded-route encoder
+uv add "cartoboost[s2]"       # S2 point and decoded-route encoder
 uv add "cartoboost[duckdb]"   # DuckDB relation inputs
 uv add "cartoboost[optuna]"   # Optuna tuning
 uv add "cartoboost[polars]"   # Polars inputs
@@ -132,6 +132,8 @@ predictions = model.predict(X_validation)
 For structured mobility or operations data, dense columns might include trip
 distance, hour, weekday, coordinates, route context, or category flags. Add
 sparse-set columns when each row has route-cell, zone, or similar memberships.
+Decoded OSRM or Valhalla routes can be converted into H3/S2 sparse rows with
+`build_h3_route_sparse_sets` or `build_s2_route_sparse_sets`.
 
 ```python
 schema = {

@@ -4,7 +4,7 @@ Use `CartoBoostRegressor` for numeric row-level targets when the effect of
 time, location, route membership, or other structure is part of the question.
 Typical uses include duration, fare, demand, or residual modeling.
 
-## Basic Fit
+## Public Contract
 
 ```python
 from cartoboost import CartoBoostRegressor
@@ -19,6 +19,15 @@ model = CartoBoostRegressor(
 model.fit(X_train, y_train)
 pred = model.predict(X_test)
 ```
+
+## Use When
+
+| Need | Better first choice |
+| --- | --- |
+| Numeric row-level prediction. | `CartoBoostRegressor` |
+| Class probabilities or labels. | `CartoBoostClassifier` |
+| Query-local ordering. | `CartoBoostRanker` |
+| Time-indexed future values. | Forecasting models |
 
 ## Common Controls
 
@@ -38,3 +47,9 @@ pred = model.predict(X_test)
 Use [Parameters](../parameters.md), [Feature Schema](../../feature_schema.md),
 [Sparse Features](../../sparse_features.md), and [Spatial Modeling](../../spatial_modeling.md)
 for the contract details.
+
+## Validation
+
+Report RMSE, MAE, and task-specific business metrics on the same split as the
+baselines. Use spatial, temporal, group, or cold-entity splits when those are
+the claim being tested.

@@ -2,208 +2,21 @@ name: Release
 
 on:
   push:
-    branches: ["main"]
-  workflow_dispatch:
-    inputs:
-      bump_level:
-        description: "SemVer bump level for this release."
-        required: false
-        default: "patch"
-        type: choice
-        options:
-          - patch
-          - minor
-          - major
+    tags:
+      - "v*"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  bump-and-tag:
-    if: github.actor != 'github-actions[bot]'
-    runs-on: ubuntu-latest
-    outputs:
-      tag: ${{ steps.version.outputs.tag }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Bump versions and prepare release tag
-        id: version
-        env:
-          BUMP_LEVEL: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.bump_level || 'patch' }}
-        run: |
-          set -euo pipefail
-
-          python - <<'PY'
-          import os
-          import re
-          import subprocess
-          from pathlib import Path
-
-          bump_level = os.environ["BUMP_LEVEL"]
-          files = [
-              "Cargo.toml",
-              "crates/cartoboost-core/Cargo.toml",
-              "crates/cartoboost-neural/Cargo.toml",
-              "crates/cartoboost-cli/Cargo.toml",
-              "crates/cartoboost-py/Cargo.toml",
-              "crates/cartoboost-py/pyproject.toml",
-              "pyproject.toml",
-              "python/cartoboost/__init__.py",
-          ]
-
-          toml_version_re = re.compile(r'(?m)^(?P<prefix>[ \t]*version[ \t]*=[ \t]*)"(?P<version>\d+\.\d+\.\d+)"')
-          py_version_re = re.compile(r'(?m)^(?P<prefix>__version__[ \t]*=[ \t]*)"(?P<version>\d+\.\d+\.\d+)"')
-          lock_version_re = r'"\d+\.\d+\.\d+"'
-
-          def extract_version(path: str) -> str:
-              text = Path(path).read_text(encoding="utf-8")
-              pattern = py_version_re if path.endswith("__init__.py") else toml_version_re
-              match = pattern.search(text)
-              if not match:
-                  raise SystemExit(f"Version key not found in {path}")
-              return match.group("version")
-
-          versions = {extract_version(path) for path in files}
-          if len(versions) != 1:
-              raise SystemExit(f"Inconsistent version declarations: {sorted(versions)}")
-
-          current = versions.pop()
-          major, minor, patch = map(int, current.split("."))
-
-          if bump_level == "major":
-              major += 1
-              minor = 0
-              patch = 0
-          elif bump_level == "minor":
-              minor += 1
-              patch = 0
-          else:
-              patch += 1
-
-          next_version = f"{major}.{minor}.{patch}"
-
-          def git_tag_exists(tag: str) -> bool:
-              cmd_local = ["git", "rev-parse", "-q", "--verify", f"refs/tags/{tag}"]
-              if subprocess.run(cmd_local, check=False, capture_output=True).returncode == 0:
-                  return True
-
-              cmd_remote = ["git", "ls-remote", "--exit-code", "--tags", "origin", f"refs/tags/{tag}"]
-              return subprocess.run(cmd_remote, check=False, capture_output=True).returncode == 0
-
-          while git_tag_exists(f"v{next_version}"):
-              major, minor, patch = map(int, next_version.split("."))
-              patch += 1
-              next_version = f"{major}.{minor}.{patch}"
-
-          next_tag = f"v{next_version}"
-
-          for path in files:
-              text = Path(path).read_text(encoding="utf-8")
-              pattern = py_version_re if path.endswith("__init__.py") else toml_version_re
-              replaced, count = pattern.subn(
-                  lambda match: f'{match.group("prefix")}"{next_version}"',
-                  text,
-                  count=1,
-              )
-              if count != 1:
-                  raise SystemExit(f"Could not replace version in {path}")
-              Path(path).write_text(replaced, encoding="utf-8")
-
-          cargo_lock_path = Path("Cargo.lock")
-          cargo_lock_text = cargo_lock_path.read_text(encoding="utf-8")
-          for package in [
-              "cartoboost-cli",
-              "cartoboost-core",
-              "cartoboost-neural",
-              "cartoboost-py",
-          ]:
-              pattern = re.compile(
-                  rf'(?ms)(\[\[package\]\]\nname = "{re.escape(package)}"\nversion = ){lock_version_re}'
-              )
-              cargo_lock_text, count = pattern.subn(
-                  lambda match: f'{match.group(1)}"{next_version}"',
-                  cargo_lock_text,
-                  count=1,
-              )
-              if count != 1:
-                  raise SystemExit(f"Could not replace lock version for {package}")
-          cargo_lock_path.write_text(cargo_lock_text, encoding="utf-8")
-
-          uv_lock_path = Path("uv.lock")
-          uv_lock_text = uv_lock_path.read_text(encoding="utf-8")
-          uv_pattern = re.compile(
-              rf'(?ms)(\[\[package\]\]\nname = "cartoboost"\nversion = ){lock_version_re}'
-          )
-          uv_lock_text, count = uv_pattern.subn(
-              lambda match: f'{match.group(1)}"{next_version}"',
-              uv_lock_text,
-              count=1,
-          )
-          if count != 1:
-              raise SystemExit("Could not replace lock version for cartoboost")
-          uv_lock_path.write_text(uv_lock_text, encoding="utf-8")
-
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
-              out.write(f"version={next_version}\n")
-              out.write(f"tag={next_tag}\n")
-          PY
-
-      - name: Commit version bump and push tag
-        if: steps.version.outputs.tag != ''
-        env:
-          RELEASE_TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          set -euo pipefail
-
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-
-          git add Cargo.toml
-          git add crates/cartoboost-core/Cargo.toml
-          git add crates/cartoboost-neural/Cargo.toml
-          git add crates/cartoboost-cli/Cargo.toml
-          git add crates/cartoboost-py/Cargo.toml
-          git add crates/cartoboost-py/pyproject.toml
-          git add pyproject.toml
-          git add python/cartoboost/__init__.py
-          git add Cargo.lock
-          git add uv.lock
-
-          if git diff --cached --quiet; then
-            echo "No version changes detected."
-            exit 0
-          fi
-
-          git commit -m "chore: bump version to ${RELEASE_TAG} [skip ci]"
-          git push origin HEAD:main
-          if git rev-parse -q --verify "refs/tags/${RELEASE_TAG}" >/dev/null; then
-            current_sha="$(git rev-parse HEAD)"
-            tag_sha="$(git rev-parse ${RELEASE_TAG}^{commit})"
-            if [ "${current_sha}" != "${tag_sha}" ]; then
-              echo "Refusing to overwrite existing ${RELEASE_TAG}."
-              echo "Existing tag points to ${tag_sha}, current HEAD is ${current_sha}."
-              exit 1
-            fi
-            echo "Tag ${RELEASE_TAG} already points to current HEAD; skipping tag push."
-          else
-            git tag "${RELEASE_TAG}"
-            git push origin "${RELEASE_TAG}"
-          fi
-
   sdist:
     name: Source distribution
-    needs: bump-and-tag
-    if: needs.bump-and-tag.outputs.tag != ''
     runs-on: ubuntu-latest
     steps:
       - name: Checkout release tag
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.bump-and-tag.outputs.tag }}
+          ref: ${{ github.ref_name }}
 
       - name: Build source distribution
         uses: PyO3/maturin-action@v1
@@ -219,8 +32,6 @@ jobs:
 
   wheels:
     name: Wheels (${{ matrix.platform.name }}, py${{ matrix.python-version }})
-    needs: bump-and-tag
-    if: needs.bump-and-tag.outputs.tag != ''
     runs-on: ${{ matrix.platform.runner }}
     strategy:
       fail-fast: false
@@ -263,7 +74,7 @@ jobs:
       - name: Checkout release tag
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.bump-and-tag.outputs.tag }}
+          ref: ${{ github.ref_name }}
 
       - name: Set up Python
         id: setup-wheel-python
@@ -305,6 +116,7 @@ jobs:
     needs: [sdist, wheels]
     runs-on: ubuntu-latest
     permissions:
+      attestations: write
       contents: read
       id-token: write
     steps:
@@ -319,6 +131,11 @@ jobs:
         run: |
           python -m pip install --upgrade pip packaging twine
           python -m twine check dist/*
+
+      - name: Attest distributions
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: "dist/*"
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1

@@ -1,3 +1,4 @@
+use crate::backend::{backend_dense_layer_f32, BackendSelection};
 use crate::error::{NeuralError, Result};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -17,6 +18,7 @@ pub struct GraphSageEncoderArtifact {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 pub enum GraphSageModelArtifact {
     Homogeneous(HomogeneousGraphSageEncoderArtifact),
     Hetero(HeteroGraphSageEncoderArtifact),
@@ -64,6 +66,8 @@ pub struct GraphSageConfig {
     pub seed: u64,
     pub add_self_loop: bool,
     pub l2_regularization: f32,
+    #[serde(default)]
+    pub backend: BackendSelection,
 }
 
 impl Default for GraphSageConfig {
@@ -76,6 +80,7 @@ impl Default for GraphSageConfig {
             seed: 0x5A17_9A4E_7F33_C0DE,
             add_self_loop: true,
             l2_regularization: 1e-5,
+            backend: BackendSelection::default(),
         }
     }
 }
@@ -89,6 +94,8 @@ pub struct HeteroGraphSageConfig {
     pub negative_samples: usize,
     pub seed: u64,
     pub l2_regularization: f32,
+    #[serde(default)]
+    pub backend: BackendSelection,
 }
 
 impl Default for HeteroGraphSageConfig {
@@ -100,6 +107,7 @@ impl Default for HeteroGraphSageConfig {
             negative_samples: 4,
             seed: 0x0D1A_2A3B_4C5D_6E7F,
             l2_regularization: 1e-5,
+            backend: BackendSelection::default(),
         }
     }
 }
@@ -114,6 +122,8 @@ pub struct HinSageConfig {
     pub seed: u64,
     pub l2_regularization: f32,
     pub neighbor_samples: Vec<usize>,
+    #[serde(default)]
+    pub backend: BackendSelection,
 }
 
 impl Default for HinSageConfig {
@@ -126,6 +136,7 @@ impl Default for HinSageConfig {
             seed: 0xA11C_E5A6_5EED_1234,
             l2_regularization: 1e-5,
             neighbor_samples: Vec::new(),
+            backend: BackendSelection::default(),
         }
     }
 }
@@ -520,7 +531,12 @@ impl GraphSageEncoder {
         };
 
         for _ in 0..self.config.epochs {
-            let cache = forward_homogeneous(node_features, &self.layers, &neighbors)?;
+            let cache = forward_homogeneous(
+                node_features,
+                &self.layers,
+                &neighbors,
+                &self.config.backend,
+            )?;
             let mut grad = vec![vec![0.0_f32; self.output_dim]; node_count];
 
             let loss = if graph.edges().is_empty() {
@@ -553,10 +569,15 @@ impl GraphSageEncoder {
         }
 
         Ok(GraphSageEmbedding::new(
-            forward_homogeneous(node_features, &self.layers, &neighbors)?
-                .representations
-                .pop()
-                .expect("cache must include final embeddings"),
+            forward_homogeneous(
+                node_features,
+                &self.layers,
+                &neighbors,
+                &self.config.backend,
+            )?
+            .representations
+            .pop()
+            .expect("cache must include final embeddings"),
         ))
     }
 
@@ -576,7 +597,7 @@ impl GraphSageEncoder {
             .filter(|neighbors| neighbors.len() == node_count)
             .unwrap_or(&fallback_neighbors);
         Ok(GraphSageEmbedding::new(
-            forward_homogeneous(node_features, &self.layers, neighbors)?
+            forward_homogeneous(node_features, &self.layers, neighbors, &self.config.backend)?
                 .representations
                 .last()
                 .expect("cache must include final embeddings")
@@ -599,11 +620,16 @@ impl GraphSageEncoder {
             graph.neighbors().to_vec()
         };
         Ok(GraphSageEmbedding::new(
-            forward_homogeneous(node_features, &self.layers, &neighbors)?
-                .representations
-                .last()
-                .expect("cache must include final embeddings")
-                .clone(),
+            forward_homogeneous(
+                node_features,
+                &self.layers,
+                &neighbors,
+                &self.config.backend,
+            )?
+            .representations
+            .last()
+            .expect("cache must include final embeddings")
+            .clone(),
         ))
     }
 
@@ -756,7 +782,12 @@ impl HeteroGraphSageEncoder {
         };
 
         for _ in 0..self.config.epochs {
-            let cache = forward_hetero(node_features, &self.layers, &neighbors)?;
+            let cache = forward_hetero(
+                node_features,
+                &self.layers,
+                &neighbors,
+                &self.config.backend,
+            )?;
             let mut grad = vec![vec![0.0_f32; self.output_dim]; node_count];
 
             let loss = if graph.edges().is_empty() {
@@ -789,11 +820,16 @@ impl HeteroGraphSageEncoder {
         }
 
         Ok(GraphSageEmbedding::new(
-            forward_hetero(node_features, &self.layers, &neighbors)?
-                .representations
-                .last()
-                .expect("cache must include final embeddings")
-                .clone(),
+            forward_hetero(
+                node_features,
+                &self.layers,
+                &neighbors,
+                &self.config.backend,
+            )?
+            .representations
+            .last()
+            .expect("cache must include final embeddings")
+            .clone(),
         ))
     }
 
@@ -813,7 +849,7 @@ impl HeteroGraphSageEncoder {
             .filter(|neighbors| neighbors.len() == node_count)
             .unwrap_or(&fallback_neighbors);
         Ok(GraphSageEmbedding::new(
-            forward_hetero(node_features, &self.layers, neighbors)?
+            forward_hetero(node_features, &self.layers, neighbors, &self.config.backend)?
                 .representations
                 .last()
                 .expect("cache must include final embeddings")
@@ -831,11 +867,16 @@ impl HeteroGraphSageEncoder {
             return Ok(GraphSageEmbedding::new(node_features.to_vec()));
         }
         Ok(GraphSageEmbedding::new(
-            forward_hetero(node_features, &self.layers, graph.neighbors())?
-                .representations
-                .last()
-                .expect("cache must include final embeddings")
-                .clone(),
+            forward_hetero(
+                node_features,
+                &self.layers,
+                graph.neighbors(),
+                &self.config.backend,
+            )?
+            .representations
+            .last()
+            .expect("cache must include final embeddings")
+            .clone(),
         ))
     }
 
@@ -909,6 +950,7 @@ impl HinSageEncoder {
             negative_samples: config.negative_samples,
             seed: config.seed,
             l2_regularization: config.l2_regularization,
+            backend: config.backend.clone(),
         };
         let inner = HeteroGraphSageEncoder::new(inner_config, input_dim, relation_count)?;
         Ok(Self {
@@ -1175,6 +1217,7 @@ fn forward_homogeneous(
     node_features: &[Vec<f32>],
     layers: &[GraphSageLayer],
     neighbors: &[Vec<usize>],
+    backend: &BackendSelection,
 ) -> Result<GraphSageForwardCache> {
     if node_features.is_empty() {
         return Ok(GraphSageForwardCache {
@@ -1208,26 +1251,24 @@ fn forward_homogeneous(
             })
             .collect::<Vec<_>>();
 
-        let mut preactivations = vec![vec![0.0_f32; layer.out_dim]; node_features.len()];
-        let mut next = vec![vec![0.0_f32; layer.out_dim]; node_features.len()];
-        preactivations
-            .par_iter_mut()
-            .zip(next.par_iter_mut())
-            .enumerate()
-            .for_each(|(node, (pre_row, next_row))| {
-                for out in 0..layer.out_dim {
-                    let mut value = layer.bias[out];
-                    for input_index in 0..layer.in_dim {
-                        let self_value = current[node][input_index];
-                        let neigh_value = means[node][input_index];
-                        let self_pos = input_index * layer.out_dim + out;
-                        value += self_value * layer.self_weight[self_pos];
-                        value += neigh_value * layer.neigh_weight[self_pos];
-                    }
-                    pre_row[out] = value;
-                    next_row[out] = if value > 0.0 { value } else { 0.0 };
-                }
-            });
+        let combined = current
+            .iter()
+            .zip(&means)
+            .map(|(self_row, mean_row)| {
+                let mut row = Vec::with_capacity(layer.in_dim * 2);
+                row.extend_from_slice(self_row);
+                row.extend_from_slice(mean_row);
+                row
+            })
+            .collect::<Vec<_>>();
+        let mut weights = Vec::with_capacity(layer.in_dim * layer.out_dim * 2);
+        weights.extend_from_slice(&layer.self_weight);
+        weights.extend_from_slice(&layer.neigh_weight);
+        let preactivations = backend_dense_layer_f32(backend, &combined, &weights, &layer.bias)?;
+        let next = preactivations
+            .par_iter()
+            .map(|row| row.iter().map(|value| value.max(0.0)).collect::<Vec<_>>())
+            .collect::<Vec<_>>();
 
         let current = current.to_vec();
         representations.push(next);
@@ -1248,6 +1289,7 @@ fn forward_hetero(
     node_features: &[Vec<f32>],
     layers: &[HeteroGraphSageLayer],
     neighbors: &[Vec<Vec<usize>>],
+    backend: &BackendSelection,
 ) -> Result<HeteroForwardCache> {
     if node_features.is_empty() {
         return Ok(HeteroForwardCache {
@@ -1299,30 +1341,28 @@ fn forward_hetero(
                 }
             });
 
-        let mut preactivations = vec![vec![0.0_f32; layer.out_dim]; node_features.len()];
-        let mut next = vec![vec![0.0_f32; layer.out_dim]; node_features.len()];
-
-        preactivations
-            .par_iter_mut()
-            .zip(next.par_iter_mut())
-            .enumerate()
-            .for_each(|(node, (pre_row, next_row))| {
-                for out in 0..layer.out_dim {
-                    let mut value = layer.bias[out];
-                    for index in 0..layer.in_dim {
-                        value +=
-                            current[node][index] * layer.self_weight[index * layer.out_dim + out];
-                        for (relation, means_by_relation) in
-                            relation_means[node].iter().enumerate().take(relation_count)
-                        {
-                            value += means_by_relation[index]
-                                * layer.relation_weights[relation][index * layer.out_dim + out];
-                        }
-                    }
-                    pre_row[out] = value;
-                    next_row[out] = if value > 0.0 { value } else { 0.0 };
+        let combined = current
+            .iter()
+            .zip(&relation_means)
+            .map(|(self_row, relation_rows)| {
+                let mut row = Vec::with_capacity(layer.in_dim * (relation_count + 1));
+                row.extend_from_slice(self_row);
+                for relation_row in relation_rows.iter().take(relation_count) {
+                    row.extend_from_slice(relation_row);
                 }
-            });
+                row
+            })
+            .collect::<Vec<_>>();
+        let mut weights = Vec::with_capacity(layer.in_dim * layer.out_dim * (relation_count + 1));
+        weights.extend_from_slice(&layer.self_weight);
+        for relation_weight in layer.relation_weights.iter().take(relation_count) {
+            weights.extend_from_slice(relation_weight);
+        }
+        let preactivations = backend_dense_layer_f32(backend, &combined, &weights, &layer.bias)?;
+        let next = preactivations
+            .par_iter()
+            .map(|row| row.iter().map(|value| value.max(0.0)).collect::<Vec<_>>())
+            .collect::<Vec<_>>();
 
         let current = current.to_vec();
         representations.push(next);

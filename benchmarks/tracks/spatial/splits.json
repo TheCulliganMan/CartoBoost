@@ -1,5 +1,59 @@
 {
   "splits": [
-    {"id": "random_and_pickup_zone_holdout_3seed", "kind": "repeated_random_plus_pickup_zone_holdout", "outer_folds": 2, "seeds": "benchmark_seeds", "hpo_scope": "fixed_settings_no_hpo"}
+    {
+      "id": "pickup_zone_group_cv_manifest_v1",
+      "kind": "group_spatial_cv",
+      "outer_folds": 5,
+      "seeds": "benchmark_seeds",
+      "hpo_scope": "fixed_settings_no_hpo",
+      "coordinate_crs_note": "NYC TLC taxi zone geometry, projected before distance-based validation",
+      "split_manifest_hash": "sha256:pending_real_run_manifest_hash",
+      "random_row_split_allowed": false,
+      "diagnostic_random_split": "random_row_split_diagnostic_only"
+    },
+    {
+      "id": "pickup_zone_buffered_cv_manifest_v1",
+      "kind": "buffered_spatial_cv",
+      "outer_folds": 5,
+      "seeds": "benchmark_seeds",
+      "hpo_scope": "fixed_settings_no_hpo",
+      "coordinate_crs_note": "NYC TLC taxi zone centroids, projected before applying buffer distance",
+      "split_manifest_hash": "sha256:pending_real_run_manifest_hash",
+      "random_row_split_allowed": false,
+      "diagnostic_random_split": "random_row_split_diagnostic_only"
+    },
+    {
+      "id": "epa_monitor_buffered_cv_manifest_v1",
+      "kind": "buffered_spatial_cv",
+      "outer_folds": 5,
+      "seeds": "benchmark_seeds",
+      "hpo_scope": "train_validation_only",
+      "coordinate_crs_note": "EPA monitor latitude/longitude projected to an equal-area CRS before applying buffer distance",
+      "split_manifest_hash": "sha256:pending_real_run_manifest_hash",
+      "random_row_split_allowed": false,
+      "diagnostic_random_split": "random_row_split_diagnostic_only"
+    },
+    {
+      "id": "synthetic_field_spatial_block_manifest_v1",
+      "kind": "spatial_block_cv",
+      "outer_folds": 5,
+      "seeds": "benchmark_seeds",
+      "hpo_scope": "train_validation_only",
+      "coordinate_crs_note": "Generated planar coordinates with fixed block assignment manifest",
+      "split_manifest_hash": "sha256:pending_generated_manifest_hash",
+      "random_row_split_allowed": false,
+      "diagnostic_random_split": "random_row_split_diagnostic_only"
+    },
+    {
+      "id": "geo_causal_panel_rolling_origin_manifest_v1",
+      "kind": "rolling_origin_panel_split",
+      "outer_folds": 5,
+      "seeds": "benchmark_seeds",
+      "hpo_scope": "past_train_validation_only",
+      "coordinate_crs_note": "Generated panel unit centroids with time-ordered train, validation, and post-treatment windows",
+      "split_manifest_hash": "sha256:pending_generated_manifest_hash",
+      "random_row_split_allowed": false,
+      "diagnostic_random_split": "placebo_periods_only"
+    }
   ]
 }

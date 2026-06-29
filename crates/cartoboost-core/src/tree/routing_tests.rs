@@ -237,6 +237,7 @@ fn dense_predict_errors_for_sparse_list_model() {
         feature_schema: None,
         target_name: None,
         training_config: None,
+        training_history: Vec::new(),
         prediction_transform: super::PredictionTransform::Identity,
         trees: vec![Tree {
             root: Node::Branch {
@@ -281,6 +282,7 @@ fn sparse_list_save_load_prediction_identity() {
         feature_schema: Some(x.feature_schema_or_default()),
         target_name: None,
         training_config: None,
+        training_history: Vec::new(),
         prediction_transform: super::PredictionTransform::Identity,
         trees: vec![Tree {
             root: Node::Branch {
@@ -325,6 +327,7 @@ fn flat_axis_predictor_matches_dataset_prediction_and_validates_inputs() {
         feature_schema: None,
         target_name: None,
         training_config: None,
+        training_history: Vec::new(),
         prediction_transform: super::PredictionTransform::Identity,
         trees: vec![
             Tree {
@@ -404,6 +407,7 @@ fn flat_additive_predictions_sum_to_flat_predictions() {
         feature_schema: None,
         target_name: None,
         training_config: None,
+        training_history: Vec::new(),
         prediction_transform: super::PredictionTransform::Identity,
         trees: vec![Tree {
             root: Node::Branch {
@@ -449,6 +453,7 @@ fn flat_sparse_list_prediction_validates_offsets_and_matches_dataset_prediction(
         feature_schema: None,
         target_name: None,
         training_config: None,
+        training_history: Vec::new(),
         prediction_transform: super::PredictionTransform::Identity,
         trees: vec![Tree {
             root: Node::Branch {

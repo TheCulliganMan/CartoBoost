@@ -8,6 +8,13 @@ direct graph structure, or learned ID embeddings.
 Use the model whose assumptions match the unit being predicted. Then compare it
 against simpler baselines under the same split before interpreting a gain.
 
+For automated routing, use `cartoboost.models.ModelRegistry` to inspect the
+stable model families and `cartoboost.AutoGeoModel` when the input may contain
+coordinates, graph structure, panel ids, time indexes, sparse targets, or
+leakage constraints. The selector starts with cheap baselines, escalates only
+when the required structure exists, and refuses random row CV for spatial
+claims.
+
 ## Start With The Scientific Unit
 
 | Question | Use | Primary guide |
@@ -16,16 +23,67 @@ against simpler baselines under the same split before interpreting a gain.
 | Is the target a class label? | `cartoboost.CartoBoostClassifier` | [CartoBoost Classifier](boosting-models/cartoboost-classifier.md) |
 | Are rows grouped and need within-group ordering? | `cartoboost.CartoBoostRanker` | [CartoBoost Ranker](boosting-models/cartoboost-ranker.md) |
 | Are you choosing how place, time, sparse memberships, losses, fuzzy routing, or local residual trends enter that row-level model? | `CartoBoostRegressor` parameters | [Parameters](parameters.md) |
+| Do you need an interpretable sparse-neighbor regression baseline for areal units, trade areas, zones, or route cells? | `SpatialLagRegressor`, `SpatialErrorRegressor`, `SpatialDurbinRegressor` | [Spatial Econometrics Models](spatial-econometrics.md) |
 | Is the target one regular time series with its own history? | Local forecasters such as `SeasonalNaiveForecaster`, `ThetaForecaster`, `ETSForecaster`, `AutoARIMAForecaster`, or `KalmanForecaster` | [CartoBoost Forecasting Model Guides](forecasting-models/index.md) |
 | Are many related series forecast from shared lag features? | `CartoBoostLagForecaster` | [CartoBoost Lag](forecasting-models/cartoboost-lag.md) |
+| Are road, lane, sensor, or zone-flow series connected by a directed graph? | `DCRNNForecaster` with `GraphTemporalFrame` | [Graph Spatiotemporal Forecasting](forecasting-models/graph-spatiotemporal.md) |
 | Should nearby coordinates borrow signal for a forecast panel? | `KrigingForecaster` | [Kriging](forecasting-models/kriging.md) |
+| Do point observations need scalable GP interpolation with uncertainty? | `NearestNeighborGPRegressor` or `SpatialGaussianProcessRegressor` | [Scalable GP Geostatistics](geostatistics-models.md) |
+| Should a base tabular model get a probabilistic spatial residual correction? | `ResidualNNGPRegressor` | [Scalable GP Geostatistics](geostatistics-models.md) |
 | Should temporal changepoints and seasonality be fused with cutoff-safe spatial kriging? | `SpatialPiecewiseKrigingForecaster` | [Spatial Piecewise Kriging](forecasting-models/spatial-piecewise-kriging.md) |
+| Are you estimating intervention lift or designing a geographic experiment rather than forecasting? | `SyntheticDIDEstimator`, `GeoLiftEstimator`, `GeoExperimentDesigner`, or `SpatialPlaceboTester` | [Geo-Causal Experiment Models](geo-causal-models.md) |
 | Should a neural panel forecaster preserve directional entity identity? | `NeuralPanelForecaster` or `LaneNeuralPanelForecaster` | [Neural Panel](forecasting-models/neural-panel.md) |
+| Do you need generic ordered-pair, response-curve, event, residual, graph-sequence, or constrained candidate models? | `cartoboost.deep.*` | [Generic Deep Models](deep-models.md) |
 | Do you need a fixed combination of fitted forecasters? | `WeightedEnsembleForecaster` | [Weighted Ensembles](forecasting-models/ensembles.md) |
 | Are stable ids themselves the learned artifact? | `NeuralEmbeddingStandaloneRegressor` | [CartoBoost Neural Embedding Regressor](neural-models/cartoboost-neural-embedding.md) |
 | Is the relationship network the object being modeled? | Graph models | [CartoBoost Graph Model Guides](graph-models/index.md) |
 | Do graph or neural embeddings only need to become columns for another estimator? | `GraphFeatureTransformer`, `NeuralEmbeddingFeatures`, or `NeuralEmbeddingRegressor` | [Graph Features](../graph-features.md), [Neural Features](../neural-features.md) |
 | Do you need one-off forecast or spatial utilities? | Functions such as `theta_forecast`, `kalman_filter`, or `ordinary_kriging_predict` | [General Utilities](../general_utilities.md) |
+
+## Unified Model Registry
+
+`cartoboost.models.ModelRegistry.defaults()` describes the stable public model
+surfaces under the namespaces `cartoboost.models`, `cartoboost.forecasting`,
+`cartoboost.geo`, `cartoboost.graph`, `cartoboost.causal`, and
+`cartoboost.prob`. Each spec carries typed metadata: model name, namespace,
+task types, capabilities, stability, artifact format, and optional dependency
+notes.
+
+```python
+from cartoboost.models import AutoGeoModel, ModelRegistry, model_card
+
+registry = ModelRegistry.defaults()
+registry.names(namespace="geo")
+
+model = AutoGeoModel(max_escalation_level=1)
+model.fit(
+    X_train,
+    y_train,
+    coords=pickup_xy,
+    validation={"train": train_idx, "holdout": holdout_idx},
+    validation_strategy="spatial_holdout",
+)
+pred = model.predict(X_test, coords=pickup_xy_test)
+card = model_card(model)
+```
+
+Use `AutoGeoModel` when model choice itself is part of the workflow. It records
+which candidates were eligible, which were skipped, the holdout metric, interval
+or calibration diagnostics when present, residual Moran's I when coordinates
+are supplied, and whether the selected artifact can be saved and reloaded
+without prediction drift.
+
+The executable contract for this registry and selector example is checked by
+`scripts/check_docs_examples.py` in CI.
+
+Use `GeoModelStack` when the desired structure is explicit: a tabular booster,
+an optional residual kriging or NNGP layer, an optional graph residual layer,
+and an optional conformal interval layer. Its layer explanation reports which
+component changed the point metric and which component adds calibration rather
+than point accuracy.
+
+Experimental research adapters live under `cartoboost.experimental`. They are
+not registered as stable models and require an explicit backend before fitting.
 
 ## When CartoBoostRegressor Fits
 
@@ -254,6 +312,7 @@ Choose the model guide by series structure:
 | Coordinate-aware panel interpolation | [Kriging](forecasting-models/kriging.md) |
 | Piecewise temporal structure plus spatial residual or regressor kriging | [Spatial Piecewise Kriging](forecasting-models/spatial-piecewise-kriging.md) |
 | Shared supervised lag model across many series | [CartoBoost Lag](forecasting-models/cartoboost-lag.md) |
+| Directed graph sequence forecasting | [Graph Spatiotemporal Forecasting](forecasting-models/graph-spatiotemporal.md) |
 | Directional neural panel forecasting | [Neural Panel](forecasting-models/neural-panel.md) |
 | Reusable statistical expert-bank selection | `AutoStatsBank` |
 | Guarded default selector over forecast candidates | [AutoForecaster](forecasting-models/auto-forecaster.md) |

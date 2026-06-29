@@ -4,6 +4,8 @@
     {"model_family": "cartoboost_graph", "budget": "standard", "parameters": ["graph_encoder", "embedding_dim", "walk_length", "n_estimators", "learning_rate", "max_depth"]},
     {"model_family": "node2vec_baseline", "budget": "standard", "parameters": ["embedding_dim", "walk_length", "context_size", "epochs", "downstream_regressor"]},
     {"model_family": "graphsage_baseline", "budget": "standard", "parameters": ["layers", "hidden_dim", "dropout", "learning_rate", "weight_decay"]},
+    {"model_family": "pytorch_geometric_temporal_baseline", "budget": "standard", "parameters": ["architecture", "hidden_dim", "layers", "learning_rate", "weight_decay", "horizon"], "external_dependencies": ["torch", "torch-geometric", "torch-geometric-temporal"], "install_hint": "Install PyTorch and PyG wheels matching the benchmark runner platform before enabling this baseline."},
+    {"model_family": "dcrnn_baseline", "budget": "standard", "parameters": ["hidden_dim", "diffusion_steps", "encoder_layers", "decoder_layers", "learning_rate", "horizon"], "external_dependencies": ["torch", "torch-geometric", "torch-geometric-temporal"], "install_hint": "Install PyTorch and PyG wheels matching the benchmark runner platform before enabling this baseline."},
     {"model_family": "tabularized_graph_baseline", "budget": "standard", "parameters": ["graph_features", "gbdt_parameters"]},
     {"model_family": "mean", "budget": "fixed", "parameters": []}
   ]

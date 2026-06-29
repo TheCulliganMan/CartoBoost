@@ -31,13 +31,41 @@ use cartoboost_core::objectives::{
 use cartoboost_core::tree::{Node, Split, SplitterKind};
 use cartoboost_core::Booster;
 use cartoboost_core::{CartoBoostError, Result};
+use cartoboost_geo_causal::{
+    GeoCausalPanel, GeoCausalRow, SpatialWeight, SyntheticDIDConfig,
+    SyntheticDIDEstimator as CoreSyntheticDIDEstimator,
+};
+use cartoboost_geo_core::{
+    clockwise_bearing_unit_vector, initial_bearing_unit_vector_latlng, local_frame_features,
+    radial_anchor_distances, rbf_anchor_features, route_feature_vector,
+    SplitManifest as GeoCoreSplitManifest,
+};
+use cartoboost_geo_st::{
+    graph_metrics as graph_st_metrics, select_compute_backend as graph_st_select_backend,
+    CsrAdjacency as GraphStCsrAdjacency, DcrnnConfig as GraphStDcrnnConfig,
+    DcrnnForecaster as GraphStDcrnnForecaster, GraphTemporalFrame as GraphStTemporalFrame,
+};
+use cartoboost_geostats::{
+    Anisotropy as GeostatsAnisotropy, CovarianceKernel,
+    NearestNeighborGPRegressor as WasmNearestNeighborGPRegressor, NngpConfig,
+};
 use cartoboost_neural::{
-    ArtifactFallbackKind, ComponentMode as NeuralComponentMode, GraphSageConfig,
-    GraphSageRegressor, HeteroGraphSageConfig, HeteroGraphSageRegressor, HinSageConfig,
-    HinSageRegressor, NBeatsConfig, NBeatsForecaster, NHiTSConfig, NHiTSForecaster,
-    NeuralEmbeddingRegressor, NeuralPanelConfig, NeuralPanelForecaster, NeuralPanelLoss,
-    NeuralPanelMode, Node2VecConfig, Node2VecRegressor, StandaloneBoosterConfig,
-    TrendMode as NeuralTrendMode,
+    available_backends as deep_available_backends,
+    constrained_decision_select as deep_constrained_decision_select,
+    directional_pair_predictions as deep_directional_pair_predictions,
+    event_outcome_fit_with_backend as deep_event_outcome_fit,
+    event_outcome_predict as deep_event_outcome_predict,
+    response_curve_fit_with_backend as deep_response_curve_fit,
+    response_curve_predict as deep_response_curve_predict,
+    service_residual_fit_with_backend as deep_service_residual_fit,
+    service_residual_predict as deep_service_residual_predict, ArtifactFallbackKind,
+    BackendSelection, ComponentMode as NeuralComponentMode, DeepDirectionalPairRow,
+    DeepEventArtifact, DeepResponseArtifact, DeepResponseRow, DeepServiceResidualArtifact,
+    DeepServiceResidualRow, GraphSageConfig, GraphSageRegressor, HeteroGraphSageConfig,
+    HeteroGraphSageRegressor, HinSageConfig, HinSageRegressor, NBeatsConfig, NBeatsForecaster,
+    NHiTSConfig, NHiTSForecaster, NeuralEmbeddingRegressor, NeuralPanelConfig,
+    NeuralPanelForecaster, NeuralPanelLoss, NeuralPanelMode, Node2VecConfig, Node2VecRegressor,
+    StandaloneBoosterConfig, TrendMode as NeuralTrendMode,
 };
 use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
@@ -198,6 +226,41 @@ struct BrowserGeotemporalDiagnosticsRequest {
     residual_correction: Option<BrowserResidualCorrectionRequest>,
     regime: Option<BrowserRegimeDiagnosticsRequest>,
     calibration: Option<BrowserCalibrationRequest>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserGeoCausalRequest {
+    rows: Vec<BrowserGeoCausalRow>,
+    intervention_time: String,
+    #[serde(default = "default_seed")]
+    seed: u64,
+    #[serde(default)]
+    placebo_n: usize,
+    #[serde(default)]
+    spatial_weights: Vec<BrowserSpatialWeight>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserGeoCausalRow {
+    unit_id: String,
+    time: String,
+    outcome: f64,
+    treatment: bool,
+    #[serde(default)]
+    covariates: BTreeMap<String, f64>,
+    latitude: Option<f64>,
+    longitude: Option<f64>,
+    region_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserSpatialWeight {
+    from_unit: String,
+    to_unit: String,
+    weight: f64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -687,6 +750,255 @@ struct BrowserForecastModel {
     pipeline: &'static str,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserGeostatsRequest {
+    observations: Vec<BrowserGeostatsObservation>,
+    targets: Vec<BrowserGeostatsTarget>,
+    #[serde(default)]
+    options: BrowserGeostatsOptions,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserGeostatsObservation {
+    x: f64,
+    y: f64,
+    value: f64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserGeostatsTarget {
+    x: f64,
+    y: f64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserGeostatsOptions {
+    #[serde(default = "default_geostats_kernel")]
+    kernel: String,
+    #[serde(default = "default_geostats_range")]
+    range: f64,
+    #[serde(default = "default_geostats_sill")]
+    sill: f64,
+    #[serde(default = "default_geostats_nugget")]
+    nugget: f64,
+    #[serde(default = "default_geostats_neighbors")]
+    n_neighbors: usize,
+    #[serde(default)]
+    anisotropy_angle_degrees: f64,
+    #[serde(default = "default_geostats_anisotropy_scaling")]
+    anisotropy_scaling: f64,
+}
+
+impl Default for BrowserGeostatsOptions {
+    fn default() -> Self {
+        Self {
+            kernel: default_geostats_kernel(),
+            range: default_geostats_range(),
+            sill: default_geostats_sill(),
+            nugget: default_geostats_nugget(),
+            n_neighbors: default_geostats_neighbors(),
+            anisotropy_angle_degrees: 0.0,
+            anisotropy_scaling: default_geostats_anisotropy_scaling(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserGeostatsResponse {
+    predictions: Vec<BrowserGeostatsPrediction>,
+    metadata: Value,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserGeostatsPrediction {
+    x: f64,
+    y: f64,
+    mean: f64,
+    variance: f64,
+    std: f64,
+    neighbor_indices: Vec<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserGeoFeatureRequest {
+    #[serde(default)]
+    planar_routes: Vec<BrowserPlanarRoute>,
+    #[serde(default)]
+    latlng_routes: Vec<BrowserLatLngRoute>,
+    #[serde(default)]
+    radial_points: Vec<BrowserNamedPoint>,
+    #[serde(default)]
+    anchors: Vec<BrowserNamedPoint>,
+    #[serde(default = "default_geo_feature_length_scale")]
+    length_scale: f64,
+    #[serde(default)]
+    local_frame: Option<BrowserLocalFrame>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserPlanarRoute {
+    label: String,
+    origin: [f64; 2],
+    destination: [f64; 2],
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserLatLngRoute {
+    label: String,
+    origin: [f64; 2],
+    destination: [f64; 2],
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserNamedPoint {
+    label: String,
+    point: [f64; 2],
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserLocalFrame {
+    origin: [f64; 2],
+    axis: [f64; 2],
+    points: Vec<BrowserNamedPoint>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserGeoFeatureResponse {
+    planar: Vec<BrowserBearingFeature>,
+    latlng: Vec<BrowserBearingFeature>,
+    routes: Vec<BrowserRouteFeature>,
+    radial: Vec<BrowserAnchorFeatureRow>,
+    rbf: Vec<BrowserAnchorFeatureRow>,
+    local_frame: Vec<BrowserLocalFrameFeature>,
+    metadata: Value,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserBearingFeature {
+    label: String,
+    east: Option<f64>,
+    north: Option<f64>,
+    zero_distance: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserRouteFeature {
+    label: String,
+    mid_x: Option<f64>,
+    mid_y: Option<f64>,
+    distance: Option<f64>,
+    bearing_east: Option<f64>,
+    bearing_north: Option<f64>,
+    zero_distance: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserAnchorFeatureRow {
+    label: String,
+    values: Vec<f64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserLocalFrameFeature {
+    label: String,
+    along_axis: Option<f64>,
+    cross_axis: Option<f64>,
+    invalid_axis: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserGraphForecastRequest {
+    frame: BrowserGraphTemporalFrame,
+    #[serde(default)]
+    options: BrowserGraphForecastOptions,
+    #[serde(default)]
+    actual: Option<Vec<Vec<f64>>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserGraphTemporalFrame {
+    node_ids: Vec<String>,
+    timestamps: Vec<i64>,
+    target: Vec<Vec<f64>>,
+    adjacency: BrowserCsrAdjacency,
+    horizon: usize,
+    frequency: String,
+    #[serde(default)]
+    covariates: Option<Vec<Vec<Vec<f64>>>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserCsrAdjacency {
+    indptr: Vec<usize>,
+    indices: Vec<usize>,
+    data: Vec<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserGraphForecastOptions {
+    #[serde(default = "default_graph_diffusion_steps")]
+    diffusion_steps: usize,
+    #[serde(default = "default_graph_hidden_size")]
+    hidden_size: usize,
+    #[serde(default = "default_graph_epochs")]
+    epochs: usize,
+    #[serde(default = "default_graph_learning_rate")]
+    learning_rate: f64,
+    #[serde(default = "default_graph_teacher_forcing_start")]
+    teacher_forcing_start: f64,
+    #[serde(default = "default_graph_teacher_forcing_end")]
+    teacher_forcing_end: f64,
+    #[serde(default = "default_graph_ridge")]
+    ridge: f64,
+    #[serde(default = "default_backend")]
+    backend: String,
+}
+
+impl Default for BrowserGraphForecastOptions {
+    fn default() -> Self {
+        Self {
+            diffusion_steps: default_graph_diffusion_steps(),
+            hidden_size: default_graph_hidden_size(),
+            epochs: default_graph_epochs(),
+            learning_rate: default_graph_learning_rate(),
+            teacher_forcing_start: default_graph_teacher_forcing_start(),
+            teacher_forcing_end: default_graph_teacher_forcing_end(),
+            ridge: default_graph_ridge(),
+            backend: default_backend(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserGraphForecastResponse {
+    predictions: Vec<Vec<f64>>,
+    node_ids: Vec<String>,
+    horizon: usize,
+    metrics: Option<Value>,
+    metadata: Value,
+}
+
 #[wasm_bindgen(js_name = runForecast)]
 pub fn run_forecast(request: JsValue) -> std::result::Result<JsValue, JsValue> {
     console_error_panic_hook::set_once();
@@ -695,6 +1007,142 @@ pub fn run_forecast(request: JsValue) -> std::result::Result<JsValue, JsValue> {
     let response =
         run_forecast_request(request).map_err(|error| JsValue::from_str(&error.to_string()))?;
     serialize_json_response(&response, "forecast response")
+}
+
+#[wasm_bindgen(js_name = runGraphForecast)]
+pub fn run_graph_forecast(request: JsValue) -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    let request: BrowserGraphForecastRequest = serde_wasm_bindgen::from_value(request)
+        .map_err(|error| JsValue::from_str(&format!("invalid graph forecast request: {error}")))?;
+    let response = run_graph_forecast_request(request)
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    serialize_json_response(&response, "graph forecast response")
+}
+
+#[wasm_bindgen(js_name = deepResponseCurveFit)]
+pub fn deep_response_curve_fit_wasm(
+    rows: JsValue,
+    response_type: String,
+    monotone: Option<String>,
+    backend: Option<String>,
+) -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    let rows: Vec<DeepResponseRow> = serde_wasm_bindgen::from_value(rows)
+        .map_err(|error| JsValue::from_str(&format!("invalid response rows: {error}")))?;
+    let artifact = deep_response_curve_fit(
+        &rows,
+        &response_type,
+        monotone.as_deref(),
+        backend.as_deref(),
+    )
+    .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    serialize_json_response(&artifact, "deep response artifact")
+}
+
+#[wasm_bindgen(js_name = deepResponseCurvePredict)]
+pub fn deep_response_curve_predict_wasm(
+    artifact: JsValue,
+    rows: JsValue,
+) -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    let artifact: DeepResponseArtifact = serde_wasm_bindgen::from_value(artifact)
+        .map_err(|error| JsValue::from_str(&format!("invalid response artifact: {error}")))?;
+    let rows: Vec<DeepResponseRow> = serde_wasm_bindgen::from_value(rows)
+        .map_err(|error| JsValue::from_str(&format!("invalid response rows: {error}")))?;
+    let predictions = deep_response_curve_predict(&artifact, &rows)
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    serialize_json_response(&predictions, "deep response predictions")
+}
+
+#[wasm_bindgen(js_name = deepEventOutcomeFit)]
+pub fn deep_event_outcome_fit_wasm(
+    features: JsValue,
+    labels: Vec<f64>,
+    backend: Option<String>,
+) -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    let features: Vec<Vec<f64>> = serde_wasm_bindgen::from_value(features)
+        .map_err(|error| JsValue::from_str(&format!("invalid event features: {error}")))?;
+    let artifact = deep_event_outcome_fit(&features, &labels, backend.as_deref())
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    serialize_json_response(&artifact, "deep event artifact")
+}
+
+#[wasm_bindgen(js_name = deepEventOutcomePredict)]
+pub fn deep_event_outcome_predict_wasm(
+    artifact: JsValue,
+    features: JsValue,
+) -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    let artifact: DeepEventArtifact = serde_wasm_bindgen::from_value(artifact)
+        .map_err(|error| JsValue::from_str(&format!("invalid event artifact: {error}")))?;
+    let features: Vec<Vec<f64>> = serde_wasm_bindgen::from_value(features)
+        .map_err(|error| JsValue::from_str(&format!("invalid event features: {error}")))?;
+    let predictions = deep_event_outcome_predict(&artifact, &features)
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    serialize_json_response(&predictions, "deep event predictions")
+}
+
+#[wasm_bindgen(js_name = deepDirectionalPairPredict)]
+pub fn deep_directional_pair_predict_wasm(rows: JsValue) -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    let rows: Vec<DeepDirectionalPairRow> = serde_wasm_bindgen::from_value(rows)
+        .map_err(|error| JsValue::from_str(&format!("invalid pair rows: {error}")))?;
+    let predictions = deep_directional_pair_predictions(&rows)
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    serialize_json_response(&predictions, "deep directional pair predictions")
+}
+
+#[wasm_bindgen(js_name = deepServiceResidualFit)]
+pub fn deep_service_residual_fit_wasm(
+    rows: JsValue,
+    backend: Option<String>,
+) -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    let rows: Vec<DeepServiceResidualRow> = serde_wasm_bindgen::from_value(rows)
+        .map_err(|error| JsValue::from_str(&format!("invalid residual rows: {error}")))?;
+    let artifact = deep_service_residual_fit(&rows, backend.as_deref())
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    serialize_json_response(&artifact, "deep service residual artifact")
+}
+
+#[wasm_bindgen(js_name = availableDeepBackends)]
+pub fn available_deep_backends_wasm() -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    serialize_json_response(&deep_available_backends(), "available deep backends")
+}
+
+#[wasm_bindgen(js_name = deepServiceResidualPredict)]
+pub fn deep_service_residual_predict_wasm(
+    artifact: JsValue,
+    rows: JsValue,
+) -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    let artifact: DeepServiceResidualArtifact = serde_wasm_bindgen::from_value(artifact)
+        .map_err(|error| JsValue::from_str(&format!("invalid residual artifact: {error}")))?;
+    let rows: Vec<DeepServiceResidualRow> = serde_wasm_bindgen::from_value(rows)
+        .map_err(|error| JsValue::from_str(&format!("invalid residual rows: {error}")))?;
+    let predictions = deep_service_residual_predict(&artifact, &rows)
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    serialize_json_response(&predictions, "deep service residual predictions")
+}
+
+#[wasm_bindgen(js_name = deepConstrainedDecisionSelect)]
+pub fn deep_constrained_decision_select_wasm(
+    candidates: JsValue,
+    objective: String,
+    constraints: JsValue,
+    fallback: String,
+) -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    let candidates: Vec<BTreeMap<String, Value>> = serde_wasm_bindgen::from_value(candidates)
+        .map_err(|error| JsValue::from_str(&format!("invalid decision candidates: {error}")))?;
+    let constraints: BTreeMap<String, f64> = serde_wasm_bindgen::from_value(constraints)
+        .map_err(|error| JsValue::from_str(&format!("invalid decision constraints: {error}")))?;
+    let choices =
+        deep_constrained_decision_select(&candidates, &objective, &constraints, &fallback)
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    serialize_json_response(&choices, "deep decision choices")
 }
 
 #[wasm_bindgen(js_name = fitPiecewiseLinearSeasonalArtifact)]
@@ -808,12 +1256,60 @@ pub fn run_geotemporal_diagnostics(request: JsValue) -> std::result::Result<JsVa
     })
 }
 
+#[wasm_bindgen(js_name = runGeoCausalExperiment)]
+pub fn run_geo_causal_experiment(request: JsValue) -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    let request: BrowserGeoCausalRequest = serde_wasm_bindgen::from_value(request)
+        .map_err(|error| JsValue::from_str(&format!("invalid geo-causal request: {error}")))?;
+    let response =
+        run_geo_causal_request(request).map_err(|error| JsValue::from_str(&error.to_string()))?;
+    let serializer = serde_wasm_bindgen::Serializer::json_compatible();
+    response.serialize(&serializer).map_err(|error| {
+        JsValue::from_str(&format!("could not encode geo-causal response: {error}"))
+    })
+}
+
+#[wasm_bindgen(js_name = runGeostatisticsModel)]
+pub fn run_geostatistics_model(request: JsValue) -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    let request: BrowserGeostatsRequest = serde_wasm_bindgen::from_value(request)
+        .map_err(|error| JsValue::from_str(&format!("invalid geostatistics request: {error}")))?;
+    let response = run_geostatistics_request(request)
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    let serializer = serde_wasm_bindgen::Serializer::json_compatible();
+    response.serialize(&serializer).map_err(|error| {
+        JsValue::from_str(&format!("could not encode geostatistics response: {error}"))
+    })
+}
+
+#[wasm_bindgen(js_name = runGeoFeatureExamples)]
+pub fn run_geo_feature_examples(request: JsValue) -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    let request: BrowserGeoFeatureRequest = serde_wasm_bindgen::from_value(request)
+        .map_err(|error| JsValue::from_str(&format!("invalid geo feature request: {error}")))?;
+    let response: BrowserGeoFeatureResponse = run_geo_feature_examples_request(request)
+        .map_err(|error: CartoBoostError| JsValue::from_str(&error.to_string()))?;
+    let serializer = serde_wasm_bindgen::Serializer::json_compatible();
+    response.serialize(&serializer).map_err(|error| {
+        JsValue::from_str(&format!("could not encode geo feature response: {error}"))
+    })
+}
+
 #[wasm_bindgen(js_name = availableForecastModels)]
 pub fn available_forecast_models() -> std::result::Result<JsValue, JsValue> {
     let serializer = serde_wasm_bindgen::Serializer::json_compatible();
     forecast_model_registry()
         .serialize(&serializer)
         .map_err(|error| JsValue::from_str(&format!("could not encode model registry: {error}")))
+}
+
+#[wasm_bindgen(js_name = geoSplitManifestHash)]
+pub fn geo_split_manifest_hash(manifest_json: &str) -> std::result::Result<String, JsValue> {
+    let manifest = GeoCoreSplitManifest::from_json_str(manifest_json)
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    manifest
+        .hash()
+        .map_err(|error| JsValue::from_str(&error.to_string()))
 }
 
 fn forecast_model_registry() -> Vec<BrowserForecastModel> {
@@ -984,6 +1480,305 @@ fn forecast_model_registry() -> Vec<BrowserForecastModel> {
             pipeline: "local",
         },
     ]
+}
+
+fn run_geostatistics_request(request: BrowserGeostatsRequest) -> Result<BrowserGeostatsResponse> {
+    if request.observations.is_empty() {
+        return Err(CartoBoostError::InvalidInput(
+            "geostatistics requires at least one observation".to_string(),
+        ));
+    }
+    if request.targets.is_empty() {
+        return Err(CartoBoostError::InvalidInput(
+            "geostatistics requires at least one target coordinate".to_string(),
+        ));
+    }
+    let coords = request
+        .observations
+        .iter()
+        .map(|row| [row.x, row.y])
+        .collect::<Vec<_>>();
+    let values = request
+        .observations
+        .iter()
+        .map(|row| row.value)
+        .collect::<Vec<_>>();
+    let targets = request
+        .targets
+        .iter()
+        .map(|row| [row.x, row.y])
+        .collect::<Vec<_>>();
+    let options = request.options;
+    let config = NngpConfig {
+        kernel: CovarianceKernel::parse(&options.kernel).map_err(|error| {
+            CartoBoostError::InvalidInput(format!("invalid geostatistics kernel: {error}"))
+        })?,
+        range: options.range,
+        sill: options.sill,
+        nugget: options.nugget,
+        anisotropy: GeostatsAnisotropy {
+            angle_degrees: options.anisotropy_angle_degrees,
+            scaling: options.anisotropy_scaling,
+        },
+        n_neighbors: options.n_neighbors,
+        brute_force_threshold: 2048,
+        duplicate_tolerance: 0.0,
+    };
+    let mut model = WasmNearestNeighborGPRegressor::new(config)
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    model
+        .fit(&coords, &values)
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    let predictions = model
+        .predict(&targets)
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?
+        .into_iter()
+        .zip(request.targets)
+        .map(|(prediction, target)| BrowserGeostatsPrediction {
+            x: target.x,
+            y: target.y,
+            mean: prediction.mean,
+            variance: prediction.variance,
+            std: prediction.variance.max(0.0).sqrt(),
+            neighbor_indices: prediction.neighbor_indices,
+        })
+        .collect();
+    Ok(BrowserGeostatsResponse {
+        predictions,
+        metadata: json!({
+            "model": "nearest_neighbor_gp",
+            "kernel": config.kernel.as_str(),
+            "range": config.range,
+            "sill": config.sill,
+            "nugget": config.nugget,
+            "n_neighbors": config.n_neighbors,
+            "works_without_gpu": true,
+        }),
+    })
+}
+
+fn run_geo_feature_examples_request(
+    request: BrowserGeoFeatureRequest,
+) -> Result<BrowserGeoFeatureResponse> {
+    let anchors = request.anchors;
+    let anchor_points = anchors
+        .iter()
+        .map(|anchor| anchor.point)
+        .collect::<Vec<_>>();
+    let anchor_labels = anchors
+        .iter()
+        .map(|anchor| anchor.label.clone())
+        .collect::<Vec<_>>();
+    let planar = request
+        .planar_routes
+        .iter()
+        .map(|route| {
+            let vector = clockwise_bearing_unit_vector(route.origin, route.destination);
+            BrowserBearingFeature {
+                label: route.label.clone(),
+                east: vector.map(|value| value[0]),
+                north: vector.map(|value| value[1]),
+                zero_distance: vector.is_none(),
+            }
+        })
+        .collect();
+    let latlng = request
+        .latlng_routes
+        .into_iter()
+        .map(|route| {
+            let vector = initial_bearing_unit_vector_latlng(
+                route.origin[0],
+                route.origin[1],
+                route.destination[0],
+                route.destination[1],
+            );
+            BrowserBearingFeature {
+                label: route.label,
+                east: vector.map(|value| value[0]),
+                north: vector.map(|value| value[1]),
+                zero_distance: vector.is_none(),
+            }
+        })
+        .collect();
+    let routes = request
+        .planar_routes
+        .iter()
+        .map(|route| {
+            let vector = route_feature_vector(route.origin, route.destination);
+            BrowserRouteFeature {
+                label: route.label.clone(),
+                mid_x: vector.map(|value| value[0]),
+                mid_y: vector.map(|value| value[1]),
+                distance: vector.map(|value| value[2]),
+                bearing_east: vector.map(|value| value[3]),
+                bearing_north: vector.map(|value| value[4]),
+                zero_distance: vector.is_none(),
+            }
+        })
+        .collect();
+    let radial = request
+        .radial_points
+        .iter()
+        .map(|point| BrowserAnchorFeatureRow {
+            label: point.label.clone(),
+            values: radial_anchor_distances(point.point, &anchor_points),
+        })
+        .collect::<Vec<_>>();
+    let rbf = request
+        .radial_points
+        .iter()
+        .map(|point| {
+            Ok(BrowserAnchorFeatureRow {
+                label: point.label.clone(),
+                values: rbf_anchor_features(point.point, &anchor_points, request.length_scale)
+                    .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let local_frame = request
+        .local_frame
+        .map(|frame| {
+            frame
+                .points
+                .into_iter()
+                .map(|point| {
+                    let vector = local_frame_features(point.point, frame.origin, frame.axis);
+                    BrowserLocalFrameFeature {
+                        label: point.label,
+                        along_axis: vector.map(|value| value[0]),
+                        cross_axis: vector.map(|value| value[1]),
+                        invalid_axis: vector.is_none(),
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(BrowserGeoFeatureResponse {
+        planar,
+        latlng,
+        routes,
+        radial,
+        rbf,
+        local_frame,
+        metadata: json!({
+            "surface": "rust_geo_feature_examples",
+            "bearingEncoding": "(east,north) unit vector",
+            "clockReference": "clockwise from north",
+            "anchorLabels": anchor_labels,
+            "rbfLengthScale": request.length_scale,
+            "zeroDistancePolicy": "null components with zeroDistance=true",
+        }),
+    })
+}
+
+fn default_geo_feature_length_scale() -> f64 {
+    1.0
+}
+
+fn default_geostats_kernel() -> String {
+    "matern_3_2".to_string()
+}
+
+fn default_geostats_range() -> f64 {
+    0.025
+}
+
+fn default_geostats_sill() -> f64 {
+    1.0
+}
+
+fn default_geostats_nugget() -> f64 {
+    1.0e-6
+}
+
+fn default_geostats_neighbors() -> usize {
+    12
+}
+
+fn default_geostats_anisotropy_scaling() -> f64 {
+    1.0
+}
+
+fn default_graph_diffusion_steps() -> usize {
+    2
+}
+
+fn default_graph_hidden_size() -> usize {
+    8
+}
+
+fn default_graph_epochs() -> usize {
+    160
+}
+
+fn default_graph_learning_rate() -> f64 {
+    0.03
+}
+
+fn default_graph_teacher_forcing_start() -> f64 {
+    1.0
+}
+
+fn default_graph_teacher_forcing_end() -> f64 {
+    0.2
+}
+
+fn default_graph_ridge() -> f64 {
+    0.0001
+}
+
+fn default_backend() -> String {
+    "auto".to_string()
+}
+
+fn default_seed() -> u64 {
+    13
+}
+
+fn run_geo_causal_request(request: BrowserGeoCausalRequest) -> Result<Value> {
+    let rows = request
+        .rows
+        .into_iter()
+        .map(|row| GeoCausalRow {
+            unit_id: row.unit_id,
+            time: row.time,
+            outcome: row.outcome,
+            treatment: row.treatment,
+            covariates: row.covariates,
+            latitude: row.latitude,
+            longitude: row.longitude,
+            region_id: row.region_id,
+        })
+        .collect();
+    let spatial_weights = request
+        .spatial_weights
+        .into_iter()
+        .map(|edge| SpatialWeight {
+            from_unit: edge.from_unit,
+            to_unit: edge.to_unit,
+            weight: edge.weight,
+        })
+        .collect();
+    let panel = GeoCausalPanel::new(rows, spatial_weights)
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    let mut estimator = CoreSyntheticDIDEstimator::new(SyntheticDIDConfig {
+        intervention_time: request.intervention_time,
+        seed: request.seed,
+    });
+    estimator
+        .fit(panel)
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    if request.placebo_n > 0 {
+        estimator
+            .placebo_test(request.placebo_n)
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    }
+    serde_json::to_value(
+        estimator
+            .estimate_effect()
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?,
+    )
+    .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))
 }
 
 fn run_geotemporal_diagnostics_request(
@@ -1842,6 +2637,71 @@ fn serialize_json_response<T: Serialize>(
         .map_err(|error| JsValue::from_str(&format!("could not encode {context}: {error}")))?;
     js_sys::JSON::parse(&json)
         .map_err(|error| JsValue::from_str(&format!("could not parse {context}: {error:?}")))
+}
+
+fn run_graph_forecast_request(
+    request: BrowserGraphForecastRequest,
+) -> Result<BrowserGraphForecastResponse> {
+    let adjacency = GraphStCsrAdjacency::new(
+        request.frame.adjacency.indptr,
+        request.frame.adjacency.indices,
+        request.frame.adjacency.data,
+        request.frame.node_ids.len(),
+    )
+    .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    let frame = GraphStTemporalFrame::new(
+        request.frame.node_ids.clone(),
+        request.frame.timestamps,
+        request.frame.target,
+        request.frame.covariates,
+        adjacency.clone(),
+        request.frame.horizon,
+        request.frame.frequency.clone(),
+    )
+    .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    let config = GraphStDcrnnConfig {
+        diffusion_steps: request.options.diffusion_steps,
+        hidden_size: request.options.hidden_size,
+        epochs: request.options.epochs,
+        learning_rate: request.options.learning_rate,
+        teacher_forcing_start: request.options.teacher_forcing_start,
+        teacher_forcing_end: request.options.teacher_forcing_end,
+        ridge: request.options.ridge,
+        backend: graph_st_select_backend(Some(&request.options.backend))
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?,
+    };
+    let mut model = GraphStDcrnnForecaster::new(config.clone())
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    model
+        .fit(&frame)
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    let predictions = model
+        .predict(frame.horizon)
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    let metrics = request.actual.map(|actual| {
+        serde_json::to_value(graph_st_metrics(
+            &predictions,
+            &actual,
+            &frame.node_ids,
+            &adjacency,
+        ))
+        .unwrap_or_else(|error| json!({ "error": error.to_string() }))
+    });
+    Ok(BrowserGraphForecastResponse {
+        predictions,
+        node_ids: frame.node_ids,
+        horizon: frame.horizon,
+        metrics,
+        metadata: json!({
+            "model": "dcrnn",
+            "frequency": frame.frequency,
+            "diffusionSteps": config.diffusion_steps,
+            "hiddenSize": config.hidden_size,
+            "epochs": config.epochs,
+            "teacherForcingStart": config.teacher_forcing_start,
+            "teacherForcingEnd": config.teacher_forcing_end,
+        }),
+    })
 }
 
 fn run_regression_request(request: BrowserRegressionRequest) -> Result<BrowserRegressionResponse> {
@@ -4108,6 +4968,7 @@ fn neural_panel_config(
         learning_rate: 0.01,
         weight_decay: 0.0,
         newer_sample_weight: false,
+        backend: BackendSelection::default(),
     };
     if let Some(seasonalities) = &options.custom_seasonalities {
         config.custom_seasonalities = seasonalities
@@ -4170,6 +5031,7 @@ fn nbeats_config(options: &BrowserForecastOptions) -> NBeatsConfig {
         hidden_size: options.hidden_size.unwrap_or(16),
         epochs: options.epochs.unwrap_or(80),
         learning_rate: options.learning_rate.unwrap_or(0.01),
+        ..NBeatsConfig::default()
     }
 }
 
@@ -4180,6 +5042,7 @@ fn nhits_config(options: &BrowserForecastOptions) -> NHiTSConfig {
         epochs: options.epochs.unwrap_or(80),
         learning_rate: options.learning_rate.unwrap_or(0.01),
         pooling_size: options.pooling_size.unwrap_or(2),
+        ..NHiTSConfig::default()
     }
 }
 
@@ -4538,6 +5401,63 @@ mod tests {
             3
         );
         assert!(response["calibration"]["calibratedProbabilities"].is_array());
+    }
+
+    #[test]
+    fn browser_geo_feature_examples_emit_bearing_columns() {
+        let response = run_geo_feature_examples_request(BrowserGeoFeatureRequest {
+            planar_routes: vec![
+                BrowserPlanarRoute {
+                    label: "north".to_string(),
+                    origin: [0.0, 0.0],
+                    destination: [0.0, 2.0],
+                },
+                BrowserPlanarRoute {
+                    label: "same".to_string(),
+                    origin: [1.0, 1.0],
+                    destination: [1.0, 1.0],
+                },
+            ],
+            latlng_routes: vec![BrowserLatLngRoute {
+                label: "latlng-north".to_string(),
+                origin: [40.0, -73.0],
+                destination: [41.0, -73.0],
+            }],
+            radial_points: vec![BrowserNamedPoint {
+                label: "point".to_string(),
+                point: [3.0, 4.0],
+            }],
+            anchors: vec![
+                BrowserNamedPoint {
+                    label: "origin".to_string(),
+                    point: [0.0, 0.0],
+                },
+                BrowserNamedPoint {
+                    label: "x-axis".to_string(),
+                    point: [3.0, 0.0],
+                },
+            ],
+            length_scale: 1.0,
+            local_frame: Some(BrowserLocalFrame {
+                origin: [1.0, 1.0],
+                axis: [0.0, 1.0],
+                points: vec![BrowserNamedPoint {
+                    label: "projected".to_string(),
+                    point: [2.0, 3.0],
+                }],
+            }),
+        })
+        .expect("geo feature examples");
+        assert_eq!(response.planar[0].east, Some(0.0));
+        assert_eq!(response.planar[0].north, Some(1.0));
+        assert!(response.planar[1].zero_distance);
+        assert!(response.latlng[0].east.unwrap().abs() < 1.0e-12);
+        assert!((response.latlng[0].north.unwrap() - 1.0).abs() < 1.0e-12);
+        assert_eq!(response.routes[0].distance, Some(2.0));
+        assert_eq!(response.radial[0].values, vec![5.0, 4.0]);
+        assert_eq!(response.rbf[0].values[0], (-12.5_f64).exp());
+        assert_eq!(response.local_frame[0].along_axis, Some(2.0));
+        assert_eq!(response.local_frame[0].cross_axis, Some(-1.0));
     }
 
     #[test]

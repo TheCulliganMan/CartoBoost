@@ -6,6 +6,39 @@
       "split_id": "ogb_official_split",
       "primary_metric": "rmse",
       "required_model_families": ["cartoboost", "cartoboost_graph", "node2vec_baseline", "graphsage_baseline", "tabularized_graph_baseline", "mean"]
+    },
+    {
+      "id": "metr_la_graph_speed_forecast",
+      "dataset_id": "metr_la_traffic_speed_v1",
+      "split_id": "traffic_graph_rolling_origin_manifest_v1",
+      "primary_metric": "rmse",
+      "claim_family": "metr_la_pems_graph_forecasting",
+      "required_model_families": ["cartoboost", "cartoboost_graph", "pytorch_geometric_temporal_baseline", "dcrnn_baseline", "tabularized_graph_baseline", "mean"],
+      "required_diagnostics": ["horizon_error", "graph_distance_residual_decay"],
+      "scorecard_outputs": ["leaderboard_json", "leaderboard_markdown"],
+      "resource_metrics": ["fit_wallclock_seconds", "predict_wallclock_seconds", "peak_memory_mb"]
+    },
+    {
+      "id": "pems_bay_graph_speed_forecast",
+      "dataset_id": "pems_bay_traffic_speed_v1",
+      "split_id": "traffic_graph_rolling_origin_manifest_v1",
+      "primary_metric": "rmse",
+      "claim_family": "metr_la_pems_graph_forecasting",
+      "required_model_families": ["cartoboost", "cartoboost_graph", "pytorch_geometric_temporal_baseline", "dcrnn_baseline", "tabularized_graph_baseline", "mean"],
+      "required_diagnostics": ["horizon_error", "graph_distance_residual_decay"],
+      "scorecard_outputs": ["leaderboard_json", "leaderboard_markdown"],
+      "resource_metrics": ["fit_wallclock_seconds", "predict_wallclock_seconds", "peak_memory_mb"]
+    },
+    {
+      "id": "synthetic_graph_diffusion_forecast",
+      "dataset_id": "synthetic_graph_diffusion_v1",
+      "split_id": "synthetic_graph_diffusion_manifest_v1",
+      "primary_metric": "rmse",
+      "claim_family": "synthetic_graph_diffusion",
+      "required_model_families": ["cartoboost", "cartoboost_graph", "pytorch_geometric_temporal_baseline", "graphsage_baseline", "tabularized_graph_baseline", "mean"],
+      "required_diagnostics": ["horizon_error", "graph_distance_residual_decay"],
+      "scorecard_outputs": ["leaderboard_json", "leaderboard_markdown"],
+      "resource_metrics": ["fit_wallclock_seconds", "predict_wallclock_seconds", "peak_memory_mb"]
     }
   ]
 }

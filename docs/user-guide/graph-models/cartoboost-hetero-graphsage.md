@@ -17,7 +17,9 @@ homogeneous GraphSAGE and schema-heavy HinSAGE.
 
 <NeuralModelExample title="HeteroGraphSAGE browser model" pipeline="hetero_graphsage" />
 
-## Python Regressor
+## Public Contract
+
+### Regressor
 
 ```python
 import numpy as np
@@ -56,7 +58,7 @@ pred = model.predict(
 )
 ```
 
-## Python Link Predictor
+### Link Predictor
 
 ```python
 from cartoboost.graph import HeteroGraphSageLinkPredictor
@@ -68,6 +70,29 @@ scores = predictor.predict_scores(
     pairs=[(0, 1), (0, 3), (3, 2)],
 )
 ```
+
+## Use When
+
+| Need | Better first choice |
+| --- | --- |
+| Relation ids matter with one node-feature matrix. | `HeteroGraphSageStandaloneRegressor` or `HeteroGraphSageLinkPredictor` |
+| Only topology is available. | Node2Vec |
+| Node attributes matter but relation ids do not. | GraphSAGE |
+| Node types and relation triples must be validated. | HinSAGE |
+
+## Compute Backend
+
+`HeteroGraphSageConfig` and `HeteroGraphSageFeatureEncoder.from_config(...)`
+accept `backend="auto"`, `"cpu"`, or an installed accelerated backend such as
+`"metal"`, `"rocm"`, `"cuda"`, or `"webgpu"`. On Apple-platform builds with
+native Metal support, Metal routes dense self/relation forward layers through
+the shared native backend kernel. On Linux or WSL builds with ROCm support
+compiled in, ROCm routes the same dense self/relation forward layers through
+the shared HIP backend. On Windows or Linux builds with CUDA support, CUDA
+routes the same dense self/relation forward layers through the shared CUDA
+backend. On builds with WebGPU enabled, WebGPU routes the same dense
+self/relation forward layers through the shared WebGPU kernel. Relation
+aggregation and training backpropagation remain CPU work.
 
 ## Validation
 

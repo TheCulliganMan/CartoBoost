@@ -1,0 +1,49 @@
+{
+  "frame": {
+    "nodeIds": [
+      "PULocationID=237",
+      "PULocationID=236",
+      "PULocationID=239"
+    ],
+    "timestamps": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+    ],
+    "target": [
+      [180.0, 164.0, 121.0],
+      [192.0, 171.0, 130.0],
+      [205.0, 180.0, 142.0],
+      [214.0, 188.0, 151.0],
+      [198.0, 176.0, 145.0],
+      [184.0, 165.0, 132.0],
+      [176.0, 158.0, 126.0],
+      [190.0, 169.0, 136.0]
+    ],
+    "adjacency": {
+      "indptr": [0, 2, 3, 4],
+      "indices": [1, 2, 2, 0],
+      "data": [0.7, 0.3, 1.0, 1.0]
+    },
+    "horizon": 2,
+    "frequency": "hourly"
+  },
+  "actual": [
+    [201.0, 178.0, 144.0],
+    [212.0, 187.0, 153.0]
+  ],
+  "options": {
+    "diffusionSteps": 2,
+    "hiddenSize": 8,
+    "epochs": 120,
+    "learningRate": 0.02,
+    "teacherForcingStart": 1.0,
+    "teacherForcingEnd": 0.2,
+    "ridge": 0.0001
+  }
+}

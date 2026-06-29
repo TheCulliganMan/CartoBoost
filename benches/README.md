@@ -17,7 +17,9 @@ Commands:
 cargo bench --workspace --no-run
 cargo bench --workspace
 uv run --group dev python scripts/plot_benchmarks.py
+uv run --group dev python scripts/check_performance_thresholds.py
 ```
 
-Use these timings for local performance checks. Use dataset benchmarks for
-claims about model quality.
+`benchmark_summary.json` records the maintained timing summary and its
+`max_mean_ns` regression thresholds. Use these timings for local performance
+checks. Use dataset benchmarks for claims about model quality.

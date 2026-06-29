@@ -34,6 +34,7 @@ from ._native import (
 from ._native import (
     StandaloneNode2VecRegressor as _NativeNode2VecRegressor,
 )
+from .config import Backend, ChoiceStrEnum, FallbackMode
 from .graph.eval import link_prediction_report
 
 __all__ = [
@@ -56,7 +57,7 @@ class NeuralEmbeddingStandaloneRegressor:
         self,
         *,
         dim: int = 16,
-        fallback: str = "global_mean_vector",
+        fallback: FallbackMode = FallbackMode.GLOBAL_MEAN_VECTOR,
         random_state: int | None = 42,
         support_prior_strength: float = 1.0,
         n_estimators: int = 80,
@@ -67,7 +68,7 @@ class NeuralEmbeddingStandaloneRegressor:
     ) -> None:
         self._native = _NativeNeuralEmbeddingRegressor(
             dim=int(dim),
-            fallback=fallback,
+            fallback=fallback.value,
             random_state=None if random_state is None else int(random_state),
             support_prior_strength=float(support_prior_strength),
             n_estimators=int(n_estimators),
@@ -242,6 +243,7 @@ class GraphSageStandaloneRegressor:
         max_depth: int = 4,
         min_samples_leaf: int = 2,
         min_gain: float = 0.0,
+        backend: Backend = Backend.AUTO,
     ) -> None:
         self._native = _NativeGraphSageRegressor(
             input_dim=int(input_dim),
@@ -257,6 +259,7 @@ class GraphSageStandaloneRegressor:
             max_depth=int(max_depth),
             min_samples_leaf=int(min_samples_leaf),
             min_gain=float(min_gain),
+            backend=_choice_value(backend),
         )
 
     def fit(
@@ -347,6 +350,7 @@ class HeteroGraphSageStandaloneRegressor:
         max_depth: int = 4,
         min_samples_leaf: int = 2,
         min_gain: float = 0.0,
+        backend: Backend = Backend.AUTO,
     ) -> None:
         self._native = _NativeHeteroGraphSageRegressor(
             input_dim=int(input_dim),
@@ -362,6 +366,7 @@ class HeteroGraphSageStandaloneRegressor:
             max_depth=int(max_depth),
             min_samples_leaf=int(min_samples_leaf),
             min_gain=float(min_gain),
+            backend=_choice_value(backend),
         )
 
     def fit(
@@ -435,6 +440,7 @@ class HinSageStandaloneRegressor:
         max_depth: int = 4,
         min_samples_leaf: int = 2,
         min_gain: float = 0.0,
+        backend: Backend = Backend.AUTO,
     ) -> None:
         self._native = _NativeHinSageRegressor(
             input_dim=int(input_dim),
@@ -454,6 +460,7 @@ class HinSageStandaloneRegressor:
             max_depth=int(max_depth),
             min_samples_leaf=int(min_samples_leaf),
             min_gain=float(min_gain),
+            backend=_choice_value(backend),
         )
 
     def fit(
@@ -720,6 +727,12 @@ def _r2(actual: np.ndarray, pred: np.ndarray) -> float:
     if total == 0.0:
         return 0.0
     return 1.0 - float(np.sum(residual**2)) / total
+
+
+def _choice_value(value: str | ChoiceStrEnum) -> str:
+    if isinstance(value, ChoiceStrEnum):
+        return value.value
+    return str(value)
 
 
 def _dense_optional(values: Any | None) -> list[list[float]] | None:

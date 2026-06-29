@@ -1,8 +1,9 @@
 use cartoboost_neural::{
-    ArtifactFallbackKind, GraphSageConfig, GraphSageLinkPredictor, GraphSageRegressor,
-    HeteroGraphSageConfig, HeteroGraphSageLinkPredictor, HeteroGraphSageRegressor, HinSageConfig,
-    HinSageLinkPredictor, HinSageRegressor, NeuralEmbeddingRegressor, Node2VecConfig,
-    Node2VecLinkPredictor, Node2VecRegressor, StandaloneBoosterConfig,
+    select_backend, ArtifactFallbackKind, GraphSageConfig, GraphSageLinkPredictor,
+    GraphSageRegressor, HeteroGraphSageConfig, HeteroGraphSageLinkPredictor,
+    HeteroGraphSageRegressor, HinSageConfig, HinSageLinkPredictor, HinSageRegressor,
+    NeuralEmbeddingRegressor, Node2VecConfig, Node2VecLinkPredictor, Node2VecRegressor,
+    StandaloneBoosterConfig,
 };
 use tempfile::tempdir;
 
@@ -43,6 +44,7 @@ fn graphsage_config(seed: u64) -> GraphSageConfig {
         seed,
         add_self_loop: true,
         l2_regularization: 1.0e-5,
+        backend: select_backend(Some("cpu")).unwrap(),
     }
 }
 
@@ -54,6 +56,7 @@ fn hetero_graphsage_config(seed: u64) -> HeteroGraphSageConfig {
         negative_samples: 1,
         seed,
         l2_regularization: 1.0e-5,
+        backend: select_backend(Some("cpu")).unwrap(),
     }
 }
 
@@ -66,6 +69,7 @@ fn hinsage_config(seed: u64) -> HinSageConfig {
         seed,
         l2_regularization: 1.0e-5,
         neighbor_samples: vec![2, 2],
+        backend: select_backend(Some("cpu")).unwrap(),
     }
 }
 
@@ -452,4 +456,47 @@ fn typed_link_predictors_score_candidate_pairs_and_roundtrip_artifacts() {
         .predict_scores(&fixture.node_features, &pairs)
         .expect("restored hinsage scores");
     assert_vec_close(&restored_hinsage_scores, &hinsage_scores);
+}
+
+#[cfg(all(
+    feature = "metal",
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "visionos"
+    )
+))]
+#[test]
+fn metal_graphsage_link_predictor_matches_cpu_backend() {
+    if !cartoboost_neural::available_backends()
+        .iter()
+        .any(|backend| backend == "metal")
+    {
+        return;
+    }
+
+    let node_features = vec![
+        vec![0.1_f32, 0.2],
+        vec![0.4_f32, 0.5],
+        vec![0.7_f32, 0.8],
+        vec![1.0_f32, 1.1],
+    ];
+    let edges = vec![(0, 1), (1, 2), (2, 3), (3, 0)];
+    let pairs = vec![(0, 1), (0, 2), (1, 3), (3, 2)];
+    let mut cpu_config = graphsage_config(808);
+    cpu_config.backend = select_backend(Some("cpu")).unwrap();
+    let mut metal_config = graphsage_config(808);
+    metal_config.backend = select_backend(Some("metal")).unwrap();
+
+    let mut cpu = GraphSageLinkPredictor::new(cpu_config, 2).unwrap();
+    let mut metal = GraphSageLinkPredictor::new(metal_config, 2).unwrap();
+    cpu.fit(&node_features, &edges).unwrap();
+    metal.fit(&node_features, &edges).unwrap();
+
+    let cpu_scores = cpu.predict_scores(&node_features, &pairs).unwrap();
+    let metal_scores = metal.predict_scores(&node_features, &pairs).unwrap();
+    for (left, right) in metal_scores.iter().zip(&cpu_scores) {
+        assert!((left - right).abs() < 1.0e-5);
+    }
 }

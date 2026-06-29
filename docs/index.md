@@ -4,7 +4,7 @@
 [![Python](https://img.shields.io/pypi/pyversions/cartoboost.svg)](https://pypi.org/project/cartoboost/)
 [![CI](https://github.com/TheCulliganMan/CartoBoost/actions/workflows/ci.yml/badge.svg)](https://github.com/TheCulliganMan/CartoBoost/actions/workflows/ci.yml)
 [![Docs](https://github.com/TheCulliganMan/CartoBoost/actions/workflows/pages.yml/badge.svg)](https://github.com/TheCulliganMan/CartoBoost/actions/workflows/pages.yml)
-[![Release](https://github.com/TheCulliganMan/CartoBoost/actions/workflows/release-version.yml/badge.svg)](https://github.com/TheCulliganMan/CartoBoost/actions/workflows/release-version.yml)
+[![Release](https://github.com/TheCulliganMan/CartoBoost/actions/workflows/publish-pypi.yml/badge.svg)](https://github.com/TheCulliganMan/CartoBoost/actions/workflows/publish-pypi.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/TheCulliganMan/CartoBoost/blob/main/LICENSE)
 
 CartoBoost is a Python toolkit for structured regression, classification,
@@ -24,8 +24,10 @@ each one is good for, and which baseline to compare against.
 
 - [Getting Started](getting-started.md): first run, install paths, and local workflow.
 - [Choose A Model](user-guide/model-types.md): pick the right entry point.
+- `cartoboost.models`: unified model registry, `AutoGeoModel`, and model stack.
 - [CartoBoost Boosting Model Guides](user-guide/boosting-models/index.md): row-level tree models.
 - [CartoBoost Forecasting Model Guides](user-guide/forecasting-models/index.md): one guide per forecast family.
+- [Geo-Causal Experiment Models](user-guide/geo-causal-models.md): synthetic DID, GeoLift-style design, and spillover diagnostics.
 - [CartoBoost Graph Model Guides](user-guide/graph-models/index.md): directed movement, link prediction, and graph features.
 - [CartoBoost Neural Model Guides](user-guide/neural-models/index.md): standalone ID embeddings and embedding features.
 - [Benchmark Overview](benchmarks/index.md): current benchmark evidence and limits.
@@ -34,6 +36,7 @@ each one is good for, and which baseline to compare against.
 
 - [Forecasting](forecasting.md): frame contracts, backtesting, artifacts, and shared forecast rules.
 - [Feature Catalog](feature_catalog.md): full capability map.
+- [Sparse Features](sparse_features.md): sparse sets, H3/S2 point cells, and decoded route-cell encoders.
 - [Python API](reference/python-api.md): public classes and methods.
 - [CLI Reference](reference/cli.md): command behavior.
 

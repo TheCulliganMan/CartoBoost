@@ -1,0 +1,12 @@
+[package]
+name = "cartoboost-spatial-econ"
+version = "0.2.32"
+edition.workspace = true
+license.workspace = true
+description = "Classical sparse spatial econometrics baselines for CartoBoost"
+
+[dependencies]
+cartoboost-geo-core = { path = "../cartoboost-geo-core" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

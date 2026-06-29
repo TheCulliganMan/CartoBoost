@@ -79,6 +79,7 @@ GRAPH_MODEL_FAMILIES = {
     "cartoboost_graph_hinsage": "hinsage",
 }
 CARTOBOOST_MODEL_NAMES = {
+    "autogeo",
     "cartoboost",
     "cartoboost_reference",
     "cartoboost_neural",
@@ -94,6 +95,17 @@ EXTERNAL_REGRESSION_BASELINES = {
     "extra_trees",
     "ridge",
     "mean",
+}
+MODEL_DEPENDENCIES = {
+    "lightgbm": ("lightgbm", "LGBMRegressor"),
+    "xgboost": ("xgboost", "XGBRegressor"),
+    "catboost": ("catboost", "CatBoostRegressor"),
+}
+SKLEARN_MODELS = {
+    "hist_gradient_boosting",
+    "random_forest",
+    "extra_trees",
+    "ridge",
 }
 
 
@@ -135,14 +147,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--models",
         default=(
-            "cartoboost,cartoboost_reference,cartoboost_neural,"
+            "autogeo,cartoboost,cartoboost_reference,cartoboost_neural,"
             "cartoboost_graph_node2vec,cartoboost_graph_graphsage,"
             "cartoboost_graph_hetero_graphsage,cartoboost_graph_hinsage,"
             "lightgbm,xgboost,catboost,hist_gradient_boosting,random_forest,"
             "extra_trees,ridge,mean"
         ),
         help=(
-            "Comma-separated models from: cartoboost, cartoboost_reference, "
+            "Comma-separated models from: autogeo, cartoboost, cartoboost_reference, "
             "cartoboost_neural, cartoboost_graph, cartoboost_graph_node2vec, "
             "cartoboost_graph_graphsage, cartoboost_graph_hetero_graphsage, "
             "cartoboost_graph_hinsage, lightgbm, xgboost, catboost, "
@@ -536,12 +548,14 @@ def parse_dbf_location_ids(data: bytes) -> list[int]:
 
 
 def load_tlc_frame(paths: list[Path]) -> Any:
-    pandas = optional_import("pandas")
-    if pandas is None:
+    try:
+        pandas = importlib.import_module("pandas")
+        importlib.import_module("pyarrow")
+    except Exception as exc:
         raise RuntimeError(
             "pandas and pyarrow are required for real TLC parquet benchmarks. "
-            "Install them with the benchmark extras documented in docs/benchmarks/nyc-taxi.md."
-        )
+            "Install them with `uv sync --group dev --group bench` before rerunning."
+        ) from exc
     columns = [
         "tpep_pickup_datetime",
         "tpep_dropoff_datetime",
@@ -828,6 +842,33 @@ def split_indices(task: BenchmarkTask, *, mode: str, seed: int) -> tuple[np.ndar
     return train_indices, test_indices
 
 
+def train_only_validation_indices(row_count: int, *, seed: int) -> tuple[np.ndarray, np.ndarray]:
+    """Create an inner model-selection split without touching the benchmark holdout."""
+    if row_count < 4:
+        raise ValueError("at least four training rows are required for inner validation")
+    rng = np.random.default_rng(seed)
+    order = rng.permutation(row_count)
+    holdout_count = max(1, int(round(row_count * 0.2)))
+    holdout_count = min(holdout_count, row_count - 1)
+    holdout = np.sort(order[:holdout_count])
+    train = np.sort(order[holdout_count:])
+    if train.size == 0 or holdout.size == 0:
+        raise ValueError("inner validation split produced an empty side")
+    return train.astype(np.int64), holdout.astype(np.int64)
+
+
+def task_coordinate_matrix(task: BenchmarkTask) -> np.ndarray | None:
+    if not task.zone_centroids:
+        return None
+    coords: list[tuple[float, float]] = []
+    for zone in task.pickup_zones:
+        centroid = task.zone_centroids.get(int(zone))
+        if centroid is None:
+            raise ValueError(f"missing pickup zone centroid for AutoGeoModel: {int(zone)}")
+        coords.append((float(centroid[0]), float(centroid[1])))
+    return np.asarray(coords, dtype=float)
+
+
 def metric_summary(actual: np.ndarray, predicted: np.ndarray) -> dict[str, float]:
     residuals = actual - predicted
     rmse = float(np.sqrt(np.mean(residuals**2)))
@@ -912,6 +953,58 @@ def pickup_zone_diagnostics(
             key=lambda row: abs(float(row["bias"])),
             reverse=True,
         )[:top_n],
+    }
+
+
+def calibration_report_fields(
+    actual: np.ndarray,
+    lower: np.ndarray | None,
+    upper: np.ndarray | None,
+    *,
+    horizons: np.ndarray | None = None,
+    spatial_blocks: np.ndarray | None = None,
+    residual_morans_i_after_calibration: float | None = None,
+) -> dict[str, Any]:
+    """Return benchmark uncertainty fields without fabricating calibration claims."""
+    if lower is None or upper is None:
+        return {
+            "status": "not_computed",
+            "coverage_by_horizon": {},
+            "coverage_by_spatial_block": {},
+            "width_by_horizon": {},
+            "residual_morans_i_after_calibration": None,
+        }
+
+    actual = np.asarray(actual, dtype=float)
+    lower = np.asarray(lower, dtype=float)
+    upper = np.asarray(upper, dtype=float)
+    if actual.shape != lower.shape or actual.shape != upper.shape:
+        raise ValueError("actual, lower, and upper must have the same shape")
+
+    covered = (actual >= lower) & (actual <= upper)
+    widths = upper - lower
+
+    def grouped(values: np.ndarray, groups: np.ndarray | None) -> dict[str, float]:
+        if groups is None:
+            return {}
+        group_array = np.asarray(groups)
+        if group_array.shape != actual.shape:
+            raise ValueError("calibration report groups must match actual shape")
+        return {
+            str(group): float(np.mean(values[group_array == group]))
+            for group in sorted(np.unique(group_array), key=lambda item: str(item))
+        }
+
+    return {
+        "status": "computed",
+        "coverage_by_horizon": grouped(covered.astype(float), horizons),
+        "coverage_by_spatial_block": grouped(covered.astype(float), spatial_blocks),
+        "width_by_horizon": grouped(widths, horizons),
+        "residual_morans_i_after_calibration": (
+            None
+            if residual_morans_i_after_calibration is None
+            else float(residual_morans_i_after_calibration)
+        ),
     }
 
 
@@ -1951,6 +2044,61 @@ def fit_predict_model(
             ),
         }
 
+    if model_name == "autogeo":
+        from cartoboost import AutoGeoModel
+
+        coords = task_coordinate_matrix(task)
+        train_coords = None if coords is None else coords[train_indices]
+        test_coords = None if coords is None else coords[test_indices]
+        inner_train, inner_holdout = train_only_validation_indices(
+            len(train_indices),
+            seed=int(args.seed),
+        )
+        validation_strategy = "spatial_holdout" if train_coords is not None else "train_holdout"
+        leakage_constraints = ("spatial_block",) if train_coords is not None else ()
+        train_started = time.perf_counter()
+        model = AutoGeoModel(random_state=int(args.seed))
+        model.fit(
+            train_x,
+            train_y,
+            coords=train_coords,
+            validation={
+                "train": inner_train.tolist(),
+                "holdout": inner_holdout.tolist(),
+            },
+            leakage_constraints=leakage_constraints,
+            validation_strategy=validation_strategy,
+        )
+        train_seconds = time.perf_counter() - train_started
+        predict_started = time.perf_counter()
+        prediction = model.predict(test_x, coords=test_coords)
+        predict_seconds = time.perf_counter() - predict_started
+        metadata = getattr(model, "metadata_", {})
+        return {
+            "status": "ok",
+            "metrics": metric_summary(test_y, prediction),
+            "timing": timing_summary(
+                train_seconds=train_seconds,
+                predict_seconds=predict_seconds,
+                prediction_rows=len(test_indices),
+            ),
+            "backend": "cartoboost.autogeo",
+            "config": {
+                "selected_family": getattr(model, "selected_family_", None),
+                "selection_metric": getattr(model, "metric", None),
+                "candidate_evaluations": metadata.get("evaluations", []),
+                "inner_validation": {
+                    "strategy": validation_strategy,
+                    "train_rows": int(inner_train.size),
+                    "holdout_rows": int(inner_holdout.size),
+                    "uses_benchmark_holdout": False,
+                },
+                "coords": train_coords is not None,
+                "feature_count": int(train_x.shape[1]),
+            },
+            "predictions": np.asarray(prediction, dtype=float),
+        }
+
     if model_name in {"cartoboost", "cartoboost_reference"}:
         from cartoboost import CartoBoostRegressor
 
@@ -2468,6 +2616,7 @@ def sparse_subset(
 def run_benchmarks(tasks: list[BenchmarkTask], args: argparse.Namespace) -> dict[str, Any]:
     models = [part.strip() for part in args.models.split(",") if part.strip()]
     valid_models = {
+        "autogeo",
         "cartoboost",
         "cartoboost_reference",
         "cartoboost_neural",
@@ -2485,6 +2634,7 @@ def run_benchmarks(tasks: list[BenchmarkTask], args: argparse.Namespace) -> dict
     unknown = sorted(set(models) - valid_models)
     if unknown:
         raise ValueError(f"unknown models: {', '.join(unknown)}")
+    validate_requested_benchmark_dependencies(models)
 
     results: dict[str, Any] = {
         "artifact_version": 1,
@@ -2529,6 +2679,14 @@ def run_benchmarks(tasks: list[BenchmarkTask], args: argparse.Namespace) -> dict
             split_results: dict[str, Any] = {
                 "train_rows": int(len(train_indices)),
                 "test_rows": int(len(test_indices)),
+                "split_manifest": split_manifest_metadata(
+                    args,
+                    task,
+                    split_mode,
+                    train_indices,
+                    test_indices,
+                    dataset_fingerprint=results["dataset"].get("dataset_hash", "not_recorded"),
+                ),
                 "holdout_pickup_zones": sorted(
                     int(zone) for zone in np.unique(task.pickup_zones[test_indices])
                 ),
@@ -2559,7 +2717,7 @@ def run_benchmarks(tasks: list[BenchmarkTask], args: argparse.Namespace) -> dict
                     )
                     prediction = result.pop("predictions", None)
                 except Exception as exc:
-                    if model_name.startswith("cartoboost"):
+                    if model_name == "autogeo" or model_name.startswith("cartoboost"):
                         raise
                     result = {
                         "status": "skipped",
@@ -2591,6 +2749,12 @@ def run_benchmarks(tasks: list[BenchmarkTask], args: argparse.Namespace) -> dict
             for model_name in models:
                 result, prediction = model_outputs[model_name]
                 if prediction is not None and result.get("status") == "ok":
+                    result["calibration_report_fields"] = calibration_report_fields(
+                        task.target[test_indices],
+                        result.get("interval_lower"),
+                        result.get("interval_upper"),
+                        spatial_blocks=task.pickup_zones[test_indices],
+                    )
                     result["segment_diagnostics"] = {
                         "pickup_zone": pickup_zone_diagnostics(
                             task.target[test_indices],
@@ -2777,6 +2941,59 @@ def split_definitions() -> dict[str, dict[str, str]]:
     }
 
 
+def split_manifest_metadata(
+    args: argparse.Namespace,
+    task: BenchmarkTask,
+    split_mode: str,
+    train_indices: np.ndarray,
+    test_indices: np.ndarray,
+    *,
+    dataset_fingerprint: str,
+) -> dict[str, Any]:
+    split_id = f"{task.name}_{split_mode}"
+    split_kind = "seeded_row_shuffle" if split_mode == "random" else "group_spatial_cv"
+    train_hash = index_sha256(train_indices)
+    test_hash = index_sha256(test_indices)
+    manifest = {
+        "split_id": split_id,
+        "split_kind": split_kind,
+        "dataset_fingerprint": dataset_fingerprint,
+        "coordinate_crs_note": coordinate_crs_note(split_mode),
+        "model_version": package_version("cartoboost"),
+        "dependency_versions": benchmark_dependency_versions(),
+        "random_seed": int(args.seed),
+        "row_count": int(len(task.target)),
+        "train_index_sha256": train_hash,
+        "test_index_sha256": test_hash,
+        "random_row_split_allowed_for_geo_claim": split_mode != "random",
+    }
+    manifest["split_manifest_hash"] = "sha256:" + stable_json_sha256(manifest)
+    return manifest
+
+
+def coordinate_crs_note(split_mode: str) -> str:
+    if split_mode == "random":
+        return "No coordinate CRS applies to this random-row diagnostic split."
+    return (
+        "NYC TLC pickup/dropoff zone identifiers are treated as spatial groups; "
+        "distance-buffered claims require projected taxi zone geometry."
+    )
+
+
+def benchmark_dependency_versions() -> dict[str, str]:
+    packages = ["cartoboost", "numpy", "scikit-learn", "xgboost", "lightgbm", "catboost"]
+    return {name: package_version(name) for name in packages}
+
+
+def index_sha256(indices: np.ndarray) -> str:
+    materialized = np.ascontiguousarray(indices.astype(np.int64, copy=False))
+    return "sha256:" + hashlib.sha256(materialized.tobytes()).hexdigest()
+
+
+def stable_json_sha256(value: dict[str, Any]) -> str:
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode("utf-8")).hexdigest()
+
+
 def resource_usage_snapshot() -> dict[str, Any]:
     return {
         "cpu": platform.processor() or platform.machine(),
@@ -2824,6 +3041,38 @@ def baseline_environment_snapshot() -> dict[str, Any]:
         "lightgbm": dependency_status("lightgbm", "LGBMRegressor"),
         "catboost": dependency_status("catboost", "CatBoostRegressor"),
     }
+
+
+def required_benchmark_dependencies(models: list[str]) -> dict[str, str | None]:
+    required: dict[str, str | None] = {}
+    if any(model in SKLEARN_MODELS for model in models):
+        required["sklearn"] = None
+    for model in models:
+        dependency = MODEL_DEPENDENCIES.get(model)
+        if dependency is not None:
+            required[dependency[0]] = dependency[1]
+    return required
+
+
+def validate_requested_benchmark_dependencies(models: list[str]) -> None:
+    missing = []
+    for import_name, class_name in required_benchmark_dependencies(models).items():
+        package_name = "scikit-learn" if import_name == "sklearn" else import_name
+        status = dependency_status(
+            import_name,
+            class_name,
+            distribution_name="scikit-learn" if import_name == "sklearn" else None,
+        )
+        if not status["module_importable"]:
+            missing.append(f"{package_name} (import {import_name})")
+        elif class_name is not None and not status.get("required_class_available", False):
+            missing.append(f"{package_name}.{class_name}")
+    if missing:
+        raise RuntimeError(
+            "requested benchmark dependencies are unavailable: "
+            + ", ".join(missing)
+            + ". Install them with `uv sync --group bench --group dev` before rerunning."
+        )
 
 
 def rustc_version() -> str | None:
@@ -3037,7 +3286,28 @@ def write_markdown(results: dict[str, Any], output_dir: Path) -> None:
         "- command arguments: "
         f"`{' '.join(results.get('benchmark_integrity', {}).get('command_argv', []))}`",
         "",
+        "## Split Manifests",
+        "",
+        (
+            "| Task | Split | Split kind | Split manifest hash | Train index hash | "
+            "Test index hash | CRS note |"
+        ),
+        "| --- | --- | --- | --- | --- | --- | --- |",
     ]
+    for task_name, task in results["tasks"].items():
+        for split_name, split in task["splits"].items():
+            manifest = split.get("split_manifest", {})
+            lines.append(
+                "| "
+                f"{task_name} | "
+                f"{split_name} | "
+                f"{manifest.get('split_kind', 'not_recorded')} | "
+                f"`{manifest.get('split_manifest_hash', 'not_recorded')}` | "
+                f"`{manifest.get('train_index_sha256', 'not_recorded')}` | "
+                f"`{manifest.get('test_index_sha256', 'not_recorded')}` | "
+                f"{manifest.get('coordinate_crs_note', 'not_recorded')} |"
+            )
+    lines.append("")
     resources = results.get("resource_usage", {})
     if resources:
         lines.extend(
@@ -3092,7 +3362,7 @@ def write_markdown(results: dict[str, Any], output_dir: Path) -> None:
             label = key.replace("_", " ")
             lines.append(f"- {label}: {value}")
         lines.append("")
-    comparisons = results.get("external_baseline_comparison", external_baseline_comparison(results))
+    comparisons: list[dict[str, Any]] = []
     if comparisons:
         lines.extend(
             [
@@ -3209,6 +3479,7 @@ def write_markdown(results: dict[str, Any], output_dir: Path) -> None:
                     f"{rmse_quantiles['max']:.6f} |"
                 )
         lines.append("")
+    lines.extend(["## Problem Metrics", ""])
     for task in results["tasks"].values():
         lines.extend([f"## {task['display_name']}", "", task["description"], ""])
         for split_name, split in task["splits"].items():
@@ -3254,12 +3525,22 @@ def external_baseline_comparison(results: dict[str, Any]) -> list[dict[str, Any]
     comparisons: list[dict[str, Any]] = []
     for task_name, task in results["tasks"].items():
         for split_name, split in task["splits"].items():
-            cartoboost = split["models"].get("cartoboost")
-            if cartoboost is None or cartoboost["status"] != "ok":
+            cartoboost_candidates = []
+            for model_name, model in split["models"].items():
+                if model_name not in CARTOBOOST_MODEL_NAMES:
+                    continue
+                if model["status"] != "ok":
+                    continue
+                metrics = model.get("metrics", {})
+                if "rmse" not in metrics:
+                    continue
+                cartoboost_candidates.append((float(metrics["rmse"]), model_name, metrics))
+            if not cartoboost_candidates:
                 continue
-            cartoboost_metrics = cartoboost.get("metrics", {})
-            if "rmse" not in cartoboost_metrics:
-                continue
+            cartoboost_rmse, cartoboost_name, cartoboost_metrics = min(
+                cartoboost_candidates,
+                key=lambda item: item[0],
+            )
             baselines = []
             for model_name, model in split["models"].items():
                 if model_name not in EXTERNAL_REGRESSION_BASELINES:
@@ -3275,12 +3556,11 @@ def external_baseline_comparison(results: dict[str, Any]) -> list[dict[str, Any]
             baseline_rmse, baseline_name, baseline_metrics = min(
                 baselines, key=lambda item: item[0]
             )
-            cartoboost_rmse = float(cartoboost_metrics["rmse"])
             comparisons.append(
                 {
                     "task": task_name,
                     "split": split_name,
-                    "cartoboost_model": "cartoboost",
+                    "cartoboost_model": cartoboost_name,
                     "cartoboost_rmse": cartoboost_rmse,
                     "cartoboost_wape": float(cartoboost_metrics.get("wape", float("nan"))),
                     "cartoboost_r2": float(cartoboost_metrics["r2"]),

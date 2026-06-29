@@ -494,10 +494,7 @@ def write_markdown(summary: dict[str, Any], output: Path) -> None:
             f"XGBoost tree_method: {summary['model_config']['xgboost_tree_method']}"
         ),
         f"- zone treatment: {summary['model_config'].get('zone_treatment', 'raw')}",
-        (
-            "- primary comparison uses one `cartoboost` row against the lowest-RMSE "
-            "external baseline that finished in each run."
-        ),
+        "- quality summary reports every model that finished for each task/split.",
         "",
     ]
     artifacts = summary.get("output_artifacts", {})
@@ -541,48 +538,7 @@ def write_markdown(summary: dict[str, Any], output: Path) -> None:
     lines.extend(
         [
             "",
-            "## Primary CartoBoost vs Best External Baseline",
-            "",
-            (
-                "Negative RMSE and WAPE deltas favor CartoBoost. Positive R2 deltas favor "
-                "CartoBoost. The external model count records which baseline was lowest-RMSE "
-                "for that split across runs."
-            ),
-            "",
-            (
-                "| task/split | runs | best external model counts | RMSE delta mean | "
-                "RMSE delta 95% CI | WAPE delta mean | R2 delta mean | R2 delta 95% CI |"
-            ),
-            "| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: |",
-        ]
-    )
-    for key, quality in summary["quality"].items():
-        comparison = quality.get("primary_vs_best_external")
-        if not comparison:
-            continue
-        model_counts = ", ".join(
-            f"{name}: {count}" for name, count in comparison["best_external_model_counts"].items()
-        )
-        rmse_ci = format_interval(
-            comparison["rmse_delta_ci95_low"],
-            comparison["rmse_delta_ci95_high"],
-        )
-        r2_ci = format_interval(
-            comparison["r2_delta_ci95_low"],
-            comparison["r2_delta_ci95_high"],
-        )
-        lines.append(
-            f"| {key} | {comparison['n']} | {model_counts} | "
-            f"{comparison['rmse_delta_mean']:.6f} | "
-            f"{rmse_ci} | "
-            f"{comparison['wape_delta_mean']:.6f} | "
-            f"{comparison['r2_delta_mean']:.6f} | "
-            f"{r2_ci} |"
-        )
-    lines.extend(
-        [
-            "",
-            "## Paired Baseline Deltas",
+            "## Paired Model Deltas",
             "",
             "Negative RMSE deltas favor the CartoBoost-family row. Positive R2 deltas favor it.",
             "",

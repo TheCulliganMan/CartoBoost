@@ -11,9 +11,19 @@ crate-type = ["cdylib"]
 
 [dependencies]
 cartoboost-core = { path = "../cartoboost-core" }
-cartoboost-neural = { path = "../cartoboost-neural" }
+cartoboost-geo-causal = { path = "../cartoboost-geo-causal" }
+cartoboost-geo-core = { path = "../cartoboost-geo-core" }
+cartoboost-geostats = { path = "../cartoboost-geostats" }
+cartoboost-geo-st = { path = "../cartoboost-geo-st", features = ["cuda", "rocm", "webgpu"] }
+cartoboost-neural = { path = "../cartoboost-neural", features = ["cuda", "rocm", "webgpu"] }
+cartoboost-prob = { path = "../cartoboost-prob" }
+cartoboost-spatial-econ = { path = "../cartoboost-spatial-econ" }
 chrono.workspace = true
 numpy = "0.23"
 pyo3.workspace = true
 rayon = "1.11"
 serde_json.workspace = true
+
+[target.'cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos", target_os = "visionos"))'.dependencies]
+cartoboost-geo-st = { path = "../cartoboost-geo-st", features = ["metal"] }
+cartoboost-neural = { path = "../cartoboost-neural", features = ["metal"] }

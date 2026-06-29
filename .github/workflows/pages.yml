@@ -21,6 +21,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -35,7 +37,7 @@ jobs:
         run: npm run typecheck
 
       - name: Build docs
-        run: npm run build
+        run: python3 scripts/build_versioned_docs.py
 
       - name: Upload Pages artifact
         if: github.event_name != 'pull_request'

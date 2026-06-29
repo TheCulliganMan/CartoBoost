@@ -92,6 +92,8 @@ def test_native_load_restores_public_estimator_params(monkeypatch, tmp_path):
         "random_state": None,
         "n_threads": None,
         "monotonic_constraints": None,
+        "tensorboard_log_dir": None,
+        "tensorboard_run_name": None,
     }
     assert loaded.n_features_in_ == 3
     assert loaded.feature_schema_["names"] == ["x", "y", "hour"]

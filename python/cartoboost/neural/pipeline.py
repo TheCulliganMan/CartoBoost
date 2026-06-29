@@ -5,6 +5,7 @@ from typing import Any
 
 import numpy as np
 
+from ..config import FallbackMode
 from ..regressor import CartoBoostRegressor, _rust_feature_schema_payload
 from .features import NeuralEmbeddingFeatures
 
@@ -20,7 +21,7 @@ class NeuralEmbeddingRegressor:
         self,
         *,
         dim: int = 16,
-        fallback: str = "global_mean_vector",
+        fallback: FallbackMode = FallbackMode.GLOBAL_MEAN_VECTOR,
         random_state: int | None = 42,
         neural_transformer: NeuralEmbeddingFeatures | None = None,
         use_residual: bool = True,
@@ -46,7 +47,7 @@ class NeuralEmbeddingRegressor:
         self.support_prior_strength = float(support_prior_strength)
         self.neural_transformer = neural_transformer or NeuralEmbeddingFeatures(
             dim=dim,
-            fallback=fallback,
+            fallback=fallback.value,
             random_state=random_state,
             support_prior_strength=support_prior_strength,
         )

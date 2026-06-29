@@ -21,6 +21,7 @@ except ImportError:  # pragma: no cover - lightweight fallback for core installs
         pass
 
 
+from ._artifacts import require_artifact_payload, versioned_artifact_payload
 from ._native import (
     CartoBoostRegressor as _NativeRegressorModel,
 )
@@ -30,7 +31,9 @@ from ._native import (
 from ._native import (
     categorical_transform as _native_categorical_transform,
 )
+from .config import ExplanationAlgorithm, ExplanationDecomposition, FuzzyKernel, LeafPredictor
 from .schema import FeatureKind, normalize_feature_kind
+from .tensorboard import write_training_history
 
 _VALID_SPLITTERS = {
     "auto",
@@ -66,16 +69,18 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
         log_offset: float = 1.0,
         loss_params: dict[str, Any] | None = None,
         splitters: list[str] | None = None,
-        leaf_predictor: str = "constant",
+        leaf_predictor: LeafPredictor = LeafPredictor.CONSTANT,
         linear_leaf_features: list[str] | None = None,
         fuzzy: bool = False,
         fuzzy_bandwidth: float = 0.0,
-        fuzzy_kernel: str = "linear",
+        fuzzy_kernel: FuzzyKernel = FuzzyKernel.LINEAR,
         l2_regularization: float = 1.0,
         constant_l2_regularization: float = 0.0,
         random_state: int | None = None,
         n_threads: int | None = None,
         monotonic_constraints: list[int] | None = None,
+        tensorboard_log_dir: str | Path | None = None,
+        tensorboard_run_name: str | None = None,
     ) -> None:
         self.n_estimators = n_estimators
         self.learning_rate = learning_rate
@@ -98,6 +103,8 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
         self.random_state = random_state
         self.n_threads = n_threads
         self.monotonic_constraints = monotonic_constraints
+        self.tensorboard_log_dir = tensorboard_log_dir
+        self.tensorboard_run_name = tensorboard_run_name
         self._model: Any | None = None
         self._backend_used: str | None = None
 
@@ -124,6 +131,8 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
             "random_state": self.random_state,
             "n_threads": self.n_threads,
             "monotonic_constraints": self.monotonic_constraints,
+            "tensorboard_log_dir": self.tensorboard_log_dir,
+            "tensorboard_run_name": self.tensorboard_run_name,
         }
 
     def set_params(self, **params: Any) -> CartoBoostRegressor:
@@ -207,12 +216,12 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
             max_depth=int(self.max_depth),
             min_samples_leaf=int(self.min_samples_leaf),
             min_gain=float(self.min_gain),
-            loss=str(self.loss),
+            loss=self.loss.value,
             quantile_alpha=float(loss_params["quantile_alpha"]),
             huber_delta=float(loss_params["huber_delta"]),
             log_offset=float(loss_params["log_offset"]),
             splitters=list(self.splitters or ["auto"]),
-            leaf_predictor=str(self.leaf_predictor),
+            leaf_predictor=self.leaf_predictor.value,
             linear_leaf_features=_resolve_linear_leaf_features(
                 self.linear_leaf_features,
                 dense_array.shape[1],
@@ -221,7 +230,7 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
             constant_l2_regularization=float(self.constant_l2_regularization),
             fuzzy=bool(self.fuzzy),
             fuzzy_bandwidth=float(self.fuzzy_bandwidth),
-            fuzzy_kernel=str(self.fuzzy_kernel),
+            fuzzy_kernel=self.fuzzy_kernel.value,
             n_threads=None if self.n_threads is None else int(self.n_threads),
             monotonic_constraints=(
                 None
@@ -246,6 +255,12 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
         )
         self.metadata_ = _json_attr(model, "metadata_json")
         self.training_config_ = _json_attr(model, "training_config_json")
+        self.training_history_ = _json_attr(model, "training_history_json") or []
+        write_training_history(
+            model,
+            self.tensorboard_log_dir,
+            run_name=self.tensorboard_run_name,
+        )
         self.requires_sparse_sets_ = bool(
             getattr(model, "requires_sparse_sets", bool(sparse_columns))
         )
@@ -349,6 +364,20 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
             rows = dense_array.tolist()
             return np.asarray(list(self._model.predict(rows, sparse_columns)), dtype=float)
 
+    def score(
+        self,
+        X: Iterable[Iterable[float]],
+        y: Iterable[float],
+        sparse_sets: Any | None = None,
+    ) -> float:
+        """Return negative RMSE for sklearn-style higher-is-better scoring."""
+
+        pred = np.asarray(self.predict(X, sparse_sets=sparse_sets), dtype=float)
+        truth = np.asarray(y, dtype=float)
+        if truth.ndim != 1 or pred.shape[0] != truth.shape[0]:
+            raise ValueError("X predictions and y must have the same number of rows")
+        return -float(np.sqrt(np.mean((truth - pred) ** 2)))
+
     def predict_additive_values(
         self,
         X: Iterable[Iterable[float]],
@@ -435,9 +464,9 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
         *,
         sparse_sets: Any | None = None,
         sparse_id_vocabulary: dict[str, list[int]] | None = None,
-        algorithm: str = "auto",
+        algorithm: ExplanationAlgorithm = ExplanationAlgorithm.AUTO,
         feature_names: list[str] | None = None,
-        decomposition: str = "features",
+        decomposition: ExplanationDecomposition = ExplanationDecomposition.FEATURES,
         **kwargs: Any,
     ) -> Any:
         """Build a SHAP explainer for dense predictions."""
@@ -448,9 +477,9 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
             background,
             sparse_sets=sparse_sets,
             sparse_id_vocabulary=sparse_id_vocabulary,
-            algorithm=algorithm,
+            algorithm=algorithm.value,
             feature_names=feature_names,
-            decomposition=decomposition,
+            decomposition=decomposition.value,
             **kwargs,
         )
 
@@ -462,9 +491,9 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
         sparse_sets: Any | None = None,
         background_sparse_sets: Any | None = None,
         sparse_id_vocabulary: dict[str, list[int]] | None = None,
-        algorithm: str = "auto",
+        algorithm: ExplanationAlgorithm = ExplanationAlgorithm.AUTO,
         feature_names: list[str] | None = None,
-        decomposition: str = "features",
+        decomposition: ExplanationDecomposition = ExplanationDecomposition.FEATURES,
         **kwargs: Any,
     ) -> Any:
         """Return a SHAP Explanation for dense predictions."""
@@ -477,9 +506,9 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
             sparse_sets=sparse_sets,
             background_sparse_sets=background_sparse_sets,
             sparse_id_vocabulary=sparse_id_vocabulary,
-            algorithm=algorithm,
+            algorithm=algorithm.value,
             feature_names=feature_names,
-            decomposition=decomposition,
+            decomposition=decomposition.value,
             **kwargs,
         )
 
@@ -493,12 +522,11 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
                     native_path = Path(temp_dir) / "native-regressor.json"
                     self._model.save(native_path)
                     native_payload = json.loads(native_path.read_text(encoding="utf-8"))
-                payload = {
-                    "artifact_type": "cartoboost.regressor",
-                    "artifact_version": 1,
-                    "categorical_encoder": getattr(self, "categorical_encoder_", None),
-                    "native_model": native_payload,
-                }
+                payload = versioned_artifact_payload(
+                    "cartoboost.regressor",
+                    categorical_encoder=getattr(self, "categorical_encoder_", None),
+                    native_model=native_payload,
+                )
                 path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
                 return
             self._model.save(path)
@@ -541,6 +569,7 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
             return cls._from_native_model(native_model)
         payload = json.loads(path.read_text(encoding="utf-8"))
         if payload.get("artifact_type") == "cartoboost.regressor":
+            require_artifact_payload(payload, "cartoboost.regressor")
             with tempfile.TemporaryDirectory() as temp_dir:
                 native_path = Path(temp_dir) / "native-regressor.json"
                 native_path.write_text(
@@ -578,13 +607,13 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
             huber_delta=float(getattr(native_model, "huber_delta", 1.0)),
             log_offset=float(getattr(native_model, "log_offset", 1.0)),
             splitters=list(getattr(native_model, "splitters", ["axis"])),
-            leaf_predictor=str(getattr(native_model, "leaf_predictor", "constant")),
+            leaf_predictor=LeafPredictor(str(getattr(native_model, "leaf_predictor", "constant"))),
             linear_leaf_features=[
                 str(feature) for feature in getattr(native_model, "linear_leaf_features", [])
             ],
             fuzzy=bool(getattr(native_model, "fuzzy", False)),
             fuzzy_bandwidth=float(getattr(native_model, "fuzzy_bandwidth", 0.0)),
-            fuzzy_kernel=str(getattr(native_model, "fuzzy_kernel", "linear")),
+            fuzzy_kernel=FuzzyKernel(str(getattr(native_model, "fuzzy_kernel", "linear"))),
             l2_regularization=float(getattr(native_model, "l2_regularization", 1.0)),
             constant_l2_regularization=float(
                 getattr(native_model, "constant_l2_regularization", 0.0)
@@ -601,6 +630,7 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
         estimator.n_sparse_sets_in_ = len(estimator.sparse_set_names_)
         estimator.metadata_ = _json_attr(native_model, "metadata_json")
         estimator.training_config_ = _json_attr(native_model, "training_config_json")
+        estimator.training_history_ = _json_attr(native_model, "training_history_json") or []
         estimator.requires_sparse_sets_ = bool(getattr(native_model, "requires_sparse_sets", False))
         estimator.is_fitted_ = True
         return estimator
@@ -626,7 +656,7 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
         min_gain = float(self.min_gain)
         if not math.isfinite(min_gain) or min_gain < 0:
             raise ValueError("min_gain must be finite and non-negative")
-        if self.loss not in {
+        if str(self.loss) not in {
             "l2",
             "squared_error",
             "l1",
@@ -643,7 +673,7 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
         }:
             raise ValueError("loss must be 'l2', 'l1', 'huber', 'log_l2', or 'quantile'")
         loss_params = _resolved_loss_params(
-            self.loss,
+            str(self.loss),
             self.quantile_alpha,
             self.huber_delta,
             self.log_offset,
@@ -658,20 +688,23 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
         log_offset = float(loss_params["log_offset"])
         if not math.isfinite(log_offset) or log_offset <= 0.0:
             raise ValueError("log_offset must be positive and finite")
-        if self.loss in {"log_l2", "log", "log_squared_error"} and log_offset != 1.0:
+        if str(self.loss) in {"log_l2", "log", "log_squared_error"} and log_offset != 1.0:
             raise ValueError("log_l2 currently supports log_offset=1.0")
-        if self.leaf_predictor not in {"constant", "linear"}:
+        if self.leaf_predictor not in {LeafPredictor.CONSTANT, LeafPredictor.LINEAR}:
             raise ValueError("leaf_predictor must be 'constant' or 'linear'")
         if (
-            self.loss in {"l1", "mae", "absolute_error", "least_absolute_deviation", "lad"}
-            and self.leaf_predictor != "constant"
+            str(self.loss) in {"l1", "mae", "absolute_error", "least_absolute_deviation", "lad"}
+            and self.leaf_predictor != LeafPredictor.CONSTANT
         ):
             raise ValueError(f"{self.loss} loss requires leaf_predictor='constant'")
-        if self.loss in {"quantile", "pinball"} and self.leaf_predictor != "constant":
+        if (
+            str(self.loss) in {"quantile", "pinball"}
+            and self.leaf_predictor != LeafPredictor.CONSTANT
+        ):
             raise ValueError("quantile loss requires leaf_predictor='constant'")
         if (
-            self.loss in {"huber", "log_l2", "log", "log_squared_error"}
-            and self.leaf_predictor != "constant"
+            str(self.loss) in {"huber", "log_l2", "log", "log_squared_error"}
+            and self.leaf_predictor != LeafPredictor.CONSTANT
         ):
             raise ValueError(f"{self.loss} loss requires leaf_predictor='constant'")
         if float(self.l2_regularization) < 0 or not math.isfinite(float(self.l2_regularization)):
@@ -681,7 +714,7 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
             raise ValueError("constant_l2_regularization must be finite and non-negative")
         if float(self.fuzzy_bandwidth) < 0 or not math.isfinite(float(self.fuzzy_bandwidth)):
             raise ValueError("fuzzy_bandwidth must be finite and non-negative")
-        if self.fuzzy_kernel not in {
+        if str(self.fuzzy_kernel) not in {
             "linear",
             "triangular",
             "gaussian",
@@ -700,7 +733,7 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
             constraints = list(self.monotonic_constraints)
             if any(int(value) not in {-1, 0, 1} for value in constraints):
                 raise ValueError("monotonic_constraints values must be -1, 0, or 1")
-            if self.leaf_predictor != "constant":
+            if self.leaf_predictor != LeafPredictor.CONSTANT:
                 raise ValueError("monotonic constraints require leaf_predictor='constant'")
             if self.fuzzy:
                 raise ValueError("monotonic constraints require fuzzy=False")

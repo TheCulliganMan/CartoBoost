@@ -87,6 +87,38 @@ jobs:
       - name: Install native extension
         run: uv run maturin develop
 
+      - name: Release gate audit
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
+        run: uv run python scripts/check_release_gates.py
+
+      - name: Public API contract audit
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
+        run: uv run python scripts/check_public_api_contract.py
+
+      - name: Artifact compatibility audit
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
+        run: uv run python scripts/check_artifact_compatibility.py
+
+      - name: Docs example audit
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
+        run: uv run python scripts/check_docs_examples.py
+
+      - name: Official geo evidence audit
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
+        run: uv run python scripts/check_official_geo_evidence.py
+
+      - name: Performance threshold audit
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
+        run: uv run python scripts/check_performance_thresholds.py
+
+      - name: AutoGeo benchmark gate
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
+        run: >-
+          PYTHONPATH=python uv run python scripts/run_autogeo_benchmark_gate.py
+          --output-dir target/autogeo-gate
+          --sample-size 90
+          --n-splits 5
+
       - name: Test Python
         run: uv run pytest --ignore=tests/python/test_full_validation_artifacts.py
 

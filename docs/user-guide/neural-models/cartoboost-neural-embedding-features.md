@@ -13,7 +13,7 @@ not for serving a neural model directly.
 - Several downstream models should use the same train-side embedding columns.
 - You can report repeated-ID and cold-ID splits separately.
 
-## Basic Fit
+## Public Contract
 
 ```python
 from cartoboost.neural import NeuralEmbeddingFeatures

@@ -222,3 +222,4 @@ node_modules
 tmp/*
 static/.DS_Store
 .playwright-cli/*
+deep-todo.md

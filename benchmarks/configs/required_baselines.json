@@ -1,6 +1,6 @@
 {
-  "tabular": ["cartoboost", "lightgbm", "xgboost", "hist_gradient_boosting", "random_forest", "extra_trees", "ridge", "mean", "deep_tabular_baseline"],
-  "spatial": ["cartoboost", "cartoboost_neural", "cartoboost_graph", "lightgbm", "xgboost", "hist_gradient_boosting", "random_forest", "extra_trees", "ridge", "mean"],
-  "graph": ["cartoboost", "cartoboost_graph", "node2vec_baseline", "graphsage_baseline", "tabularized_graph_baseline", "mean"],
-  "forecasting": ["cartoboost_lag", "statistical_forecaster", "global_forecaster"]
+  "tabular": ["cartoboost", "lightgbm", "xgboost", "catboost", "hist_gradient_boosting", "random_forest", "extra_trees", "ridge", "mean", "deep_tabular_baseline"],
+  "spatial": ["cartoboost", "cartoboost_neural", "cartoboost_graph", "lightgbm", "xgboost", "catboost", "hist_gradient_boosting", "random_forest", "extra_trees", "ridge", "mean", "pysal_spatial_regression", "pykrige", "gstools"],
+  "graph": ["cartoboost", "cartoboost_graph", "node2vec_baseline", "graphsage_baseline", "tabularized_graph_baseline", "pytorch_geometric_temporal_baseline", "dcrnn_baseline", "mean"],
+  "forecasting": ["cartoboost_lag", "statistical_forecaster", "global_forecaster", "neuralforecast_baseline", "darts_baseline"]
 }

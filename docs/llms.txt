@@ -5,16 +5,38 @@ Use this directory as the navigation map for the user-facing docs site.
 ## Main Entry Points
 
 - [Docs home](./index.md)
+- Versioned docs are built from `../docs-versions.json`; `latest` maps to the
+  current docs, and retained release docs are added only for real tagged
+  versions listed in that manifest.
 - [Getting started](./getting-started.md)
 - [Choose a model](./user-guide/model-types.md)
+- [Unified model registry and AutoGeoModel](./user-guide/model-types.md)
+- [Spatial econometrics models](./user-guide/spatial-econometrics.md)
+- [Scalable GP geostatistics models](./user-guide/geostatistics-models.md)
 - [CartoBoost Boosting Model Guides](./user-guide/boosting-models/index.md)
 - [CartoBoost Forecasting Model Guides](./user-guide/forecasting-models/index.md)
+- [Graph Spatiotemporal Forecasting](./user-guide/forecasting-models/graph-spatiotemporal.md)
+- [Probabilistic and conformal forecasting guide](./user-guide/forecasting-models/probabilistic-conformal.md)
 - [CartoBoost Graph Model Guides](./user-guide/graph-models/index.md)
 - [CartoBoost Neural Model Guides](./user-guide/neural-models/index.md)
+- [Generic deep models](./user-guide/deep-models.md)
+- [Native deep backend selection and Metal availability](./user-guide/deep-models.md)
 - [Forecasting reference](./forecasting.md)
 - [Graph features contract](./graph-features.md)
 - [Neural features contract](./neural-features.md)
+- [Sparse H3/S2 and route-cell features](./sparse_features.md)
+- [Spatial modeling and bearing unit-vector features](./spatial_modeling.md)
+- [Geo evaluation standard](./user-guide/geo-evaluation-standard.md)
 - [Benchmarks](./benchmarks/index.md)
+- [Benchmark methodology and geo manifest contract](./benchmarks/methodology.md)
+- Release gate audit: `../scripts/check_release_gates.py`
+- Public API contract audit: `../scripts/check_public_api_contract.py`
+- Artifact compatibility audit: `../scripts/check_artifact_compatibility.py`
+- Docs example audit: `../scripts/check_docs_examples.py`
+- Official geo evidence audit: `../scripts/check_official_geo_evidence.py`
+- Performance threshold audit: `../scripts/check_performance_thresholds.py`
+- AutoGeo benchmark gate: `../scripts/run_autogeo_benchmark_gate.py`
+- NYC TLC quality benchmark harness: `../scripts/run_nyc_taxi_quality_benchmarks.py`
 - [Model benchmark suite](./benchmarks/model-suite.md)
 - [NYC taxi benchmark report](./benchmarks/nyc-taxi.md)
 - [Python API reference](./reference/python-api.md)

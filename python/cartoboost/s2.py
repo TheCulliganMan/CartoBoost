@@ -6,10 +6,13 @@ from functools import cache
 from typing import Any
 
 from . import _native
+from .geo import route_latlng_points
 
 __all__ = [
+    "build_s2_route_sparse_sets",
     "build_s2_sparse_sets",
     "encode_s2_cells",
+    "encode_s2_route_cells",
     "latlng_to_s2_id",
     "normalize_s2_id",
     "s2_parent_id",
@@ -71,6 +74,51 @@ def encode_s2_cells(
         latlng_to_s2_id(latitude, longitude, level=level)
         for latitude, longitude in zip(lat_values, lng_values, strict=True)
     ]
+
+
+def encode_s2_route_cells(
+    route: Any,
+    *,
+    level: int,
+    parent_levels: Iterable[int] = (),
+) -> list[int]:
+    """Encode one decoded OSRM/Valhalla route into sorted S2 sparse IDs."""
+
+    child_level = _normalize_level(level, "level")
+    parents = [_normalize_level(value, "parent_levels") for value in parent_levels]
+    _native.s2_validate_parent_levels_value(child_level, parents)
+    cells: list[int] = []
+    for latitude, longitude in route_latlng_points(route):
+        child = latlng_to_s2_id(latitude, longitude, level=child_level)
+        cells.append(child)
+        cells.extend(s2_parent_id(child, parent_level=parent) for parent in parents)
+    return [int(value) for value in _native.geo_assemble_route_sparse_rows_value([cells])[0]]
+
+
+def build_s2_route_sparse_sets(
+    routes: Iterable[Any],
+    *,
+    name: str = "route_s2",
+    level: int,
+    parent_levels: Iterable[int] = (),
+) -> dict[str, list[list[int]]]:
+    """Build one S2 sparse-set column from decoded route geometries."""
+
+    if not name:
+        raise ValueError("name must be non-empty")
+    route_values = list(routes)
+    if not route_values:
+        raise ValueError("routes must contain at least one row")
+    parents = tuple(parent_levels)
+    rows = [
+        encode_s2_route_cells(
+            route,
+            level=level,
+            parent_levels=parents,
+        )
+        for route in route_values
+    ]
+    return {name: [list(row) for row in _native.geo_assemble_route_sparse_rows_value(rows)]}
 
 
 def build_s2_sparse_sets(
