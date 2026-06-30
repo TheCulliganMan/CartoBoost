@@ -20,9 +20,9 @@ index first with `ForecastFrame`, then model true zero demand.
 
 | Model | Use when |
 | --- | --- |
-| `CrostonForecaster` | Demand is intermittent and you want the basic Croston decomposition. |
-| `SbaForecaster` | You want Croston-style smoothing with SBA bias adjustment. |
-| `TsbForecaster` | Occurrence probability and demand size should be smoothed separately. |
+| [`CrostonForecaster`](croston.md) | Demand is intermittent and you want the basic Croston decomposition. |
+| [`SbaForecaster`](sba.md) | You want Croston-style smoothing with SBA bias adjustment. |
+| [`TsbForecaster`](tsb.md) | Occurrence probability and demand size should be smoothed separately. |
 
 ## Public Contract
 
@@ -43,6 +43,12 @@ tsb_forecast = tsb.predict(6)
 ## Browser WASM Example
 
 <ForecastModelExample title="Intermittent demand browser forecast" model="intermittent_demand" />
+
+<ForecastModelExample title="Croston browser forecast" model="croston" />
+
+<ForecastModelExample title="SBA browser forecast" model="sba" />
+
+<ForecastModelExample title="TSB browser forecast" model="tsb" />
 
 ## Use When
 

@@ -33,6 +33,9 @@ it on the same rolling-origin split as the simpler baselines.
 | [Neural Panel](neural-panel.md) | Fit a neural panel forecaster with direct multi-horizon output for related series. | Includes an interactive example for `neural_panel`. |
 | [AutoStatsBank](auto-stats-bank.md) | Validate a deterministic statistical expert bank. | Useful when a local statistical selector is the model being tested. |
 | [Intermittent Demand](intermittent-demand.md) | Forecast sparse non-negative demand with fixed Croston, SBA, or TSB methods. | Use when zeros are meaningful demand periods rather than missing rows. |
+| [Croston](croston.md) | Fit the basic Croston decomposition for sparse non-negative demand. | Includes an interactive example for `croston`. |
+| [SBA](sba.md) | Fit the Syntetos-Boylan bias-adjusted Croston method. | Includes an interactive example for `sba`. |
+| [TSB](tsb.md) | Smooth demand size and occurrence probability separately. | Includes an interactive example for `tsb`. |
 | [AutoForecaster](auto-forecaster.md) | Use the guarded default selector over lag, direct, residual-corrected, intermittent, and classical candidates. | Includes diagrams for validation, gating, prediction, and metadata inspection. |
 | [Weighted Ensembles](ensembles.md) | Combine fitted forecasters with explicit weights. | Components and weights must be named explicitly. |
 
@@ -56,7 +59,7 @@ Choose the model whose assumptions match the signal you can defend:
 | Geo model quality must include calibrated uncertainty. | [Probabilistic and conformal models](probabilistic-conformal.md) | Separates base fitting from calibration and reports coverage, width, PIT bins, horizon/block coverage, and residual Moran's I. |
 | Fixed regular windows should be tested with a compact neural expert. | [N-BEATS or N-HiTS](beats-hits.md) | Provides deterministic neural baselines for direct window learning before moving to richer panel or graph models. |
 | Directional series need direct multi-horizon neural forecasts with id direction preserved. | [Neural Panel](neural-panel.md) | Builds leak-free lag windows from `ForecastFrame`, keeps directional ids distinct, injects generated lane embedding/graph covariates, and stores component, normalization, quantile, series-id, and train-cutoff metadata. |
-| Pickup demand is sparse with many true zero periods. | Croston, SBA, or TSB | Uses intermittent-demand smoothing instead of generic trend extrapolation. |
+| Pickup demand is sparse with many true zero periods. | [Croston](croston.md), [SBA](sba.md), or [TSB](tsb.md) | Uses intermittent-demand smoothing instead of generic trend extrapolation. |
 | A local statistical bank should choose among reusable non-benchmark candidates. | AutoStatsBank | Runs validation over a deterministic statistical expert bank. |
 | A production panel needs a deterministic guarded default with auditable candidate weights. | AutoForecaster | Validates a fixed roster, protects the lag baseline, and stores global, horizon, and series weights. |
 | Validated models capture complementary errors. | Weighted ensemble | Averages explicit components after each member proves useful. |
