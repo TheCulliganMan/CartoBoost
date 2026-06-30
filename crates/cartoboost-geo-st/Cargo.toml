@@ -1,6 +1,6 @@
 [package]
 name = "cartoboost-geo-st"
-version = "0.2.32"
+version = "0.2.35"
 edition.workspace = true
 license.workspace = true
 
