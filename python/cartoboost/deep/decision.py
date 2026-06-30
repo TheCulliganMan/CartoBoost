@@ -23,14 +23,15 @@ class ConstrainedDecisionOptimizer:
     def select(
         self, candidate_frame: list[dict[str, Any]], predictions: Any | None = None
     ) -> list[dict[str, Any]]:
-        del predictions
         select = require_native("deep_constrained_decision_select_value")
+        candidates = _merge_predictions(candidate_frame, predictions)
         return loads(
             select(
-                dumps(candidate_frame),
+                dumps(candidates),
                 str(self.objective),
                 dumps(self.constraints),
                 str(self.fallback),
+                self.risk_aversion,
             )
         )
 
@@ -42,3 +43,27 @@ class ConstrainedDecisionOptimizer:
             "fallback": self.fallback,
             "risk_aversion": self.risk_aversion,
         }
+
+
+def _merge_predictions(
+    candidate_frame: list[dict[str, Any]], predictions: Any | None
+) -> list[dict[str, Any]]:
+    if predictions is None:
+        return [dict(row) for row in candidate_frame]
+    if not isinstance(predictions, list):
+        predictions = list(predictions)
+    by_candidate = {
+        str(row["candidate_id"]): row
+        for row in predictions
+        if isinstance(row, dict) and "candidate_id" in row
+    }
+    merged = []
+    for row in candidate_frame:
+        out = dict(row)
+        pred = by_candidate.get(str(row.get("candidate_id")))
+        if pred is not None:
+            for key, value in pred.items():
+                if key not in {"decision_id", "candidate_id", "candidate_value"}:
+                    out[key] = value
+        merged.append(out)
+    return merged

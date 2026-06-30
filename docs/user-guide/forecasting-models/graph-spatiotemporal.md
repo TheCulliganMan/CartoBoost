@@ -2,10 +2,11 @@ import {ForecastModelExample} from '@site/src/components/ModelingLabClient';
 
 # Graph Spatiotemporal Forecasting
 
-Use `DCRNNForecaster` when each forecast series is a node in a known directed
-graph and neighboring nodes can lead, lag, or diffuse signal into one another.
-This is for sensor networks, route flows, road segments, zone flows, equipment
-networks, or other panels where the graph is part of the modeling claim.
+Use `DCRNNForecaster`, `GraphWaveNetForecaster`, or `STAEformerForecaster`
+when each forecast series is a node in a known directed graph and neighboring
+nodes can lead, lag, or diffuse signal into one another. This is for sensor
+networks, route flows, road segments, zone flows, equipment networks, or other
+panels where the graph is part of the modeling claim.
 
 Do not use a graph forecaster only because node ids exist. The edges should
 represent known movement, influence, adjacency, or dependency available at the
@@ -24,7 +25,12 @@ same rolling-origin split used by the baselines.
 
 ```python
 import numpy as np
-from cartoboost.forecasting import DCRNNForecaster, GraphTemporalFrame
+from cartoboost.forecasting import (
+    DCRNNForecaster,
+    GraphTemporalFrame,
+    GraphWaveNetForecaster,
+    STAEformerForecaster,
+)
 
 target = np.array(
     [
@@ -63,20 +69,42 @@ model.fit(frame)
 forecast = model.predict(2)
 metrics = model.backtest(frame=frame, train_size=6)
 model.save("graph-forecast.json")
+
+attention_model = STAEformerForecaster(
+    lookback=4,
+    attention_heads=2,
+    hidden_size=8,
+    backend="cpu",
+)
+attention_model.fit(frame)
+attention_forecast = attention_model.predict(2)
+attention_model.save("graph-attention-forecast.json")
+
+wave_model = GraphWaveNetForecaster(
+    lookback=4,
+    dilation_depth=2,
+    hidden_size=8,
+    backend="cpu",
+)
+wave_model.fit(frame)
+wave_forecast = wave_model.predict(2)
 ```
 
-`forecast` is a numeric array with shape `[horizon, node]`. `backtest` returns
-horizon-level MAE, RMSE, and WAPE for the supplied cutoff.
+`forecast`, `attention_forecast`, and `wave_forecast` are numeric arrays with
+shape `[horizon, node]`. `backtest` returns horizon-level MAE, RMSE, and WAPE
+for the supplied cutoff.
 
 `backend="cpu"` is the default. `backend="auto"` is accepted as a CPU-resolving
 alias. On Apple-platform wheels built with native
-Metal support, `backend="metal"` routes the DCRNN decoder head through the
-shared Metal affine kernel. On Linux or WSL wheels built with ROCm support,
+Metal support, `backend="metal"` routes the DCRNN decoder head, GraphWaveNet
+dilated decoder head, and STAEformer attention decoder head through the shared
+Metal affine kernel. On Linux or WSL wheels built with ROCm support,
 `backend="rocm"` routes the same decoder head through the shared HIP affine
 kernel. On Windows or Linux wheels built with CUDA support, `backend="cuda"`
-routes the same decoder head through the shared CUDA affine kernel. Diffusion state updates, graph validation, and
-training remain deterministic Rust code. If the requested accelerator is
-unavailable, construction fails with the available backend list.
+routes the same decoder head through the shared CUDA affine kernel. Diffusion
+state updates, dilated temporal graph features, attention feature generation,
+graph validation, and training remain deterministic Rust code. If the requested
+accelerator is unavailable, construction fails with the available backend list.
 
 ## Inputs
 
@@ -130,5 +158,6 @@ Report:
 - If the graph changes over time, keep only edges known at the cutoff.
 - Do not fill missing adjacency with an empty graph or silently fall back to a
   panel-only model.
-- `STAEformerForecaster` is a reserved transformer-style interface marker; use
-  `DCRNNForecaster` for graph forecasting quality claims.
+- `STAEformerForecaster` uses a deterministic Rust spatiotemporal attention
+  feature encoder with a trained native decoder. Benchmark claims still need
+  the same rolling-origin split and baseline comparisons as DCRNN claims.

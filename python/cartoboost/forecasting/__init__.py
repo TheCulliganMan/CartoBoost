@@ -17,6 +17,7 @@ from .global_models import CartoBoostLagForecaster
 from .graph_st import (
     DCRNNForecaster,
     GraphTemporalFrame,
+    GraphWaveNetForecaster,
     STAEformerForecaster,
     available_graph_st_backends,
 )
@@ -127,6 +128,7 @@ __all__ = [
     "ForecastRegistry",
     "ForecastResult",
     "ForecastingConfig",
+    "GraphWaveNetForecaster",
     "GraphTemporalFrame",
     "available_graph_st_backends",
     "ConformalCalibrator",

@@ -4,7 +4,7 @@ from typing import Any
 
 import numpy as np
 
-from ._native import dumps, require_native
+from ._native import dumps, loads, require_native
 from .frames import DirectionalPairFrame, EntityPanelFrame
 
 
@@ -15,15 +15,30 @@ class DirectionalPairForecaster:
         self.is_fitted_ = False
 
     def fit(self, frame: DirectionalPairFrame) -> DirectionalPairForecaster:
-        self.feature_names_in_ = []
-        self.metadata_ = {"model_class": "DirectionalPairForecaster", "preserve_direction": True}
+        fit = require_native("deep_directional_pair_fit_value")
+        rows = [
+            {
+                "source_id": row["source_id"],
+                "target_id": row["target_id"],
+                "timestamp": row.get("timestamp"),
+                "features": row.get("features", []),
+                "target": row.get("target"),
+            }
+            for row in frame.rows
+        ]
+        self._artifact_json = fit(dumps(rows))
+        self.metadata_ = loads(self._artifact_json)
+        self.metadata_["preserve_direction"] = self.preserve_direction
+        self.feature_names_in_ = [
+            f"feature_{idx}" for idx in range(len(rows[0].get("features", [])))
+        ]
         self.is_fitted_ = True
         return self
 
     def predict(self, frame: DirectionalPairFrame) -> np.ndarray:
         if not self.is_fitted_:
             raise RuntimeError("model must be fit before prediction")
-        predict = require_native("deep_directional_pair_predict_value")
+        predict = require_native("deep_directional_pair_predict_artifact_value")
         rows = [
             {
                 "source_id": row["source_id"],
@@ -33,7 +48,7 @@ class DirectionalPairForecaster:
             }
             for row in frame.rows
         ]
-        return np.asarray(predict(dumps(rows)), dtype=float)
+        return np.asarray(predict(self._artifact_json, dumps(rows)), dtype=float)
 
     def score(self, frame: DirectionalPairFrame) -> float:
         actual = np.asarray([row["target"] for row in frame.rows], dtype=float)
@@ -57,13 +72,14 @@ class TemporalEntityTransformer:
         self.is_fitted_ = False
 
     def fit(self, frame: EntityPanelFrame) -> TemporalEntityTransformer:
-        if frame.y.shape[0] <= self.lookback:
-            raise ValueError("frame history must exceed lookback")
-        self._last_window = np.asarray(frame.y[-self.lookback :], dtype=float)
-        self.metadata_ = {
-            "model_class": "TemporalEntityTransformer",
-            "cutoff": str(frame.timestamps[-1]),
-        }
+        fit = require_native("deep_temporal_entity_fit_value")
+        self._artifact_json = fit(
+            dumps(np.asarray(frame.y, dtype=float).tolist()),
+            self.lookback,
+            self.horizon,
+        )
+        self.metadata_ = loads(self._artifact_json)
+        self.metadata_["cutoff"] = str(frame.timestamps[-1])
         self.is_fitted_ = True
         return self
 
@@ -71,8 +87,8 @@ class TemporalEntityTransformer:
         if not self.is_fitted_:
             raise RuntimeError("model must be fit before prediction")
         horizon = int(horizon or self.horizon)
-        level = self._last_window[-min(7, self._last_window.shape[0]) :].mean(axis=0)
-        return np.tile(level, (horizon, 1))
+        predict = require_native("deep_temporal_entity_predict_value")
+        return np.asarray(loads(predict(self._artifact_json, horizon)), dtype=float)
 
     def predict_quantiles(self, horizon: int | None = None) -> dict[float, np.ndarray]:
         pred = self.predict(horizon)

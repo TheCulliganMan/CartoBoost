@@ -10,7 +10,8 @@
 use cartoboost_geo_st::{available_compute_backends, select_compute_backend};
 use cartoboost_geo_st::{
     graph_metrics, synthetic_graph_diffusion_frame, traffic_style_fixture_frame, CsrAdjacency,
-    DcrnnConfig, DcrnnForecaster, GraphTemporalFrame,
+    DcrnnConfig, DcrnnForecaster, GraphTemporalFrame, GraphWaveNetConfig, GraphWaveNetForecaster,
+    STAEformerConfig, STAEformerForecaster,
 };
 
 #[test]
@@ -109,6 +110,68 @@ fn save_load_is_stable() {
             assert!((left - right).abs() < 1.0e-10);
         }
     }
+}
+
+#[test]
+fn staeformer_fits_predicts_scores_and_roundtrips() {
+    let frame = synthetic_graph_diffusion_frame();
+    let mut model = STAEformerForecaster::new(STAEformerConfig {
+        lookback: 6,
+        attention_heads: 3,
+        hidden_size: 5,
+        epochs: 12,
+        learning_rate: 0.03,
+        ridge: 1e-3,
+        ..STAEformerConfig::default()
+    })
+    .unwrap();
+    model.fit(&frame).unwrap();
+    let prediction = model.predict(frame.horizon).unwrap();
+    assert_eq!(prediction.len(), frame.horizon);
+    assert_eq!(prediction[0].len(), frame.node_ids.len());
+    let score = model
+        .score(&frame.target[frame.target.len() - frame.horizon..])
+        .unwrap();
+    assert!(score.is_finite());
+
+    let artifact = model.to_json_string().unwrap();
+    assert!(artifact.contains("temporal_queries"));
+    let loaded = STAEformerForecaster::from_json_string(&artifact).unwrap();
+    assert_eq!(
+        loaded.predict(frame.horizon).unwrap().len(),
+        prediction.len()
+    );
+}
+
+#[test]
+fn graph_wavenet_fits_predicts_scores_and_roundtrips() {
+    let frame = synthetic_graph_diffusion_frame();
+    let mut model = GraphWaveNetForecaster::new(GraphWaveNetConfig {
+        lookback: 6,
+        dilation_depth: 3,
+        hidden_size: 5,
+        epochs: 12,
+        learning_rate: 0.03,
+        ridge: 1e-3,
+        ..GraphWaveNetConfig::default()
+    })
+    .unwrap();
+    model.fit(&frame).unwrap();
+    let prediction = model.predict(frame.horizon).unwrap();
+    assert_eq!(prediction.len(), frame.horizon);
+    assert_eq!(prediction[0].len(), frame.node_ids.len());
+    let score = model
+        .score(&frame.target[frame.target.len() - frame.horizon..])
+        .unwrap();
+    assert!(score.is_finite());
+
+    let artifact = model.to_json_string().unwrap();
+    assert!(artifact.contains("dilation_depth"));
+    let loaded = GraphWaveNetForecaster::from_json_string(&artifact).unwrap();
+    assert_eq!(
+        loaded.predict(frame.horizon).unwrap().len(),
+        prediction.len()
+    );
 }
 
 #[test]

@@ -668,14 +668,537 @@ impl DcrnnForecaster {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct STAEformerConfig {
+    pub lookback: usize,
+    pub attention_heads: usize,
+    pub hidden_size: usize,
+    pub epochs: usize,
+    pub learning_rate: f64,
+    pub ridge: f64,
+    #[serde(default)]
+    pub backend: ComputeBackendSelection,
+}
+
+impl Default for STAEformerConfig {
+    fn default() -> Self {
+        Self {
+            lookback: 8,
+            attention_heads: 4,
+            hidden_size: 8,
+            epochs: 120,
+            learning_rate: 0.02,
+            ridge: 1e-4,
+            backend: select_compute_backend(None).expect("default CPU backend is always available"),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct STAEformerForecaster {
-    pub message: String,
+    pub config: STAEformerConfig,
+    node_ids: Vec<String>,
+    frequency: String,
+    horizon: usize,
+    adjacency: Option<CsrAdjacency>,
+    weights: Vec<Vec<f64>>,
+    intercepts: Vec<f64>,
+    temporal_queries: Vec<Vec<f64>>,
+    temporal_keys: Vec<Vec<f64>>,
+    spatial_weights: Vec<f64>,
+    history: Vec<Vec<f64>>,
+    target_mean: f64,
+    target_scale: f64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GraphWaveNetConfig {
+    pub lookback: usize,
+    pub dilation_depth: usize,
+    pub hidden_size: usize,
+    pub epochs: usize,
+    pub learning_rate: f64,
+    pub ridge: f64,
+    #[serde(default)]
+    pub backend: ComputeBackendSelection,
+}
+
+impl Default for GraphWaveNetConfig {
+    fn default() -> Self {
+        Self {
+            lookback: 8,
+            dilation_depth: 3,
+            hidden_size: 8,
+            epochs: 120,
+            learning_rate: 0.02,
+            ridge: 1e-4,
+            backend: select_compute_backend(None).expect("default CPU backend is always available"),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GraphWaveNetForecaster {
+    pub config: GraphWaveNetConfig,
+    node_ids: Vec<String>,
+    frequency: String,
+    horizon: usize,
+    adjacency: Option<CsrAdjacency>,
+    weights: Vec<Vec<f64>>,
+    intercepts: Vec<f64>,
+    history: Vec<Vec<f64>>,
+    target_mean: f64,
+    target_scale: f64,
+}
+
+impl GraphWaveNetForecaster {
+    pub fn new(config: GraphWaveNetConfig) -> Result<Self> {
+        if config.lookback == 0
+            || config.dilation_depth == 0
+            || config.hidden_size == 0
+            || config.epochs == 0
+        {
+            return Err(GeoStError::InvalidFrame(
+                "lookback, dilation_depth, hidden_size, and epochs must be positive".to_string(),
+            ));
+        }
+        if !config.learning_rate.is_finite() || config.learning_rate <= 0.0 {
+            return Err(GeoStError::InvalidFrame(
+                "learning_rate must be positive".to_string(),
+            ));
+        }
+        Ok(Self {
+            config,
+            node_ids: Vec::new(),
+            frequency: String::new(),
+            horizon: 0,
+            adjacency: None,
+            weights: Vec::new(),
+            intercepts: Vec::new(),
+            history: Vec::new(),
+            target_mean: 0.0,
+            target_scale: 1.0,
+        })
+    }
+
+    pub fn fit(&mut self, frame: &GraphTemporalFrame) -> Result<()> {
+        frame.validate()?;
+        if frame.target.len() <= self.config.lookback + frame.horizon {
+            return Err(GeoStError::InvalidFrame(
+                "target length must exceed lookback plus horizon".to_string(),
+            ));
+        }
+        let nodes = frame.node_ids.len();
+        let feature_len = self.feature_len();
+        let (target_mean, target_scale) = target_center_scale(&frame.target);
+        let normalized_target = frame
+            .target
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|value| (value - target_mean) / target_scale)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let adjacency = frame.adjacency.row_normalized();
+        self.weights = vec![vec![0.0; feature_len]; frame.horizon];
+        self.intercepts = vec![0.0; frame.horizon];
+        let samples = frame.target.len() - self.config.lookback - frame.horizon + 1;
+        for h in 0..frame.horizon {
+            let mut xtx = vec![vec![0.0; feature_len]; feature_len];
+            let mut xty = vec![0.0; feature_len];
+            for sample in 0..samples {
+                let cutoff = sample + self.config.lookback;
+                let features = self.wave_features(&normalized_target[sample..cutoff], &adjacency);
+                let actual = &normalized_target[cutoff + h];
+                for node in 0..nodes {
+                    let x = &features[node * feature_len..(node + 1) * feature_len];
+                    for row in 0..feature_len {
+                        xty[row] += x[row] * actual[node];
+                        for col in 0..feature_len {
+                            xtx[row][col] += x[row] * x[col];
+                        }
+                    }
+                }
+            }
+            for (idx, row) in xtx.iter_mut().enumerate() {
+                row[idx] += self.config.ridge.max(1.0e-8);
+            }
+            self.weights[h] = solve_linear_system(xtx, xty);
+        }
+        self.node_ids = frame.node_ids.clone();
+        self.frequency = frame.frequency.clone();
+        self.horizon = frame.horizon;
+        self.adjacency = Some(adjacency);
+        self.history = normalized_target;
+        self.target_mean = target_mean;
+        self.target_scale = target_scale;
+        Ok(())
+    }
+
+    pub fn predict(&self, horizon: usize) -> Result<Vec<Vec<f64>>> {
+        if horizon == 0 {
+            return Err(GeoStError::InvalidFrame(
+                "prediction horizon must be positive".to_string(),
+            ));
+        }
+        if self.weights.is_empty() {
+            return Err(GeoStError::NotFit);
+        }
+        let adjacency = self.adjacency.as_ref().ok_or(GeoStError::NotFit)?;
+        let mut history = self.history.clone();
+        let mut predictions = Vec::with_capacity(horizon);
+        for step in 0..horizon {
+            let h = step.min(self.weights.len() - 1);
+            let start = history.len() - self.config.lookback;
+            let features = self.wave_features(&history[start..], adjacency);
+            let feature_len = self.weights[h].len();
+            let rows = features
+                .chunks(feature_len)
+                .map(|chunk| chunk.to_vec())
+                .collect::<Vec<_>>();
+            let means = vec![0.0; feature_len];
+            let intercepts = vec![self.intercepts[h]; self.node_ids.len()];
+            let next = backend_affine_scores(
+                &self.neural_backend_selection(),
+                &rows,
+                &means,
+                &self.weights[h],
+                &intercepts,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+            history.push(next.clone());
+            predictions.push(
+                next.into_iter()
+                    .map(|value| value * self.target_scale + self.target_mean)
+                    .collect(),
+            );
+        }
+        Ok(predictions)
+    }
+
+    pub fn score(&self, actual: &[Vec<f64>]) -> Result<f64> {
+        let predictions = self.predict(actual.len())?;
+        let mut sum = 0.0;
+        let mut count = 0usize;
+        for (pred_row, actual_row) in predictions.iter().zip(actual) {
+            if pred_row.len() != actual_row.len() {
+                return Err(GeoStError::InvalidFrame(
+                    "prediction and actual rows must have the same width".to_string(),
+                ));
+            }
+            for (pred, actual) in pred_row.iter().zip(actual_row) {
+                sum += (pred - actual).powi(2);
+                count += 1;
+            }
+        }
+        Ok((sum / count.max(1) as f64).sqrt())
+    }
+
+    pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
+        fs::write(path, serde_json::to_string_pretty(self)?)?;
+        Ok(())
+    }
+
+    pub fn load(path: impl AsRef<Path>) -> Result<Self> {
+        Ok(serde_json::from_str(&fs::read_to_string(path)?)?)
+    }
+
+    pub fn to_json_string(&self) -> Result<String> {
+        Ok(serde_json::to_string(self)?)
+    }
+
+    pub fn from_json_string(value: &str) -> Result<Self> {
+        Ok(serde_json::from_str(value)?)
+    }
+
+    pub fn backend(&self) -> String {
+        self.config.backend.selected.clone()
+    }
+
+    fn feature_len(&self) -> usize {
+        3 + self.config.dilation_depth * 4
+    }
+
+    fn wave_features(&self, window: &[Vec<f64>], adjacency: &CsrAdjacency) -> Vec<f64> {
+        let nodes = window[0].len();
+        let feature_len = self.feature_len();
+        let last = window.last().expect("non-empty lookback window");
+        let mut neighbor_last = vec![0.0; nodes];
+        adjacency.matvec(last, &mut neighbor_last);
+        let mut out = vec![0.0; nodes * feature_len];
+        for node in 0..nodes {
+            let offset = node * feature_len;
+            out[offset] = last[node];
+            out[offset + 1] = neighbor_last[node];
+            out[offset + 2] = 1.0;
+            for depth in 0..self.config.dilation_depth {
+                let lag = 2usize.pow(depth as u32).min(window.len());
+                let current = &window[window.len() - lag];
+                let previous = &window[window.len().saturating_sub(lag + 1)];
+                let mut neighbor = vec![0.0; nodes];
+                adjacency.matvec(current, &mut neighbor);
+                let gated = (current[node] + neighbor[node]).tanh();
+                let filter = sigmoid(current[node] - previous[node]);
+                let base = offset + 3 + depth * 4;
+                out[base] = gated * filter;
+                out[base + 1] = current[node];
+                out[base + 2] = neighbor[node];
+                out[base + 3] = current[node] - previous[node];
+            }
+        }
+        out
+    }
+
+    fn neural_backend_selection(&self) -> BackendSelection {
+        BackendSelection {
+            requested: self.config.backend.requested.clone(),
+            selected: self.config.backend.selected.clone(),
+            available: self.config.backend.available.clone(),
+        }
+    }
 }
 
 impl Default for STAEformerForecaster {
     fn default() -> Self {
-        Self {
-            message: "STAEformerForecaster scaffold: transformer-ready graph temporal interface is reserved; use DCRNNForecaster for the Rust CPU baseline.".to_string(),
+        Self::new(STAEformerConfig::default()).expect("default STAEformer config is valid")
+    }
+}
+
+impl STAEformerForecaster {
+    pub fn new(config: STAEformerConfig) -> Result<Self> {
+        if config.lookback == 0
+            || config.attention_heads == 0
+            || config.hidden_size == 0
+            || config.epochs == 0
+        {
+            return Err(GeoStError::InvalidFrame(
+                "lookback, attention_heads, hidden_size, and epochs must be positive".to_string(),
+            ));
+        }
+        if !config.learning_rate.is_finite() || config.learning_rate <= 0.0 {
+            return Err(GeoStError::InvalidFrame(
+                "learning_rate must be positive".to_string(),
+            ));
+        }
+        Ok(Self {
+            config,
+            node_ids: Vec::new(),
+            frequency: String::new(),
+            horizon: 0,
+            adjacency: None,
+            weights: Vec::new(),
+            intercepts: Vec::new(),
+            temporal_queries: Vec::new(),
+            temporal_keys: Vec::new(),
+            spatial_weights: Vec::new(),
+            history: Vec::new(),
+            target_mean: 0.0,
+            target_scale: 1.0,
+        })
+    }
+
+    pub fn fit(&mut self, frame: &GraphTemporalFrame) -> Result<()> {
+        frame.validate()?;
+        if frame.target.len() <= self.config.lookback + frame.horizon {
+            return Err(GeoStError::InvalidFrame(
+                "target length must exceed lookback plus horizon".to_string(),
+            ));
+        }
+        let nodes = frame.node_ids.len();
+        let feature_len = self.feature_len();
+        let (target_mean, target_scale) = target_center_scale(&frame.target);
+        let normalized_target = frame
+            .target
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|value| (value - target_mean) / target_scale)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let adjacency = frame.adjacency.row_normalized();
+        self.temporal_queries = deterministic_weight_matrix(
+            self.config.attention_heads,
+            self.config.lookback,
+            0x94d0_49bb_1331_11eb,
+        );
+        self.temporal_keys = deterministic_weight_matrix(
+            self.config.attention_heads,
+            self.config.lookback,
+            0x2545_f491_4f6c_dd1d,
+        );
+        self.spatial_weights = (0..self.config.attention_heads)
+            .map(|idx| 0.5 + idx as f64 / self.config.attention_heads as f64)
+            .collect();
+        self.weights = vec![vec![0.0; feature_len]; frame.horizon];
+        self.intercepts = vec![0.0; frame.horizon];
+        let samples = frame.target.len() - self.config.lookback - frame.horizon + 1;
+        for h in 0..frame.horizon {
+            let mut xtx = vec![vec![0.0; feature_len]; feature_len];
+            let mut xty = vec![0.0; feature_len];
+            for sample in 0..samples {
+                let cutoff = sample + self.config.lookback;
+                let features =
+                    self.attention_features(&normalized_target[sample..cutoff], &adjacency);
+                let actual = &normalized_target[cutoff + h];
+                for node in 0..nodes {
+                    let x = &features[node * feature_len..(node + 1) * feature_len];
+                    for row in 0..feature_len {
+                        xty[row] += x[row] * actual[node];
+                        for col in 0..feature_len {
+                            xtx[row][col] += x[row] * x[col];
+                        }
+                    }
+                }
+            }
+            for (idx, row) in xtx.iter_mut().enumerate() {
+                row[idx] += self.config.ridge.max(1.0e-8);
+            }
+            self.weights[h] = solve_linear_system(xtx, xty);
+        }
+        self.node_ids = frame.node_ids.clone();
+        self.frequency = frame.frequency.clone();
+        self.horizon = frame.horizon;
+        self.adjacency = Some(adjacency);
+        self.history = normalized_target;
+        self.target_mean = target_mean;
+        self.target_scale = target_scale;
+        Ok(())
+    }
+
+    pub fn predict(&self, horizon: usize) -> Result<Vec<Vec<f64>>> {
+        if horizon == 0 {
+            return Err(GeoStError::InvalidFrame(
+                "prediction horizon must be positive".to_string(),
+            ));
+        }
+        if self.weights.is_empty() {
+            return Err(GeoStError::NotFit);
+        }
+        let adjacency = self.adjacency.as_ref().ok_or(GeoStError::NotFit)?;
+        let mut history = self.history.clone();
+        let mut predictions = Vec::with_capacity(horizon);
+        for step in 0..horizon {
+            let h = step.min(self.weights.len() - 1);
+            let start = history.len() - self.config.lookback;
+            let features = self.attention_features(&history[start..], adjacency);
+            let feature_len = self.weights[h].len();
+            let rows = features
+                .chunks(feature_len)
+                .map(|chunk| chunk.to_vec())
+                .collect::<Vec<_>>();
+            let means = vec![0.0; feature_len];
+            let intercepts = vec![self.intercepts[h]; self.node_ids.len()];
+            let next = backend_affine_scores(
+                &self.neural_backend_selection(),
+                &rows,
+                &means,
+                &self.weights[h],
+                &intercepts,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+            history.push(next.clone());
+            predictions.push(
+                next.into_iter()
+                    .map(|value| value * self.target_scale + self.target_mean)
+                    .collect(),
+            );
+        }
+        Ok(predictions)
+    }
+
+    pub fn score(&self, actual: &[Vec<f64>]) -> Result<f64> {
+        if actual.is_empty() {
+            return Err(GeoStError::InvalidFrame(
+                "actual horizon cannot be empty".to_string(),
+            ));
+        }
+        let predictions = self.predict(actual.len())?;
+        let mut sum = 0.0;
+        let mut count = 0usize;
+        for (pred_row, actual_row) in predictions.iter().zip(actual) {
+            if pred_row.len() != actual_row.len() {
+                return Err(GeoStError::InvalidFrame(
+                    "prediction and actual rows must have the same width".to_string(),
+                ));
+            }
+            for (pred, actual) in pred_row.iter().zip(actual_row) {
+                sum += (pred - actual).powi(2);
+                count += 1;
+            }
+        }
+        Ok((sum / count.max(1) as f64).sqrt())
+    }
+
+    pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
+        fs::write(path, serde_json::to_string_pretty(self)?)?;
+        Ok(())
+    }
+
+    pub fn load(path: impl AsRef<Path>) -> Result<Self> {
+        Ok(serde_json::from_str(&fs::read_to_string(path)?)?)
+    }
+
+    pub fn to_json_string(&self) -> Result<String> {
+        Ok(serde_json::to_string(self)?)
+    }
+
+    pub fn from_json_string(value: &str) -> Result<Self> {
+        Ok(serde_json::from_str(value)?)
+    }
+
+    pub fn backend(&self) -> String {
+        self.config.backend.selected.clone()
+    }
+
+    fn feature_len(&self) -> usize {
+        3 + self.config.attention_heads * 2
+    }
+
+    fn attention_features(&self, window: &[Vec<f64>], adjacency: &CsrAdjacency) -> Vec<f64> {
+        let nodes = window[0].len();
+        let feature_len = self.feature_len();
+        let mut out = vec![0.0; nodes * feature_len];
+        let last = window.last().expect("non-empty lookback window");
+        let mut neighbor_last = vec![0.0; nodes];
+        adjacency.matvec(last, &mut neighbor_last);
+        for node in 0..nodes {
+            let offset = node * feature_len;
+            out[offset] = last[node];
+            out[offset + 1] = neighbor_last[node];
+            out[offset + 2] = 1.0;
+            let series = window.iter().map(|row| row[node]).collect::<Vec<_>>();
+            let neighbor_series = window
+                .iter()
+                .map(|row| {
+                    let mut smoothed = vec![0.0; nodes];
+                    adjacency.matvec(row, &mut smoothed);
+                    smoothed[node]
+                })
+                .collect::<Vec<_>>();
+            for head in 0..self.config.attention_heads {
+                let temporal = attention_pool(
+                    &series,
+                    &self.temporal_queries[head],
+                    &self.temporal_keys[head],
+                );
+                let spatial = attention_pool(
+                    &neighbor_series,
+                    &self.temporal_queries[head],
+                    &self.temporal_keys[head],
+                ) * self.spatial_weights[head];
+                out[offset + 3 + head * 2] = temporal;
+                out[offset + 3 + head * 2 + 1] = spatial;
+            }
+        }
+        out
+    }
+
+    fn neural_backend_selection(&self) -> BackendSelection {
+        BackendSelection {
+            requested: self.config.backend.requested.clone(),
+            selected: self.config.backend.selected.clone(),
+            available: self.config.backend.available.clone(),
         }
     }
 }
@@ -776,6 +1299,29 @@ pub fn traffic_style_fixture_frame() -> GraphTemporalFrame {
 
 fn dot(weights: &[f64], values: &[f64]) -> f64 {
     weights.iter().zip(values.iter()).map(|(w, v)| w * v).sum()
+}
+
+fn attention_pool(values: &[f64], query: &[f64], key: &[f64]) -> f64 {
+    let width = values.len().min(query.len()).min(key.len());
+    let scores = (0..width)
+        .map(|idx| (query[idx] * values[idx] + key[idx]).tanh())
+        .collect::<Vec<_>>();
+    let max_score = scores.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let weights = scores
+        .iter()
+        .map(|score| (score - max_score).exp())
+        .collect::<Vec<_>>();
+    let denom = weights.iter().sum::<f64>().max(1.0e-12);
+    weights
+        .iter()
+        .zip(values)
+        .take(width)
+        .map(|(weight, value)| weight / denom * value)
+        .sum()
+}
+
+fn sigmoid(value: f64) -> f64 {
+    1.0 / (1.0 + (-value).exp())
 }
 
 fn blend_rows(actual: &[f64], predicted: &[f64], teacher_ratio: f64) -> Vec<f64> {

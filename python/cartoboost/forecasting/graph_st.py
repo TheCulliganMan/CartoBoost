@@ -278,42 +278,227 @@ def _choice_value(value: str | ChoiceStrEnum) -> str:
 
 
 class STAEformerForecaster:
-    """Transformer-ready graph temporal scaffold."""
+    """Rust spatiotemporal attention graph sequence forecaster."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        lookback: int = 8,
+        attention_heads: int = 4,
+        hidden_size: int = 8,
+        epochs: int = 120,
+        learning_rate: float = 0.02,
+        ridge: float = 0.0001,
+        backend: Backend = Backend.CPU,
+    ) -> None:
         native_class = _native_class("STAEformerForecaster")
         if native_class is None:
             raise NotImplementedError("Rust binding for STAEformerForecaster is not available.")
-        self._native_model = native_class()
+        self._params = {
+            "lookback": int(lookback),
+            "attention_heads": int(attention_heads),
+            "hidden_size": int(hidden_size),
+            "epochs": int(epochs),
+            "learning_rate": float(learning_rate),
+            "ridge": float(ridge),
+            "backend": _choice_value(backend),
+        }
+        self._native_model = native_class(
+            self._params["lookback"],
+            self._params["attention_heads"],
+            self._params["hidden_size"],
+            self._params["epochs"],
+            self._params["learning_rate"],
+            self._params["ridge"],
+            self._params["backend"],
+        )
+        self.is_fitted_ = False
 
-    @property
-    def message(self) -> str:
-        return str(self._native_model.message)
+    def fit(self, frame: GraphTemporalFrame) -> STAEformerForecaster:
+        self._native_model.fit(_native_frame(frame))
+        self.is_fitted_ = True
+        return self
 
-    def fit(self, *_args: Any, **_kwargs: Any) -> STAEformerForecaster:
-        raise NotImplementedError("STAEformerForecaster is an experimental scaffold")
+    def predict(self, horizon: int) -> np.ndarray:
+        self._check_is_fitted()
+        return np.asarray(self._native_model.predict(int(horizon)), dtype=float)
 
-    def predict(self, *_args: Any, **_kwargs: Any) -> np.ndarray:
-        raise NotImplementedError("STAEformerForecaster is an experimental scaffold")
+    def score(self, actual: Any, *, horizon: int | None = None) -> float:
+        actual_arr = np.asarray(actual, dtype=float)
+        if actual_arr.ndim != 2:
+            raise ValueError("actual must be a two-dimensional horizon by node matrix")
+        if horizon is not None and int(horizon) != actual_arr.shape[0]:
+            actual_arr = actual_arr[: int(horizon)]
+        return float(self._native_model.score(actual_arr.tolist()))
 
-    def score(self, *_args: Any, **_kwargs: Any) -> float:
-        raise NotImplementedError("STAEformerForecaster is an experimental scaffold")
-
-    def save(self, _path: str | Path) -> None:
-        raise NotImplementedError("STAEformerForecaster is an experimental scaffold")
+    def save(self, path: str | Path) -> None:
+        self._check_is_fitted()
+        self._native_model.save(str(path))
 
     @classmethod
-    def load(cls, _path: str | Path) -> STAEformerForecaster:
-        raise NotImplementedError("STAEformerForecaster is an experimental scaffold")
+    def load(cls, path: str | Path) -> STAEformerForecaster:
+        native_class = _native_class("STAEformerForecaster")
+        if native_class is None:
+            raise NotImplementedError("Rust binding for STAEformerForecaster is not available.")
+        obj = cls.__new__(cls)
+        obj._native_model = native_class.load(str(path))
+        obj.is_fitted_ = True
+        obj._params = {"backend": obj._backend_selected()}
+        return obj
+
+    def to_json(self) -> str:
+        self._check_is_fitted()
+        return str(self._native_model.to_json())
+
+    @classmethod
+    def from_json(cls, value: str) -> STAEformerForecaster:
+        native_class = _native_class("STAEformerForecaster")
+        if native_class is None:
+            raise NotImplementedError("Rust binding for STAEformerForecaster is not available.")
+        obj = cls.__new__(cls)
+        obj._native_model = native_class.from_json(value)
+        obj.is_fitted_ = True
+        obj._params = {"backend": obj._backend_selected()}
+        return obj
 
     def get_params(self, deep: bool = True) -> dict[str, Any]:
         del deep
-        return {}
+        return dict(self._params)
 
     def set_params(self, **params: Any) -> STAEformerForecaster:
-        if params:
-            raise ValueError(f"unknown parameters: {sorted(params)}")
+        valid = set(self._params)
+        for key in params:
+            if key not in valid:
+                raise ValueError(f"unknown parameter {key!r}")
+        self.__init__(**{**self._params, **params})
         return self
+
+    @property
+    def metadata_(self) -> dict[str, Any]:
+        return {
+            "model": "STAEformerForecaster",
+            "params": dict(self._params),
+            "backend": self._backend_selected(),
+            "fitted": self.is_fitted_,
+        }
+
+    def _check_is_fitted(self) -> None:
+        if not self.is_fitted_:
+            raise RuntimeError("STAEformerForecaster must be fitted before predict")
+
+    def _backend_selected(self) -> str:
+        backend = getattr(self._native_model, "backend", None)
+        if backend is None:
+            return str(self._params.get("backend", "cpu"))
+        return str(backend())
+
+
+class GraphWaveNetForecaster:
+    """Rust graph WaveNet-style dilated temporal graph forecaster."""
+
+    def __init__(
+        self,
+        *,
+        lookback: int = 8,
+        dilation_depth: int = 3,
+        hidden_size: int = 8,
+        epochs: int = 120,
+        learning_rate: float = 0.02,
+        ridge: float = 0.0001,
+        backend: Backend = Backend.CPU,
+    ) -> None:
+        native_class = _native_class("GraphWaveNetForecaster")
+        if native_class is None:
+            raise NotImplementedError("Rust binding for GraphWaveNetForecaster is not available.")
+        self._params = {
+            "lookback": int(lookback),
+            "dilation_depth": int(dilation_depth),
+            "hidden_size": int(hidden_size),
+            "epochs": int(epochs),
+            "learning_rate": float(learning_rate),
+            "ridge": float(ridge),
+            "backend": _choice_value(backend),
+        }
+        self._native_model = native_class(
+            self._params["lookback"],
+            self._params["dilation_depth"],
+            self._params["hidden_size"],
+            self._params["epochs"],
+            self._params["learning_rate"],
+            self._params["ridge"],
+            self._params["backend"],
+        )
+        self.is_fitted_ = False
+
+    def fit(self, frame: GraphTemporalFrame) -> GraphWaveNetForecaster:
+        self._native_model.fit(_native_frame(frame))
+        self.is_fitted_ = True
+        return self
+
+    def predict(self, horizon: int) -> np.ndarray:
+        self._check_is_fitted()
+        return np.asarray(self._native_model.predict(int(horizon)), dtype=float)
+
+    def score(self, actual: Any, *, horizon: int | None = None) -> float:
+        actual_arr = np.asarray(actual, dtype=float)
+        if actual_arr.ndim != 2:
+            raise ValueError("actual must be a two-dimensional horizon by node matrix")
+        if horizon is not None and int(horizon) != actual_arr.shape[0]:
+            actual_arr = actual_arr[: int(horizon)]
+        return float(self._native_model.score(actual_arr.tolist()))
+
+    def save(self, path: str | Path) -> None:
+        self._check_is_fitted()
+        self._native_model.save(str(path))
+
+    @classmethod
+    def load(cls, path: str | Path) -> GraphWaveNetForecaster:
+        native_class = _native_class("GraphWaveNetForecaster")
+        if native_class is None:
+            raise NotImplementedError("Rust binding for GraphWaveNetForecaster is not available.")
+        obj = cls.__new__(cls)
+        obj._native_model = native_class.load(str(path))
+        obj.is_fitted_ = True
+        obj._params = {"backend": obj._backend_selected()}
+        return obj
+
+    def to_json(self) -> str:
+        self._check_is_fitted()
+        return str(self._native_model.to_json())
+
+    @classmethod
+    def from_json(cls, value: str) -> GraphWaveNetForecaster:
+        native_class = _native_class("GraphWaveNetForecaster")
+        if native_class is None:
+            raise NotImplementedError("Rust binding for GraphWaveNetForecaster is not available.")
+        obj = cls.__new__(cls)
+        obj._native_model = native_class.from_json(value)
+        obj.is_fitted_ = True
+        obj._params = {"backend": obj._backend_selected()}
+        return obj
+
+    def get_params(self, deep: bool = True) -> dict[str, Any]:
+        del deep
+        return dict(self._params)
+
+    @property
+    def metadata_(self) -> dict[str, Any]:
+        return {
+            "model": "GraphWaveNetForecaster",
+            "params": dict(self._params),
+            "backend": self._backend_selected(),
+            "fitted": self.is_fitted_,
+        }
+
+    def _check_is_fitted(self) -> None:
+        if not self.is_fitted_:
+            raise RuntimeError("GraphWaveNetForecaster must be fitted before predict")
+
+    def _backend_selected(self) -> str:
+        backend = getattr(self._native_model, "backend", None)
+        if backend is None:
+            return str(self._params.get("backend", "cpu"))
+        return str(backend())
 
 
 def _native_frame(frame: GraphTemporalFrame) -> Any:
@@ -348,4 +533,9 @@ def _horizon_metrics(prediction: np.ndarray, actual: np.ndarray) -> list[dict[st
     return rows
 
 
-__all__ = ["DCRNNForecaster", "GraphTemporalFrame", "STAEformerForecaster"]
+__all__ = [
+    "DCRNNForecaster",
+    "GraphTemporalFrame",
+    "GraphWaveNetForecaster",
+    "STAEformerForecaster",
+]

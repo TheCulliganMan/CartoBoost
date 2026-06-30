@@ -22,13 +22,15 @@ pub use backend::{
     ComputeBackend,
 };
 pub use deep::{
-    constrained_decision_select, directional_pair_predictions, event_outcome_fit,
+    constrained_decision_select, constrained_decision_select_with_options, directional_pair_fit,
+    directional_pair_predict, directional_pair_predictions, event_outcome_fit,
     event_outcome_fit_with_backend, event_outcome_predict, response_curve_fit,
     response_curve_fit_with_backend, response_curve_predict, service_residual_fit,
-    service_residual_fit_with_backend, service_residual_predict, DeepDecisionChoice,
+    service_residual_fit_with_backend, service_residual_predict, temporal_entity_fit,
+    temporal_entity_predict, DeepDecisionChoice, DeepDirectionalPairArtifact,
     DeepDirectionalPairRow, DeepEventArtifact, DeepEventPrediction, DeepResponseArtifact,
     DeepResponsePrediction, DeepResponseRow, DeepServiceResidualArtifact,
-    DeepServiceResidualPrediction, DeepServiceResidualRow,
+    DeepServiceResidualPrediction, DeepServiceResidualRow, DeepTemporalEntityArtifact,
 };
 pub use encoder::{EmbeddingTableEncoder, NeuralEncoder};
 pub use error::{NeuralError, Result};

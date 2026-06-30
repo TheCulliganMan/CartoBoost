@@ -7,7 +7,9 @@ import numpy as np
 from cartoboost.forecasting import (
     DCRNNForecaster,
     GraphTemporalFrame,
+    GraphWaveNetForecaster,
     RollingOriginSplitter,
+    STAEformerForecaster,
     available_graph_st_backends,
 )
 
@@ -177,3 +179,65 @@ def test_dcrnn_backend_parameter_and_availability_delegate(monkeypatch):
     assert model.get_params()["backend"] == "cuda"
     assert model.metadata_["backend"] == "cuda"
     assert available_graph_st_backends() == ["cpu", "cuda"]
+
+
+def test_staeformer_native_fit_predict_and_save_load(tmp_path):
+    target = []
+    for t in range(24):
+        target.append(
+            [
+                10.0 + np.sin(t / 3.0),
+                12.0 + np.sin((t - 1) / 3.0),
+                14.0 + np.sin((t - 2) / 3.0),
+            ]
+        )
+    frame = GraphTemporalFrame(
+        node_ids=["a", "b", "c"],
+        timestamps=list(range(24)),
+        target=np.asarray(target, dtype=float),
+        indptr=[0, 1, 2, 3],
+        indices=[1, 2, 0],
+        data=[1.0, 1.0, 1.0],
+        horizon=3,
+        frequency="hourly",
+    )
+    model = STAEformerForecaster(lookback=5, attention_heads=2, hidden_size=4).fit(frame)
+
+    prediction = model.predict(3)
+    assert prediction.shape == (3, 3)
+    assert np.isfinite(model.score(np.asarray(target[-3:], dtype=float)))
+    path = tmp_path / "staeformer.json"
+    model.save(path)
+    loaded = STAEformerForecaster.load(path)
+    assert loaded.predict(3).shape == (3, 3)
+
+
+def test_graph_wavenet_native_fit_predict_and_save_load(tmp_path):
+    target = []
+    for t in range(24):
+        target.append(
+            [
+                10.0 + np.sin(t / 3.0),
+                12.0 + np.sin((t - 1) / 3.0),
+                14.0 + np.sin((t - 2) / 3.0),
+            ]
+        )
+    frame = GraphTemporalFrame(
+        node_ids=["a", "b", "c"],
+        timestamps=list(range(24)),
+        target=np.asarray(target, dtype=float),
+        indptr=[0, 1, 2, 3],
+        indices=[1, 2, 0],
+        data=[1.0, 1.0, 1.0],
+        horizon=3,
+        frequency="hourly",
+    )
+    model = GraphWaveNetForecaster(lookback=5, dilation_depth=2, hidden_size=4).fit(frame)
+
+    prediction = model.predict(3)
+    assert prediction.shape == (3, 3)
+    assert np.isfinite(model.score(np.asarray(target[-3:], dtype=float)))
+    path = tmp_path / "graph_wavenet.json"
+    model.save(path)
+    loaded = GraphWaveNetForecaster.load(path)
+    assert loaded.predict(3).shape == (3, 3)

@@ -105,7 +105,9 @@ use cartoboost_geo_st::{
     available_compute_backends as graph_st_available_compute_backends,
     select_compute_backend as graph_st_select_compute_backend, CsrAdjacency as CoreStCsrAdjacency,
     DcrnnConfig as CoreDcrnnConfig, DcrnnForecaster as CoreDcrnnForecaster,
-    GraphTemporalFrame as CoreGraphTemporalFrame, STAEformerForecaster as CoreSTAEformerForecaster,
+    GraphTemporalFrame as CoreGraphTemporalFrame, GraphWaveNetConfig as CoreGraphWaveNetConfig,
+    GraphWaveNetForecaster as CoreGraphWaveNetForecaster, STAEformerConfig as CoreSTAEformerConfig,
+    STAEformerForecaster as CoreSTAEformerForecaster,
 };
 use cartoboost_geostats::{
     empirical_semivariogram as geostats_empirical_semivariogram,
@@ -117,7 +119,9 @@ use cartoboost_neural::{
     available_backends as neural_available_backends,
     backend_dispatch_report as neural_backend_dispatch_report, build_embedding_table_artifact,
     compute_directional_features,
-    constrained_decision_select as core_deep_constrained_decision_select,
+    constrained_decision_select_with_options as core_deep_constrained_decision_select,
+    directional_pair_fit as core_deep_directional_pair_fit,
+    directional_pair_predict as core_deep_directional_pair_predict,
     directional_pair_predictions as core_deep_directional_pair_predictions,
     event_outcome_fit_with_backend as core_deep_event_outcome_fit,
     event_outcome_predict as core_deep_event_outcome_predict, fit_embedding_table_with_options,
@@ -126,14 +130,16 @@ use cartoboost_neural::{
     response_curve_predict as core_deep_response_curve_predict,
     select_backend as neural_select_backend,
     service_residual_fit_with_backend as core_deep_service_residual_fit,
-    service_residual_predict as core_deep_service_residual_predict, validate_directed_metapath,
-    write_embedding_table_artifact, ArtifactFallbackKind, DeepDirectionalPairRow,
-    DeepEventArtifact, DeepResponseArtifact, DeepResponseRow, DeepServiceResidualArtifact,
-    DeepServiceResidualRow, EmbeddingTable, GraphSageConfig, GraphSageEncoder,
-    GraphSageLinkPredictor, GraphSageRegressor, HeteroGraph, HeteroGraphSageConfig,
-    HeteroGraphSageEncoder, HeteroGraphSageLinkPredictor, HeteroGraphSageRegressor,
-    HeteroTypedEdge, HinSageConfig, HinSageEncoder, HinSageGraph, HinSageLinkPredictor,
-    HinSageRegressor, HomogeneousGraph,
+    service_residual_predict as core_deep_service_residual_predict,
+    temporal_entity_fit as core_deep_temporal_entity_fit,
+    temporal_entity_predict as core_deep_temporal_entity_predict, validate_directed_metapath,
+    write_embedding_table_artifact, ArtifactFallbackKind, DeepDirectionalPairArtifact,
+    DeepDirectionalPairRow, DeepEventArtifact, DeepResponseArtifact, DeepResponseRow,
+    DeepServiceResidualArtifact, DeepServiceResidualRow, DeepTemporalEntityArtifact,
+    EmbeddingTable, GraphSageConfig, GraphSageEncoder, GraphSageLinkPredictor, GraphSageRegressor,
+    HeteroGraph, HeteroGraphSageConfig, HeteroGraphSageEncoder, HeteroGraphSageLinkPredictor,
+    HeteroGraphSageRegressor, HeteroTypedEdge, HinSageConfig, HinSageEncoder, HinSageGraph,
+    HinSageLinkPredictor, HinSageRegressor, HomogeneousGraph,
     NeuralEmbeddingRegressor as StandaloneNeuralEmbeddingRegressor, Node2VecConfig,
     Node2VecEncoder, Node2VecLinkPredictor, Node2VecRegressor, StandaloneBoosterConfig,
 };
@@ -3394,18 +3400,166 @@ struct NativeSTAEformerForecaster {
     model: CoreSTAEformerForecaster,
 }
 
+#[pyclass(name = "GraphWaveNetForecaster")]
+#[derive(Clone, Debug)]
+struct NativeGraphWaveNetForecaster {
+    model: CoreGraphWaveNetForecaster,
+}
+
 #[pymethods]
 impl NativeSTAEformerForecaster {
     #[new]
-    fn new() -> Self {
-        Self {
-            model: CoreSTAEformerForecaster::default(),
-        }
+    #[pyo3(signature = (
+        lookback=8,
+        attention_heads=4,
+        hidden_size=8,
+        epochs=120,
+        learning_rate=0.02,
+        ridge=0.0001,
+        backend=None
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        lookback: usize,
+        attention_heads: usize,
+        hidden_size: usize,
+        epochs: usize,
+        learning_rate: f64,
+        ridge: f64,
+        backend: Option<&str>,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            model: CoreSTAEformerForecaster::new(CoreSTAEformerConfig {
+                lookback,
+                attention_heads,
+                hidden_size,
+                epochs,
+                learning_rate,
+                ridge,
+                backend: graph_st_select_compute_backend(backend).map_err(to_py_geo_st_error)?,
+            })
+            .map_err(to_py_geo_st_error)?,
+        })
     }
 
-    #[getter]
-    fn message(&self) -> String {
-        self.model.message.clone()
+    fn fit(&mut self, py: Python<'_>, frame: &NativeGraphTemporalFrame) -> PyResult<()> {
+        py.allow_threads(|| self.model.fit(&frame.frame))
+            .map_err(to_py_geo_st_error)
+    }
+
+    fn predict(&self, py: Python<'_>, horizon: usize) -> PyResult<Vec<Vec<f64>>> {
+        py.allow_threads(|| self.model.predict(horizon))
+            .map_err(to_py_geo_st_error)
+    }
+
+    fn score(&self, py: Python<'_>, actual: Vec<Vec<f64>>) -> PyResult<f64> {
+        py.allow_threads(|| self.model.score(&actual))
+            .map_err(to_py_geo_st_error)
+    }
+
+    fn save(&self, path: PathBuf) -> PyResult<()> {
+        self.model.save(path).map_err(to_py_geo_st_error)
+    }
+
+    #[classmethod]
+    fn load(_cls: &Bound<'_, PyType>, path: PathBuf) -> PyResult<Self> {
+        Ok(Self {
+            model: CoreSTAEformerForecaster::load(path).map_err(to_py_geo_st_error)?,
+        })
+    }
+
+    fn to_json(&self) -> PyResult<String> {
+        self.model.to_json_string().map_err(to_py_geo_st_error)
+    }
+
+    #[classmethod]
+    fn from_json(_cls: &Bound<'_, PyType>, value: &str) -> PyResult<Self> {
+        Ok(Self {
+            model: CoreSTAEformerForecaster::from_json_string(value).map_err(to_py_geo_st_error)?,
+        })
+    }
+
+    fn backend(&self) -> PyResult<String> {
+        Ok(self.model.backend())
+    }
+}
+
+#[pymethods]
+impl NativeGraphWaveNetForecaster {
+    #[new]
+    #[pyo3(signature = (
+        lookback=8,
+        dilation_depth=3,
+        hidden_size=8,
+        epochs=120,
+        learning_rate=0.02,
+        ridge=0.0001,
+        backend=None
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        lookback: usize,
+        dilation_depth: usize,
+        hidden_size: usize,
+        epochs: usize,
+        learning_rate: f64,
+        ridge: f64,
+        backend: Option<&str>,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            model: CoreGraphWaveNetForecaster::new(CoreGraphWaveNetConfig {
+                lookback,
+                dilation_depth,
+                hidden_size,
+                epochs,
+                learning_rate,
+                ridge,
+                backend: graph_st_select_compute_backend(backend).map_err(to_py_geo_st_error)?,
+            })
+            .map_err(to_py_geo_st_error)?,
+        })
+    }
+
+    fn fit(&mut self, py: Python<'_>, frame: &NativeGraphTemporalFrame) -> PyResult<()> {
+        py.allow_threads(|| self.model.fit(&frame.frame))
+            .map_err(to_py_geo_st_error)
+    }
+
+    fn predict(&self, py: Python<'_>, horizon: usize) -> PyResult<Vec<Vec<f64>>> {
+        py.allow_threads(|| self.model.predict(horizon))
+            .map_err(to_py_geo_st_error)
+    }
+
+    fn score(&self, py: Python<'_>, actual: Vec<Vec<f64>>) -> PyResult<f64> {
+        py.allow_threads(|| self.model.score(&actual))
+            .map_err(to_py_geo_st_error)
+    }
+
+    fn save(&self, path: PathBuf) -> PyResult<()> {
+        self.model.save(path).map_err(to_py_geo_st_error)
+    }
+
+    #[classmethod]
+    fn load(_cls: &Bound<'_, PyType>, path: PathBuf) -> PyResult<Self> {
+        Ok(Self {
+            model: CoreGraphWaveNetForecaster::load(path).map_err(to_py_geo_st_error)?,
+        })
+    }
+
+    fn to_json(&self) -> PyResult<String> {
+        self.model.to_json_string().map_err(to_py_geo_st_error)
+    }
+
+    #[classmethod]
+    fn from_json(_cls: &Bound<'_, PyType>, value: &str) -> PyResult<Self> {
+        Ok(Self {
+            model: CoreGraphWaveNetForecaster::from_json_string(value)
+                .map_err(to_py_geo_st_error)?,
+        })
+    }
+
+    fn backend(&self) -> PyResult<String> {
+        Ok(self.model.backend())
     }
 }
 
@@ -10582,6 +10736,26 @@ fn deep_directional_pair_predict_value(rows_json: &str) -> PyResult<Vec<f64>> {
 }
 
 #[pyfunction]
+fn deep_directional_pair_fit_value(rows_json: &str) -> PyResult<String> {
+    let rows: Vec<DeepDirectionalPairRow> =
+        serde_json::from_str(rows_json).map_err(to_py_json_error)?;
+    let artifact = core_deep_directional_pair_fit(&rows).map_err(to_py_neural_error)?;
+    serde_json::to_string(&artifact).map_err(to_py_json_error)
+}
+
+#[pyfunction]
+fn deep_directional_pair_predict_artifact_value(
+    artifact_json: &str,
+    rows_json: &str,
+) -> PyResult<Vec<f64>> {
+    let artifact: DeepDirectionalPairArtifact =
+        serde_json::from_str(artifact_json).map_err(to_py_json_error)?;
+    let rows: Vec<DeepDirectionalPairRow> =
+        serde_json::from_str(rows_json).map_err(to_py_json_error)?;
+    core_deep_directional_pair_predict(&artifact, &rows).map_err(to_py_neural_error)
+}
+
+#[pyfunction]
 #[pyo3(signature = (rows_json, backend=None))]
 fn deep_service_residual_fit_value(rows_json: &str, backend: Option<&str>) -> PyResult<String> {
     let rows: Vec<DeepServiceResidualRow> =
@@ -10619,20 +10793,48 @@ fn deep_service_residual_predict_value(artifact_json: &str, rows_json: &str) -> 
 }
 
 #[pyfunction]
+#[pyo3(signature = (candidates_json, objective, constraints_json, fallback, risk_aversion=None))]
 fn deep_constrained_decision_select_value(
     candidates_json: &str,
     objective: &str,
     constraints_json: &str,
     fallback: &str,
+    risk_aversion: Option<f64>,
 ) -> PyResult<String> {
     let candidates: Vec<BTreeMap<String, Value>> =
         serde_json::from_str(candidates_json).map_err(to_py_json_error)?;
     let constraints: BTreeMap<String, f64> =
         serde_json::from_str(constraints_json).map_err(to_py_json_error)?;
-    let choices =
-        core_deep_constrained_decision_select(&candidates, objective, &constraints, fallback)
-            .map_err(to_py_neural_error)?;
+    let choices = core_deep_constrained_decision_select(
+        &candidates,
+        objective,
+        &constraints,
+        fallback,
+        risk_aversion.unwrap_or(0.0),
+    )
+    .map_err(to_py_neural_error)?;
     serde_json::to_string(&choices).map_err(to_py_json_error)
+}
+
+#[pyfunction]
+fn deep_temporal_entity_fit_value(
+    y_json: &str,
+    lookback: usize,
+    horizon: usize,
+) -> PyResult<String> {
+    let y: Vec<Vec<f64>> = serde_json::from_str(y_json).map_err(to_py_json_error)?;
+    let artifact =
+        core_deep_temporal_entity_fit(&y, lookback, horizon).map_err(to_py_neural_error)?;
+    serde_json::to_string(&artifact).map_err(to_py_json_error)
+}
+
+#[pyfunction]
+fn deep_temporal_entity_predict_value(artifact_json: &str, horizon: usize) -> PyResult<String> {
+    let artifact: DeepTemporalEntityArtifact =
+        serde_json::from_str(artifact_json).map_err(to_py_json_error)?;
+    let prediction =
+        core_deep_temporal_entity_predict(&artifact, horizon).map_err(to_py_neural_error)?;
+    serde_json::to_string(&prediction).map_err(to_py_json_error)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -10919,6 +11121,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<NativeGraphTemporalFrame>()?;
     m.add_class::<NativeDcrnnForecaster>()?;
     m.add_class::<NativeSTAEformerForecaster>()?;
+    m.add_class::<NativeGraphWaveNetForecaster>()?;
     m.add_class::<NativeNBeatsForecaster>()?;
     m.add_class::<NativeNHiTSForecaster>()?;
     m.add_class::<NativeNeuralPanelForecaster>()?;
@@ -11127,10 +11330,17 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(deep_event_outcome_fit_value, m)?)?;
     m.add_function(wrap_pyfunction!(deep_event_outcome_predict_value, m)?)?;
     m.add_function(wrap_pyfunction!(deep_directional_pair_predict_value, m)?)?;
+    m.add_function(wrap_pyfunction!(deep_directional_pair_fit_value, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        deep_directional_pair_predict_artifact_value,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(deep_service_residual_fit_value, m)?)?;
     m.add_function(wrap_pyfunction!(deep_service_residual_predict_value, m)?)?;
     m.add_function(wrap_pyfunction!(deep_available_backends_value, m)?)?;
     m.add_function(wrap_pyfunction!(deep_backend_dispatch_report_value, m)?)?;
     m.add_function(wrap_pyfunction!(deep_constrained_decision_select_value, m)?)?;
+    m.add_function(wrap_pyfunction!(deep_temporal_entity_fit_value, m)?)?;
+    m.add_function(wrap_pyfunction!(deep_temporal_entity_predict_value, m)?)?;
     Ok(())
 }

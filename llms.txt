@@ -18,7 +18,7 @@ compare it against strong baselines on the same split.
 - Boosting model guides: ./docs/user-guide/boosting-models/index.md
 - Forecasting model guides: ./docs/user-guide/forecasting-models/index.md
 - Intermittent demand forecasting: ./docs/user-guide/forecasting-models/intermittent-demand.md
-- Graph spatiotemporal forecasting and DCRNN: ./docs/user-guide/forecasting-models/graph-spatiotemporal.md
+- Graph spatiotemporal forecasting, DCRNN, GraphWaveNet, and STAEformer: ./docs/user-guide/forecasting-models/graph-spatiotemporal.md
 - N-BEATS and N-HiTS neural forecasting: ./docs/user-guide/forecasting-models/beats-hits.md
 - Neural panel forecasting: ./docs/user-guide/forecasting-models/neural-panel.md
 - Probabilistic and conformal forecasting guide: ./docs/user-guide/forecasting-models/probabilistic-conformal.md
