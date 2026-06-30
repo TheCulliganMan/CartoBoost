@@ -136,10 +136,11 @@ use cartoboost_neural::{
     write_embedding_table_artifact, ArtifactFallbackKind, DeepDirectionalPairArtifact,
     DeepDirectionalPairRow, DeepEventArtifact, DeepResponseArtifact, DeepResponseRow,
     DeepServiceResidualArtifact, DeepServiceResidualRow, DeepTemporalEntityArtifact,
-    EmbeddingTable, GraphSageConfig, GraphSageEncoder, GraphSageLinkPredictor, GraphSageRegressor,
-    HeteroGraph, HeteroGraphSageConfig, HeteroGraphSageEncoder, HeteroGraphSageLinkPredictor,
-    HeteroGraphSageRegressor, HeteroTypedEdge, HinSageConfig, HinSageEncoder, HinSageGraph,
-    HinSageLinkPredictor, HinSageRegressor, HomogeneousGraph,
+    DirectionalPairFitOptions, EmbeddingTable, GraphSageConfig, GraphSageEncoder,
+    GraphSageLinkPredictor, GraphSageRegressor, HeteroGraph, HeteroGraphSageConfig,
+    HeteroGraphSageEncoder, HeteroGraphSageLinkPredictor, HeteroGraphSageRegressor,
+    HeteroTypedEdge, HinSageConfig, HinSageEncoder, HinSageGraph, HinSageLinkPredictor,
+    HinSageRegressor, HomogeneousGraph,
     NeuralEmbeddingRegressor as StandaloneNeuralEmbeddingRegressor, Node2VecConfig,
     Node2VecEncoder, Node2VecLinkPredictor, Node2VecRegressor, StandaloneBoosterConfig,
 };
@@ -10736,10 +10737,21 @@ fn deep_directional_pair_predict_value(rows_json: &str) -> PyResult<Vec<f64>> {
 }
 
 #[pyfunction]
-fn deep_directional_pair_fit_value(rows_json: &str) -> PyResult<String> {
+#[pyo3(signature = (rows_json, options_json=None))]
+fn deep_directional_pair_fit_value(
+    rows_json: &str,
+    options_json: Option<&str>,
+) -> PyResult<String> {
     let rows: Vec<DeepDirectionalPairRow> =
         serde_json::from_str(rows_json).map_err(to_py_json_error)?;
-    let artifact = core_deep_directional_pair_fit(&rows).map_err(to_py_neural_error)?;
+    let artifact = if let Some(options_json) = options_json {
+        let options: DirectionalPairFitOptions =
+            serde_json::from_str(options_json).map_err(to_py_json_error)?;
+        cartoboost_neural::directional_pair_fit_with_options(&rows, &options)
+            .map_err(to_py_neural_error)?
+    } else {
+        core_deep_directional_pair_fit(&rows).map_err(to_py_neural_error)?
+    };
     serde_json::to_string(&artifact).map_err(to_py_json_error)
 }
 

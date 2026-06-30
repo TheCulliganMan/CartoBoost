@@ -25,6 +25,7 @@ compare it against strong baselines on the same split.
 - Graph model guides: ./docs/user-guide/graph-models/index.md
 - Neural model guides: ./docs/user-guide/neural-models/index.md
 - Deep model guides: ./docs/user-guide/deep-models.md
+- Directional pair forecasting architectures: ./docs/user-guide/deep-models/cartoboost-directional-pair-forecaster.md
 - Native deep backend selection and Metal availability: ./docs/user-guide/deep-models.md
 - Forecasting reference: ./docs/forecasting.md
 - Graph features contract: ./docs/graph-features.md

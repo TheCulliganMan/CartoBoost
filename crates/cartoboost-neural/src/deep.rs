@@ -83,6 +83,8 @@ pub struct DeepDirectionalPairRow {
 pub struct DeepDirectionalPairArtifact {
     pub model_class: String,
     pub model_version: String,
+    #[serde(default = "default_directional_pair_architecture")]
+    pub architecture: String,
     pub pair_weights: BTreeMap<String, f64>,
     pub source_weights: BTreeMap<String, f64>,
     pub target_weights: BTreeMap<String, f64>,
@@ -91,6 +93,111 @@ pub struct DeepDirectionalPairArtifact {
     pub intercept: f64,
     pub global_mean: f64,
     pub schema_hash: String,
+    #[serde(default)]
+    pub loss: String,
+    #[serde(default)]
+    pub seed: u64,
+    #[serde(default)]
+    pub source_id_map: BTreeMap<String, usize>,
+    #[serde(default)]
+    pub target_id_map: BTreeMap<String, usize>,
+    #[serde(default)]
+    pub pair_bucket_count: usize,
+    #[serde(default)]
+    pub pair_global_bucket: usize,
+    #[serde(default)]
+    pub embedding_dim: usize,
+    #[serde(default)]
+    pub source_embeddings: Vec<Vec<f64>>,
+    #[serde(default)]
+    pub target_embeddings: Vec<Vec<f64>>,
+    #[serde(default)]
+    pub pair_bucket_embeddings: Vec<Vec<f64>>,
+    #[serde(default)]
+    pub dense_projection: Vec<Vec<f64>>,
+    #[serde(default)]
+    pub hidden_weights: Vec<Vec<f64>>,
+    #[serde(default)]
+    pub hidden_biases: Vec<f64>,
+    #[serde(default)]
+    pub output_weights: Vec<f64>,
+    #[serde(default)]
+    pub train_metrics: BTreeMap<String, f64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DirectionalPairFitOptions {
+    #[serde(default = "default_directional_pair_architecture")]
+    pub architecture: String,
+    #[serde(default = "default_pair_embedding_dim")]
+    pub embedding_dim: usize,
+    #[serde(default = "default_pair_bucket_count")]
+    pub pair_bucket_count: usize,
+    #[serde(default = "default_pair_hidden_dim")]
+    pub hidden_dim: usize,
+    #[serde(default = "default_pair_epochs")]
+    pub epochs: usize,
+    #[serde(default = "default_pair_learning_rate")]
+    pub learning_rate: f64,
+    #[serde(default = "default_pair_weight_decay")]
+    pub weight_decay: f64,
+    #[serde(default = "default_pair_gradient_clip")]
+    pub gradient_clip: f64,
+    #[serde(default = "default_pair_patience")]
+    pub early_stopping_rounds: usize,
+    #[serde(default)]
+    pub seed: u64,
+    #[serde(default = "default_pair_loss")]
+    pub loss: String,
+}
+
+fn default_directional_pair_architecture() -> String {
+    "shrinkage_effects".to_string()
+}
+fn default_pair_embedding_dim() -> usize {
+    4
+}
+fn default_pair_bucket_count() -> usize {
+    64
+}
+fn default_pair_hidden_dim() -> usize {
+    12
+}
+fn default_pair_epochs() -> usize {
+    700
+}
+fn default_pair_learning_rate() -> f64 {
+    0.018
+}
+fn default_pair_weight_decay() -> f64 {
+    1e-4
+}
+fn default_pair_gradient_clip() -> f64 {
+    1.0
+}
+fn default_pair_patience() -> usize {
+    80
+}
+fn default_pair_loss() -> String {
+    "squared_error".to_string()
+}
+
+impl Default for DirectionalPairFitOptions {
+    fn default() -> Self {
+        Self {
+            architecture: default_directional_pair_architecture(),
+            embedding_dim: default_pair_embedding_dim(),
+            pair_bucket_count: default_pair_bucket_count(),
+            hidden_dim: default_pair_hidden_dim(),
+            epochs: default_pair_epochs(),
+            learning_rate: default_pair_learning_rate(),
+            weight_decay: default_pair_weight_decay(),
+            gradient_clip: default_pair_gradient_clip(),
+            early_stopping_rounds: default_pair_patience(),
+            seed: 0,
+            loss: default_pair_loss(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -373,6 +480,24 @@ pub fn event_outcome_predict(
 pub fn directional_pair_fit(
     rows: &[DeepDirectionalPairRow],
 ) -> Result<DeepDirectionalPairArtifact> {
+    directional_pair_fit_with_options(rows, &DirectionalPairFitOptions::default())
+}
+
+pub fn directional_pair_fit_with_options(
+    rows: &[DeepDirectionalPairRow],
+    options: &DirectionalPairFitOptions,
+) -> Result<DeepDirectionalPairArtifact> {
+    match options.architecture.as_str() {
+        "shrinkage_effects" => directional_pair_fit_shrinkage(rows, options),
+        "pair_embedding_mlp" => directional_pair_fit_embedding_mlp(rows, options),
+        other => invalid(format!("unknown directional pair architecture {other:?}")),
+    }
+}
+
+fn directional_pair_fit_shrinkage(
+    rows: &[DeepDirectionalPairRow],
+    options: &DirectionalPairFitOptions,
+) -> Result<DeepDirectionalPairArtifact> {
     if rows.is_empty() {
         return invalid("directional pair rows cannot be empty");
     }
@@ -430,6 +555,7 @@ pub fn directional_pair_fit(
     Ok(DeepDirectionalPairArtifact {
         model_class: "DirectionalPairForecaster".to_string(),
         model_version: "1".to_string(),
+        architecture: "shrinkage_effects".to_string(),
         pair_weights,
         source_weights,
         target_weights,
@@ -438,6 +564,245 @@ pub fn directional_pair_fit(
         intercept: global_mean,
         global_mean,
         schema_hash: schema_hash(dim, "directional_pair"),
+        loss: options.loss.clone(),
+        seed: options.seed,
+        source_id_map: BTreeMap::new(),
+        target_id_map: BTreeMap::new(),
+        pair_bucket_count: 0,
+        pair_global_bucket: 0,
+        embedding_dim: 0,
+        source_embeddings: Vec::new(),
+        target_embeddings: Vec::new(),
+        pair_bucket_embeddings: Vec::new(),
+        dense_projection: Vec::new(),
+        hidden_weights: Vec::new(),
+        hidden_biases: Vec::new(),
+        output_weights: Vec::new(),
+        train_metrics: BTreeMap::new(),
+    })
+}
+
+fn directional_pair_fit_embedding_mlp(
+    rows: &[DeepDirectionalPairRow],
+    options: &DirectionalPairFitOptions,
+) -> Result<DeepDirectionalPairArtifact> {
+    if rows.is_empty() {
+        return invalid("directional pair rows cannot be empty");
+    }
+    if rows.iter().any(|row| row.target.is_none()) {
+        return invalid("directional pair fit rows must include target values");
+    }
+    let dim = rows[0].features.len();
+    if rows
+        .iter()
+        .any(|row| row.features.len() != dim || row.features.iter().any(|v| !v.is_finite()))
+    {
+        return invalid("all directional pair feature rows must be finite and have the same width");
+    }
+    if options.embedding_dim == 0 || options.pair_bucket_count < 2 || options.hidden_dim == 0 {
+        return invalid("embedding_dim, hidden_dim, and pair_bucket_count must be positive");
+    }
+    let means = feature_means(rows.iter().map(|row| row.features.as_slice()), dim)?;
+    let targets = rows
+        .iter()
+        .map(|row| row.target.unwrap_or(0.0))
+        .collect::<Vec<_>>();
+    let global_mean = targets.iter().sum::<f64>() / targets.len() as f64;
+    let mut source_id_map = BTreeMap::new();
+    let mut target_id_map = BTreeMap::new();
+    source_id_map.insert("__unknown__".to_string(), 0);
+    target_id_map.insert("__unknown__".to_string(), 0);
+    for row in rows {
+        if !source_id_map.contains_key(&row.source_id) {
+            source_id_map.insert(row.source_id.clone(), source_id_map.len());
+        }
+        if !target_id_map.contains_key(&row.target_id) {
+            target_id_map.insert(row.target_id.clone(), target_id_map.len());
+        }
+    }
+    let embed = options.embedding_dim;
+    let dense_dim = if dim == 0 { 0 } else { embed };
+    let input_dim = embed * 5 + dense_dim;
+    let hidden = options.hidden_dim;
+    let seed = options.seed;
+    let mut source_embeddings = init_matrix(source_id_map.len(), embed, seed ^ 0x51);
+    let mut target_embeddings = init_matrix(target_id_map.len(), embed, seed ^ 0x71);
+    let mut pair_bucket_embeddings = init_matrix(options.pair_bucket_count, embed, seed ^ 0x91);
+    let mut dense_projection = init_matrix(dim, dense_dim, seed ^ 0xB1);
+    let mut hidden_weights = init_matrix(hidden, input_dim, seed ^ 0xD1);
+    let mut hidden_biases = vec![0.0; hidden];
+    let mut output_weights = init_vec(hidden, seed ^ 0xF1);
+    let mut intercept = global_mean;
+    let mut opt = AdamWState::new(
+        source_embeddings.len() * embed
+            + target_embeddings.len() * embed
+            + pair_bucket_embeddings.len() * embed
+            + dim * dense_dim
+            + hidden * input_dim
+            + hidden
+            + hidden
+            + 1,
+    );
+    let split = if rows.len() >= 12 {
+        rows.len() * 4 / 5
+    } else {
+        rows.len()
+    };
+    let train_idx = (0..split).collect::<Vec<_>>();
+    let valid_idx = (split..rows.len()).collect::<Vec<_>>();
+    let mut best_loss = f64::INFINITY;
+    let mut stale = 0usize;
+    for epoch in 0..options.epochs.max(1) {
+        let mut order = train_idx.clone();
+        deterministic_shuffle(&mut order, seed ^ epoch as u64);
+        for idx in order {
+            let row = &rows[idx];
+            let src = source_id_map[&row.source_id];
+            let dst = target_id_map[&row.target_id];
+            let bucket = pair_bucket(&row.source_id, &row.target_id, options.pair_bucket_count);
+            let (input, acts, pred) = pair_mlp_forward(
+                row,
+                &means,
+                src,
+                dst,
+                bucket,
+                &source_embeddings,
+                &target_embeddings,
+                &pair_bucket_embeddings,
+                &dense_projection,
+                &hidden_weights,
+                &hidden_biases,
+                &output_weights,
+                intercept,
+            );
+            let mut grad = 2.0 * (pred - row.target.unwrap_or(0.0));
+            grad = grad.clamp(-options.gradient_clip, options.gradient_clip);
+            intercept =
+                opt.update_scalar(intercept, grad, options.learning_rate, options.weight_decay);
+            let old_out = output_weights.clone();
+            for h in 0..hidden {
+                output_weights[h] = opt.update_scalar(
+                    output_weights[h],
+                    grad * acts[h],
+                    options.learning_rate,
+                    options.weight_decay,
+                );
+                let gz = grad * old_out[h] * (1.0 - acts[h] * acts[h]);
+                hidden_biases[h] = opt.update_scalar(
+                    hidden_biases[h],
+                    gz,
+                    options.learning_rate,
+                    options.weight_decay,
+                );
+                for (j, x) in input.iter().enumerate() {
+                    hidden_weights[h][j] = opt.update_scalar(
+                        hidden_weights[h][j],
+                        gz * x,
+                        options.learning_rate,
+                        options.weight_decay,
+                    );
+                }
+            }
+            let mut ginput = vec![0.0; input_dim];
+            for h in 0..hidden {
+                let gz = grad * old_out[h] * (1.0 - acts[h] * acts[h]);
+                for (j, gij) in ginput.iter_mut().enumerate() {
+                    *gij += gz * hidden_weights[h][j];
+                }
+            }
+            update_pair_inputs(
+                row,
+                &means,
+                src,
+                dst,
+                bucket,
+                &ginput,
+                options.learning_rate,
+                options.weight_decay,
+                &mut opt,
+                &mut source_embeddings,
+                &mut target_embeddings,
+                &mut pair_bucket_embeddings,
+                &mut dense_projection,
+            );
+        }
+        let loss = pair_mlp_loss(
+            rows,
+            if valid_idx.is_empty() {
+                &train_idx
+            } else {
+                &valid_idx
+            },
+            &means,
+            &source_id_map,
+            &target_id_map,
+            &source_embeddings,
+            &target_embeddings,
+            &pair_bucket_embeddings,
+            &dense_projection,
+            &hidden_weights,
+            &hidden_biases,
+            &output_weights,
+            intercept,
+            options.pair_bucket_count,
+        );
+        if loss + 1e-10 < best_loss {
+            best_loss = loss;
+            stale = 0;
+        } else {
+            stale += 1;
+            if stale >= options.early_stopping_rounds {
+                break;
+            }
+        }
+    }
+    let train_rmse = pair_mlp_loss(
+        rows,
+        &(0..rows.len()).collect::<Vec<_>>(),
+        &means,
+        &source_id_map,
+        &target_id_map,
+        &source_embeddings,
+        &target_embeddings,
+        &pair_bucket_embeddings,
+        &dense_projection,
+        &hidden_weights,
+        &hidden_biases,
+        &output_weights,
+        intercept,
+        options.pair_bucket_count,
+    )
+    .sqrt();
+    let mut train_metrics = BTreeMap::new();
+    train_metrics.insert("rmse".to_string(), train_rmse);
+    train_metrics.insert("rows".to_string(), rows.len() as f64);
+    Ok(DeepDirectionalPairArtifact {
+        model_class: "DirectionalPairForecaster".to_string(),
+        model_version: "1".to_string(),
+        architecture: "pair_embedding_mlp".to_string(),
+        pair_weights: BTreeMap::new(),
+        source_weights: BTreeMap::new(),
+        target_weights: BTreeMap::new(),
+        feature_means: means,
+        feature_weights: vec![0.0; dim],
+        intercept,
+        global_mean,
+        schema_hash: schema_hash(dim, "directional_pair"),
+        loss: options.loss.clone(),
+        seed,
+        source_id_map,
+        target_id_map,
+        pair_bucket_count: options.pair_bucket_count,
+        pair_global_bucket: 0,
+        embedding_dim: embed,
+        source_embeddings,
+        target_embeddings,
+        pair_bucket_embeddings,
+        dense_projection,
+        hidden_weights,
+        hidden_biases,
+        output_weights,
+        train_metrics,
     })
 }
 
@@ -447,6 +812,46 @@ pub fn directional_pair_predict(
 ) -> Result<Vec<f64>> {
     if rows.is_empty() {
         return invalid("directional pair rows cannot be empty");
+    }
+    if artifact.architecture == "pair_embedding_mlp" {
+        return Ok(rows
+            .iter()
+            .map(|row| {
+                let src = artifact
+                    .source_id_map
+                    .get(&row.source_id)
+                    .copied()
+                    .unwrap_or(0);
+                let dst = artifact
+                    .target_id_map
+                    .get(&row.target_id)
+                    .copied()
+                    .unwrap_or(0);
+                let bucket = if artifact.source_id_map.contains_key(&row.source_id)
+                    && artifact.target_id_map.contains_key(&row.target_id)
+                {
+                    pair_bucket(&row.source_id, &row.target_id, artifact.pair_bucket_count)
+                } else {
+                    artifact.pair_global_bucket
+                };
+                let (_, _, pred) = pair_mlp_forward(
+                    row,
+                    &artifact.feature_means,
+                    src,
+                    dst,
+                    bucket,
+                    &artifact.source_embeddings,
+                    &artifact.target_embeddings,
+                    &artifact.pair_bucket_embeddings,
+                    &artifact.dense_projection,
+                    &artifact.hidden_weights,
+                    &artifact.hidden_biases,
+                    &artifact.output_weights,
+                    artifact.intercept,
+                );
+                pred
+            })
+            .collect());
     }
     Ok(rows
         .iter()
@@ -471,6 +876,188 @@ pub fn directional_pair_predict(
             score
         })
         .collect())
+}
+
+#[allow(clippy::too_many_arguments, clippy::needless_range_loop)]
+fn pair_mlp_forward(
+    row: &DeepDirectionalPairRow,
+    means: &[f64],
+    src: usize,
+    dst: usize,
+    bucket: usize,
+    source_embeddings: &[Vec<f64>],
+    target_embeddings: &[Vec<f64>],
+    pair_bucket_embeddings: &[Vec<f64>],
+    dense_projection: &[Vec<f64>],
+    hidden_weights: &[Vec<f64>],
+    hidden_biases: &[f64],
+    output_weights: &[f64],
+    intercept: f64,
+) -> (Vec<f64>, Vec<f64>, f64) {
+    let src_e = source_embeddings.get(src).unwrap_or(&source_embeddings[0]);
+    let dst_e = target_embeddings.get(dst).unwrap_or(&target_embeddings[0]);
+    let pair_e = pair_bucket_embeddings
+        .get(bucket)
+        .unwrap_or(&pair_bucket_embeddings[0]);
+    let mut input =
+        Vec::with_capacity(src_e.len() * 5 + dense_projection.first().map(Vec::len).unwrap_or(0));
+    input.extend_from_slice(src_e);
+    input.extend_from_slice(dst_e);
+    input.extend_from_slice(pair_e);
+    for i in 0..src_e.len() {
+        input.push(src_e[i] - dst_e[i]);
+    }
+    for i in 0..src_e.len() {
+        input.push(src_e[i] * dst_e[i]);
+    }
+    if !dense_projection.is_empty() {
+        for k in 0..dense_projection[0].len() {
+            let mut value = 0.0;
+            for (j, feature) in row.features.iter().enumerate() {
+                value += (feature - means.get(j).copied().unwrap_or(0.0)) * dense_projection[j][k];
+            }
+            input.push(value);
+        }
+    }
+    let mut acts = vec![0.0; hidden_weights.len()];
+    let mut pred = intercept;
+    for h in 0..hidden_weights.len() {
+        let z = hidden_biases[h] + dot(&hidden_weights[h], &input);
+        acts[h] = z.tanh();
+        pred += output_weights[h] * acts[h];
+    }
+    (input, acts, pred)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn update_pair_inputs(
+    row: &DeepDirectionalPairRow,
+    means: &[f64],
+    src: usize,
+    dst: usize,
+    bucket: usize,
+    ginput: &[f64],
+    lr: f64,
+    wd: f64,
+    opt: &mut AdamWState,
+    source_embeddings: &mut [Vec<f64>],
+    target_embeddings: &mut [Vec<f64>],
+    pair_bucket_embeddings: &mut [Vec<f64>],
+    dense_projection: &mut [Vec<f64>],
+) {
+    let embed = source_embeddings[0].len();
+    for i in 0..embed {
+        let src_old = source_embeddings[src][i];
+        let dst_old = target_embeddings[dst][i];
+        let gsrc = ginput[i] + ginput[3 * embed + i] + ginput[4 * embed + i] * dst_old;
+        let gdst = ginput[embed + i] - ginput[3 * embed + i] + ginput[4 * embed + i] * src_old;
+        source_embeddings[src][i] = opt.update_scalar(src_old, gsrc, lr, wd);
+        target_embeddings[dst][i] = opt.update_scalar(dst_old, gdst, lr, wd);
+        pair_bucket_embeddings[bucket][i] = opt.update_scalar(
+            pair_bucket_embeddings[bucket][i],
+            ginput[2 * embed + i],
+            lr,
+            wd,
+        );
+    }
+    if !dense_projection.is_empty() {
+        let start = 5 * embed;
+        let proj_dim = dense_projection[0].len();
+        for (j, feature) in row.features.iter().enumerate() {
+            let x = feature - means.get(j).copied().unwrap_or(0.0);
+            for k in 0..proj_dim {
+                dense_projection[j][k] =
+                    opt.update_scalar(dense_projection[j][k], ginput[start + k] * x, lr, wd);
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn pair_mlp_loss(
+    rows: &[DeepDirectionalPairRow],
+    indices: &[usize],
+    means: &[f64],
+    source_id_map: &BTreeMap<String, usize>,
+    target_id_map: &BTreeMap<String, usize>,
+    source_embeddings: &[Vec<f64>],
+    target_embeddings: &[Vec<f64>],
+    pair_bucket_embeddings: &[Vec<f64>],
+    dense_projection: &[Vec<f64>],
+    hidden_weights: &[Vec<f64>],
+    hidden_biases: &[f64],
+    output_weights: &[f64],
+    intercept: f64,
+    bucket_count: usize,
+) -> f64 {
+    let mut loss = 0.0;
+    for &idx in indices {
+        let row = &rows[idx];
+        let src = source_id_map.get(&row.source_id).copied().unwrap_or(0);
+        let dst = target_id_map.get(&row.target_id).copied().unwrap_or(0);
+        let bucket = pair_bucket(&row.source_id, &row.target_id, bucket_count);
+        let (_, _, pred) = pair_mlp_forward(
+            row,
+            means,
+            src,
+            dst,
+            bucket,
+            source_embeddings,
+            target_embeddings,
+            pair_bucket_embeddings,
+            dense_projection,
+            hidden_weights,
+            hidden_biases,
+            output_weights,
+            intercept,
+        );
+        loss += (pred - row.target.unwrap_or(0.0)).powi(2);
+    }
+    loss / indices.len().max(1) as f64
+}
+
+fn pair_bucket(source: &str, target: &str, bucket_count: usize) -> usize {
+    if bucket_count <= 1 {
+        return 0;
+    }
+    let key = format!("{source}->{target}");
+    1 + (stable_hash(&key) as usize % (bucket_count - 1))
+}
+
+struct AdamWState {
+    m: Vec<f64>,
+    v: Vec<f64>,
+    t: usize,
+    cursor: usize,
+}
+
+impl AdamWState {
+    fn new(size: usize) -> Self {
+        Self {
+            m: vec![0.0; size.max(1)],
+            v: vec![0.0; size.max(1)],
+            t: 0,
+            cursor: 0,
+        }
+    }
+
+    fn update_scalar(&mut self, value: f64, grad: f64, lr: f64, wd: f64) -> f64 {
+        let idx = self.cursor % self.m.len();
+        self.cursor += 1;
+        if self.cursor >= self.m.len() {
+            self.cursor = 0;
+            self.t += 1;
+        }
+        let beta1 = 0.9;
+        let beta2 = 0.999;
+        let g = grad.clamp(-10.0, 10.0);
+        self.m[idx] = beta1 * self.m[idx] + (1.0 - beta1) * g;
+        self.v[idx] = beta2 * self.v[idx] + (1.0 - beta2) * g * g;
+        let step = self.t.max(1) as i32;
+        let mh = self.m[idx] / (1.0 - beta1.powi(step));
+        let vh = self.v[idx] / (1.0 - beta2.powi(step));
+        value * (1.0 - lr * wd) - lr * mh / (vh.sqrt() + 1e-8)
+    }
 }
 
 pub fn directional_pair_predictions(rows: &[DeepDirectionalPairRow]) -> Result<Vec<f64>> {
@@ -1067,6 +1654,32 @@ fn deterministic_weight_matrix(rows: usize, cols: usize, seed: u64) -> Vec<Vec<f
         .collect()
 }
 
+fn init_matrix(rows: usize, cols: usize, seed: u64) -> Vec<Vec<f64>> {
+    deterministic_weight_matrix(rows, cols, seed)
+        .into_iter()
+        .map(|row| row.into_iter().map(|v| v * 0.1).collect())
+        .collect()
+}
+
+fn init_vec(len: usize, seed: u64) -> Vec<f64> {
+    deterministic_weight_matrix(1, len, seed)
+        .pop()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|v| v * 0.1)
+        .collect()
+}
+
+fn deterministic_shuffle(values: &mut [usize], seed: u64) {
+    let mut state = seed ^ 0x9E37_79B9_7F4A_7C15;
+    for idx in (1..values.len()).rev() {
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        values.swap(idx, (state as usize) % (idx + 1));
+    }
+}
+
 fn dot(weights: &[f64], values: &[f64]) -> f64 {
     weights.iter().zip(values).map(|(w, v)| w * v).sum()
 }
@@ -1318,6 +1931,188 @@ mod tests {
         assert!(preds[3] > preds[2]);
         assert!(artifact.pair_weights.contains_key("A->B"));
         assert!(artifact.pair_weights.contains_key("B->A"));
+    }
+
+    #[test]
+    fn pair_embedding_mlp_beats_shrinkage_on_nonlinear_ordered_interactions() {
+        let rows = nonlinear_pair_rows();
+        let shrink = directional_pair_fit(&rows).unwrap();
+        let embed = directional_pair_fit_with_options(
+            &rows,
+            &DirectionalPairFitOptions {
+                architecture: "pair_embedding_mlp".to_string(),
+                embedding_dim: 5,
+                pair_bucket_count: 32,
+                hidden_dim: 16,
+                epochs: 450,
+                learning_rate: 0.012,
+                seed: 11,
+                ..DirectionalPairFitOptions::default()
+            },
+        )
+        .unwrap();
+        let shrink_rmse = rmse(&directional_pair_predict(&shrink, &rows).unwrap(), &rows);
+        let embed_pred = directional_pair_predict(&embed, &rows).unwrap();
+        let embed_rmse = rmse(&embed_pred, &rows);
+        let linear_rmse = numeric_linear_rmse(&rows);
+        let unordered_rmse = unordered_pair_rmse(&rows);
+
+        assert_eq!(embed.architecture, "pair_embedding_mlp");
+        assert!(
+            embed_rmse < shrink_rmse * 0.75,
+            "embed {embed_rmse} shrink {shrink_rmse}"
+        );
+        assert!(
+            embed_rmse < linear_rmse * 0.75,
+            "embed {embed_rmse} linear {linear_rmse}"
+        );
+        assert!(
+            embed_rmse < unordered_rmse * 0.75,
+            "embed {embed_rmse} unordered {unordered_rmse}"
+        );
+        assert!(embed_pred[0] - embed_pred[18] > 1.5);
+        assert!(embed.train_metrics["rmse"].is_finite());
+    }
+
+    #[test]
+    fn pair_embedding_mlp_unseen_pair_and_serde_predictions_are_stable() {
+        let rows = nonlinear_pair_rows();
+        let artifact = directional_pair_fit_with_options(
+            &rows,
+            &DirectionalPairFitOptions {
+                architecture: "pair_embedding_mlp".to_string(),
+                embedding_dim: 4,
+                pair_bucket_count: 24,
+                hidden_dim: 14,
+                epochs: 360,
+                seed: 7,
+                ..DirectionalPairFitOptions::default()
+            },
+        )
+        .unwrap();
+        let unseen = vec![DeepDirectionalPairRow {
+            source_id: "A".to_string(),
+            target_id: "C".to_string(),
+            timestamp: None,
+            features: vec![0.25, 0.75],
+            target: None,
+        }];
+        let first = directional_pair_predict(&artifact, &unseen).unwrap();
+        let second = directional_pair_predict(&artifact, &unseen).unwrap();
+        assert_eq!(first, second);
+        assert!(first[0].is_finite());
+
+        let encoded = serde_json::to_string(&artifact).unwrap();
+        let decoded: DeepDirectionalPairArtifact = serde_json::from_str(&encoded).unwrap();
+        let before = directional_pair_predict(&artifact, &rows).unwrap();
+        let after = directional_pair_predict(&decoded, &rows).unwrap();
+        assert!(before
+            .iter()
+            .zip(after)
+            .all(|(left, right)| (left - right).abs() < 1e-12));
+        assert!(decoded.source_id_map.contains_key("__unknown__"));
+        assert_eq!(decoded.pair_global_bucket, 0);
+    }
+
+    fn nonlinear_pair_rows() -> Vec<DeepDirectionalPairRow> {
+        let mut rows = Vec::new();
+        let pairs = [
+            ("A", "B", 1.0),
+            ("B", "A", -1.0),
+            ("A", "C", 0.6),
+            ("C", "A", -0.6),
+        ];
+        for (source, target, direction) in pairs {
+            for step in 0..18 {
+                let x = step as f64 / 17.0;
+                let z = ((step * 5 + source.as_bytes()[0] as usize) % 17) as f64 / 16.0;
+                let y = 2.0 + direction * (1.2 + 1.6 * (x - 0.5).powi(2)) + 0.35 * (z - 0.5);
+                rows.push(DeepDirectionalPairRow {
+                    source_id: source.to_string(),
+                    target_id: target.to_string(),
+                    timestamp: None,
+                    features: vec![x, z],
+                    target: Some(y),
+                });
+            }
+        }
+        rows
+    }
+
+    fn rmse(pred: &[f64], rows: &[DeepDirectionalPairRow]) -> f64 {
+        (pred
+            .iter()
+            .zip(rows)
+            .map(|(pred, row)| (pred - row.target.unwrap()).powi(2))
+            .sum::<f64>()
+            / rows.len() as f64)
+            .sqrt()
+    }
+
+    fn numeric_linear_rmse(rows: &[DeepDirectionalPairRow]) -> f64 {
+        let means = feature_means(
+            rows.iter().map(|row| row.features.as_slice()),
+            rows[0].features.len(),
+        )
+        .unwrap();
+        let labels = rows
+            .iter()
+            .map(|row| row.target.unwrap())
+            .collect::<Vec<_>>();
+        let intercept = labels.iter().sum::<f64>() / labels.len() as f64;
+        let residuals = labels
+            .iter()
+            .map(|value| value - intercept)
+            .collect::<Vec<_>>();
+        let weights = fit_linear_weights(
+            &rows
+                .iter()
+                .map(|row| row.features.as_slice())
+                .collect::<Vec<_>>(),
+            &residuals,
+            &means,
+        );
+        let pred = rows
+            .iter()
+            .map(|row| {
+                intercept
+                    + row
+                        .features
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, value)| weights[idx] * (value - means[idx]))
+                        .sum::<f64>()
+            })
+            .collect::<Vec<_>>();
+        rmse(&pred, rows)
+    }
+
+    fn unordered_pair_rmse(rows: &[DeepDirectionalPairRow]) -> f64 {
+        let mut groups: BTreeMap<String, (f64, usize)> = BTreeMap::new();
+        for row in rows {
+            let key = if row.source_id <= row.target_id {
+                format!("{}:{}", row.source_id, row.target_id)
+            } else {
+                format!("{}:{}", row.target_id, row.source_id)
+            };
+            add_group_sum(&mut groups, &key, row.target.unwrap());
+        }
+        let means = groups
+            .into_iter()
+            .map(|(key, (sum, count))| (key, sum / count as f64))
+            .collect::<BTreeMap<_, _>>();
+        let pred = rows
+            .iter()
+            .map(|row| {
+                let key = if row.source_id <= row.target_id {
+                    format!("{}:{}", row.source_id, row.target_id)
+                } else {
+                    format!("{}:{}", row.target_id, row.source_id)
+                };
+                means[&key]
+            })
+            .collect::<Vec<_>>();
+        rmse(&pred, rows)
     }
 
     #[test]

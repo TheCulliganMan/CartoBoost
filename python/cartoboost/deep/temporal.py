@@ -9,8 +9,35 @@ from .frames import DirectionalPairFrame, EntityPanelFrame
 
 
 class DirectionalPairForecaster:
-    def __init__(self, *, preserve_direction: bool = True, **params: Any) -> None:
+    def __init__(
+        self,
+        *,
+        preserve_direction: bool = True,
+        architecture: str = "shrinkage_effects",
+        embedding_dim: int = 4,
+        pair_bucket_count: int = 64,
+        hidden_dim: int = 12,
+        epochs: int = 700,
+        learning_rate: float = 0.018,
+        weight_decay: float = 1e-4,
+        gradient_clip: float = 1.0,
+        early_stopping_rounds: int = 80,
+        seed: int = 0,
+        loss: str = "squared_error",
+        **params: Any,
+    ) -> None:
         self.preserve_direction = preserve_direction
+        self.architecture = architecture
+        self.embedding_dim = int(embedding_dim)
+        self.pair_bucket_count = int(pair_bucket_count)
+        self.hidden_dim = int(hidden_dim)
+        self.epochs = int(epochs)
+        self.learning_rate = float(learning_rate)
+        self.weight_decay = float(weight_decay)
+        self.gradient_clip = float(gradient_clip)
+        self.early_stopping_rounds = int(early_stopping_rounds)
+        self.seed = int(seed)
+        self.loss = loss
         self._params = dict(params)
         self.is_fitted_ = False
 
@@ -26,7 +53,20 @@ class DirectionalPairForecaster:
             }
             for row in frame.rows
         ]
-        self._artifact_json = fit(dumps(rows))
+        options = {
+            "architecture": self.architecture,
+            "embedding_dim": self.embedding_dim,
+            "pair_bucket_count": self.pair_bucket_count,
+            "hidden_dim": self.hidden_dim,
+            "epochs": self.epochs,
+            "learning_rate": self.learning_rate,
+            "weight_decay": self.weight_decay,
+            "gradient_clip": self.gradient_clip,
+            "early_stopping_rounds": self.early_stopping_rounds,
+            "seed": self.seed,
+            "loss": self.loss,
+        }
+        self._artifact_json = fit(dumps(rows), dumps(options))
         self.metadata_ = loads(self._artifact_json)
         self.metadata_["preserve_direction"] = self.preserve_direction
         self.feature_names_in_ = [
@@ -57,10 +97,28 @@ class DirectionalPairForecaster:
 
     def get_params(self, deep: bool = True) -> dict[str, Any]:
         del deep
-        return {"preserve_direction": self.preserve_direction, **self._params}
+        return {
+            "preserve_direction": self.preserve_direction,
+            "architecture": self.architecture,
+            "embedding_dim": self.embedding_dim,
+            "pair_bucket_count": self.pair_bucket_count,
+            "hidden_dim": self.hidden_dim,
+            "epochs": self.epochs,
+            "learning_rate": self.learning_rate,
+            "weight_decay": self.weight_decay,
+            "gradient_clip": self.gradient_clip,
+            "early_stopping_rounds": self.early_stopping_rounds,
+            "seed": self.seed,
+            "loss": self.loss,
+            **self._params,
+        }
 
     def set_params(self, **params: Any) -> DirectionalPairForecaster:
-        self._params.update(params)
+        for key, value in params.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
+            else:
+                self._params[key] = value
         return self
 
 

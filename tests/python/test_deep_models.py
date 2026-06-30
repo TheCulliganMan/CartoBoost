@@ -62,6 +62,42 @@ def test_directional_pair_preserves_order_with_native_fit():
     assert pred[1] > pred[0]
 
 
+def test_directional_pair_embedding_mlp_public_wrapper():
+    rows = []
+    for source, target, direction in [("A", "B", 1.0), ("B", "A", -1.0), ("A", "C", 0.6)]:
+        for step in range(12):
+            x = step / 11.0
+            rows.append(
+                {
+                    "source_id": source,
+                    "target_id": target,
+                    "features": [x],
+                    "target": 2.0 + direction * (1.0 + (x - 0.5) ** 2),
+                }
+            )
+    frame = DirectionalPairFrame(rows)
+    model = DirectionalPairForecaster(
+        architecture="pair_embedding_mlp",
+        embedding_dim=4,
+        pair_bucket_count=24,
+        hidden_dim=12,
+        epochs=260,
+        seed=13,
+    ).fit(frame)
+    pred = model.predict(frame)
+    unseen = model.predict(
+        DirectionalPairFrame(
+            [{"source_id": "A", "target_id": "Z", "features": [0.2], "target": None}]
+        )
+    )
+
+    assert model.metadata_["architecture"] == "pair_embedding_mlp"
+    assert model.metadata_["source_id_map"]["__unknown__"] == 0
+    assert model.metadata_["pair_global_bucket"] == 0
+    assert np.isfinite(unseen[0])
+    assert pred[0] > pred[12]
+
+
 def test_temporal_entity_transformer_uses_native_attention_fit():
     y = np.asarray(
         [
