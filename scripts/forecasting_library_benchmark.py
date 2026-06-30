@@ -5856,16 +5856,29 @@ def cartoboost_autostats_forecast(
     pl = require_polars()
     pd = require_pandas_for_benchmark()
     feature_start = perf_counter()
-    training_frame = train.select("lane_id", "date", "loads").to_pandas()
+    training_data = train.select("lane_id", "date", "loads").sort(["lane_id", "date"])
+    observed = training_data.group_by("lane_id", maintain_order=True).agg(
+        pl.col("date").n_unique().alias("__observed_count"),
+        ((pl.col("date").max() - pl.col("date").min()).dt.total_days() + 1).alias(
+            "__expected_count"
+        ),
+    )
+    allow_irregular = bool(
+        observed.filter(pl.col("__observed_count") != pl.col("__expected_count")).height
+    )
+    training_frame = training_data.to_pandas()
     if not isinstance(training_frame, pd.DataFrame):
         raise TypeError("CartoBoost native benchmark training conversion did not return pandas")
+    training_frame["date"] = pd.to_datetime(training_frame["date"], errors="raise").astype(
+        "datetime64[ns]"
+    )
     frame = ForecastFrame.from_pandas(
         training_frame,
         timestamp_col="date",
         target_col="loads",
         series_id_col="lane_id",
         freq="D",
-        allow_irregular=True,
+        allow_irregular=allow_irregular,
     )
     validation_window = max(1, min(int(horizon), 8))
     feature_seconds = perf_counter() - feature_start

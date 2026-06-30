@@ -43,6 +43,7 @@
 - Always run lint/format checks before pushing. All linting and format checks must go through `uv run --group dev pre-commit run --all-files`; report that command in the handoff.
 - For targeted Rust behavior checks, run `cargo test --workspace` or the narrower relevant `cargo test` command.
 - For targeted Python behavior checks, run `uv run --group dev pytest` or the narrower relevant pytest command.
+- Before pushing forecast benchmark or release/tag changes, run `uv run --group dev pytest tests/integration/test_validation_scripts.py`; do not tag or publish if it fails.
 - For Python support matrix changes, do not commit claims for versions you have not validated end-to-end through CI/build logs.
   If an interpreter fails native build checks (for example PyO3 compatibility limits), revert the version claim and CI matrix entries until support is real.
 - Add or update tests for behavioral changes, especially when changing splitters, serialization, CLI output, Python estimator behavior, or native bindings.
