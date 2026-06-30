@@ -1,4 +1,4 @@
-import {DeepModelWasmStatus} from '@site/src/components/ModelingLabClient';
+import {DeepModelWasmExample} from '@site/src/components/ModelingLabClient';
 
 # CartoBoost SpatioTemporalGraphForecaster
 
@@ -47,7 +47,7 @@ forecast = model.predict(2)
 
 ## Browser WASM Example
 
-<DeepModelWasmStatus model="SpatioTemporalGraphForecaster" />
+<DeepModelWasmExample model="SpatioTemporalGraphForecaster" />
 
 ## When To Use
 

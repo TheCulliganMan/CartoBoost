@@ -83,6 +83,20 @@ type WasmModule = {
   runNeuralModel: (request: unknown) => RegressionResponse;
   runGeostatisticsModel?: (request: unknown) => GeostatisticsResponse;
   runGeoFeatureExamples?: (request: unknown) => GeoFeatureResponse;
+  runGraphForecast?: (request: unknown) => unknown;
+  deepResponseCurveFit?: (rows: unknown, responseType: string, monotone?: string, backend?: string) => unknown;
+  deepResponseCurvePredict?: (artifact: unknown, rows: unknown) => unknown;
+  deepEventOutcomeFit?: (features: unknown, labels: Float64Array, backend?: string) => unknown;
+  deepEventOutcomePredict?: (artifact: unknown, features: unknown) => unknown;
+  deepDirectionalPairPredict?: (rows: unknown) => unknown;
+  deepServiceResidualFit?: (rows: unknown, backend?: string) => unknown;
+  deepServiceResidualPredict?: (artifact: unknown, rows: unknown) => unknown;
+  deepConstrainedDecisionSelect?: (
+    candidates: unknown,
+    objective: string,
+    constraints: unknown,
+    fallback: string,
+  ) => unknown;
   runSequence?: (request: unknown) => unknown;
   runGeotemporalDiagnostics?: (request: unknown) => unknown;
   availableForecastModels?: () => WasmModelMetadata[];
@@ -340,6 +354,9 @@ const fallbackModelOptions: ModelOption[] = [
   {value: 'classical_expert_bank', label: 'Classical Expert Bank', group: 'selection'},
   {value: 'autostats_bank', label: 'AutoStats Bank', group: 'selection'},
   {value: 'intermittent_demand', label: 'Intermittent Demand', group: 'demand'},
+  {value: 'croston', label: 'Croston', group: 'demand'},
+  {value: 'sba', label: 'SBA', group: 'demand'},
+  {value: 'tsb', label: 'TSB', group: 'demand'},
   {value: 'stl_cartoboost', label: 'STL + ARIMA', group: 'decomposition'},
   {value: 'mstl_cartoboost', label: 'MSTL + ARIMA', group: 'decomposition'},
   {value: 'seasonal_naive', label: 'Seasonal Naive', group: 'local'},
@@ -427,7 +444,29 @@ export function RegressionModelExample({
   );
 }
 
-export function DeepModelWasmStatus({model}: {model: string}): React.ReactElement {
+export function DeepModelWasmExample({model}: {model: string}): React.ReactElement {
+  const wasmJsUrl = useBaseUrl('/wasm/cartoboost/cartoboost_wasm.js');
+  const wasmBinaryUrl = useBaseUrl('/wasm/cartoboost/cartoboost_wasm_bg.wasm');
+  const [status, setStatus] = useState('Ready to run in this page.');
+  const [isRunning, setIsRunning] = useState(false);
+  const [result, setResult] = useState<unknown>(null);
+
+  const runExample = useCallback(async () => {
+    setIsRunning(true);
+    setStatus('Loading CartoBoost Wasm.');
+    try {
+      const wasmModule = await getInitializedWasmModule(wasmJsUrl, wasmBinaryUrl);
+      const nextResult = runDeepModelWasmExample(wasmModule, model);
+      setResult(nextResult);
+      setStatus('Wasm example complete.');
+    } catch (error) {
+      setResult(null);
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsRunning(false);
+    }
+  }, [model, wasmBinaryUrl, wasmJsUrl]);
+
   return (
     <section
       style={{
@@ -437,14 +476,200 @@ export function DeepModelWasmStatus({model}: {model: string}): React.ReactElemen
         margin: '1rem 0',
       }}
     >
-      <strong>{model} browser status</strong>
+      <div style={{display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap'}}>
+        <div>
+          <strong>{model} Wasm example</strong>
+          <p style={{margin: '0.25rem 0 0'}}>
+            Runs the Rust-backed browser export with a small taxi-shaped sample.
+          </p>
+        </div>
+        <button className="button button--primary" type="button" disabled={isRunning} onClick={() => void runExample()}>
+          {isRunning ? 'Running' : 'Run example'}
+        </button>
+      </div>
       <p style={{margin: '0.5rem 0 0'}}>
-        This model is implemented in the native Rust/PyO3 deep surface. The current Wasm docs bundle does not expose a
-        dedicated browser runner for <code>{model}</code>; use the Python example on this page for fitting and serving, and
-        use the Modeling Lab for the related forecast, graph, neural, geostatistics, and regression Wasm runners.
+        {status}
       </p>
+      {result && <DeepModelWasmResult result={result} />}
     </section>
   );
+}
+
+function DeepModelWasmResult({result}: {result: unknown}) {
+  const rows = deepExampleResultRows(result);
+  return (
+    <div style={{overflowX: 'auto', marginTop: '0.75rem'}}>
+      <table>
+        <tbody>
+          {rows.map(([label, value]) => (
+            <tr key={label}>
+              <th>{label}</th>
+              <td>{value}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function deepExampleResultRows(result: unknown): [string, string][] {
+  if (typeof result !== 'object' || result === null) {
+    return [['Result', String(result)]];
+  }
+  const value = result as Record<string, unknown>;
+  if (Array.isArray(value.predictions)) {
+    const firstPrediction = value.predictions[0];
+    if (Array.isArray(firstPrediction)) {
+      return [
+        ['Horizons', String(value.horizon ?? value.predictions.length)],
+        ['Nodes', Array.isArray(value.nodeIds) ? value.nodeIds.join(', ') : '-'],
+        ['First horizon', firstPrediction.map(formatMetric).join(', ')],
+      ];
+    }
+    if (typeof firstPrediction === 'object' && firstPrediction !== null) {
+      const row = firstPrediction as Record<string, unknown>;
+      return Object.entries(row).slice(0, 5).map(([key, rowValue]) => [key, formatMetric(rowValue)]);
+    }
+  }
+  if (Array.isArray(value.choices)) {
+    const firstChoice = value.choices[0] as Record<string, unknown> | undefined;
+    return [
+      ['Selected candidates', String(value.choices.length)],
+      ['First group', String(firstChoice?.group_id ?? firstChoice?.groupId ?? '-')],
+      ['First candidate', String(firstChoice?.candidate_id ?? firstChoice?.candidateId ?? '-')],
+    ];
+  }
+  return Object.entries(value).slice(0, 6).map(([key, rowValue]) => [key, formatMetric(rowValue)]);
+}
+
+function runDeepModelWasmExample(wasmModule: WasmModule, model: string): unknown {
+  switch (model) {
+    case 'DirectionalPairForecaster': {
+      if (!wasmModule.deepDirectionalPairPredict) {
+        throw new Error('CartoBoost directional pair Wasm export is not available from this bundle.');
+      }
+      return {predictions: wasmModule.deepDirectionalPairPredict(deepDirectionalPairRows())};
+    }
+    case 'ResponseCurveModel': {
+      if (!wasmModule.deepResponseCurveFit || !wasmModule.deepResponseCurvePredict) {
+        throw new Error('CartoBoost response curve Wasm exports are not available from this bundle.');
+      }
+      const rows = deepResponseCurveRows();
+      const artifact = wasmModule.deepResponseCurveFit(rows.slice(0, 6), 'binary', 'decreasing', 'cpu');
+      return {predictions: wasmModule.deepResponseCurvePredict(artifact, rows.slice(6))};
+    }
+    case 'EventOutcomeModel': {
+      if (!wasmModule.deepEventOutcomeFit || !wasmModule.deepEventOutcomePredict) {
+        throw new Error('CartoBoost event outcome Wasm exports are not available from this bundle.');
+      }
+      const features = deepEventFeatures();
+      const artifact = wasmModule.deepEventOutcomeFit(features.slice(0, 6), new Float64Array([0, 0, 1, 1, 0, 1]), 'cpu');
+      return {predictions: wasmModule.deepEventOutcomePredict(artifact, features.slice(6))};
+    }
+    case 'ServiceTimeResidualModel': {
+      if (!wasmModule.deepServiceResidualFit || !wasmModule.deepServiceResidualPredict) {
+        throw new Error('CartoBoost service residual Wasm exports are not available from this bundle.');
+      }
+      const rows = deepServiceResidualRows();
+      const artifact = wasmModule.deepServiceResidualFit(rows.slice(0, 6), 'cpu');
+      return {predictions: wasmModule.deepServiceResidualPredict(artifact, rows.slice(6))};
+    }
+    case 'SpatioTemporalGraphForecaster': {
+      if (!wasmModule.runGraphForecast) {
+        throw new Error('CartoBoost graph forecast Wasm export is not available from this bundle.');
+      }
+      return wasmModule.runGraphForecast(deepGraphForecastRequest());
+    }
+    case 'ConstrainedDecisionOptimizer': {
+      if (!wasmModule.deepConstrainedDecisionSelect) {
+        throw new Error('CartoBoost constrained decision Wasm export is not available from this bundle.');
+      }
+      const choices = wasmModule.deepConstrainedDecisionSelect(
+        deepDecisionCandidates(),
+        'utility',
+        {fare: 35, eta_minutes: 28},
+        'raise',
+      );
+      return {choices};
+    }
+    default:
+      throw new Error(`Unknown deep model example: ${model}`);
+  }
+}
+
+function deepDirectionalPairRows() {
+  return [
+    {source_id: 'PULocationID:161', target_id: 'DOLocationID:236', timestamp: 0, features: [1.8, 8, 0.42], target: 18.4},
+    {source_id: 'PULocationID:161', target_id: 'DOLocationID:237', timestamp: 1, features: [2.1, 9, 0.48], target: 20.2},
+    {source_id: 'PULocationID:132', target_id: 'DOLocationID:161', timestamp: 2, features: [17.4, 17, 0.83], target: 58.7},
+  ];
+}
+
+function deepResponseCurveRows() {
+  return [18, 22, 26, 20, 24, 28, 21, 25].map((fare, index) => ({
+    features: [index % 2, 8 + (index % 4), 1.6 + index * 0.2],
+    candidate_value: fare,
+    response: index < 6 ? Number(fare <= 24) : undefined,
+    group_id: `route_offer_${Math.floor(index / 2)}`,
+    candidate_id: `fare_${fare}`,
+  }));
+}
+
+function deepEventFeatures() {
+  return [
+    [1.2, 8, 0.35],
+    [2.4, 9, 0.44],
+    [4.8, 17, 0.78],
+    [5.2, 18, 0.82],
+    [1.6, 11, 0.38],
+    [6.1, 19, 0.88],
+    [3.2, 16, 0.65],
+    [5.8, 20, 0.9],
+  ];
+}
+
+function deepServiceResidualRows() {
+  return [
+    {baseline_value: 16.5, actual_value: 17.4, features: [1.8, 8, 0.35]},
+    {baseline_value: 18.2, actual_value: 19.1, features: [2.1, 9, 0.42]},
+    {baseline_value: 46.0, actual_value: 49.8, features: [12.4, 17, 0.83]},
+    {baseline_value: 51.0, actual_value: 53.2, features: [13.1, 18, 0.88]},
+    {baseline_value: 22.4, actual_value: 23.0, features: [3.2, 11, 0.51]},
+    {baseline_value: 55.5, actual_value: 59.4, features: [14.8, 19, 0.91]},
+    {baseline_value: 24.1, features: [3.6, 16, 0.62]},
+    {baseline_value: 58.0, features: [15.2, 20, 0.94]},
+  ];
+}
+
+function deepGraphForecastRequest() {
+  return {
+    frame: {
+      nodeIds: ['PULocationID:161', 'PULocationID:236', 'PULocationID:132'],
+      timestamps: [0, 1, 2, 3, 4, 5],
+      target: [
+        [42, 35, 18],
+        [44, 36, 19],
+        [51, 40, 24],
+        [58, 46, 31],
+        [55, 45, 34],
+        [49, 43, 30],
+      ],
+      adjacency: {indptr: [0, 2, 3, 3], indices: [1, 2, 2], data: [0.7, 0.3, 1.0]},
+      horizon: 2,
+      frequency: 'hourly',
+    },
+    options: {diffusionSteps: 1, hiddenSize: 4, epochs: 5, backend: 'cpu'},
+  };
+}
+
+function deepDecisionCandidates() {
+  return [
+    {decision_id: 'ride_request_1', candidate_id: 'standard_route', candidate_value: 26, utility: 0.74, fare: 26, eta_minutes: 24},
+    {decision_id: 'ride_request_1', candidate_id: 'express_route', candidate_value: 34, utility: 0.82, fare: 34, eta_minutes: 18},
+    {decision_id: 'ride_request_2', candidate_id: 'local_pickup', candidate_value: 22, utility: 0.68, fare: 22, eta_minutes: 26},
+    {decision_id: 'ride_request_2', candidate_id: 'airport_queue', candidate_value: 42, utility: 0.91, fare: 42, eta_minutes: 32},
+  ];
 }
 
 export function ForecastModelExample({
@@ -2861,6 +3086,9 @@ function forecastSettingsProfile(selectedModel?: ModelOption) {
     'classical_expert_bank',
     'autostats_bank',
     'intermittent_demand',
+    'croston',
+    'sba',
+    'tsb',
     'stl_cartoboost',
     'mstl_cartoboost',
     'seasonal_naive',

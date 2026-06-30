@@ -32,6 +32,7 @@ Use this directory as the navigation map for the user-facing docs site.
 - [Geo evaluation standard](./user-guide/geo-evaluation-standard.md)
 - [Benchmarks](./benchmarks/index.md)
 - [Benchmark methodology and geo manifest contract](./benchmarks/methodology.md)
+- [NYC Taxi Path C claim gates](./benchmarks/nyc-taxi-path-c.md)
 - Release gate audit: `../scripts/check_release_gates.py`
 - Public API contract audit: `../scripts/check_public_api_contract.py`
 - Artifact compatibility audit: `../scripts/check_artifact_compatibility.py`
@@ -40,6 +41,8 @@ Use this directory as the navigation map for the user-facing docs site.
 - Performance threshold audit: `../scripts/check_performance_thresholds.py`
 - AutoGeo benchmark gate: `../scripts/run_autogeo_benchmark_gate.py`
 - NYC TLC quality benchmark harness: `../scripts/run_nyc_taxi_quality_benchmarks.py`
+- NYC TLC Path C claim harness: `../scripts/run_nyc_taxi_path_c_claims.py`
+- NYC TLC Path C gate audit: `../scripts/check_nyc_taxi_path_c_gates.py`
 - [Model benchmark suite](./benchmarks/model-suite.md)
 - [NYC taxi benchmark report](./benchmarks/nyc-taxi.md)
 - [Python API reference](./reference/python-api.md)

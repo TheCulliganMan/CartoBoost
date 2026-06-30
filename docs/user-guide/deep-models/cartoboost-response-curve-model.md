@@ -1,4 +1,4 @@
-import {DeepModelWasmStatus} from '@site/src/components/ModelingLabClient';
+import {DeepModelWasmExample} from '@site/src/components/ModelingLabClient';
 
 # CartoBoost ResponseCurveModel
 
@@ -36,7 +36,7 @@ best = model.best_candidate(frame)
 
 ## Browser WASM Example
 
-<DeepModelWasmStatus model="ResponseCurveModel" />
+<DeepModelWasmExample model="ResponseCurveModel" />
 
 ## When To Use
 

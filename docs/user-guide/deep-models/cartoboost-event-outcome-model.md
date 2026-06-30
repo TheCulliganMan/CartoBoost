@@ -1,4 +1,4 @@
-import {DeepModelWasmStatus} from '@site/src/components/ModelingLabClient';
+import {DeepModelWasmExample} from '@site/src/components/ModelingLabClient';
 
 # CartoBoost EventOutcomeModel
 
@@ -21,7 +21,7 @@ model.save("event-outcome.json")
 
 ## Browser WASM Example
 
-<DeepModelWasmStatus model="EventOutcomeModel" />
+<DeepModelWasmExample model="EventOutcomeModel" />
 
 ## When To Use
 

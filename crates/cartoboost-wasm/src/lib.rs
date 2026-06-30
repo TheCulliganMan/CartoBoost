@@ -6,21 +6,22 @@ use cartoboost_core::forecasting::{
     rolling_median_residual, AutoARIMAForecaster, AutoETSForecaster, AutoForecastConfig,
     AutoForecastModel, AutoKalmanForecaster, AutoLocalLevelKalmanForecaster, AutoStatsBank,
     CalendarFeature, CartoBoostDirectForecaster, CartoBoostLagForecaster, ClassicalExpertBank,
-    CusumConfig, ETSForecaster, EwmaVolatility, EwmaVolatilityConfig, ForecastFrame,
-    ForecastFrameMetadata, ForecastFrequency, ForecastResult, Forecaster, IntermittentDemandConfig,
-    IntermittentDemandForecaster, KalmanForecaster, KalmanResidualCorrector, KrigingForecaster,
-    LagFeatureConfig, LagPlusConfig, LagPlusForecaster, LocalLevelKalmanForecaster,
-    LocalStandardScaledForecaster, Log1pForecaster, MSTLCartoBoostForecaster, NaiveForecaster,
-    OptimizedThetaForecaster, PageHinkley, PageHinkleyConfig, PiecewiseLinearComponentMode,
-    PiecewiseLinearEvent, PiecewiseLinearFitLoss, PiecewiseLinearGrowth,
-    PiecewiseLinearSeasonalConfig, PiecewiseLinearSeasonalForecaster, PiecewiseLinearSeasonality,
-    RectifiedRecursiveForecaster, ReferencePathConfig, ReferenceSignal, RegimeIntervalPolicy,
-    ResidualStateKey, STLCartoBoostForecaster, SeasonalNaiveForecaster,
-    SeasonalWindowAverageForecaster, SequenceCandidate, SequenceCandidateEnsemble,
-    SequenceCandidatePrediction, SequenceFrame, SequenceGroupPrediction, SequenceOofCandidateRow,
-    SequenceOofFold, SequenceSeries, SequenceStateSpaceConfig, SpatialPiecewiseKrigingConfig,
-    SpatialPiecewiseKrigingForecaster, SpatialPiecewiseKrigingMode, StateFilter, StateObservation,
-    ThetaForecaster, ThetaSeasonality, WindowAverageForecaster, CUSUM,
+    CrostonForecaster, CusumConfig, ETSForecaster, EwmaVolatility, EwmaVolatilityConfig,
+    ForecastFrame, ForecastFrameMetadata, ForecastFrequency, ForecastResult, Forecaster,
+    IntermittentDemandConfig, IntermittentDemandForecaster, KalmanForecaster,
+    KalmanResidualCorrector, KrigingForecaster, LagFeatureConfig, LagPlusConfig, LagPlusForecaster,
+    LocalLevelKalmanForecaster, LocalStandardScaledForecaster, Log1pForecaster,
+    MSTLCartoBoostForecaster, NaiveForecaster, OptimizedThetaForecaster, PageHinkley,
+    PageHinkleyConfig, PiecewiseLinearComponentMode, PiecewiseLinearEvent, PiecewiseLinearFitLoss,
+    PiecewiseLinearGrowth, PiecewiseLinearSeasonalConfig, PiecewiseLinearSeasonalForecaster,
+    PiecewiseLinearSeasonality, RectifiedRecursiveForecaster, ReferencePathConfig, ReferenceSignal,
+    RegimeIntervalPolicy, ResidualStateKey, STLCartoBoostForecaster, SbaForecaster,
+    SeasonalNaiveForecaster, SeasonalWindowAverageForecaster, SequenceCandidate,
+    SequenceCandidateEnsemble, SequenceCandidatePrediction, SequenceFrame, SequenceGroupPrediction,
+    SequenceOofCandidateRow, SequenceOofFold, SequenceSeries, SequenceStateSpaceConfig,
+    SpatialPiecewiseKrigingConfig, SpatialPiecewiseKrigingForecaster, SpatialPiecewiseKrigingMode,
+    StateFilter, StateObservation, ThetaForecaster, ThetaSeasonality, TsbForecaster,
+    WindowAverageForecaster, CUSUM,
 };
 use cartoboost_core::loss::{HuberLossConfig, LogL2LossConfig, LossConfig, QuantileLossConfig};
 use cartoboost_core::objectives::{
@@ -4486,6 +4487,14 @@ fn build_forecaster(
             };
             Ok(Box::new(IntermittentDemandForecaster::new(config)?))
         }
+        "croston" => Ok(Box::new(CrostonForecaster::new(
+            options.alpha.unwrap_or(0.2),
+        )?)),
+        "sba" => Ok(Box::new(SbaForecaster::new(options.alpha.unwrap_or(0.2))?)),
+        "tsb" => Ok(Box::new(TsbForecaster::new(
+            options.alpha.unwrap_or(0.2),
+            options.beta.unwrap_or(0.2),
+        )?)),
         "classical_expert_bank" => Ok(Box::new(ClassicalExpertBank::default_for_season_length(
             options.season_length.unwrap_or(7),
         )?)),

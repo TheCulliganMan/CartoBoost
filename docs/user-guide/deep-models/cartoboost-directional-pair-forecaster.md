@@ -1,4 +1,4 @@
-import {DeepModelWasmStatus} from '@site/src/components/ModelingLabClient';
+import {DeepModelWasmExample} from '@site/src/components/ModelingLabClient';
 
 # CartoBoost DirectionalPairForecaster
 
@@ -42,7 +42,7 @@ ids use the learned unknown embedding row.
 
 ## Browser WASM Example
 
-<DeepModelWasmStatus model="DirectionalPairForecaster" />
+<DeepModelWasmExample model="DirectionalPairForecaster" />
 
 ## When To Use
 

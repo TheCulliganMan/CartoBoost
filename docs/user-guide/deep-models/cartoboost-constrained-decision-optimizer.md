@@ -1,4 +1,4 @@
-import {DeepModelWasmStatus} from '@site/src/components/ModelingLabClient';
+import {DeepModelWasmExample} from '@site/src/components/ModelingLabClient';
 
 # CartoBoost ConstrainedDecisionOptimizer
 
@@ -41,7 +41,7 @@ choice = optimizer.select(candidate_rows)
 
 ## Browser WASM Example
 
-<DeepModelWasmStatus model="ConstrainedDecisionOptimizer" />
+<DeepModelWasmExample model="ConstrainedDecisionOptimizer" />
 
 ## When To Use
 

@@ -35,6 +35,7 @@ compare it against strong baselines on the same split.
 - Geo evaluation standard: ./docs/user-guide/geo-evaluation-standard.md
 - Benchmarks: ./docs/benchmarks/index.md
 - Benchmark methodology and geo manifest contract: ./docs/benchmarks/methodology.md
+- NYC Taxi Path C claim gates: ./docs/benchmarks/nyc-taxi-path-c.md
 - Release gate audit: ./scripts/check_release_gates.py
 - Public API contract audit: ./scripts/check_public_api_contract.py
 - Artifact compatibility audit: ./scripts/check_artifact_compatibility.py
@@ -43,6 +44,8 @@ compare it against strong baselines on the same split.
 - Performance threshold audit: ./scripts/check_performance_thresholds.py
 - AutoGeo benchmark gate: ./scripts/run_autogeo_benchmark_gate.py
 - NYC TLC quality benchmark harness: ./scripts/run_nyc_taxi_quality_benchmarks.py
+- NYC TLC Path C claim harness: ./scripts/run_nyc_taxi_path_c_claims.py
+- NYC TLC Path C gate audit: ./scripts/check_nyc_taxi_path_c_gates.py
 - Model benchmark suite: ./docs/benchmarks/model-suite.md
 - NYC taxi benchmark report: ./docs/benchmarks/nyc-taxi.md
 

@@ -30,6 +30,7 @@ runtime, and memory before results can be promoted as benchmark evidence.
 | --- | --- | --- |
 | [Benchmark Methodology](methodology.md) | Evidence contract and v0.2 acceptance gates. | Required fields, split rules, metric roster, and rerun rules. |
 | [NYC Taxi Benchmarks](nyc-taxi.md) | Real TLC fare, duration, and pickup-demand regression. | Current-code CartoBoost versus external baselines, RMSE/MAE/R2/WAPE tables, timing breakdown. |
+| [NYC Taxi Path C Claims](nyc-taxi-path-c.md) | Claim-based real TLC gates for generic geo-temporal behavior. | Directional, temporal, known-future, spatial-transfer, and residual-correction falsifier rows. |
 | [Forecasting Tool Benchmark](forecasting.md) | Real taxi lane demand, synthetic taxi-shaped forecasting, M4 sample, M5 full-roster sample, and M5/M6 full-run protocols. | RMSE/WAPE tables, M5/M6 model rosters, run commands, horizon plot, forecast-line plot. |
 | [Model Benchmark Suite](model-suite.md) | Public tabular regression and graph diagnostics. | CartoBoost versus external baselines, validation-search selections, full RMSE/MAE/R2/WAPE tables. |
 | [Taxi Zone Acceptance](taxi-zone.md) | Deterministic taxi-lane feature acceptance. | Lane heatmap, hour profile, route midpoint geometry. |
@@ -42,6 +43,9 @@ runtime, and memory before results can be promoted as benchmark evidence.
 | NYC regression JSON | `docs/assets/nyc_taxi_benchmarks/results.json` |
 | NYC regression JSONL metrics | `docs/assets/nyc_taxi_benchmarks/results.jsonl` |
 | NYC regression report | `docs/assets/nyc_taxi_benchmarks/results.md` |
+| NYC Path C claims JSON | `docs/assets/nyc_taxi_benchmarks/path_c_claims.json` |
+| NYC Path C claims JSONL | `docs/assets/nyc_taxi_benchmarks/path_c_claims.jsonl` |
+| NYC Path C claims report | `docs/assets/nyc_taxi_benchmarks/path_c_claims.md` |
 | NYC repeated regression JSON | `docs/assets/nyc_taxi_benchmarks/repeated_results.json` |
 | NYC repeated regression report | `docs/assets/nyc_taxi_benchmarks/repeated_results.md` |
 | NYC forecasting JSON | `docs/assets/nyc_taxi_benchmarks/forecasting_library_benchmark_real.json` |

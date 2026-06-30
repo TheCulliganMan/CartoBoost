@@ -1,4 +1,4 @@
-import {DeepModelWasmStatus} from '@site/src/components/ModelingLabClient';
+import {DeepModelWasmExample} from '@site/src/components/ModelingLabClient';
 
 # CartoBoost ServiceTimeResidualModel
 
@@ -32,7 +32,7 @@ model.save("service-residual.json")
 
 ## Browser WASM Example
 
-<DeepModelWasmStatus model="ServiceTimeResidualModel" />
+<DeepModelWasmExample model="ServiceTimeResidualModel" />
 
 ## When To Use
 
