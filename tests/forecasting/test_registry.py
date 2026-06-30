@@ -423,6 +423,8 @@ def test_piecewise_linear_seasonal_wrapper_normalizes_native_overrides(install_f
             8,
             {1: 1.05},
             {"PULocationID=132": {2: 1.15}},
+            None,
+            None,
         ),
         {},
     )
@@ -490,6 +492,49 @@ def test_piecewise_linear_seasonal_wrapper_accepts_prophet_holiday_and_changepoi
     assert init_params["event_l2_regularization_by_name"] == {
         "airport_queue_surge": pytest.approx(0.04)
     }
+
+
+def test_piecewise_linear_seasonal_predict_accepts_future_timestamps(install_fake_native):
+    pd = pytest.importorskip("pandas")
+    native = install_fake_native("PiecewiseLinearSeasonalForecaster")
+    model = PiecewiseLinearSeasonalForecaster().fit([10.0, 12.0, 14.0])
+
+    model.predict(2, future_timestamps=pd.bdate_range("2026-01-05", periods=2))
+    model.predict(
+        2,
+        future_timestamps_by_series={"__single__": ["2026-01-05", "2026-01-06"]},
+    )
+
+    assert native.calls[2] == (
+        "predict",
+        (
+            2,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            ["2026-01-05T00:00:00", "2026-01-06T00:00:00"],
+            None,
+        ),
+        {},
+    )
+    assert native.calls[3] == (
+        "predict",
+        (
+            2,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            {"__single__": ["2026-01-05T00:00:00", "2026-01-06T00:00:00"]},
+        ),
+        {},
+    )
 
 
 def test_piecewise_linear_seasonal_wrapper_accepts_prophet_country_holiday_and_prior_aliases(

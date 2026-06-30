@@ -286,6 +286,7 @@ impl ClassicalExpertBank {
 
 impl Forecaster for ClassicalExpertBank {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
+        frame.require_regular_for_model(self.model_name())?;
         let validation_window = self.effective_validation_window(frame);
         let mut scores = Vec::new();
         if validation_window > 0 {

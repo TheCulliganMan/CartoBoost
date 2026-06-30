@@ -657,6 +657,11 @@ impl PiecewiseLinearSeasonalForecaster {
         Ok(artifact.model)
     }
 
+    pub fn fitted_series_ids(&self) -> Result<Vec<String>> {
+        let fitted = self.fitted.as_ref().ok_or_else(not_fitted)?;
+        Ok(fitted.series.keys().cloned().collect())
+    }
+
     pub fn predict_components_json_value(&self, horizon: usize) -> Result<Value> {
         validate_horizon(horizon)?;
         let fitted = self.fitted.as_ref().ok_or_else(not_fitted)?;
@@ -865,6 +870,174 @@ impl PiecewiseLinearSeasonalForecaster {
                 "failed to serialize piecewise linear seasonal posterior samples: {err}"
             ))
         })
+    }
+
+    pub fn predict_at_timestamps(
+        &self,
+        timestamps_by_series: BTreeMap<String, Vec<chrono::NaiveDateTime>>,
+    ) -> Result<ForecastResult> {
+        let fitted = self.fitted.as_ref().ok_or_else(not_fitted)?;
+        let schedule = self.validate_prediction_schedule(timestamps_by_series)?;
+        self.predict_with_schedule(fitted, &schedule)
+    }
+
+    fn horizon_schedule(
+        &self,
+        fitted: &FittedPiecewiseLinearSeasonalState,
+        horizon: usize,
+    ) -> Result<BTreeMap<String, Vec<chrono::NaiveDateTime>>> {
+        validate_horizon(horizon)?;
+        fitted
+            .series
+            .iter()
+            .map(|(series_id, series)| {
+                let timestamps = (1..=horizon)
+                    .map(|step| {
+                        fitted
+                            .frame
+                            .frequency()
+                            .advance(series.last_timestamp, step)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok((series_id.clone(), timestamps))
+            })
+            .collect()
+    }
+
+    fn validate_prediction_schedule(
+        &self,
+        timestamps_by_series: BTreeMap<String, Vec<chrono::NaiveDateTime>>,
+    ) -> Result<BTreeMap<String, Vec<chrono::NaiveDateTime>>> {
+        let fitted = self.fitted.as_ref().ok_or_else(not_fitted)?;
+        if timestamps_by_series.is_empty() {
+            return Err(CartoBoostError::InvalidInput(
+                "future_timestamps must contain at least one timestamp".to_string(),
+            ));
+        }
+        for series_id in fitted.series.keys() {
+            let timestamps = timestamps_by_series.get(series_id).ok_or_else(|| {
+                CartoBoostError::InvalidInput(format!(
+                    "future_timestamps_by_series is missing fitted series {series_id:?}"
+                ))
+            })?;
+            if timestamps.is_empty() {
+                return Err(CartoBoostError::InvalidInput(format!(
+                    "future_timestamps for series {series_id:?} must not be empty"
+                )));
+            }
+            let series = fitted.series.get(series_id).expect("series key exists");
+            let mut previous = series.last_timestamp;
+            for timestamp in timestamps {
+                if *timestamp <= previous {
+                    return Err(CartoBoostError::InvalidInput(format!(
+                        "future_timestamps for series {series_id:?} must be strictly after the last training timestamp and increasing"
+                    )));
+                }
+                previous = *timestamp;
+            }
+        }
+        for series_id in timestamps_by_series.keys() {
+            if !fitted.series.contains_key(series_id) {
+                return Err(CartoBoostError::InvalidInput(format!(
+                    "future_timestamps_by_series contains unknown series {series_id:?}"
+                )));
+            }
+        }
+        Ok(timestamps_by_series)
+    }
+
+    fn predict_with_schedule(
+        &self,
+        fitted: &FittedPiecewiseLinearSeasonalState,
+        schedule: &BTreeMap<String, Vec<chrono::NaiveDateTime>>,
+    ) -> Result<ForecastResult> {
+        let per_series = fitted
+            .series
+            .iter()
+            .collect::<Vec<_>>()
+            .into_par_iter()
+            .map(|(series_id, series)| {
+                let emit_intervals = !self.config.interval_levels.is_empty();
+                let residual_scale = if emit_intervals {
+                    series.residual_scale()
+                } else {
+                    0.0
+                };
+                let timestamps = schedule.get(series_id).ok_or_else(|| {
+                    CartoBoostError::InvalidInput(format!(
+                        "missing prediction timestamps for series {series_id:?}"
+                    ))
+                })?;
+                timestamps
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, &timestamp)| {
+                        let step = idx + 1;
+                        let elapsed = elapsed_days(series.start_timestamp, timestamp);
+                        let bounds =
+                            piecewise_bounds(Some(series_id), None, Some(step), &self.config)?;
+                        let terms = series.prediction_terms_at(
+                            series_id,
+                            elapsed,
+                            timestamp,
+                            step,
+                            bounds,
+                            &self.config,
+                        )?;
+                        let prediction = ForecastPrediction {
+                            series_id: series_id.clone(),
+                            timestamp,
+                            horizon: step,
+                            model: self.model_name().to_string(),
+                            mean: terms.mean,
+                        };
+                        let intervals = if emit_intervals {
+                            piecewise_prediction_intervals(
+                                &prediction,
+                                residual_scale,
+                                terms.coefficient_scale,
+                                if series.transformed_residual_scale > 0.0 {
+                                    series.transformed_residual_scale
+                                } else {
+                                    residual_scale
+                                },
+                                terms.linear_predictor,
+                                terms.linear_coefficient_scale,
+                                series.trend_uncertainty_offsets(
+                                    series_id,
+                                    elapsed,
+                                    timestamp,
+                                    step,
+                                    &self.config,
+                                )?,
+                                series.trend_uncertainty_linear_offsets(
+                                    series_id,
+                                    elapsed,
+                                    step,
+                                    &self.config,
+                                ),
+                                &self.config.interval_levels,
+                                bounds,
+                                &self.config,
+                            )?
+                        } else {
+                            Vec::new()
+                        };
+                        Ok((prediction, intervals))
+                    })
+                    .collect::<Result<Vec<_>>>()
+            })
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        let mut predictions = Vec::with_capacity(per_series.len());
+        let mut intervals = Vec::new();
+        for (prediction, prediction_intervals) in per_series {
+            predictions.push(prediction);
+            intervals.extend(prediction_intervals);
+        }
+        ForecastResult::new_with_intervals(predictions, intervals)
     }
 
     pub fn predict_quantiles_json_value(
@@ -1680,6 +1853,7 @@ impl Forecaster for NaiveForecaster {
 
 impl Forecaster for SeasonalNaiveForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
+        frame.require_regular_for_model(self.model_name())?;
         self.fitted = Some(FittedLocalState::from_frame(frame));
         Ok(())
     }
@@ -1788,6 +1962,7 @@ impl Forecaster for WindowAverageForecaster {
 
 impl Forecaster for SeasonalWindowAverageForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
+        frame.require_regular_for_model(self.model_name())?;
         self.fitted = Some(FittedLocalState::from_frame(frame));
         Ok(())
     }
@@ -1852,6 +2027,7 @@ impl Forecaster for SeasonalWindowAverageForecaster {
 
 impl Forecaster for ThetaForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
+        frame.require_regular_for_model(self.model_name())?;
         self.fitted = Some(FittedThetaState::from_frame(
             frame,
             self.theta,
@@ -1882,6 +2058,7 @@ impl Forecaster for ThetaForecaster {
 
 impl Forecaster for OptimizedThetaForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
+        frame.require_regular_for_model(self.model_name())?;
         let candidates = self
             .theta_grid
             .iter()
@@ -1960,6 +2137,7 @@ impl Forecaster for OptimizedThetaForecaster {
 
 impl Forecaster for ETSForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
+        frame.require_regular_for_model(self.model_name())?;
         self.fitted = Some(FittedETSState::from_frame(
             frame,
             self.alpha,
@@ -2027,6 +2205,7 @@ impl Forecaster for ETSForecaster {
 
 impl Forecaster for AutoETSForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
+        frame.require_regular_for_model(self.model_name())?;
         let mut candidates = Vec::new();
         for (alpha_idx, alpha) in self.alpha_grid.iter().copied().enumerate() {
             for (beta_idx, beta) in self.beta_grid.iter().copied().enumerate() {
@@ -2165,6 +2344,7 @@ impl Forecaster for AutoETSForecaster {
 
 impl Forecaster for ArimaForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
+        frame.require_regular_for_model(self.model_name())?;
         self.fitted = Some(FittedArimaState::from_frame(frame, self.p, self.d, self.q)?);
         Ok(())
     }
@@ -2184,6 +2364,7 @@ impl Forecaster for ArimaForecaster {
 
 impl Forecaster for AutoARIMAForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
+        frame.require_regular_for_model(self.model_name())?;
         let max_p = self.max_p;
         let max_d = self.max_d;
         let max_q = self.max_q;
@@ -2263,6 +2444,7 @@ impl Forecaster for AutoARIMAForecaster {
 
 impl Forecaster for KalmanForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
+        frame.require_regular_for_model(self.model_name())?;
         self.fitted = Some(FittedKalmanState::from_frame(
             frame,
             self.level_process_variance,
@@ -2292,6 +2474,7 @@ impl Forecaster for KalmanForecaster {
 
 impl Forecaster for LocalLevelKalmanForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
+        frame.require_regular_for_model(self.model_name())?;
         self.fitted = Some(FittedLocalLevelKalmanState::from_frame(
             frame,
             self.level_process_variance,
@@ -2319,6 +2502,7 @@ impl Forecaster for LocalLevelKalmanForecaster {
 
 impl Forecaster for AutoKalmanForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
+        frame.require_regular_for_model(self.model_name())?;
         let local = FittedLocalState::from_frame(frame);
         let level_grid = self.level_process_variance_grid.clone();
         let trend_grid = self.trend_process_variance_grid.clone();
@@ -2422,6 +2606,7 @@ impl Forecaster for AutoKalmanForecaster {
 
 impl Forecaster for AutoLocalLevelKalmanForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
+        frame.require_regular_for_model(self.model_name())?;
         let local = FittedLocalState::from_frame(frame);
         let candidates = self
             .level_process_variance_grid
@@ -2766,91 +2951,9 @@ impl Forecaster for PiecewiseLinearSeasonalForecaster {
     }
 
     fn predict(&self, horizon: usize) -> Result<ForecastResult> {
-        validate_horizon(horizon)?;
         let fitted = self.fitted.as_ref().ok_or_else(not_fitted)?;
-        let per_series = fitted
-            .series
-            .iter()
-            .collect::<Vec<_>>()
-            .into_par_iter()
-            .map(|(series_id, series)| {
-                let emit_intervals = !self.config.interval_levels.is_empty();
-                let residual_scale = if emit_intervals {
-                    series.residual_scale()
-                } else {
-                    0.0
-                };
-                (1..=horizon)
-                    .map(|step| {
-                        let timestamp = fitted
-                            .frame
-                            .frequency()
-                            .advance(series.last_timestamp, step)?;
-                        let elapsed = elapsed_days(series.start_timestamp, timestamp);
-                        let bounds =
-                            piecewise_bounds(Some(series_id), None, Some(step), &self.config)?;
-                        let terms = series.prediction_terms_at(
-                            series_id,
-                            elapsed,
-                            timestamp,
-                            step,
-                            bounds,
-                            &self.config,
-                        )?;
-                        let prediction = ForecastPrediction {
-                            series_id: series_id.clone(),
-                            timestamp,
-                            horizon: step,
-                            model: self.model_name().to_string(),
-                            mean: terms.mean,
-                        };
-                        let intervals = if emit_intervals {
-                            piecewise_prediction_intervals(
-                                &prediction,
-                                residual_scale,
-                                terms.coefficient_scale,
-                                if series.transformed_residual_scale > 0.0 {
-                                    series.transformed_residual_scale
-                                } else {
-                                    residual_scale
-                                },
-                                terms.linear_predictor,
-                                terms.linear_coefficient_scale,
-                                series.trend_uncertainty_offsets(
-                                    series_id,
-                                    elapsed,
-                                    timestamp,
-                                    step,
-                                    &self.config,
-                                )?,
-                                series.trend_uncertainty_linear_offsets(
-                                    series_id,
-                                    elapsed,
-                                    step,
-                                    &self.config,
-                                ),
-                                &self.config.interval_levels,
-                                bounds,
-                                &self.config,
-                            )?
-                        } else {
-                            Vec::new()
-                        };
-                        Ok((prediction, intervals))
-                    })
-                    .collect::<Result<Vec<_>>>()
-            })
-            .collect::<Result<Vec<_>>>()?
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
-        let mut predictions = Vec::with_capacity(per_series.len());
-        let mut intervals = Vec::new();
-        for (prediction, prediction_intervals) in per_series {
-            predictions.push(prediction);
-            intervals.extend(prediction_intervals);
-        }
-        ForecastResult::new_with_intervals(predictions, intervals)
+        let schedule = self.horizon_schedule(fitted, horizon)?;
+        self.predict_with_schedule(fitted, &schedule)
     }
 
     fn model_name(&self) -> &'static str {
@@ -7598,13 +7701,50 @@ fn not_fitted() -> CartoBoostError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::forecasting::ForecastFrequency;
+    use crate::forecasting::{ForecastFrameMetadata, ForecastFrequency};
     use chrono::{Duration, NaiveDate, NaiveDateTime};
 
     fn ts(day: u32) -> NaiveDateTime {
         NaiveDate::from_ymd_opt(2026, 1, day)
             .and_then(|date| date.and_hms_opt(0, 0, 0))
             .expect("valid fixture timestamp")
+    }
+
+    #[test]
+    fn piecewise_linear_predicts_irregular_history_at_future_timestamps() {
+        let frame = ForecastFrame::with_metadata(
+            vec![
+                ForecastRow::new("__single__", ts(1), 10.0),
+                ForecastRow::new("__single__", ts(8), 14.0),
+                ForecastRow::new("__single__", ts(9), 15.0),
+                ForecastRow::new("__single__", ts(12), 17.0),
+            ],
+            ForecastFrequency::Daily,
+            ForecastFrameMetadata {
+                allow_irregular: true,
+                ..ForecastFrameMetadata::default()
+            },
+        )
+        .expect("irregular frame");
+        let mut model =
+            PiecewiseLinearSeasonalForecaster::new(PiecewiseLinearSeasonalConfig::default())
+                .expect("valid piecewise model");
+        model.fit(&frame).expect("fit irregular history");
+
+        let result = model
+            .predict_at_timestamps(BTreeMap::from([(
+                "__single__".to_string(),
+                vec![ts(13), ts(14)],
+            )]))
+            .expect("predict at explicit timestamps");
+
+        let predictions = result.predictions();
+        assert_eq!(predictions.len(), 2);
+        assert_eq!(predictions[0].timestamp, ts(13));
+        assert_eq!(predictions[1].timestamp, ts(14));
+        assert!(predictions
+            .iter()
+            .all(|prediction| prediction.mean.is_finite()));
     }
 
     #[test]

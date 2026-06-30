@@ -113,6 +113,7 @@ impl AutoStatsBank {
 
 impl Forecaster for AutoStatsBank {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
+        frame.require_regular_for_model(self.model_name())?;
         self.bank.fit(frame)
     }
 

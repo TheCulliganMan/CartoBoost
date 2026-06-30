@@ -303,6 +303,8 @@ class PiecewiseLinearSeasonalForecaster(NativeForecastWrapper):
         uncertainty_samples: int | None = None,
         trend_adjustments: Mapping[int, float] | None = None,
         trend_adjustments_by_series: Mapping[str, Mapping[int, float]] | None = None,
+        future_timestamps: Sequence[Any] | None = None,
+        future_timestamps_by_series: Mapping[str, Sequence[Any]] | None = None,
     ) -> Any:
         self._check_is_fitted()
         return self._native_model.predict(
@@ -318,6 +320,10 @@ class PiecewiseLinearSeasonalForecaster(NativeForecastWrapper):
             _trend_adjustment_values(trend_adjustments) if trend_adjustments is not None else None,
             _trend_adjustment_values_by_series(trend_adjustments_by_series)
             if trend_adjustments_by_series is not None
+            else None,
+            _future_timestamp_values(future_timestamps) if future_timestamps is not None else None,
+            _future_timestamp_values_by_series(future_timestamps_by_series)
+            if future_timestamps_by_series is not None
             else None,
         )
 
@@ -835,6 +841,25 @@ def _future_regressor_values_by_series(
     return {
         str(series_id): _future_regressor_values(values_by_name)
         for series_id, values_by_name in (future_regressors or {}).items()
+    }
+
+
+def _future_timestamp_values(timestamps: Sequence[Any] | None) -> list[str]:
+    pd = require_pandas()
+    if timestamps is None:
+        return []
+    return [
+        pd.Timestamp(timestamp).to_pydatetime().replace(tzinfo=None).isoformat()
+        for timestamp in timestamps
+    ]
+
+
+def _future_timestamp_values_by_series(
+    timestamps_by_series: Mapping[str, Sequence[Any]] | None,
+) -> dict[str, list[str]]:
+    return {
+        str(series_id): _future_timestamp_values(timestamps)
+        for series_id, timestamps in (timestamps_by_series or {}).items()
     }
 
 

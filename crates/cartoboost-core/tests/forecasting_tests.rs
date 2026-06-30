@@ -343,6 +343,7 @@ fn exports_metadata_json() {
             static_covariates: vec!["DOLocationID".to_string()],
             known_future_covariates: vec!["hour".to_string(), "day_of_week".to_string()],
             historical_covariates: vec!["trip_distance".to_string()],
+            allow_irregular: false,
         },
     )
     .expect("valid frame");
@@ -363,6 +364,29 @@ fn exports_metadata_json() {
         metadata["static_covariates"],
         serde_json::json!(["DOLocationID"])
     );
+}
+
+#[test]
+fn forecast_frame_accepts_irregular_rows_only_when_explicit() {
+    let rows = vec![
+        ForecastRow::new("PULocationID=132", ts(1), 42.0),
+        ForecastRow::new("PULocationID=132", ts(3), 44.0),
+    ];
+    let err = ForecastFrame::new(rows.clone(), ForecastFrequency::Daily)
+        .expect_err("regular frame rejects skipped daily row");
+    assert!(err.to_string().contains("irregular forecast frequency"));
+
+    let frame = ForecastFrame::with_metadata(
+        rows,
+        ForecastFrequency::Daily,
+        ForecastFrameMetadata {
+            allow_irregular: true,
+            ..ForecastFrameMetadata::default()
+        },
+    )
+    .expect("irregular frame");
+    assert!(frame.allow_irregular());
+    assert!(frame.is_irregular());
 }
 
 #[test]

@@ -95,6 +95,48 @@ history_components = model.history_components()
 history_frame = model.history_components_frame()
 ```
 
+## Irregular History
+
+`PiecewiseLinearSeasonalForecaster` can fit Prophet-style irregular history
+without filling missing dates. Use this when older aggregate rows are weekly
+and recent operational rows are daily or business-daily. The model fits on the
+actual timestamps and uses `freq` only as the default horizon cadence.
+
+```python
+from cartoboost.forecasting import ForecastFrame, PiecewiseLinearSeasonalForecaster
+
+frame = ForecastFrame.from_pandas(
+    taxi_route_training_rows,
+    timestamp_col="pickup_day",
+    target_col="demand",
+    freq="D",
+    allow_irregular=True,
+)
+
+model = PiecewiseLinearSeasonalForecaster(
+    growth="linear",
+    changepoint_prior_scale=0.05,
+    weekly_fourier_order=3,
+)
+
+forecast = model.fit(frame).predict(
+    5,
+    future_timestamps=[
+        "2026-06-30",
+        "2026-07-01",
+        "2026-07-02",
+        "2026-07-06",
+        "2026-07-07",
+    ],
+)
+```
+
+Pass explicit `future_timestamps` or `future_timestamps_by_series` when the
+forecast calendar should skip weekends or holidays. Models whose training
+logic depends on equal row spacing, including ETS, ARIMA, theta, Kalman,
+intermittent demand, lag, neural, and auto selectors, still require a regular
+`ForecastFrame`.
+
 Prophet-shaped holiday and changepoint inputs are accepted as configuration
 ergonomics for users migrating existing component-model workflows. The default
 automatic changepoint count is 25, matching Prophet's public default.

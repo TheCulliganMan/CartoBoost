@@ -599,6 +599,7 @@ def _build_native_frame(frame: ForecastFrame, *, data: Any | None = None) -> Any
             row_covariates=row_covariates if covariate_cols else None,
             sample_weights=sample_weights,
             sample_weight_col=frame.sample_weight_col,
+            allow_irregular=frame.allow_irregular,
         )
     except TypeError:
         return _native.ForecastFrame(rows, frame.freq)

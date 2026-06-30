@@ -158,6 +158,7 @@ impl FixedHorizonDirectForecaster {
 
 impl Forecaster for FixedHorizonDirectForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
+        frame.require_regular_for_model(self.model_name())?;
         match &mut self.member {
             DirectAutoMember::Direct(model) => model.fit_horizon(frame, self.fit_horizon),
             DirectAutoMember::Rectified(model) => model.fit_horizon(frame, self.fit_horizon),
@@ -215,6 +216,7 @@ impl AutoForecastModel {
 
 impl Forecaster for AutoForecastModel {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
+        frame.require_regular_for_model(self.model_name())?;
         let validation_window = effective_validation_window(frame, self.config.validation_window);
         let validation_origin_count = effective_validation_origin_count(
             frame,

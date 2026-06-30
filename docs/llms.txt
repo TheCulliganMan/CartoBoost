@@ -15,6 +15,7 @@ Use this directory as the navigation map for the user-facing docs site.
 - [Scalable GP geostatistics models](./user-guide/geostatistics-models.md)
 - [CartoBoost Boosting Model Guides](./user-guide/boosting-models/index.md)
 - [CartoBoost Forecasting Model Guides](./user-guide/forecasting-models/index.md)
+- [Piecewise linear seasonal forecasting](./user-guide/forecasting-models/piecewise-linear-seasonal.md)
 - [Intermittent demand forecasting](./user-guide/forecasting-models/intermittent-demand.md)
 - [Graph Spatiotemporal Forecasting](./user-guide/forecasting-models/graph-spatiotemporal.md)
 - [N-BEATS and N-HiTS neural forecasting](./user-guide/forecasting-models/beats-hits.md)

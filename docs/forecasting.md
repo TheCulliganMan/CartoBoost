@@ -64,6 +64,14 @@ Known-future covariates are values available at forecast creation time; lagged
 targets, rolling summaries, and other history-derived features must be built
 from rows before the forecast origin.
 
+Irregular history is opt-in and model-scoped. Pass `allow_irregular=True` with
+a forecast cadence such as `freq="D"` when the observed rows are not evenly
+spaced but future horizon steps should use that cadence. Native irregular
+fitting is supported by `PiecewiseLinearSeasonalForecaster`, `NaiveForecaster`,
+and cadence-agnostic window averages; equal-step models such as ETS, ARIMA,
+theta, Kalman, intermittent-demand, lag, direct, neural, and auto selectors
+raise a clear error and should be fit on a regularized frame.
+
 When raw observations have multiple rows at the same timestamp, aggregate them
 before modeling or pass a positive `sample_weight_col`. With
 `sample_weight_col`, CartoBoost collapses each duplicate series/timestamp group

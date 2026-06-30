@@ -7,6 +7,7 @@ use cartoboost_core::forecasting::{
     lag_origin_consistency_guard as core_lag_origin_consistency_guard,
     missing_target_continuation as core_missing_target_continuation,
     native_auto_raw_candidate_is_confident as core_native_auto_raw_candidate_is_confident,
+    parse_forecast_timestamp,
     proportional_total_reconciliation as core_proportional_total_reconciliation,
     reference_path_posterior_mean as core_reference_path_posterior_mean,
     reference_path_viterbi as core_reference_path_viterbi,
@@ -764,7 +765,7 @@ struct NativeForecastFrame {
 #[pymethods]
 impl NativeForecastFrame {
     #[new]
-    #[pyo3(signature = (rows, frequency, timestamp_col=None, target_col=None, series_id_col=None, static_covariates=None, known_future_covariates=None, historical_covariates=None, row_covariates=None, sample_weights=None, sample_weight_col=None))]
+    #[pyo3(signature = (rows, frequency, timestamp_col=None, target_col=None, series_id_col=None, static_covariates=None, known_future_covariates=None, historical_covariates=None, row_covariates=None, sample_weights=None, sample_weight_col=None, allow_irregular=false))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         py: Python<'_>,
@@ -779,6 +780,7 @@ impl NativeForecastFrame {
         row_covariates: Option<Vec<BTreeMap<String, f64>>>,
         sample_weights: Option<Vec<f64>>,
         sample_weight_col: Option<String>,
+        allow_irregular: bool,
     ) -> PyResult<Self> {
         let frequency = ForecastFrequency::parse(frequency).map_err(to_py_value_error)?;
         let frequency_name = frequency.as_str().to_string();
@@ -789,6 +791,7 @@ impl NativeForecastFrame {
             static_covariates: static_covariates.unwrap_or_default(),
             known_future_covariates: known_future_covariates.unwrap_or_default(),
             historical_covariates: historical_covariates.unwrap_or_default(),
+            allow_irregular,
         };
         let frame = py
             .allow_threads(|| {
@@ -2485,7 +2488,7 @@ impl NativePiecewiseLinearSeasonalForecaster {
         fit_forecaster_py(py, &mut self.model, frame)
     }
 
-    #[pyo3(signature = (horizon, future_regressors=None, future_regressors_by_series=None, prediction_interval_levels=None, uncertainty_samples=None, trend_adjustments=None, trend_adjustments_by_series=None))]
+    #[pyo3(signature = (horizon, future_regressors=None, future_regressors_by_series=None, prediction_interval_levels=None, uncertainty_samples=None, trend_adjustments=None, trend_adjustments_by_series=None, future_timestamps=None, future_timestamps_by_series=None))]
     #[allow(clippy::too_many_arguments)]
     fn predict(
         &self,
@@ -2497,6 +2500,8 @@ impl NativePiecewiseLinearSeasonalForecaster {
         uncertainty_samples: Option<usize>,
         trend_adjustments: Option<BTreeMap<usize, f64>>,
         trend_adjustments_by_series: Option<BTreeMap<String, BTreeMap<usize, f64>>>,
+        future_timestamps: Option<Vec<String>>,
+        future_timestamps_by_series: Option<BTreeMap<String, Vec<String>>>,
     ) -> PyResult<NativeForecastResult> {
         validate_interval_levels(prediction_interval_levels.as_deref())?;
         let model = piecewise_model_with_prediction_overrides(
@@ -2509,7 +2514,21 @@ impl NativePiecewiseLinearSeasonalForecaster {
             trend_adjustments,
             trend_adjustments_by_series,
         )?;
-        predict_forecaster_py(py, &model, horizon)
+        match (future_timestamps, future_timestamps_by_series) {
+            (None, None) => predict_forecaster_py(py, &model, horizon),
+            (Some(timestamps), None) => {
+                let schedule = piecewise_shared_future_timestamps(&model, timestamps, horizon)?;
+                forecast_to_py(py.allow_threads(|| model.predict_at_timestamps(schedule)))
+            }
+            (None, Some(timestamps_by_series)) => {
+                let schedule =
+                    piecewise_future_timestamps_by_series(timestamps_by_series, horizon)?;
+                forecast_to_py(py.allow_threads(|| model.predict_at_timestamps(schedule)))
+            }
+            (Some(_), Some(_)) => Err(PyValueError::new_err(
+                "pass either future_timestamps or future_timestamps_by_series, not both",
+            )),
+        }
     }
 
     fn metadata_json(&self) -> PyResult<String> {
@@ -2652,6 +2671,50 @@ fn piecewise_model_with_prediction_overrides(
         })
         .map_err(to_py_value_error)?;
     Ok(model)
+}
+
+fn piecewise_shared_future_timestamps(
+    model: &CorePiecewiseLinearSeasonalForecaster,
+    timestamps: Vec<String>,
+    horizon: usize,
+) -> PyResult<BTreeMap<String, Vec<chrono::NaiveDateTime>>> {
+    let parsed = parse_future_timestamps(timestamps)?;
+    validate_future_timestamp_count(parsed.len(), horizon)?;
+    let series_ids = model.fitted_series_ids().map_err(to_py_value_error)?;
+    Ok(series_ids
+        .into_iter()
+        .map(|series_id| (series_id, parsed.clone()))
+        .collect())
+}
+
+fn piecewise_future_timestamps_by_series(
+    timestamps_by_series: BTreeMap<String, Vec<String>>,
+    horizon: usize,
+) -> PyResult<BTreeMap<String, Vec<chrono::NaiveDateTime>>> {
+    timestamps_by_series
+        .into_iter()
+        .map(|(series_id, timestamps)| {
+            let parsed = parse_future_timestamps(timestamps)?;
+            validate_future_timestamp_count(parsed.len(), horizon)?;
+            Ok((series_id, parsed))
+        })
+        .collect()
+}
+
+fn parse_future_timestamps(timestamps: Vec<String>) -> PyResult<Vec<chrono::NaiveDateTime>> {
+    timestamps
+        .into_iter()
+        .map(|timestamp| parse_forecast_timestamp(&timestamp).map_err(to_py_value_error))
+        .collect()
+}
+
+fn validate_future_timestamp_count(count: usize, horizon: usize) -> PyResult<()> {
+    if count != horizon {
+        return Err(PyValueError::new_err(format!(
+            "future_timestamps length must match horizon; got {count} timestamps for horizon {horizon}"
+        )));
+    }
+    Ok(())
 }
 
 #[pyclass(name = "ETSForecaster")]

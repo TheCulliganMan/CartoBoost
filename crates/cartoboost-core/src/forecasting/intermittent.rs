@@ -171,6 +171,7 @@ impl Default for TsbForecaster {
 
 impl Forecaster for IntermittentDemandForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
+        frame.require_regular_for_model(self.model_name())?;
         validate_nonnegative_frame(frame)?;
         let validation_window = effective_validation_window(frame, self.config.validation_window);
         let mut series = BTreeMap::new();
@@ -265,6 +266,7 @@ impl Forecaster for IntermittentDemandForecaster {
 
 impl Forecaster for CrostonForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
+        frame.require_regular_for_model(self.model_name())?;
         self.fitted = Some(fit_fixed_intermittent(
             frame,
             IntermittentDemandMethod::Croston,
@@ -293,6 +295,7 @@ impl Forecaster for CrostonForecaster {
 
 impl Forecaster for SbaForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
+        frame.require_regular_for_model(self.model_name())?;
         self.fitted = Some(fit_fixed_intermittent(
             frame,
             IntermittentDemandMethod::Sba,
@@ -321,6 +324,7 @@ impl Forecaster for SbaForecaster {
 
 impl Forecaster for TsbForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
+        frame.require_regular_for_model(self.model_name())?;
         self.fitted = Some(fit_fixed_intermittent(
             frame,
             IntermittentDemandMethod::Tsb,

@@ -87,6 +87,8 @@ pub struct ForecastFrameMetadata {
     pub static_covariates: Vec<String>,
     pub known_future_covariates: Vec<String>,
     pub historical_covariates: Vec<String>,
+    #[serde(default)]
+    pub allow_irregular: bool,
 }
 
 impl ForecastFrame {
@@ -143,7 +145,9 @@ impl ForecastFrame {
                 )));
             }
         }
-        validate_regular_frequency(&rows, frequency)?;
+        if !metadata.allow_irregular {
+            validate_regular_frequency(&rows, frequency)?;
+        }
         Ok(Self {
             rows,
             frequency,
@@ -249,7 +253,25 @@ impl ForecastFrame {
             "static_covariates": self.metadata.static_covariates,
             "known_future_covariates": self.metadata.known_future_covariates,
             "historical_covariates": self.metadata.historical_covariates,
+            "allow_irregular": self.metadata.allow_irregular,
         })
+    }
+
+    pub fn allow_irregular(&self) -> bool {
+        self.metadata.allow_irregular
+    }
+
+    pub fn is_irregular(&self) -> bool {
+        self.allow_irregular()
+    }
+
+    pub fn require_regular_for_model(&self, model_name: &str) -> Result<()> {
+        if self.allow_irregular() {
+            return Err(CartoBoostError::InvalidInput(format!(
+                "{model_name} requires a regular ForecastFrame; use a regularized frame or a model that supports irregular history"
+            )));
+        }
+        Ok(())
     }
 
     pub fn metadata_json_string(&self) -> Result<String> {

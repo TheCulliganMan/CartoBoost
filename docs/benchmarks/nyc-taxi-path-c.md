@@ -1,8 +1,10 @@
 # NYC Taxi Path C Claims
 
 Path C is bounded real-data evidence on NYC TLC 2024 yellow taxi tasks. It
-proves implementation behavior and benchmark discipline on this dataset, not
-universal market superiority.
+validates real-data `cartoboost` geo-temporal tree behavior and benchmark
+discipline on this dataset, not universal market superiority. It does not
+validate `cartoboost.deep` models unless those models are explicitly added as
+Path C rows later.
 
 ## Evidence Contract
 
@@ -44,14 +46,16 @@ by the gate checker as Path C evidence.
 
 | Claim | Unit | Required split | Falsifier baselines | Pass condition |
 | --- | --- | --- | --- | --- |
-| Directional structure | Pickup zone to dropoff zone by time bucket | Pickup-zone spatial holdout | Unordered pair, source+target additive | Ordered model has lower duration and fare RMSE. |
-| Temporal structure | Pickup zone x hour/day bucket | Rolling-origin zone-time | Trailing mean, seasonal naive, pooled Ridge | Temporal model has lower pickup-demand RMSE than seasonal naive. |
-| Known-future sensitivity | Zone-time demand | Rolling-origin zone-time | Future-known covariates ablated | Full model has lower RMSE and reports ablation delta. |
-| Spatial transfer | Held-out pickup zones | Pickup-zone spatial holdout | Target-encoded zone-only, mean | Route/geometry features improve duration and fare RMSE. |
-| Residual correction | Completed trip with baseline estimate | Pickup-zone spatial holdout | Raw baseline, global residual mean, linear residual model | Nonlinear correction has lower duration and fare RMSE. |
+| Directional structure | Pickup zone to dropoff zone by time bucket | Pickup-zone spatial holdout | Unordered pair, source+target additive | Ordered model has at least 2% lower duration and fare RMSE. |
+| Temporal structure | Pickup zone x real hourly timestamp | Rolling-origin zone-time by actual pickup timestamp | Trailing mean, seasonal naive, pooled Ridge | Temporal model has at least 2% lower pickup-demand RMSE than seasonal naive. Trailing mean and pooled Ridge remain reported falsifier rows. |
+| Known-future sensitivity | Zone-time demand | Rolling-origin zone-time by actual pickup timestamp | Future-known covariates ablated | Full model has positive ablation delta and at least 1% lower RMSE. |
+| Spatial transfer | Completed trips from held-out pickup zones | Pickup-zone spatial holdout | Target-encoded zone-only, mean | Trip-level route/geometry features improve duration and fare RMSE by at least 1% over trip-level falsifiers. |
+| Residual correction | Completed trip with baseline estimate | Pickup-zone spatial holdout | Raw baseline, global residual mean, linear residual model | Nonlinear correction has at least 1% lower duration and fare RMSE. |
 
 Each claim row records the claim id, task, split kind, train/test index hashes,
 dataset hash, model, architecture, capability tier, falsifier baseline, primary
-metric, threshold, RMSE, MAE, WAPE, R2, fit and predict time, peak memory,
-save/load parity, feature access policy, train-only target encoding, and the
-guarantee that selection does not use outer test labels.
+metric, nonzero materiality threshold, percent improvement, prediction-unit
+metadata, rolling-origin cutoff timestamp where applicable, RMSE, MAE, WAPE, R2,
+fit and predict time, peak memory, save/load parity, feature access policy,
+train-only target encoding, and the guarantee that selection does not use outer
+test labels.

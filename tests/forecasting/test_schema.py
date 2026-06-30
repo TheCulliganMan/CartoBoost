@@ -162,6 +162,30 @@ def test_forecast_frame_rejects_irregular_data_unless_allowed():
     assert frame.allow_irregular is True
 
 
+def test_forecast_frame_builds_native_irregular_frame_with_frequency_hint(install_fake_native):
+    native = install_fake_native("NaiveForecaster")
+    raw = pd.DataFrame(
+        {
+            "pickup_hour": ["2025-01-01", "2025-01-08", "2025-01-09"],
+            "fare": [10.0, 17.0, 18.0],
+        }
+    )
+
+    frame = ForecastFrame.from_pandas(
+        raw,
+        timestamp_col="pickup_hour",
+        target_col="fare",
+        freq="D",
+        allow_irregular=True,
+    )
+
+    assert frame.freq == "D"
+    assert frame._native_frame is not None
+    assert frame._native_frame.freq == "D"
+    assert frame._native_frame.kwargs["allow_irregular"] is True
+    assert native.frame_class is frame._native_frame.__class__
+
+
 def test_panel_forecast_frame_detects_duplicates_per_series_and_keeps_series_isolated():
     raw = pd.DataFrame(
         {

@@ -348,6 +348,13 @@ rows are collapsed before forecast validation: targets and numeric covariates
 are weighted means, while the weight column is summed and kept as a historical
 covariate.
 
+`ForecastFrame.from_pandas(..., freq="D", allow_irregular=True)` keeps observed
+timestamps as-is while recording a daily forecast cadence. This supports
+Prophet-style irregular history for `PiecewiseLinearSeasonalForecaster` and
+simple last-value/window baselines. Equal-step models still reject irregular
+frames because their training rows, season lengths, or validation folds assume
+regular spacing.
+
 Forecasters:
 
 | Entry point | Notes |
@@ -368,7 +375,7 @@ Forecasters:
 | `TsbForecaster` | Fixed TSB intermittent-demand forecaster with separate demand and occurrence smoothing. |
 | `KrigingForecaster` | Coordinate-aware panel forecaster using stable series coordinates and variogram controls. |
 | `SpatialPiecewiseKrigingForecaster` | Piecewise seasonal CartoBoost base fused with cutoff-safe kriged regressors, residual kriging, or hybrid spatial correction; result JSON includes base mean, correction, variance, neighbors, components, and metadata. |
-| `PiecewiseLinearSeasonalForecaster` | Piecewise linear seasonal local model with linear, flat, or logistic growth, automatic or explicit changepoints, holiday tables and optional country holiday calendars normalized into event windows, Fourier seasonalities, conditional custom seasonalities, events, automatic extra-regressor standardization, per-component regularization, residual intervals, deterministic sampled trend uncertainty, external trend adjustments, residual shock propagation, fitted JSON round-trips, `components()` / `components_json()` forecast decomposition, and `history_components()` / `history_components_frame()` / `history_components_json()` fitted trend, movement, seasonality, event, and regressor diagnostics; interactive examples expose matching fitted artifact prediction and component helpers. |
+| `PiecewiseLinearSeasonalForecaster` | Piecewise linear seasonal local model with irregular-history fitting, explicit future timestamp prediction, linear, flat, or logistic growth, automatic or explicit changepoints, holiday tables and optional country holiday calendars normalized into event windows, Fourier seasonalities, conditional custom seasonalities, events, automatic extra-regressor standardization, per-component regularization, residual intervals, deterministic sampled trend uncertainty, external trend adjustments, residual shock propagation, fitted JSON round-trips, `components()` / `components_json()` forecast decomposition, and `history_components()` / `history_components_frame()` / `history_components_json()` fitted trend, movement, seasonality, event, and regressor diagnostics; interactive examples expose matching fitted artifact prediction and component helpers. |
 | `CartoBoostLagForecaster` | Global recursive forecaster using leakage-safe lag, rolling, calendar, static, and known-future features with `CartoBoostRegressor`. |
 | `NeuralPanelForecaster` | Neural panel forecaster with `n_lags`, `n_forecasts`, quantiles, trend, Fourier seasonality, event offsets, known-future regressors, lagged regressors, direct horizons, separate local/global/glocal seasonality, event, and regressor modes, median-first internal quantile residuals, CPU-default backend-dispatched dense prediction with optional explicit accelerators such as `"metal"`, `"rocm"`, or `"cuda"` on supported builds, and serializable metadata. |
 | `LaneNeuralPanelForecaster` | Directional pair wrapper for `series_id="origin:destination"` panels; injects generated origin, destination, lane, and directional graph covariates into the panel model while keeping `A:B` distinct from `B:A`; `predict_for_lanes(horizon, series_ids)` applies fitted-lane fallback for explicit cold lane ids. |

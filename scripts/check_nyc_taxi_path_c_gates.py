@@ -25,6 +25,7 @@ REQUIRED_FIELDS = {
     "falsifier_baseline",
     "primary_metric",
     "improvement_threshold",
+    "percent_improvement",
     "rmse",
     "mae",
     "wape",
@@ -34,11 +35,24 @@ REQUIRED_FIELDS = {
     "peak_memory_mb",
     "save_load_max_abs_diff",
     "feature_access_policy",
+    "prediction_unit",
+    "primary_prediction_unit",
+    "falsifier_prediction_unit",
+    "task_frame_id",
+    "primary_train_rows",
+    "primary_test_rows",
+    "falsifier_train_rows",
+    "falsifier_test_rows",
+    "primary_train_index_sha256",
+    "primary_test_index_sha256",
+    "falsifier_train_index_sha256",
+    "falsifier_test_index_sha256",
     "target_encoding_train_only",
     "selection_uses_outer_test_labels",
 }
 SPATIAL_TRANSFER = "spatial_transfer"
 TEMPORAL_CLAIMS = {"temporal_structure", "known_future_sensitivity"}
+SAVE_LOAD_TOLERANCE = 1e-10
 
 
 def parse_args() -> argparse.Namespace:
@@ -92,10 +106,25 @@ def check_artifact(data: dict[str, Any]) -> list[str]:
             errors.append(f"{label} uses outer test labels for selection")
         if row.get("save_load_max_abs_diff") is None:
             errors.append(f"{label} save/load parity is missing")
+        elif float(row.get("save_load_max_abs_diff", 0.0)) > SAVE_LOAD_TOLERANCE:
+            errors.append(f"{label} save/load parity exceeds {SAVE_LOAD_TOLERANCE}")
         if claim_id in TEMPORAL_CLAIMS and row.get("split_kind") == "random":
             errors.append(f"{label} uses random split for temporal claim")
+        if claim_id in TEMPORAL_CLAIMS and not row.get("rolling_origin_cutoff_timestamp"):
+            errors.append(f"{label} temporal split lacks a real cutoff timestamp")
         if claim_id == SPATIAL_TRANSFER and row.get("split_kind") == "random":
             errors.append(f"{label} uses random split for spatial-transfer claim")
+        if claim_id == SPATIAL_TRANSFER:
+            if row.get("primary_prediction_unit") != row.get("falsifier_prediction_unit"):
+                errors.append(f"{label} spatial-transfer primary/falsifier units differ")
+            if row.get("primary_train_rows") != row.get("falsifier_train_rows"):
+                errors.append(f"{label} spatial-transfer train row counts differ")
+            if row.get("primary_test_rows") != row.get("falsifier_test_rows"):
+                errors.append(f"{label} spatial-transfer test row counts differ")
+            if row.get("primary_train_index_sha256") != row.get("falsifier_train_index_sha256"):
+                errors.append(f"{label} spatial-transfer train split hashes differ")
+            if row.get("primary_test_index_sha256") != row.get("falsifier_test_index_sha256"):
+                errors.append(f"{label} spatial-transfer test split hashes differ")
         if (
             claim_id == "directional_structure"
             and row.get("directionality_tested") != "A_to_B_vs_B_to_A"
@@ -103,8 +132,19 @@ def check_artifact(data: dict[str, Any]) -> list[str]:
             errors.append(f"{label} ordered-pair claim does not test A->B vs B->A")
         if claim_id == "known_future_sensitivity" and "known_future_ablation_delta_rmse" not in row:
             errors.append(f"{label} known-future ablation delta is missing")
-        if row.get("gate_required", True) and row.get("passed") is not True:
-            errors.append(f"{label} did not pass its claim gate")
+        if (
+            claim_id == "known_future_sensitivity"
+            and float(row.get("known_future_ablation_delta_rmse", 0.0)) <= 0.0
+        ):
+            errors.append(f"{label} known-future ablation delta is not positive")
+        if row.get("gate_required", True):
+            threshold = float(row.get("improvement_threshold", 0.0))
+            if threshold <= 0.0:
+                errors.append(f"{label} required gate has zero threshold")
+            if float(row.get("percent_improvement", 0.0)) < threshold:
+                errors.append(f"{label} required percent improvement is not met")
+            if row.get("passed") is not True:
+                errors.append(f"{label} did not pass its claim gate")
 
     required_claims = {
         "directional_structure",

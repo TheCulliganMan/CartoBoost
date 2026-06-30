@@ -92,6 +92,7 @@ impl LagPlusForecaster {
 
 impl Forecaster for LagPlusForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
+        frame.require_regular_for_model(self.model_name())?;
         let validation_window = effective_validation_window(frame, self.config.validation_window);
         let calibration = if validation_window == 0 {
             disabled_corrections(&self.config, 0)

@@ -81,6 +81,7 @@ impl CartoBoostDirectForecaster {
     }
 
     pub fn fit_horizon(&mut self, frame: &ForecastFrame, horizon: usize) -> Result<()> {
+        frame.require_regular_for_model(self.model_name())?;
         validate_horizon(horizon)?;
         let effective_lag_config =
             lag_config_supported_by_history(self.lag_builder.config(), frame);
@@ -186,6 +187,7 @@ impl RectifiedRecursiveForecaster {
     }
 
     pub fn fit_horizon(&mut self, frame: &ForecastFrame, horizon: usize) -> Result<()> {
+        frame.require_regular_for_model(self.model_name())?;
         validate_horizon(horizon)?;
         let effective_lag_config =
             lag_config_supported_by_history(self.lag_builder.config(), frame);

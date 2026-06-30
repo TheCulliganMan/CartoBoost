@@ -191,6 +191,7 @@ impl CartoBoostLagForecaster {
 
 impl Forecaster for CartoBoostLagForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
+        frame.require_regular_for_model(self.model_name())?;
         let effective_lag_config =
             lag_config_supported_by_history(self.lag_builder.config(), frame);
         self.lag_builder = LagFeatureBuilder::new(effective_lag_config)?;
