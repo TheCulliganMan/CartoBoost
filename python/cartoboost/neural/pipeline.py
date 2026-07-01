@@ -256,6 +256,35 @@ class NeuralEmbeddingRegressor:
     def neural_feature_count_(self) -> int:
         return self.dim * max(1, len(self.neural_transformers))
 
+    def get_params(self, deep: bool = True) -> dict[str, Any]:
+        """Return constructor parameters without fitted native transformer state."""
+
+        return {
+            "dim": self.dim,
+            "fallback": self.fallback,
+            "random_state": self.random_state,
+            "neural_transformer": None,
+            "use_residual": self.use_residual,
+            "oof_folds": self.oof_folds,
+            "drop_id_column": self.drop_id_column,
+            "id_column": self.id_column,
+            "support_prior_strength": self.support_prior_strength,
+            "base_model_kwargs": dict(self.base_model_kwargs),
+            "final_model_kwargs": dict(self.final_model_kwargs),
+        }
+
+    def set_params(self, **params: Any) -> NeuralEmbeddingRegressor:
+        valid = self.get_params(deep=False)
+        unknown = sorted(set(params) - set(valid))
+        if unknown:
+            raise ValueError(f"unknown parameter(s): {', '.join(unknown)}")
+        updated = {**valid, **params}
+        self.__init__(**updated)
+        return self
+
+    def __sklearn_clone__(self) -> NeuralEmbeddingRegressor:
+        return type(self)(**self.get_params(deep=False))
+
     def _build_base_model(self) -> CartoBoostRegressor:
         return CartoBoostRegressor(**self.base_model_kwargs)
 

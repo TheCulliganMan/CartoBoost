@@ -4,6 +4,7 @@ from cartoboost import (
     NeuralEmbeddingRegressor,
     benchmark_neural_vs_cartoboost,
 )
+from sklearn.base import clone
 
 
 def test_regressor_can_fit_on_augmented_neural_features():
@@ -203,6 +204,36 @@ def test_neural_embedding_regressor_predict_uses_fallback_context():
     )
 
     assert pred.shape == (3,)
+
+
+def test_neural_embedding_regressor_clone_starts_with_fresh_native_transformer():
+    rng = np.random.default_rng(41)
+    rows = 90
+    ids = rng.integers(1, 18, size=rows, dtype=np.uint64)
+    x = rng.normal(size=(rows, 2))
+    y = x[:, 0] + 0.3 * (ids % 4).astype(float)
+
+    regressor = NeuralEmbeddingRegressor(
+        dim=2,
+        id_column=2,
+        random_state=13,
+        final_model_kwargs={
+            "n_estimators": 8,
+            "learning_rate": 0.1,
+            "max_depth": 2,
+            "min_gain": 0.0,
+        },
+    ).fit(np.column_stack([x, ids.astype(float)]), y)
+
+    cloned = clone(regressor)
+
+    assert cloned is not regressor
+    assert cloned.get_params()["neural_transformer"] is None
+    assert cloned.neural_transformer is not regressor.neural_transformer
+    assert cloned.neural_transformers == []
+
+    cloned.fit(np.column_stack([x, ids.astype(float)]), y)
+    assert cloned.predict(np.column_stack([x, ids.astype(float)])).shape == (rows,)
 
 
 def test_benchmark_neural_vs_cartoboost_smoke():
