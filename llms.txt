@@ -17,7 +17,7 @@ compare it against strong baselines on the same split.
 - Scalable GP geostatistics models: ./docs/user-guide/geostatistics-models.md
 - Boosting model guides: ./docs/user-guide/boosting-models/index.md
 - Forecasting model guides: ./docs/user-guide/forecasting-models/index.md
-- ForecastFrame validation and missing-target behavior: ./docs/forecasting.md
+- ForecastFrame validation, missing-target, and missing-covariate behavior: ./docs/forecasting.md
 - Piecewise linear seasonal missing-target example: ./docs/user-guide/forecasting-models/piecewise-linear-seasonal.md
 - Naive and seasonal naive missing-target support: ./docs/user-guide/forecasting-models/naive-seasonal.md
 - Intermittent demand forecasting: ./docs/user-guide/forecasting-models/intermittent-demand.md

@@ -42,6 +42,7 @@ class ForecastFrame:
     historical_covariates: tuple[str, ...] = ()
     allow_irregular: bool = False
     allow_missing_targets: bool = False
+    allow_missing_covariates: bool = False
     sample_weight_col: str | None = None
     _native_frame: Any | None = field(default=None, repr=False, compare=False)
 
@@ -67,6 +68,7 @@ class ForecastFrame:
         historical_covariates: Sequence[str] | None = None,
         allow_irregular: bool = False,
         allow_missing_targets: bool = False,
+        allow_missing_covariates: bool = False,
         sample_weight_col: str | None = None,
     ) -> ForecastFrame:
         pd = require_pandas()
@@ -124,9 +126,12 @@ class ForecastFrame:
                 raise ValueError(
                     f"forecast covariate column {covariate_col!r} must contain numeric values"
                 ) from exc
-            if not np.isfinite(covariate_values).all():
+            if np.isinf(covariate_values).any() or (
+                not allow_missing_covariates and np.isnan(covariate_values).any()
+            ):
                 raise ValueError(
-                    f"forecast covariate column {covariate_col!r} must contain only finite values"
+                    f"forecast covariate column {covariate_col!r} must contain only finite values "
+                    "unless allow_missing_covariates=True"
                 )
         if sample_weight_col is not None:
             sample_weights = data[sample_weight_col].to_numpy(dtype=float, copy=False)
@@ -182,6 +187,7 @@ class ForecastFrame:
             historical_covariates=tuple(historical),
             allow_irregular=allow_irregular,
             allow_missing_targets=allow_missing_targets,
+            allow_missing_covariates=allow_missing_covariates,
             sample_weight_col=sample_weight_col,
         )
         native_frame = _build_native_frame(result, data=native_source_data)
@@ -196,6 +202,7 @@ class ForecastFrame:
             historical_covariates=result.historical_covariates,
             allow_irregular=result.allow_irregular,
             allow_missing_targets=result.allow_missing_targets,
+            allow_missing_covariates=result.allow_missing_covariates,
             sample_weight_col=result.sample_weight_col,
             _native_frame=native_frame,
         )
@@ -231,6 +238,7 @@ class ForecastFrame:
             "historical_covariates": list(self.historical_covariates),
             "allow_irregular": self.allow_irregular,
             "allow_missing_targets": self.allow_missing_targets,
+            "allow_missing_covariates": self.allow_missing_covariates,
             "sample_weight_col": self.sample_weight_col,
         }
 
@@ -611,6 +619,7 @@ def _build_native_frame(frame: ForecastFrame, *, data: Any | None = None) -> Any
             sample_weight_col=frame.sample_weight_col,
             allow_irregular=frame.allow_irregular,
             allow_missing_targets=frame.allow_missing_targets,
+            allow_missing_covariates=frame.allow_missing_covariates,
         )
     except TypeError:
         return _native.ForecastFrame(rows, frame.freq)

@@ -345,6 +345,7 @@ fn exports_metadata_json() {
             historical_covariates: vec!["trip_distance".to_string()],
             allow_irregular: false,
             allow_missing_targets: false,
+            allow_missing_covariates: false,
         },
     )
     .expect("valid frame");
@@ -383,6 +384,7 @@ fn forecast_frame_accepts_irregular_rows_only_when_explicit() {
         ForecastFrameMetadata {
             allow_irregular: true,
             allow_missing_targets: false,
+            allow_missing_covariates: false,
             ..ForecastFrameMetadata::default()
         },
     )
@@ -437,6 +439,65 @@ fn forecast_frame_rejects_infinite_targets_even_when_missing_allowed() {
     )
     .expect_err("infinite target rejected");
     assert!(err.to_string().contains("forecast targets"));
+}
+
+#[test]
+fn forecast_frame_allows_missing_covariates_only_when_explicit() {
+    let mut first_covariates = BTreeMap::new();
+    first_covariates.insert("QUOTE_MILES".to_string(), 4.2);
+    let mut missing_covariates = BTreeMap::new();
+    missing_covariates.insert("QUOTE_MILES".to_string(), f64::NAN);
+    let rows = vec![
+        ForecastRow::with_covariates("PULocationID=132", ts(1), 42.0, first_covariates),
+        ForecastRow::with_covariates("PULocationID=132", ts(2), 43.0, missing_covariates),
+    ];
+
+    let err = ForecastFrame::with_metadata(
+        rows.clone(),
+        ForecastFrequency::Daily,
+        ForecastFrameMetadata {
+            historical_covariates: vec!["QUOTE_MILES".to_string()],
+            ..ForecastFrameMetadata::default()
+        },
+    )
+    .expect_err("missing covariate rejected by default");
+    assert!(err.to_string().contains("allow_missing_covariates"));
+
+    let frame = ForecastFrame::with_metadata(
+        rows,
+        ForecastFrequency::Daily,
+        ForecastFrameMetadata {
+            historical_covariates: vec!["QUOTE_MILES".to_string()],
+            allow_missing_covariates: true,
+            ..ForecastFrameMetadata::default()
+        },
+    )
+    .expect("missing covariate frame");
+    assert!(frame.allow_missing_covariates());
+    assert!(frame.has_missing_covariates());
+}
+
+#[test]
+fn forecast_frame_rejects_infinite_covariates_even_when_missing_allowed() {
+    let mut covariates = BTreeMap::new();
+    covariates.insert("QUOTE_MILES".to_string(), f64::INFINITY);
+
+    let err = ForecastFrame::with_metadata(
+        vec![ForecastRow::with_covariates(
+            "PULocationID=132",
+            ts(1),
+            42.0,
+            covariates,
+        )],
+        ForecastFrequency::Daily,
+        ForecastFrameMetadata {
+            historical_covariates: vec!["QUOTE_MILES".to_string()],
+            allow_missing_covariates: true,
+            ..ForecastFrameMetadata::default()
+        },
+    )
+    .expect_err("infinite covariate rejected");
+    assert!(err.to_string().contains("must not be infinite"));
 }
 
 #[test]

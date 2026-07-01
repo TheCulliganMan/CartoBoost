@@ -15,7 +15,7 @@ Use this directory as the navigation map for the user-facing docs site.
 - [Scalable GP geostatistics models](./user-guide/geostatistics-models.md)
 - [CartoBoost Boosting Model Guides](./user-guide/boosting-models/index.md)
 - [CartoBoost Forecasting Model Guides](./user-guide/forecasting-models/index.md)
-- [ForecastFrame validation and missing-target behavior](./forecasting.md)
+- [ForecastFrame validation, missing-target, and missing-covariate behavior](./forecasting.md)
 - [Piecewise linear seasonal forecasting](./user-guide/forecasting-models/piecewise-linear-seasonal.md)
 - [Naive and seasonal naive forecasting](./user-guide/forecasting-models/naive-seasonal.md)
 - [Intermittent demand forecasting](./user-guide/forecasting-models/intermittent-demand.md)

@@ -2606,6 +2606,7 @@ fn forecast_frame_from_browser_request(
         historical_covariates: Vec::new(),
         allow_irregular: false,
         allow_missing_targets: false,
+        allow_missing_covariates: false,
     };
     let rows = rows
         .into_iter()

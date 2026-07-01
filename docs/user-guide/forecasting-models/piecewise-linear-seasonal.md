@@ -164,7 +164,9 @@ forecast = PiecewiseLinearSeasonalForecaster(
 This option is model-scoped. Use it for `PiecewiseLinearSeasonalForecaster` or
 last-value baselines when upstream training data carries future or withheld
 timestamps with missing targets. Do not use it to mask failed data joins or
-missing covariates; covariates remain required and finite.
+missing covariates. If the piecewise model uses an extra regressor, capacity
+regressor, floor regressor, or condition flag, that covariate must be present
+and finite on the rows where the component is evaluated.
 
 Prophet-shaped holiday and changepoint inputs are accepted as configuration
 ergonomics for users migrating existing component-model workflows. The default

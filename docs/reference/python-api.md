@@ -364,6 +364,12 @@ non-seasonal window averages support this; regular statistical, seasonal, lag,
 direct, neural, intermittent-demand, kriging, and auto models raise clear
 model-level errors.
 
+`ForecastFrame.from_pandas(..., allow_missing_covariates=True)` allows `NaN` in
+declared static, known-future, or historical covariates while still rejecting
+infinity. This is available to every forecaster at frame construction time.
+Models that ignore covariates can proceed; models that consume a missing
+covariate raise a model-level error when fitting or predicting.
+
 Forecasters:
 
 | Entry point | Notes |

@@ -765,7 +765,7 @@ struct NativeForecastFrame {
 #[pymethods]
 impl NativeForecastFrame {
     #[new]
-    #[pyo3(signature = (rows, frequency, timestamp_col=None, target_col=None, series_id_col=None, static_covariates=None, known_future_covariates=None, historical_covariates=None, row_covariates=None, sample_weights=None, sample_weight_col=None, allow_irregular=false, allow_missing_targets=false))]
+    #[pyo3(signature = (rows, frequency, timestamp_col=None, target_col=None, series_id_col=None, static_covariates=None, known_future_covariates=None, historical_covariates=None, row_covariates=None, sample_weights=None, sample_weight_col=None, allow_irregular=false, allow_missing_targets=false, allow_missing_covariates=false))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         py: Python<'_>,
@@ -782,6 +782,7 @@ impl NativeForecastFrame {
         sample_weight_col: Option<String>,
         allow_irregular: bool,
         allow_missing_targets: bool,
+        allow_missing_covariates: bool,
     ) -> PyResult<Self> {
         let frequency = ForecastFrequency::parse(frequency).map_err(to_py_value_error)?;
         let frequency_name = frequency.as_str().to_string();
@@ -794,6 +795,7 @@ impl NativeForecastFrame {
             historical_covariates: historical_covariates.unwrap_or_default(),
             allow_irregular,
             allow_missing_targets,
+            allow_missing_covariates,
         };
         let frame = py
             .allow_threads(|| {

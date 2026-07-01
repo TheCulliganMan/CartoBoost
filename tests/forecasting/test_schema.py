@@ -49,6 +49,7 @@ def test_forecast_frame_from_pandas_sorts_and_exports_metadata_for_single_series
         "historical_covariates": ["weather_code"],
         "allow_irregular": False,
         "allow_missing_targets": False,
+        "allow_missing_covariates": False,
         "sample_weight_col": None,
     }
 
@@ -228,6 +229,60 @@ def test_forecast_frame_rejects_infinite_targets_even_when_missing_allowed():
             target_col="fare",
             freq="D",
             allow_missing_targets=True,
+        )
+
+
+def test_forecast_frame_allows_missing_covariates_only_when_explicit(install_fake_native):
+    native = install_fake_native("NaiveForecaster")
+    raw = pd.DataFrame(
+        {
+            "pickup_hour": pd.date_range("2025-01-01", periods=3, freq="D"),
+            "fare": [10.0, 11.0, 12.0],
+            "QUOTE_MILES": [4.2, np.nan, 5.1],
+        }
+    )
+
+    with pytest.raises(ValueError, match="allow_missing_covariates"):
+        ForecastFrame.from_pandas(
+            raw,
+            timestamp_col="pickup_hour",
+            target_col="fare",
+            freq="D",
+            historical_covariates=["QUOTE_MILES"],
+        )
+
+    frame = ForecastFrame.from_pandas(
+        raw,
+        timestamp_col="pickup_hour",
+        target_col="fare",
+        freq="D",
+        historical_covariates=["QUOTE_MILES"],
+        allow_missing_covariates=True,
+    )
+
+    assert frame.allow_missing_covariates is True
+    assert frame._native_frame is not None
+    assert frame._native_frame.kwargs["allow_missing_covariates"] is True
+    assert native.frame_class is frame._native_frame.__class__
+
+
+def test_forecast_frame_rejects_infinite_covariates_even_when_missing_allowed():
+    raw = pd.DataFrame(
+        {
+            "pickup_hour": pd.date_range("2025-01-01", periods=2, freq="D"),
+            "fare": [10.0, 11.0],
+            "QUOTE_MILES": [4.2, np.inf],
+        }
+    )
+
+    with pytest.raises(ValueError, match="finite"):
+        ForecastFrame.from_pandas(
+            raw,
+            timestamp_col="pickup_hour",
+            target_col="fare",
+            freq="D",
+            historical_covariates=["QUOTE_MILES"],
+            allow_missing_covariates=True,
         )
 
 

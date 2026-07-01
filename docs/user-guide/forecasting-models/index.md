@@ -104,6 +104,11 @@ is supported by `PiecewiseLinearSeasonalForecaster`, `NaiveForecaster`, and
 non-seasonal window averages; models that require dense regular targets reject
 missing targets with a clear error.
 
+Use `allow_missing_covariates=True` when declared covariate columns contain
+`NaN` values and you want each model to validate only the covariates it actually
+uses. Infinite covariates are always rejected. Models that consume a missing
+covariate still fail clearly at fit or predict time.
+
 ## Advanced Candidates
 
 `AutoStatsBank` is a public wrapper for the reusable statistical expert bank.

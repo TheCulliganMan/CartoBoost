@@ -82,6 +82,14 @@ averages support this path. Equal-step, seasonal, lag, direct, neural,
 intermittent-demand, spatial kriging, and auto-selector models reject missing
 targets with a model-level error.
 
+Missing covariate values are frame-level opt-in. Pass
+`allow_missing_covariates=True` when a declared static, known-future, or
+historical covariate contains `NaN` values and you want model-level validation
+instead of `ForecastFrame` construction failure. Infinity is always rejected.
+Forecasters that do not consume covariates can fit normally. Forecasters that
+do consume a missing covariate, such as lag-feature or piecewise-regressor
+paths, raise a model-level error naming the covariate and series.
+
 When raw observations have multiple rows at the same timestamp, aggregate them
 before modeling or pass a positive `sample_weight_col`. With
 `sample_weight_col`, CartoBoost collapses each duplicate series/timestamp group

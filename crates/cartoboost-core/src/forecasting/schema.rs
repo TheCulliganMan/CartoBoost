@@ -91,6 +91,8 @@ pub struct ForecastFrameMetadata {
     pub allow_irregular: bool,
     #[serde(default)]
     pub allow_missing_targets: bool,
+    #[serde(default)]
+    pub allow_missing_covariates: bool,
 }
 
 impl ForecastFrame {
@@ -130,9 +132,15 @@ impl ForecastFrame {
                         "forecast covariate names must not be empty".to_string(),
                     ));
                 }
-                if !value.is_finite() {
+                if value.is_infinite() {
                     return Err(CartoBoostError::InvalidInput(format!(
-                        "forecast covariate {name:?} for series {} at {} must be finite",
+                        "forecast covariate {name:?} for series {} at {} must not be infinite",
+                        row.series_id, row.timestamp
+                    )));
+                }
+                if !metadata.allow_missing_covariates && value.is_nan() {
+                    return Err(CartoBoostError::InvalidInput(format!(
+                        "forecast covariate {name:?} for series {} at {} must be finite unless allow_missing_covariates is enabled",
                         row.series_id, row.timestamp
                     )));
                 }
@@ -263,6 +271,7 @@ impl ForecastFrame {
             "historical_covariates": self.metadata.historical_covariates,
             "allow_irregular": self.metadata.allow_irregular,
             "allow_missing_targets": self.metadata.allow_missing_targets,
+            "allow_missing_covariates": self.metadata.allow_missing_covariates,
         })
     }
 
@@ -280,6 +289,16 @@ impl ForecastFrame {
 
     pub fn has_missing_targets(&self) -> bool {
         self.rows.iter().any(|row| row.target.is_nan())
+    }
+
+    pub fn allow_missing_covariates(&self) -> bool {
+        self.metadata.allow_missing_covariates
+    }
+
+    pub fn has_missing_covariates(&self) -> bool {
+        self.rows
+            .iter()
+            .any(|row| row.covariates.values().any(|value| value.is_nan()))
     }
 
     pub fn require_regular_for_model(&self, model_name: &str) -> Result<()> {
