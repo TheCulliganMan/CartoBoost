@@ -344,6 +344,7 @@ fn exports_metadata_json() {
             known_future_covariates: vec!["hour".to_string(), "day_of_week".to_string()],
             historical_covariates: vec!["trip_distance".to_string()],
             allow_irregular: false,
+            allow_missing_targets: false,
         },
     )
     .expect("valid frame");
@@ -381,12 +382,61 @@ fn forecast_frame_accepts_irregular_rows_only_when_explicit() {
         ForecastFrequency::Daily,
         ForecastFrameMetadata {
             allow_irregular: true,
+            allow_missing_targets: false,
             ..ForecastFrameMetadata::default()
         },
     )
     .expect("irregular frame");
     assert!(frame.allow_irregular());
     assert!(frame.is_irregular());
+}
+
+#[test]
+fn forecast_frame_allows_missing_targets_only_when_explicit() {
+    let rows = vec![
+        ForecastRow::new("PULocationID=132", ts(1), 42.0),
+        ForecastRow::new("PULocationID=132", ts(2), f64::NAN),
+        ForecastRow::new("PULocationID=132", ts(3), 44.0),
+    ];
+    let err = ForecastFrame::new(rows.clone(), ForecastFrequency::Daily)
+        .expect_err("missing target rejected by default");
+    assert!(err.to_string().contains("allow_missing_targets"));
+
+    let frame = ForecastFrame::with_metadata(
+        rows,
+        ForecastFrequency::Daily,
+        ForecastFrameMetadata {
+            allow_missing_targets: true,
+            ..ForecastFrameMetadata::default()
+        },
+    )
+    .expect("missing target frame");
+    assert!(frame.allow_missing_targets());
+    assert!(frame.has_missing_targets());
+
+    let observed = frame
+        .observed_target_frame("piecewise_linear_seasonal")
+        .expect("observed frame");
+    assert_eq!(observed.rows().len(), 2);
+    assert!(observed.rows().iter().all(|row| row.target.is_finite()));
+    assert!(observed.allow_irregular());
+}
+
+#[test]
+fn forecast_frame_rejects_infinite_targets_even_when_missing_allowed() {
+    let err = ForecastFrame::with_metadata(
+        vec![
+            ForecastRow::new("PULocationID=132", ts(1), 42.0),
+            ForecastRow::new("PULocationID=132", ts(2), f64::INFINITY),
+        ],
+        ForecastFrequency::Daily,
+        ForecastFrameMetadata {
+            allow_missing_targets: true,
+            ..ForecastFrameMetadata::default()
+        },
+    )
+    .expect_err("infinite target rejected");
+    assert!(err.to_string().contains("forecast targets"));
 }
 
 #[test]

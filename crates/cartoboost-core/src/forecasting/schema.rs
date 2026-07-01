@@ -89,6 +89,8 @@ pub struct ForecastFrameMetadata {
     pub historical_covariates: Vec<String>,
     #[serde(default)]
     pub allow_irregular: bool,
+    #[serde(default)]
+    pub allow_missing_targets: bool,
 }
 
 impl ForecastFrame {
@@ -111,9 +113,15 @@ impl ForecastFrame {
             if row.series_id.is_empty() {
                 row.series_id = SINGLE_SERIES_ID.to_string();
             }
-            if !row.target.is_finite() {
+            if row.target.is_infinite() {
                 return Err(CartoBoostError::InvalidInput(
-                    "forecast targets must be finite".to_string(),
+                    "forecast targets must not be infinite".to_string(),
+                ));
+            }
+            if !metadata.allow_missing_targets && row.target.is_nan() {
+                return Err(CartoBoostError::InvalidInput(
+                    "forecast targets must be finite unless allow_missing_targets is enabled"
+                        .to_string(),
                 ));
             }
             for (name, value) in &row.covariates {
@@ -254,6 +262,7 @@ impl ForecastFrame {
             "known_future_covariates": self.metadata.known_future_covariates,
             "historical_covariates": self.metadata.historical_covariates,
             "allow_irregular": self.metadata.allow_irregular,
+            "allow_missing_targets": self.metadata.allow_missing_targets,
         })
     }
 
@@ -265,13 +274,58 @@ impl ForecastFrame {
         self.allow_irregular()
     }
 
+    pub fn allow_missing_targets(&self) -> bool {
+        self.metadata.allow_missing_targets
+    }
+
+    pub fn has_missing_targets(&self) -> bool {
+        self.rows.iter().any(|row| row.target.is_nan())
+    }
+
     pub fn require_regular_for_model(&self, model_name: &str) -> Result<()> {
+        self.require_observed_targets_for_model(model_name)?;
         if self.allow_irregular() {
             return Err(CartoBoostError::InvalidInput(format!(
                 "{model_name} requires a regular ForecastFrame; use a regularized frame or a model that supports irregular history"
             )));
         }
         Ok(())
+    }
+
+    pub fn require_observed_targets_for_model(&self, model_name: &str) -> Result<()> {
+        if self.has_missing_targets() {
+            return Err(CartoBoostError::InvalidInput(format!(
+                "{model_name} requires observed finite targets; drop missing target rows or use a model that supports allow_missing_targets"
+            )));
+        }
+        Ok(())
+    }
+
+    pub fn observed_target_frame(&self, model_name: &str) -> Result<Self> {
+        if !self.has_missing_targets() {
+            return Ok(self.clone());
+        }
+        let mut observed_by_series: BTreeMap<String, usize> = BTreeMap::new();
+        let mut total_by_series: BTreeMap<String, usize> = BTreeMap::new();
+        let mut rows = Vec::new();
+        for row in &self.rows {
+            *total_by_series.entry(row.series_id.clone()).or_default() += 1;
+            if row.target.is_finite() {
+                *observed_by_series.entry(row.series_id.clone()).or_default() += 1;
+                rows.push(row.clone());
+            }
+        }
+        for series_id in total_by_series.keys() {
+            if !observed_by_series.contains_key(series_id) {
+                return Err(CartoBoostError::InvalidInput(format!(
+                    "{model_name} requires at least one observed target row for series {series_id:?}"
+                )));
+            }
+        }
+        let mut metadata = self.metadata.clone();
+        metadata.allow_irregular = true;
+        metadata.allow_missing_targets = false;
+        Self::with_metadata(rows, self.frequency, metadata)
     }
 
     pub fn metadata_json_string(&self) -> Result<String> {

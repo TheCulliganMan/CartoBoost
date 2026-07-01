@@ -48,6 +48,7 @@ def test_forecast_frame_from_pandas_sorts_and_exports_metadata_for_single_series
         "known_future_covariates": ["day_of_week"],
         "historical_covariates": ["weather_code"],
         "allow_irregular": False,
+        "allow_missing_targets": False,
         "sample_weight_col": None,
     }
 
@@ -184,6 +185,50 @@ def test_forecast_frame_builds_native_irregular_frame_with_frequency_hint(instal
     assert frame._native_frame.freq == "D"
     assert frame._native_frame.kwargs["allow_irregular"] is True
     assert native.frame_class is frame._native_frame.__class__
+
+
+def test_forecast_frame_allows_missing_targets_only_when_explicit(install_fake_native):
+    native = install_fake_native("NaiveForecaster")
+    raw = pd.DataFrame(
+        {
+            "pickup_hour": pd.date_range("2025-01-01", periods=3, freq="D"),
+            "fare": [10.0, np.nan, 12.0],
+        }
+    )
+
+    with pytest.raises(ValueError, match="allow_missing_targets"):
+        ForecastFrame.from_pandas(raw, timestamp_col="pickup_hour", target_col="fare", freq="D")
+
+    frame = ForecastFrame.from_pandas(
+        raw,
+        timestamp_col="pickup_hour",
+        target_col="fare",
+        freq="D",
+        allow_missing_targets=True,
+    )
+
+    assert frame.allow_missing_targets is True
+    assert frame._native_frame is not None
+    assert frame._native_frame.kwargs["allow_missing_targets"] is True
+    assert native.frame_class is frame._native_frame.__class__
+
+
+def test_forecast_frame_rejects_infinite_targets_even_when_missing_allowed():
+    raw = pd.DataFrame(
+        {
+            "pickup_hour": pd.date_range("2025-01-01", periods=2, freq="D"),
+            "fare": [10.0, np.inf],
+        }
+    )
+
+    with pytest.raises(ValueError, match="finite"):
+        ForecastFrame.from_pandas(
+            raw,
+            timestamp_col="pickup_hour",
+            target_col="fare",
+            freq="D",
+            allow_missing_targets=True,
+        )
 
 
 def test_panel_forecast_frame_detects_duplicates_per_series_and_keeps_series_isolated():

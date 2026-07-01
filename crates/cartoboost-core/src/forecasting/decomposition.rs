@@ -93,6 +93,7 @@ impl MSTLCartoBoostForecaster {
 
 impl Forecaster for STLCartoBoostForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
+        frame.require_regular_for_model(self.model_name())?;
         let mut remainder_rows = Vec::with_capacity(frame.rows().len());
         let mut fitted_series = BTreeMap::new();
         for (series_id, rows) in history_by_series(frame.rows()) {
@@ -174,6 +175,7 @@ impl Forecaster for STLCartoBoostForecaster {
 
 impl Forecaster for MSTLCartoBoostForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
+        frame.require_regular_for_model(self.model_name())?;
         let mut remainder_rows = Vec::with_capacity(frame.rows().len());
         let mut fitted_series = BTreeMap::new();
         for (series_id, rows) in history_by_series(frame.rows()) {

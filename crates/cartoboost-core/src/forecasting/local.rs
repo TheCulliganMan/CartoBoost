@@ -295,6 +295,7 @@ pub struct ThetaSeasonality {
 struct FittedLocalState {
     frame: ForecastFrame,
     history_by_series: BTreeMap<String, Vec<ForecastRow>>,
+    anchor_timestamp_by_series: BTreeMap<String, chrono::NaiveDateTime>,
 }
 
 #[derive(Debug, Clone)]
@@ -397,6 +398,8 @@ struct SpatialKrigingCorrection {
 struct FittedPiecewiseLinearSeasonalState {
     frame: ForecastFrame,
     series: BTreeMap<String, FittedPiecewiseLinearSeasonalSeries>,
+    #[serde(default)]
+    anchor_timestamp_by_series: BTreeMap<String, chrono::NaiveDateTime>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -891,13 +894,13 @@ impl PiecewiseLinearSeasonalForecaster {
             .series
             .iter()
             .map(|(series_id, series)| {
+                let anchor_timestamp = fitted
+                    .anchor_timestamp_by_series
+                    .get(series_id)
+                    .copied()
+                    .unwrap_or(series.last_timestamp);
                 let timestamps = (1..=horizon)
-                    .map(|step| {
-                        fitted
-                            .frame
-                            .frequency()
-                            .advance(series.last_timestamp, step)
-                    })
+                    .map(|step| fitted.frame.frequency().advance(anchor_timestamp, step))
                     .collect::<Result<Vec<_>>>()?;
                 Ok((series_id.clone(), timestamps))
             })
@@ -1804,7 +1807,8 @@ impl SpatialPiecewiseKrigingForecaster {
 
 impl Forecaster for NaiveForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
-        self.fitted = Some(FittedLocalState::from_frame(frame));
+        let observed = frame.observed_target_frame(self.model_name())?;
+        self.fitted = Some(FittedLocalState::from_frame_with_anchor(&observed, frame));
         Ok(())
     }
 
@@ -1820,12 +1824,17 @@ impl Forecaster for NaiveForecaster {
                 let last = history.last().ok_or_else(|| {
                     CartoBoostError::InvalidInput("empty series history".to_string())
                 })?;
+                let anchor_timestamp = fitted
+                    .anchor_timestamp_by_series
+                    .get(series_id)
+                    .copied()
+                    .unwrap_or(last.timestamp);
                 let model = self.model_name().to_string();
                 let mut predictions = Vec::with_capacity(horizon);
                 for step in 1..=horizon {
                     predictions.push(ForecastPrediction {
                         series_id: series_id.clone(),
-                        timestamp: fitted.frame.frequency().advance(last.timestamp, step)?,
+                        timestamp: fitted.frame.frequency().advance(anchor_timestamp, step)?,
                         horizon: step,
                         model: model.clone(),
                         mean: last.target,
@@ -1906,7 +1915,8 @@ impl Forecaster for SeasonalNaiveForecaster {
 
 impl Forecaster for WindowAverageForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
-        self.fitted = Some(FittedLocalState::from_frame(frame));
+        let observed = frame.observed_target_frame(self.model_name())?;
+        self.fitted = Some(FittedLocalState::from_frame_with_anchor(&observed, frame));
         Ok(())
     }
 
@@ -1922,6 +1932,11 @@ impl Forecaster for WindowAverageForecaster {
                 let last = history.last().ok_or_else(|| {
                     CartoBoostError::InvalidInput("empty series history".to_string())
                 })?;
+                let anchor_timestamp = fitted
+                    .anchor_timestamp_by_series
+                    .get(series_id)
+                    .copied()
+                    .unwrap_or(last.timestamp);
                 let effective_window_size = self.window_size.min(history.len()).max(1);
                 let start = history.len() - effective_window_size;
                 let mean = history[start..].iter().map(|row| row.target).sum::<f64>()
@@ -1931,7 +1946,7 @@ impl Forecaster for WindowAverageForecaster {
                 for step in 1..=horizon {
                     predictions.push(ForecastPrediction {
                         series_id: series_id.clone(),
-                        timestamp: fitted.frame.frequency().advance(last.timestamp, step)?,
+                        timestamp: fitted.frame.frequency().advance(anchor_timestamp, step)?,
                         horizon: step,
                         model: model.clone(),
                         mean,
@@ -2706,6 +2721,7 @@ impl Forecaster for AutoLocalLevelKalmanForecaster {
 
 impl Forecaster for KrigingForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
+        frame.require_observed_targets_for_model(self.model_name())?;
         self.fitted = Some(FittedKrigingState::from_frame(frame, &self.coordinates)?);
         Ok(())
     }
@@ -2798,6 +2814,7 @@ impl Forecaster for KrigingForecaster {
 
 impl Forecaster for SpatialPiecewiseKrigingForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
+        frame.require_observed_targets_for_model(self.model_name())?;
         validate_spatial_piecewise_frame(frame, &self.config)?;
         self.fitted = Some(FittedSpatialPiecewiseKrigingState::from_frame(
             frame,
@@ -2941,8 +2958,10 @@ impl Forecaster for SpatialPiecewiseKrigingForecaster {
 
 impl Forecaster for PiecewiseLinearSeasonalForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
-        let resolved_config = resolve_piecewise_auto_seasonalities(frame, &self.config);
-        self.fitted = Some(FittedPiecewiseLinearSeasonalState::from_frame(
+        let observed = frame.observed_target_frame(self.model_name())?;
+        let resolved_config = resolve_piecewise_auto_seasonalities(&observed, &self.config);
+        self.fitted = Some(FittedPiecewiseLinearSeasonalState::from_frame_with_anchor(
+            &observed,
             frame,
             resolved_config.clone(),
         )?);
@@ -3157,6 +3176,10 @@ impl ArimaForecaster {
 
 impl FittedLocalState {
     fn from_frame(frame: &ForecastFrame) -> Self {
+        Self::from_frame_with_anchor(frame, frame)
+    }
+
+    fn from_frame_with_anchor(frame: &ForecastFrame, anchor_frame: &ForecastFrame) -> Self {
         let mut history_by_series: BTreeMap<String, Vec<ForecastRow>> = BTreeMap::new();
         for row in frame.rows() {
             history_by_series
@@ -3164,9 +3187,14 @@ impl FittedLocalState {
                 .or_default()
                 .push(row.clone());
         }
+        let mut anchor_timestamp_by_series = BTreeMap::new();
+        for row in anchor_frame.rows() {
+            anchor_timestamp_by_series.insert(row.series_id.clone(), row.timestamp);
+        }
         Self {
             frame: frame.clone(),
             history_by_series,
+            anchor_timestamp_by_series,
         }
     }
 }
@@ -3293,6 +3321,14 @@ impl FittedArimaState {
 
 impl FittedPiecewiseLinearSeasonalState {
     fn from_frame(frame: &ForecastFrame, config: PiecewiseLinearSeasonalConfig) -> Result<Self> {
+        Self::from_frame_with_anchor(frame, frame, config)
+    }
+
+    fn from_frame_with_anchor(
+        frame: &ForecastFrame,
+        anchor_frame: &ForecastFrame,
+        config: PiecewiseLinearSeasonalConfig,
+    ) -> Result<Self> {
         let local = FittedLocalState::from_frame(frame);
         let series = local
             .history_by_series
@@ -3306,9 +3342,14 @@ impl FittedPiecewiseLinearSeasonalState {
                 ))
             })
             .collect::<Result<BTreeMap<_, _>>>()?;
+        let mut anchor_timestamp_by_series = BTreeMap::new();
+        for row in anchor_frame.rows() {
+            anchor_timestamp_by_series.insert(row.series_id.clone(), row.timestamp);
+        }
         Ok(Self {
             frame: frame.clone(),
             series,
+            anchor_timestamp_by_series,
         })
     }
 
@@ -7745,6 +7786,60 @@ mod tests {
         assert!(predictions
             .iter()
             .all(|prediction| prediction.mean.is_finite()));
+    }
+
+    #[test]
+    fn piecewise_linear_skips_missing_targets_like_prophet() {
+        let frame = ForecastFrame::with_metadata(
+            vec![
+                ForecastRow::new("__single__", ts(1), 10.0),
+                ForecastRow::new("__single__", ts(2), f64::NAN),
+                ForecastRow::new("__single__", ts(3), 12.0),
+                ForecastRow::new("__single__", ts(4), 13.0),
+            ],
+            ForecastFrequency::Daily,
+            ForecastFrameMetadata {
+                allow_missing_targets: true,
+                ..ForecastFrameMetadata::default()
+            },
+        )
+        .expect("missing target frame");
+        let mut model =
+            PiecewiseLinearSeasonalForecaster::new(PiecewiseLinearSeasonalConfig::default())
+                .expect("valid piecewise model");
+        model.fit(&frame).expect("fit missing target frame");
+
+        let result = model.predict(2).expect("forecast");
+
+        assert_eq!(result.predictions().len(), 2);
+        assert!(result
+            .predictions()
+            .iter()
+            .all(|prediction| prediction.mean.is_finite()));
+        assert_eq!(
+            model.fitted_series_ids().expect("series ids"),
+            vec!["__single__"]
+        );
+    }
+
+    #[test]
+    fn regular_models_reject_missing_targets() {
+        let frame = ForecastFrame::with_metadata(
+            vec![
+                ForecastRow::new("__single__", ts(1), 10.0),
+                ForecastRow::new("__single__", ts(2), f64::NAN),
+                ForecastRow::new("__single__", ts(3), 12.0),
+            ],
+            ForecastFrequency::Daily,
+            ForecastFrameMetadata {
+                allow_missing_targets: true,
+                ..ForecastFrameMetadata::default()
+            },
+        )
+        .expect("missing target frame");
+        let mut ets = ETSForecaster::new(0.5, 0.1).expect("valid ets");
+        let err = ets.fit(&frame).expect_err("ets rejects missing targets");
+        assert!(err.to_string().contains("requires observed finite targets"));
     }
 
     #[test]

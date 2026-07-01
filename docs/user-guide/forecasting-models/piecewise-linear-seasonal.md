@@ -137,6 +137,35 @@ logic depends on equal row spacing, including ETS, ARIMA, theta, Kalman,
 intermittent demand, lag, neural, and auto selectors, still require a regular
 `ForecastFrame`.
 
+## Missing Targets
+
+Prophet drops rows whose `y` value is missing before fitting, while still using
+the full timestamp range as the history calendar. CartoBoost exposes the same
+behavior with `allow_missing_targets=True`: `NaN` targets are allowed in
+`ForecastFrame`, infinity is still rejected, and the piecewise model fits only
+observed target rows. Horizon forecasts start after the latest timestamp in the
+input, even when the final row has a missing target.
+
+```python
+frame = ForecastFrame.from_pandas(
+    taxi_route_training_rows,
+    timestamp_col="pickup_day",
+    target_col="demand",
+    freq="D",
+    allow_missing_targets=True,
+)
+
+forecast = PiecewiseLinearSeasonalForecaster(
+    growth="linear",
+    weekly_fourier_order=3,
+).fit(frame).predict(7)
+```
+
+This option is model-scoped. Use it for `PiecewiseLinearSeasonalForecaster` or
+last-value baselines when upstream training data carries future or withheld
+timestamps with missing targets. Do not use it to mask failed data joins or
+missing covariates; covariates remain required and finite.
+
 Prophet-shaped holiday and changepoint inputs are accepted as configuration
 ergonomics for users migrating existing component-model workflows. The default
 automatic changepoint count is 25, matching Prophet's public default.

@@ -96,7 +96,13 @@ frame = ForecastFrame.from_pandas(
 ```
 
 `ForecastFrame` validates timestamps, duplicate rows within each series, finite
-targets, regular frequency, panel ids, and covariate role metadata.
+targets by default, regular frequency, panel ids, and covariate role metadata.
+Use `allow_missing_targets=True` only when missing target rows represent known
+calendar slots that should be skipped during fitting while still anchoring the
+future schedule after the latest input timestamp. This Prophet-style behavior
+is supported by `PiecewiseLinearSeasonalForecaster`, `NaiveForecaster`, and
+non-seasonal window averages; models that require dense regular targets reject
+missing targets with a clear error.
 
 ## Advanced Candidates
 

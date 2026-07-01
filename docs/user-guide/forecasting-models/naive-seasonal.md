@@ -26,6 +26,12 @@ CartoBoost models. The naive baseline compares against the latest known value.
 The seasonal naive baseline compares against the prior cycle, which is often
 the stronger control for recurring demand.
 
+`NaiveForecaster` supports `ForecastFrame.from_pandas(...,
+allow_missing_targets=True)` by fitting on observed target rows and forecasting
+from the latest timestamp in the input frame. `SeasonalNaiveForecaster` still
+requires observed finite targets at every regular step because its
+`season_length` indexes previous rows in a complete seasonal cycle.
+
 ## Scientific Role
 
 These models are not weak because they are simple; they are the control group.

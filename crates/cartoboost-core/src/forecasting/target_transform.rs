@@ -137,6 +137,7 @@ impl LocalStandardScaledForecaster {
 
 impl Forecaster for LocalStandardScaledForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
+        frame.require_observed_targets_for_model(self.model_name())?;
         let transformed = self.scaler.fit_transform(frame)?;
         self.inner.fit(&transformed)
     }
@@ -172,6 +173,7 @@ impl Log1pForecaster {
 
 impl Forecaster for Log1pForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
+        frame.require_observed_targets_for_model(self.model_name())?;
         let rows = frame
             .rows()
             .iter()

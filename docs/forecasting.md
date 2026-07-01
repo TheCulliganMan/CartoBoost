@@ -58,11 +58,11 @@ frame = ForecastFrame.from_pandas(
 ```
 
 `ForecastFrame` validation is deterministic: timestamps are sorted within each
-series, duplicate series/timestamp rows are rejected, targets must be finite,
-regular frequency is checked when provided, and covariate roles remain explicit.
-Known-future covariates are values available at forecast creation time; lagged
-targets, rolling summaries, and other history-derived features must be built
-from rows before the forecast origin.
+series, duplicate series/timestamp rows are rejected, targets must be finite by
+default, regular frequency is checked when provided, and covariate roles remain
+explicit. Known-future covariates are values available at forecast creation
+time; lagged targets, rolling summaries, and other history-derived features
+must be built from rows before the forecast origin.
 
 Irregular history is opt-in and model-scoped. Pass `allow_irregular=True` with
 a forecast cadence such as `freq="D"` when the observed rows are not evenly
@@ -71,6 +71,16 @@ fitting is supported by `PiecewiseLinearSeasonalForecaster`, `NaiveForecaster`,
 and cadence-agnostic window averages; equal-step models such as ETS, ARIMA,
 theta, Kalman, intermittent-demand, lag, direct, neural, and auto selectors
 raise a clear error and should be fit on a regularized frame.
+
+Missing target values are also opt-in and model-scoped. Pass
+`allow_missing_targets=True` when the target column contains `NaN` values that
+should be treated like Prophet treats missing `y`: the frame keeps the
+timestamps, fitting uses only observed target rows, and forecast horizons start
+after the latest timestamp in the input. Infinity is always rejected.
+`PiecewiseLinearSeasonalForecaster`, `NaiveForecaster`, and non-seasonal window
+averages support this path. Equal-step, seasonal, lag, direct, neural,
+intermittent-demand, spatial kriging, and auto-selector models reject missing
+targets with a model-level error.
 
 When raw observations have multiple rows at the same timestamp, aggregate them
 before modeling or pass a positive `sample_weight_col`. With
