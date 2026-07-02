@@ -674,12 +674,14 @@ impl PiecewiseLinearSeasonalForecaster {
             .collect::<Vec<_>>()
             .into_par_iter()
             .map(|(series_id, series)| {
+                let anchor_timestamp = fitted
+                    .anchor_timestamp_by_series
+                    .get(series_id)
+                    .copied()
+                    .unwrap_or(series.last_timestamp);
                 (1..=horizon)
                     .map(|step| {
-                        let timestamp = fitted
-                            .frame
-                            .frequency()
-                            .advance(series.last_timestamp, step)?;
+                        let timestamp = fitted.frame.frequency().advance(anchor_timestamp, step)?;
                         let elapsed = elapsed_days(series.start_timestamp, timestamp);
                         series.predict_component_record(
                             series_id,
@@ -7810,8 +7812,16 @@ mod tests {
         model.fit(&frame).expect("fit missing target frame");
 
         let result = model.predict(2).expect("forecast");
+        let components = model
+            .predict_components_json_value(2)
+            .expect("component forecast");
 
         assert_eq!(result.predictions().len(), 2);
+        assert_eq!(result.predictions()[0].timestamp, ts(5));
+        assert_eq!(
+            components["records"][0]["timestamp"].as_str(),
+            Some("2026-01-05T00:00:00")
+        );
         assert!(result
             .predictions()
             .iter()

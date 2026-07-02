@@ -385,6 +385,26 @@ class PiecewiseLinearSeasonalForecaster(NativeForecastWrapper):
             )
         )
 
+    def components_frame(
+        self,
+        horizon: int,
+        *,
+        future_regressors: Mapping[str, Sequence[float]] | None = None,
+        future_regressors_by_series: Mapping[str, Mapping[str, Sequence[float]]] | None = None,
+        trend_adjustments: Mapping[int, float] | None = None,
+        trend_adjustments_by_series: Mapping[str, Mapping[int, float]] | None = None,
+    ) -> Any:
+        """Return forecast component diagnostics as a pandas DataFrame."""
+        pd = require_pandas()
+        payload = self.components(
+            horizon,
+            future_regressors=future_regressors,
+            future_regressors_by_series=future_regressors_by_series,
+            trend_adjustments=trend_adjustments,
+            trend_adjustments_by_series=trend_adjustments_by_series,
+        )
+        return _component_records_frame(pd, payload)
+
     def history_components(self) -> dict[str, Any]:
         """Return fitted historical trend, movement, and component diagnostics."""
         self._check_is_fitted()
@@ -394,14 +414,7 @@ class PiecewiseLinearSeasonalForecaster(NativeForecastWrapper):
         """Return fitted historical component diagnostics as a pandas DataFrame."""
         pd = require_pandas()
         payload = self.history_components()
-        rows: list[dict[str, Any]] = []
-        for record in payload.get("records", []):
-            row = dict(record)
-            components = row.pop("components", {})
-            if isinstance(components, Mapping):
-                _flatten_component_columns(row, "components", components)
-            rows.append(row)
-        return pd.DataFrame(rows)
+        return _component_records_frame(pd, payload)
 
     def history_components_json(self) -> str:
         """Return fitted historical component diagnostics as a JSON string."""
@@ -900,6 +913,17 @@ def _flatten_component_columns(
             _flatten_component_columns(row, column, value)
         else:
             row[column] = value
+
+
+def _component_records_frame(pd: Any, payload: Mapping[str, Any]) -> Any:
+    rows: list[dict[str, Any]] = []
+    for record in payload.get("records", []):
+        row = dict(record)
+        components = row.pop("components", {})
+        if isinstance(components, Mapping):
+            _flatten_component_columns(row, "components", components)
+        rows.append(row)
+    return pd.DataFrame(rows)
 
 
 __all__ = ["PiecewiseLinearSeasonalForecaster"]

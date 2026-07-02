@@ -48,7 +48,36 @@ def install_fake_native(monkeypatch: pytest.MonkeyPatch):
 
             def components_json(self, *args: Any, **kwargs: Any) -> str:
                 calls.append(("components_json", args, kwargs))
-                return json.dumps({"args": list(args), "kwargs": kwargs}, default=str)
+                return json.dumps(
+                    {
+                        "args": list(args),
+                        "kwargs": kwargs,
+                        "model": class_name,
+                        "columns": [
+                            "series_id",
+                            "timestamp",
+                            "horizon",
+                            "prediction",
+                            "trend",
+                            "components",
+                        ],
+                        "records": [
+                            {
+                                "series_id": "PULocationID=132",
+                                "timestamp": "1970-01-04T00:00:00",
+                                "horizon": 1,
+                                "prediction": 15.0,
+                                "trend": 13.0,
+                                "components": {
+                                    "seasonal_total": 2.0,
+                                    "weekly": 1.75,
+                                    "events": {"airport_surge": 0.25},
+                                },
+                            }
+                        ],
+                    },
+                    default=str,
+                )
 
             def history_components_json(self, *args: Any, **kwargs: Any) -> str:
                 calls.append(("history_components_json", args, kwargs))

@@ -91,6 +91,7 @@ model = PiecewiseLinearSeasonalForecaster(
 
 forecast = model.fit(frame).predict(24)
 components = model.components(24)
+components_frame = model.components_frame(24)
 history_components = model.history_components()
 history_frame = model.history_components_frame()
 ```
@@ -260,12 +261,15 @@ carry-forward.
 ## Historical Component Diagnostics
 
 Use `history_components()` after fitting when rolling-origin backtests need to
-explain why a cutoff won or lost. Use `history_components_frame()` when the
-same fitted records should be flattened into plottable pandas columns such as
-`components.seasonal_total`, `components.weekly`, or
-`components.events.airport_surge`. The methods return one row for every
-training observation and are computed from the fitted coefficients and the
-original covariates. Each row includes:
+explain why a cutoff won or lost. Use `components()` for future horizon
+decomposition and `components_frame(horizon)` when future component records
+should be flattened into the same dotted pandas columns as
+`history_components_frame()`, such as `components.seasonal_total`,
+`components.weekly`, or `components.events.airport_surge`.
+
+Historical component methods return one row for every training observation and
+are computed from the fitted coefficients and the original covariates. Each row
+includes:
 
 | Field | Meaning |
 | --- | --- |
@@ -277,8 +281,8 @@ original covariates. Each row includes:
 | `fitted_movement` | Change in fitted total value versus the previous training row for that series. |
 | `components` | Named component contributions, including `seasonal_total`, `yearly`, `weekly`, `daily`, custom seasonalities, event totals, and regressor totals. |
 
-`history_components_frame()` keeps the top-level fields and expands nested
-components with dotted column names:
+`history_components_frame()` and `components_frame(horizon)` keep top-level
+fields and expand nested components with dotted column names:
 
 | Column | Diagnostic use |
 | --- | --- |
@@ -288,6 +292,17 @@ components with dotted column names:
 | `components.yearly`, `components.weekly`, `components.daily` | Inspect built-in Fourier seasonal effects separately when the aggregate seasonal total looks plausible but one cadence is wrong. |
 | `components.events.*` | Verify that holiday or event windows explain known calendar shocks instead of forcing the trend to absorb them. |
 | `components.regressors.*` | Verify known future or historical regressor contribution and sign. |
+
+For whole-dataset transformations, concatenate the historical and future
+component frames after adding any project-specific split label:
+
+```python
+import pandas as pd
+
+history_frame = model.history_components_frame().assign(split="history")
+future_frame = model.components_frame(14).assign(split="forecast")
+component_frame = pd.concat([history_frame, future_frame], ignore_index=True)
+```
 | `residual` | Identify whether the model is already biased immediately before the holdout. |
 
 For a weekly backtest with 12 cutoffs, run the model once per cutoff, holding

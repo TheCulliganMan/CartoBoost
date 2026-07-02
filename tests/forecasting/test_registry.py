@@ -345,6 +345,11 @@ def test_piecewise_linear_seasonal_wrapper_normalizes_native_overrides(install_f
         future_regressors={"airport_queue": [1, 0]},
         trend_adjustments={2: 1.1},
     )
+    components_frame = model.components_frame(
+        2,
+        future_regressors={"airport_queue": [1, 0]},
+        trend_adjustments={2: 1.1},
+    )
     model.history_components()
     history_frame = model.history_components_frame()
     model.samples(
@@ -434,6 +439,15 @@ def test_piecewise_linear_seasonal_wrapper_normalizes_native_overrides(install_f
         {},
     )
     assert native.calls[4] == (
+        "components_json",
+        (2, {"airport_queue": [1.0, 0.0]}, None, {2: 1.1}, None),
+        {},
+    )
+    assert components_frame.loc[0, "prediction"] == 15.0
+    assert components_frame.loc[0, "components.seasonal_total"] == 2.0
+    assert components_frame.loc[0, "components.weekly"] == 1.75
+    assert components_frame.loc[0, "components.events.airport_surge"] == 0.25
+    assert native.calls[5] == (
         "history_components_json",
         (),
         {},
@@ -442,17 +456,17 @@ def test_piecewise_linear_seasonal_wrapper_normalizes_native_overrides(install_f
     assert history_frame.loc[0, "components.seasonal_total"] == 1.5
     assert history_frame.loc[0, "components.weekly"] == 1.25
     assert history_frame.loc[0, "components.events.airport_surge"] == 0.25
-    assert native.calls[5] == (
+    assert native.calls[6] == (
         "history_components_json",
         (),
         {},
     )
-    assert native.calls[6] == (
+    assert native.calls[7] == (
         "samples_json",
         (2, None, {"PULocationID=132": {"airport_queue": [1.0, 1.0]}}, 4, None, None),
         {},
     )
-    assert native.calls[7] == (
+    assert native.calls[8] == (
         "quantiles_json",
         (2, (0.1, 0.9), {"airport_queue": [0.0, 0.0]}, None, None, None, None),
         {},

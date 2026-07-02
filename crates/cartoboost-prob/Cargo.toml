@@ -1,6 +1,6 @@
 [package]
 name = "cartoboost-prob"
-version = "0.2.37"
+version = "0.2.38"
 edition.workspace = true
 license.workspace = true
 description = "Probabilistic prediction, calibration, and distributional metrics for CartoBoost."
