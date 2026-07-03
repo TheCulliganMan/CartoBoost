@@ -399,6 +399,8 @@ struct FittedPiecewiseLinearSeasonalState {
     frame: ForecastFrame,
     series: BTreeMap<String, FittedPiecewiseLinearSeasonalSeries>,
     #[serde(default)]
+    history_frame: Option<ForecastFrame>,
+    #[serde(default)]
     anchor_timestamp_by_series: BTreeMap<String, chrono::NaiveDateTime>,
 }
 
@@ -718,8 +720,9 @@ impl PiecewiseLinearSeasonalForecaster {
 
     pub fn history_components_json_value(&self) -> Result<Value> {
         let fitted = self.fitted.as_ref().ok_or_else(not_fitted)?;
+        let history_frame = fitted.history_frame.as_ref().unwrap_or(&fitted.frame);
         let mut history_by_series: BTreeMap<String, Vec<&ForecastRow>> = BTreeMap::new();
-        for row in fitted.frame.rows() {
+        for row in history_frame.rows() {
             history_by_series
                 .entry(row.series_id.clone())
                 .or_default()
@@ -3351,6 +3354,7 @@ impl FittedPiecewiseLinearSeasonalState {
         Ok(Self {
             frame: frame.clone(),
             series,
+            history_frame: Some(anchor_frame.clone()),
             anchor_timestamp_by_series,
         })
     }
@@ -7815,6 +7819,12 @@ mod tests {
         let components = model
             .predict_components_json_value(2)
             .expect("component forecast");
+        let history_components = model
+            .history_components_json_value()
+            .expect("history component forecast");
+        let history_records = history_components["records"]
+            .as_array()
+            .expect("history records");
 
         assert_eq!(result.predictions().len(), 2);
         assert_eq!(result.predictions()[0].timestamp, ts(5));
@@ -7822,6 +7832,17 @@ mod tests {
             components["records"][0]["timestamp"].as_str(),
             Some("2026-01-05T00:00:00")
         );
+        assert_eq!(history_records.len(), 4);
+        assert_eq!(
+            history_records[1]["timestamp"].as_str(),
+            Some("2026-01-02T00:00:00")
+        );
+        assert!(history_records[1]["actual"].is_null());
+        assert!(history_records[1]["residual"].is_null());
+        assert!(history_records[1]["fitted"]
+            .as_f64()
+            .expect("missing-target fitted value")
+            .is_finite());
         assert!(result
             .predictions()
             .iter()

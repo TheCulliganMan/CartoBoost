@@ -146,6 +146,9 @@ behavior with `allow_missing_targets=True`: `NaN` targets are allowed in
 `ForecastFrame`, infinity is still rejected, and the piecewise model fits only
 observed target rows. Horizon forecasts start after the latest timestamp in the
 input, even when the final row has a missing target.
+Historical diagnostics retain the missing-target timestamps:
+`history_components_frame()` emits a finite `fitted` value for each missing
+target row while leaving `actual` and `residual` null.
 
 ```python
 frame = ForecastFrame.from_pandas(

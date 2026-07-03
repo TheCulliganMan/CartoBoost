@@ -359,10 +359,12 @@ regular spacing.
 the target column but still rejects positive or negative infinity. Supported
 models follow Prophet's missing-`y` behavior: fit on observed target rows,
 preserve timestamps for horizon anchoring, and forecast after the latest input
-timestamp. `PiecewiseLinearSeasonalForecaster`, `NaiveForecaster`, and
-non-seasonal window averages support this; regular statistical, seasonal, lag,
-direct, neural, intermittent-demand, kriging, and auto models raise clear
-model-level errors.
+timestamp. `PiecewiseLinearSeasonalForecaster` also keeps missing-target rows
+in `history_components_frame()` with finite fitted values and null
+actual/residual fields. `PiecewiseLinearSeasonalForecaster`,
+`NaiveForecaster`, and non-seasonal window averages support missing targets;
+regular statistical, seasonal, lag, direct, neural, intermittent-demand,
+kriging, and auto models raise clear model-level errors.
 
 `ForecastFrame.from_pandas(..., allow_missing_covariates=True)` allows `NaN` in
 declared static, known-future, or historical covariates while still rejecting
