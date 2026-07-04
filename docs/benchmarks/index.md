@@ -66,6 +66,8 @@ runtime, and memory before results can be promoted as benchmark evidence.
 | Model diagnostic suite report | `docs/assets/model_benchmarks_public/results.md` |
 | Lane acceptance JSON | `docs/assets/lane_level_tests/acceptance_metrics.json` |
 | Deep claim benchmark JSON | `docs/assets/deep_claim_benchmarks/results.json` |
+| Deep claim benchmark JSONL | `docs/assets/deep_claim_benchmarks/results.jsonl` |
+| Deep claim benchmark report | `docs/assets/deep_claim_benchmarks/results.md` |
 
 ## v0.2 Release Gate Harness
 

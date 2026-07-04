@@ -32,9 +32,11 @@ compare it against strong baselines on the same split.
 - Graph model guides: ./docs/user-guide/graph-models/index.md
 - Neural model guides: ./docs/user-guide/neural-models/index.md
 - Deep model guides: ./docs/user-guide/deep-models.md
-- Deep model capability table: ./docs/reference/model-capabilities.md
+- Deep model capability matrix: ./docs/reference/capability-matrix.md
 - Deep claim benchmark report: ./docs/benchmarks/deep-claims.md
 - Deep claim benchmark artifact: ./docs/assets/deep_claim_benchmarks/results.json
+- Deep claim benchmark JSONL artifact: ./docs/assets/deep_claim_benchmarks/results.jsonl
+- Deep claim benchmark Markdown artifact: ./docs/assets/deep_claim_benchmarks/results.md
 - Model capability artifact: ./docs/assets/capabilities/model_capabilities.json
 - Shared representation primitives: ./docs/user-guide/deep-models.md
 - Retrieval-augmented forecasting: ./docs/user-guide/deep-models.md
@@ -64,7 +66,7 @@ compare it against strong baselines on the same split.
 - Deep claim benchmark gate: ./scripts/check_deep_claim_gates.py
 - Deep claim benchmark harness: ./scripts/run_deep_claim_benchmarks.py
 - Capability status gate: ./scripts/check_capability_status.py
-- Capability table generator: ./scripts/generate_capability_table.py
+- Capability matrix generator: ./scripts/generate_capability_table.py
 - Release gate audit: ./scripts/check_release_gates.py
 - Public API contract audit: ./scripts/check_public_api_contract.py
 - Artifact compatibility audit: ./scripts/check_artifact_compatibility.py

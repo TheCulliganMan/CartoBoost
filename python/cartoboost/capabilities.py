@@ -5,6 +5,7 @@ from typing import Any
 REQUIRED_CAPABILITY_FIELDS = (
     "class_name",
     "architecture",
+    "capability_tier",
     "implementation_backend",
     "trainable_parameters",
     "uses_native_core",
@@ -24,6 +25,7 @@ CAPABILITY_TABLE: tuple[dict[str, Any], ...] = (
     {
         "class_name": "CartoBoostRegressor",
         "architecture": "gradient_boosted_oblivious_trees",
+        "capability_tier": "stable_native",
         "implementation_backend": "rust_native",
         "trainable_parameters": "tree_splits_leaf_values",
         "uses_native_core": True,
@@ -33,6 +35,7 @@ CAPABILITY_TABLE: tuple[dict[str, Any], ...] = (
     {
         "class_name": "CartoBoostClassifier",
         "architecture": "gradient_boosted_oblivious_trees_classifier",
+        "capability_tier": "stable_native",
         "implementation_backend": "rust_native",
         "trainable_parameters": "tree_splits_leaf_values",
         "uses_native_core": True,
@@ -42,15 +45,17 @@ CAPABILITY_TABLE: tuple[dict[str, Any], ...] = (
     {
         "class_name": "CartoBoostRanker",
         "architecture": "gradient_boosted_pairwise_ranker",
+        "capability_tier": "stable_native",
         "implementation_backend": "rust_native",
         "trainable_parameters": "tree_splits_leaf_values",
         "uses_native_core": True,
-        "benchmark_evidence": "API contract only",
+        "benchmark_evidence": "real-data evidence",
         "experimental_status": "stable_native",
     },
     {
         "class_name": "AutoGeoModel",
         "architecture": "model_selection_stack",
+        "capability_tier": "stable_native",
         "implementation_backend": "python_orchestration_rust_models",
         "trainable_parameters": "selected_candidate_models",
         "uses_native_core": True,
@@ -60,6 +65,7 @@ CAPABILITY_TABLE: tuple[dict[str, Any], ...] = (
     {
         "class_name": "EntityEmbedding",
         "architecture": "entity_embedding",
+        "capability_tier": "deterministic_python",
         "implementation_backend": "deterministic_python_numpy",
         "trainable_parameters": "deterministic_hash_projection",
         "uses_native_core": False,
@@ -69,6 +75,7 @@ CAPABILITY_TABLE: tuple[dict[str, Any], ...] = (
     {
         "class_name": "PairEmbedding",
         "architecture": "pair_embedding",
+        "capability_tier": "deterministic_python",
         "implementation_backend": "deterministic_python_numpy",
         "trainable_parameters": "deterministic_hash_projection",
         "uses_native_core": False,
@@ -78,6 +85,7 @@ CAPABILITY_TABLE: tuple[dict[str, Any], ...] = (
     {
         "class_name": "SpatioTemporalAdaptiveEmbedding",
         "architecture": "spatiotemporal_adaptive_embedding",
+        "capability_tier": "deterministic_python",
         "implementation_backend": "deterministic_python_numpy",
         "trainable_parameters": "deterministic_hash_projection",
         "uses_native_core": False,
@@ -87,6 +95,7 @@ CAPABILITY_TABLE: tuple[dict[str, Any], ...] = (
     {
         "class_name": "HistoricalAnalogRetriever",
         "architecture": "exact_knn_memory",
+        "capability_tier": "deterministic_python",
         "implementation_backend": "deterministic_python_numpy",
         "trainable_parameters": "stored_normalized_memory",
         "uses_native_core": False,
@@ -96,6 +105,7 @@ CAPABILITY_TABLE: tuple[dict[str, Any], ...] = (
     {
         "class_name": "MultiViewSpatialAttention",
         "architecture": "multi_view_spatial_attention",
+        "capability_tier": "shallow_neural",
         "implementation_backend": "deterministic_python_numpy",
         "trainable_parameters": "view_weights",
         "uses_native_core": False,
@@ -105,6 +115,7 @@ CAPABILITY_TABLE: tuple[dict[str, Any], ...] = (
     {
         "class_name": "DirectionalPairForecaster",
         "architecture": "pair_embedding_mlp",
+        "capability_tier": "native_deep",
         "implementation_backend": "rust_native",
         "trainable_parameters": "pair_embeddings_mlp_weights",
         "uses_native_core": True,
@@ -114,6 +125,7 @@ CAPABILITY_TABLE: tuple[dict[str, Any], ...] = (
     {
         "class_name": "TemporalSSMForecaster",
         "architecture": "selective_ssm_lite",
+        "capability_tier": "shallow_neural",
         "implementation_backend": "python_numpy_decoder",
         "trainable_parameters": "horizon_specific_ridge_decoder",
         "uses_native_core": False,
@@ -123,6 +135,7 @@ CAPABILITY_TABLE: tuple[dict[str, Any], ...] = (
     {
         "class_name": "SelectiveStateSpaceBlock",
         "architecture": "selective_ssm_lite_encoder",
+        "capability_tier": "shallow_neural",
         "implementation_backend": "python_numpy_recurrence",
         "trainable_parameters": "deterministic_projection_matrices",
         "uses_native_core": False,
@@ -132,6 +145,7 @@ CAPABILITY_TABLE: tuple[dict[str, Any], ...] = (
     {
         "class_name": "InvertedTemporalTransformer",
         "architecture": "inverted_transformer",
+        "capability_tier": "shallow_neural",
         "implementation_backend": "python_numpy",
         "trainable_parameters": "entity_token_projection",
         "uses_native_core": False,
@@ -141,6 +155,7 @@ CAPABILITY_TABLE: tuple[dict[str, Any], ...] = (
     {
         "class_name": "PropagationDelayGraphForecaster",
         "architecture": "delay_aware_graph_transformer",
+        "capability_tier": "native_deep",
         "implementation_backend": "rust_native_with_python_facade",
         "trainable_parameters": "graph_delay_weights",
         "uses_native_core": True,
@@ -150,6 +165,7 @@ CAPABILITY_TABLE: tuple[dict[str, Any], ...] = (
     {
         "class_name": "ConditionalFlowDistributionHead",
         "architecture": "conditional_residual_sampler",
+        "capability_tier": "native_deep",
         "implementation_backend": "rust_native",
         "trainable_parameters": "location_scale_ridge_weights",
         "uses_native_core": True,
@@ -159,6 +175,7 @@ CAPABILITY_TABLE: tuple[dict[str, Any], ...] = (
     {
         "class_name": "ChoiceSetTransformer",
         "architecture": "choice_set_utility_softmax",
+        "capability_tier": "native_deep",
         "implementation_backend": "rust_native",
         "trainable_parameters": "utility_softmax_temperature",
         "uses_native_core": True,
@@ -168,6 +185,7 @@ CAPABILITY_TABLE: tuple[dict[str, Any], ...] = (
     {
         "class_name": "GeoTemporalDiffusionScenarioModel",
         "architecture": "conditional_residual_diffusion",
+        "capability_tier": "experimental",
         "implementation_backend": "rust_native",
         "trainable_parameters": "scenario_noise_graph_diffusion",
         "uses_native_core": True,
@@ -177,23 +195,274 @@ CAPABILITY_TABLE: tuple[dict[str, Any], ...] = (
     {
         "class_name": "GraphNeuralOperator",
         "architecture": "graph_neural_operator",
+        "capability_tier": "experimental",
         "implementation_backend": "rust_native",
         "trainable_parameters": "field_smoothing_operator_weights",
         "uses_native_core": True,
         "benchmark_evidence": "experimental only",
         "experimental_status": "experimental",
     },
+    {
+        "class_name": "RegimeMoEForecaster",
+        "architecture": "regime_moe",
+        "capability_tier": "shallow_neural",
+        "implementation_backend": "python_numpy",
+        "trainable_parameters": "expert_mixer_weights",
+        "uses_native_core": False,
+        "benchmark_evidence": "synthetic claim evidence",
+        "experimental_status": "shallow_neural",
+    },
+    {
+        "class_name": "RetrievalAugmentedForecaster",
+        "architecture": "retrieval_augmented_forecaster",
+        "capability_tier": "deterministic_python",
+        "implementation_backend": "deterministic_python_numpy",
+        "trainable_parameters": "stored_exact_knn_memory",
+        "uses_native_core": False,
+        "benchmark_evidence": "synthetic claim evidence",
+        "experimental_status": "deterministic_python",
+    },
+    {
+        "class_name": "ResponseCurveModel",
+        "architecture": "native_response_curve_utility",
+        "capability_tier": "native_deep",
+        "implementation_backend": "rust_native",
+        "trainable_parameters": "utility_response_weights",
+        "uses_native_core": True,
+        "benchmark_evidence": "API contract only",
+        "experimental_status": "native_deep",
+    },
+    {
+        "class_name": "EventOutcomeModel",
+        "architecture": "native_event_outcome_head",
+        "capability_tier": "native_deep",
+        "implementation_backend": "rust_native",
+        "trainable_parameters": "event_probability_weights",
+        "uses_native_core": True,
+        "benchmark_evidence": "API contract only",
+        "experimental_status": "native_deep",
+    },
+    {
+        "class_name": "ServiceTimeResidualModel",
+        "architecture": "native_service_residual_head",
+        "capability_tier": "native_deep",
+        "implementation_backend": "rust_native",
+        "trainable_parameters": "residual_correction_weights",
+        "uses_native_core": True,
+        "benchmark_evidence": "API contract only",
+        "experimental_status": "native_deep",
+    },
+    {
+        "class_name": "ConstrainedDecisionOptimizer",
+        "architecture": "native_constrained_candidate_optimizer",
+        "capability_tier": "native_deep",
+        "implementation_backend": "rust_native",
+        "trainable_parameters": "not_applicable_optimizer",
+        "uses_native_core": True,
+        "benchmark_evidence": "API contract only",
+        "experimental_status": "native_deep",
+    },
+)
+
+_ALIAS_CAPABILITIES: tuple[tuple[str, str], ...] = (
+    ("EntityTemporalSSM", "TemporalSSMForecaster"),
+    ("PairTemporalSSM", "TemporalSSMForecaster"),
+    ("GraphTemporalSSM", "TemporalSSMForecaster"),
+    ("TemporalEntityTransformer", "InvertedTemporalTransformer"),
+    ("InvertedEntityTransformer", "InvertedTemporalTransformer"),
+    ("SpatioTemporalGraphForecaster", "PropagationDelayGraphForecaster"),
+    ("DelayAwareGraphTransformer", "PropagationDelayGraphForecaster"),
+    ("DynamicAdjacencyTransformer", "PropagationDelayGraphForecaster"),
+    ("JointHorizonFlowHead", "ConditionalFlowDistributionHead"),
+    ("ResidualFlowCalibrator", "ConditionalFlowDistributionHead"),
+    ("UtilityNet", "ChoiceSetTransformer"),
+    ("NestedChoiceHead", "ChoiceSetTransformer"),
+    ("CounterfactualCandidateScorer", "ChoiceSetTransformer"),
+    ("GeoTemporalMixtureOfExperts", "RegimeMoEForecaster"),
+    ("PairRegimeRouter", "RegimeMoEForecaster"),
+    ("EntityRegimeRouter", "RegimeMoEForecaster"),
+    ("FlowScenarioGenerator", "GeoTemporalDiffusionScenarioModel"),
+    ("ConditionalResidualDiffusion", "GeoTemporalDiffusionScenarioModel"),
+    ("FourierGeoOperator", "GraphNeuralOperator"),
+    ("SpatioTemporalOperator", "GraphNeuralOperator"),
+    ("GraphContextEmbedding", "EntityEmbedding"),
+    ("KNNContextMemory", "HistoricalAnalogRetriever"),
+    ("RetrievalAugmentedPairModel", "RetrievalAugmentedForecaster"),
+    ("EntityTimeAdaptiveEmbedding", "SpatioTemporalAdaptiveEmbedding"),
+    ("NodeTimeAdaptiveEmbedding", "SpatioTemporalAdaptiveEmbedding"),
+    ("PairTimeAdaptiveEmbedding", "SpatioTemporalAdaptiveEmbedding"),
+)
+
+_UTILITY_CAPABILITIES: tuple[dict[str, Any], ...] = (
+    {
+        "class_name": "EntityPanelFrame",
+        "architecture": "entity_panel_frame_schema",
+        "capability_tier": "deterministic_python",
+        "implementation_backend": "python_validation_schema",
+        "trainable_parameters": "not_applicable",
+        "uses_native_core": False,
+        "benchmark_evidence": "API contract only",
+        "experimental_status": "deterministic_python",
+    },
+    {
+        "class_name": "DirectionalPairFrame",
+        "architecture": "directional_pair_frame_schema",
+        "capability_tier": "deterministic_python",
+        "implementation_backend": "python_validation_schema",
+        "trainable_parameters": "not_applicable",
+        "uses_native_core": False,
+        "benchmark_evidence": "API contract only",
+        "experimental_status": "deterministic_python",
+    },
+    {
+        "class_name": "GraphTemporalFrame",
+        "architecture": "graph_temporal_frame_schema",
+        "capability_tier": "deterministic_python",
+        "implementation_backend": "python_validation_schema",
+        "trainable_parameters": "not_applicable",
+        "uses_native_core": False,
+        "benchmark_evidence": "API contract only",
+        "experimental_status": "deterministic_python",
+    },
+    {
+        "class_name": "ResponseCurveFrame",
+        "architecture": "response_curve_frame_schema",
+        "capability_tier": "deterministic_python",
+        "implementation_backend": "python_validation_schema",
+        "trainable_parameters": "not_applicable",
+        "uses_native_core": False,
+        "benchmark_evidence": "API contract only",
+        "experimental_status": "deterministic_python",
+    },
+    {
+        "class_name": "RepresentationArtifact",
+        "architecture": "representation_artifact_schema",
+        "capability_tier": "deterministic_python",
+        "implementation_backend": "python_dataclass",
+        "trainable_parameters": "not_applicable",
+        "uses_native_core": False,
+        "benchmark_evidence": "API contract only",
+        "experimental_status": "deterministic_python",
+    },
+    {
+        "class_name": "RegimeRouter",
+        "architecture": "deterministic_regime_router",
+        "capability_tier": "deterministic_python",
+        "implementation_backend": "deterministic_python_numpy",
+        "trainable_parameters": "router_projection",
+        "uses_native_core": False,
+        "benchmark_evidence": "API contract only",
+        "experimental_status": "deterministic_python",
+    },
+    {
+        "class_name": "SelfSupervisedPretrainer",
+        "architecture": "deterministic_self_supervised_pretrainer",
+        "capability_tier": "shallow_neural",
+        "implementation_backend": "deterministic_python_numpy",
+        "trainable_parameters": "pretraining_projection",
+        "uses_native_core": False,
+        "benchmark_evidence": "API contract only",
+        "experimental_status": "shallow_neural",
+    },
+    {
+        "class_name": "LocalGlobalHubAttention",
+        "architecture": "local_global_hub_attention",
+        "capability_tier": "shallow_neural",
+        "implementation_backend": "deterministic_python_numpy",
+        "trainable_parameters": "attention_weights",
+        "uses_native_core": False,
+        "benchmark_evidence": "API contract only",
+        "experimental_status": "shallow_neural",
+    },
+    {
+        "class_name": "SpatialSemanticGraphTransformer",
+        "architecture": "spatial_semantic_graph_transformer",
+        "capability_tier": "shallow_neural",
+        "implementation_backend": "deterministic_python_numpy",
+        "trainable_parameters": "graph_semantic_projection",
+        "uses_native_core": False,
+        "benchmark_evidence": "API contract only",
+        "experimental_status": "shallow_neural",
+    },
+    {
+        "class_name": "MaskedEntityTimeModeling",
+        "architecture": "masked_entity_time_proxy_task",
+        "capability_tier": "deterministic_python",
+        "implementation_backend": "python_metric_adapter",
+        "trainable_parameters": "not_applicable",
+        "uses_native_core": False,
+        "benchmark_evidence": "API contract only",
+        "experimental_status": "deterministic_python",
+    },
+    {
+        "class_name": "MaskedPairTimeModeling",
+        "architecture": "masked_pair_time_proxy_task",
+        "capability_tier": "deterministic_python",
+        "implementation_backend": "python_metric_adapter",
+        "trainable_parameters": "not_applicable",
+        "uses_native_core": False,
+        "benchmark_evidence": "API contract only",
+        "experimental_status": "deterministic_python",
+    },
+    {
+        "class_name": "GraphEdgeDenoising",
+        "architecture": "graph_edge_denoising_proxy_task",
+        "capability_tier": "deterministic_python",
+        "implementation_backend": "python_metric_adapter",
+        "trainable_parameters": "not_applicable",
+        "uses_native_core": False,
+        "benchmark_evidence": "API contract only",
+        "experimental_status": "deterministic_python",
+    },
+    {
+        "class_name": "TemporalOrderContrastiveLoss",
+        "architecture": "temporal_order_contrastive_proxy_task",
+        "capability_tier": "deterministic_python",
+        "implementation_backend": "python_metric_adapter",
+        "trainable_parameters": "not_applicable",
+        "uses_native_core": False,
+        "benchmark_evidence": "API contract only",
+        "experimental_status": "deterministic_python",
+    },
+    {
+        "class_name": "SpatialNeighborContrastiveLoss",
+        "architecture": "spatial_neighbor_contrastive_proxy_task",
+        "capability_tier": "deterministic_python",
+        "implementation_backend": "python_metric_adapter",
+        "trainable_parameters": "not_applicable",
+        "uses_native_core": False,
+        "benchmark_evidence": "API contract only",
+        "experimental_status": "deterministic_python",
+    },
+    {
+        "class_name": "FuturePatchReconstruction",
+        "architecture": "future_patch_reconstruction_proxy_task",
+        "capability_tier": "deterministic_python",
+        "implementation_backend": "python_metric_adapter",
+        "trainable_parameters": "not_applicable",
+        "uses_native_core": False,
+        "benchmark_evidence": "API contract only",
+        "experimental_status": "deterministic_python",
+    },
 )
 
 
 def capability_table() -> list[dict[str, Any]]:
-    return [dict(row) for row in CAPABILITY_TABLE]
+    rows = [dict(row) for row in CAPABILITY_TABLE]
+    by_name = {str(row["class_name"]): row for row in rows}
+    for alias, source in _ALIAS_CAPABILITIES:
+        source_row = dict(by_name[source])
+        source_row["class_name"] = alias
+        source_row["alias_of"] = source
+        rows.append(source_row)
+    rows.extend(dict(row) for row in _UTILITY_CAPABILITIES)
+    return rows
 
 
 def validate_capability_table() -> list[str]:
     errors: list[str] = []
     seen: set[str] = set()
-    for row in CAPABILITY_TABLE:
+    for row in capability_table():
         class_name = str(row.get("class_name", ""))
         if class_name in seen:
             errors.append(f"duplicate capability row for {class_name}")
@@ -204,6 +473,13 @@ def validate_capability_table() -> list[str]:
         status = row.get("experimental_status")
         if status not in VALID_EXPERIMENTAL_STATUS:
             errors.append(f"{class_name} has invalid experimental_status {status!r}")
+        if row.get("capability_tier") != status:
+            errors.append(f"{class_name} capability_tier must match experimental_status")
+        evidence = str(row.get("benchmark_evidence", ""))
+        if status == "stable_native" and evidence in {"", "API contract only", "experimental only"}:
+            errors.append(f"{class_name} stable_native lacks benchmark evidence")
+        if status == "experimental" and evidence != "experimental only":
+            errors.append(f"{class_name} experimental class counted as primary evidence")
     return errors
 
 

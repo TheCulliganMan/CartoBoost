@@ -76,8 +76,8 @@ against a simpler baseline under the same split.
 | `GeoTemporalDiffusionScenarioModel` | `conditional_residual_diffusion` | experimental only |
 | `GraphNeuralOperator` | `graph_neural_operator` | experimental only |
 
-The generated capability table is maintained at
-`docs/reference/model-capabilities.md`, with the machine-readable artifact at
+The generated capability matrix is maintained at
+`docs/reference/capability-matrix.md`, with the machine-readable artifact at
 `docs/assets/capabilities/model_capabilities.json`. Docs CI should run
 `PYTHONPATH=python python scripts/check_capability_status.py` so exported model
 classes cannot ship without architecture, backend, parameter, native-core,
