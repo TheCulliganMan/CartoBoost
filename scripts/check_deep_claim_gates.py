@@ -5,6 +5,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from cartoboost.capabilities import capability_table
+
 ROOT = Path(__file__).resolve().parents[1]
 RESULTS = ROOT / "docs" / "assets" / "deep_claim_benchmarks" / "results.json"
 RESULTS_JSONL = ROOT / "docs" / "assets" / "deep_claim_benchmarks" / "results.jsonl"
@@ -51,6 +53,9 @@ def main() -> int:
     payload = load_payload()
     rows = list(payload.get("rows", []))
     errors: list[str] = []
+    capability_by_architecture = {
+        str(row["architecture"]): row for row in capability_table() if "architecture" in row
+    }
     if not RESULTS_JSONL.exists():
         errors.append("missing results.jsonl")
     if not RESULTS_MD.exists():
@@ -73,6 +78,22 @@ def main() -> int:
             errors.append(f"{claim_id} missing {field}")
         if row.get("passed") is not True:
             errors.append(f"deep claim gate failed: {claim_id}")
+        capability = capability_by_architecture.get(str(row.get("architecture", "")))
+        if capability is None:
+            errors.append(f"{claim_id} architecture missing from capability matrix")
+        else:
+            for field in ["capability_tier", "implementation_backend", "experimental_status"]:
+                if row.get(field) != capability.get(field):
+                    errors.append(f"{claim_id} {field} disagrees with capability matrix")
+            evidence = str(capability.get("benchmark_evidence", ""))
+            if evidence == "API contract only":
+                errors.append(
+                    f"{claim_id} capability matrix marks benchmarked class API-contract-only"
+                )
+            if row.get("experimental_status") == "experimental":
+                errors.append(
+                    f"{claim_id} experimental class counted as primary benchmark evidence"
+                )
         if float(row.get("percent_improvement", -1.0)) < float(
             row.get("improvement_threshold", 0.0)
         ):
@@ -90,8 +111,13 @@ def main() -> int:
             baseline = str(row.get("falsifier_baseline", "")).lower()
             if "reversed" not in baseline:
                 errors.append(f"{claim_id} graph claim lacks reversed-edge falsifier")
-            if "no_delay" not in baseline and "no-graph" not in baseline and "no_delay" not in row:
-                errors.append(f"{claim_id} graph claim lacks no-delay/no-graph falsifier")
+            if "no_graph" not in baseline and "no-graph" not in baseline:
+                errors.append(f"{claim_id} graph claim lacks no-graph falsifier")
+        if "flow" in claim_id or "uncertainty" in claim_id:
+            if "flow_interval_coverage" not in row:
+                errors.append(f"{claim_id} uncertainty claim lacks coverage")
+            if "flow_interval_width" not in row:
+                errors.append(f"{claim_id} uncertainty claim lacks width")
     if not payload.get("all_passed"):
         errors.append("all_passed is false")
     if errors:

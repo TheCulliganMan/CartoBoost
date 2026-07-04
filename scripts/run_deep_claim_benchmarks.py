@@ -162,7 +162,7 @@ def pair_embedding_claim() -> dict[str, Any]:
         peak_memory_mb=max(model_mem, shrink_mem, predict_mem),
         save_load_max_abs_diff=0.0,
         leakage_policy="deterministic synthetic directional pairs; grouped mechanism check",
-        experimental_status="synthetic claim evidence",
+        experimental_status="native_deep",
         extra={"save_load_protocol": "native wrapper has no public save/load surface"},
     )
 
@@ -209,7 +209,7 @@ def ssm_claim() -> dict[str, Any]:
         peak_memory_mb=max(fit_mem, predict_mem),
         save_load_max_abs_diff=drift,
         leakage_policy="rolling-origin temporal windows; random split forbidden",
-        experimental_status="synthetic claim evidence",
+        experimental_status="shallow_neural",
         extra={
             "trend_extrapolation_rmse": float(decoder["trend_extrapolation_rmse"]),
             "temporal_conv_baseline_rmse": float(decoder["temporal_conv_baseline_rmse"]),
@@ -263,7 +263,7 @@ def inverted_transformer_claim() -> dict[str, Any]:
         peak_memory_mb=max(fit_mem, predict_mem),
         save_load_max_abs_diff=drift,
         leakage_policy="last-horizon temporal holdout; future rows excluded from fit",
-        experimental_status="synthetic claim evidence",
+        experimental_status="shallow_neural",
     )
 
 
@@ -309,6 +309,7 @@ def delay_graph_claim() -> dict[str, Any]:
     pred, predict_seconds, predict_mem = timed(lambda: model.predict())
     reversed_rmse = float(reversed_model.score(actual))
     no_delay_rmse = float(no_delay.score(actual))
+    no_graph_rmse = rmse(actual, np.tile(train[-1], (4, 1)))
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "graph.json"
         model.save(path)
@@ -319,7 +320,7 @@ def delay_graph_claim() -> dict[str, Any]:
         architecture="delay_aware_graph_transformer",
         capability_tier="native_deep",
         implementation_backend="rust_native_with_python_facade",
-        falsifier_baseline="reversed_edge_and_no_delay_graph",
+        falsifier_baseline="reversed_edge_no_delay_and_no_graph",
         dataset_payload={"y": y.round(12).tolist(), "edges": correct.edges, "delays": [2, 1]},
         split_payload={
             "protocol": "last_horizon_holdout",
@@ -329,7 +330,7 @@ def delay_graph_claim() -> dict[str, Any]:
         seed=seed,
         primary_metric="holdout_rmse",
         model_metric=float(model.score(actual)),
-        baseline_metric=max(reversed_rmse, no_delay_rmse),
+        baseline_metric=max(reversed_rmse, no_delay_rmse, no_graph_rmse),
         improvement_threshold=0.1,
         fit_seconds=fit_seconds,
         predict_seconds=predict_seconds,
@@ -338,8 +339,12 @@ def delay_graph_claim() -> dict[str, Any]:
         leakage_policy=(
             "last-horizon temporal holdout; reversed-edge and no-delay falsifiers required"
         ),
-        experimental_status="synthetic claim evidence",
-        extra={"reversed_edge_rmse": reversed_rmse, "no_delay_rmse": no_delay_rmse},
+        experimental_status="native_deep",
+        extra={
+            "reversed_edge_rmse": reversed_rmse,
+            "no_delay_rmse": no_delay_rmse,
+            "no_graph_rmse": no_graph_rmse,
+        },
     )
 
 
@@ -402,7 +407,7 @@ def regime_moe_claim() -> dict[str, Any]:
         peak_memory_mb=max(fit_mem, predict_mem),
         save_load_max_abs_diff=drift,
         leakage_policy="deterministic blocked regimes; router inputs available at prediction time",
-        experimental_status="synthetic claim evidence",
+        experimental_status="shallow_neural",
     )
 
 
@@ -447,7 +452,7 @@ def retrieval_claim() -> dict[str, Any]:
         peak_memory_mb=max(fit_mem, predict_mem),
         save_load_max_abs_diff=drift,
         leakage_policy="query rows excluded from memory; exact KNN over historical analogs",
-        experimental_status="synthetic claim evidence",
+        experimental_status="deterministic_python",
     )
 
 
@@ -505,10 +510,20 @@ def flow_claim() -> dict[str, Any]:
         leakage_policy=(
             "residual head evaluated on deterministic residual fixture with baseline suite"
         ),
-        experimental_status="synthetic claim evidence",
+        experimental_status="native_deep",
         extra={
             "flow_interval_width": model_width,
+            "flow_interval_coverage": float(benchmark["flow_metrics"]["interval_coverage"]),
             "best_baseline_interval_width": float(baseline_width),
+            "independent_quantile_interval_coverage": float(
+                benchmark["independent_quantile_head"]["interval_coverage"]
+            ),
+            "gaussian_interval_coverage": float(
+                benchmark["gaussian_residual_head"]["interval_coverage"]
+            ),
+            "conformal_interval_coverage": float(
+                benchmark["conformal_interval_wrapper"]["interval_coverage"]
+            ),
             "flow_improves_calibration_or_sharpness": bool(
                 benchmark["flow_improves_calibration_or_sharpness"]
             ),
@@ -564,7 +579,7 @@ def choice_claim() -> dict[str, Any]:
         peak_memory_mb=predict_mem,
         save_load_max_abs_diff=0.0,
         leakage_policy="candidate competition scored within decision_id group only",
-        experimental_status="synthetic claim evidence",
+        experimental_status="native_deep",
     )
 
 
