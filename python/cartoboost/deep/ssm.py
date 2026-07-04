@@ -19,7 +19,7 @@ class SelectiveStateSpaceBlock:
         self.input_dim = int(input_dim)
         self.state_dim = int(state_dim)
         self.seed = int(seed)
-        self.architecture = "selective_ssm"
+        self.architecture = "selective_ssm_lite_encoder"
         self.gate_weights = _deterministic_matrix(input_dim, state_dim, seed=seed + 11, salt="gate")
         self.delta_weights = _deterministic_matrix(
             input_dim, state_dim, seed=seed + 17, salt="delta"
@@ -95,7 +95,7 @@ class TemporalSSMForecaster:
         self.horizon = int(horizon)
         self.state_dim = int(state_dim)
         self.seed = int(seed)
-        self.architecture = "selective_ssm"
+        self.architecture = "selective_ssm_lite"
         self.is_fitted_ = False
 
     def fit(self, frame: EntityPanelFrame) -> TemporalSSMForecaster:
@@ -111,9 +111,16 @@ class TemporalSSMForecaster:
         recent = y[-max(2, min(self.lookback, y.shape[0])) :]
         self.last_values_ = y[-1].copy()
         self.trend_ = (recent[-1] - recent[0]) / max(1, recent.shape[0] - 1)
+        self.decoder_weights_, self.decoder_metrics_ = _fit_horizon_decoders(
+            y,
+            self.encoded_,
+            horizon=self.horizon,
+            ridge=1e-6,
+        )
         self.metadata_ = {
             "model_class": "TemporalSSMForecaster",
             "architecture": self.architecture,
+            "architecture_scope": "selective_ssm_lite_not_full_mamba",
             "artifact_version": 1,
             "schema_hash": _schema_hash(y.shape, self.lookback, self.horizon, self.state_dim),
             "lookback": self.lookback,
@@ -122,6 +129,13 @@ class TemporalSSMForecaster:
             "seed": self.seed,
             "backend": "cpu",
             "accelerated_scan": False,
+            "decoder": {
+                "kind": "encoded_state_horizon_specific_ridge",
+                "uses_encoded_state": True,
+                "uses_entity_conditioning": True,
+                "rolling_origin_fit_objective": "squared_error",
+                **self.decoder_metrics_,
+            },
             "cutoff": str(frame.timestamps[-1]),
             "flow_uncertainty_head": _ssm_flow_report(y, self.encoded_),
             "save_load_parity_checked": False,
@@ -134,7 +148,16 @@ class TemporalSSMForecaster:
         if not self.is_fitted_:
             raise RuntimeError("model must be fit before prediction")
         horizon = int(horizon or self.horizon)
-        return np.vstack([self.last_values_ + self.trend_ * step for step in range(1, horizon + 1)])
+        features = _decoder_features(
+            self.encoded_[-1],
+            self.last_values_,
+            np.arange(self.last_values_.shape[0], dtype=float),
+        )
+        rows = []
+        for step in range(horizon):
+            weight_idx = min(step, self.decoder_weights_.shape[0] - 1)
+            rows.append(features @ self.decoder_weights_[weight_idx])
+        return np.vstack(rows)
 
     def runtime_scaling_report(
         self,
@@ -158,7 +181,7 @@ class TemporalSSMForecaster:
                     "lookback": int(lookback),
                     "elapsed_seconds": float(elapsed),
                     "memory_bytes": int(sequence.nbytes + encoded.nbytes),
-                    "architecture": "selective_ssm",
+                    "architecture": self.architecture,
                     "backend": "cpu",
                 }
             )
@@ -170,8 +193,11 @@ class TemporalSSMForecaster:
         payload = {
             "metadata": self.metadata_,
             "block": self.block_.to_dict(),
+            "encoded": self.encoded_.tolist(),
             "last_values": self.last_values_.tolist(),
             "trend": self.trend_.tolist(),
+            "decoder_weights": self.decoder_weights_.tolist(),
+            "decoder_metrics": self.decoder_metrics_,
         }
         path = Path(path)
         path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
@@ -188,8 +214,11 @@ class TemporalSSMForecaster:
             seed=int(metadata["seed"]),
         )
         obj.block_ = SelectiveStateSpaceBlock.from_dict(payload["block"])
+        obj.encoded_ = np.asarray(payload["encoded"], dtype=float)
         obj.last_values_ = np.asarray(payload["last_values"], dtype=float)
         obj.trend_ = np.asarray(payload["trend"], dtype=float)
+        obj.decoder_weights_ = np.asarray(payload["decoder_weights"], dtype=float)
+        obj.decoder_metrics_ = dict(payload["decoder_metrics"])
         obj.metadata_ = dict(metadata)
         obj.is_fitted_ = True
         return obj
@@ -222,6 +251,96 @@ def _ssm_flow_report(y: np.ndarray, encoded: np.ndarray) -> dict[str, Any]:
         entity_or_pair_embeddings=entity,
         surface="TemporalSSMForecaster",
     )
+
+
+def _fit_horizon_decoders(
+    y: np.ndarray,
+    encoded: np.ndarray,
+    *,
+    horizon: int,
+    ridge: float,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    if y.shape[0] <= horizon:
+        raise ValueError("EntityPanelFrame.y must have more rows than horizon")
+    weights = []
+    ssm_rmse = []
+    trend_rmse = []
+    conv_rmse = []
+    for step in range(1, horizon + 1):
+        feature_rows = []
+        target_rows = []
+        trend_rows = []
+        conv_rows = []
+        for idx in range(y.shape[0] - step):
+            entity_index = np.arange(y.shape[1], dtype=float)
+            feature_rows.append(_decoder_features(encoded[idx], y[idx], entity_index))
+            target_rows.append(y[idx + step])
+            start = max(0, idx - 3)
+            recent = y[start : idx + 1]
+            trend = (recent[-1] - recent[0]) / max(1, recent.shape[0] - 1)
+            trend_rows.append(y[idx] + trend * step)
+            conv_rows.append(np.mean(recent, axis=0))
+        x = np.vstack(feature_rows)
+        x = np.nan_to_num(x, nan=0.0, posinf=1.0e6, neginf=-1.0e6)
+        x = np.clip(x, -1.0e6, 1.0e6)
+        target = np.concatenate(target_rows)
+        coef = _ridge_fit(x, target, ridge)
+        with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+            pred = x @ coef
+        pred = np.nan_to_num(pred, nan=0.0, posinf=1.0e6, neginf=-1.0e6)
+        weights.append(coef)
+        actual = target
+        ssm_rmse.append(_rmse(actual, pred))
+        trend_rmse.append(_rmse(actual, np.concatenate(trend_rows)))
+        conv_rmse.append(_rmse(actual, np.concatenate(conv_rows)))
+    return np.vstack(weights), {
+        "rolling_origin_train_windows": int(
+            sum(y.shape[0] - step for step in range(1, horizon + 1))
+        ),
+        "ssm_decoder_rmse": float(np.mean(ssm_rmse)),
+        "trend_extrapolation_rmse": float(np.mean(trend_rmse)),
+        "temporal_conv_baseline_rmse": float(np.mean(conv_rmse)),
+        "beats_trend_extrapolation": bool(np.mean(ssm_rmse) < np.mean(trend_rmse)),
+        "beats_temporal_conv_baseline": bool(np.mean(ssm_rmse) < np.mean(conv_rmse)),
+    }
+
+
+def _decoder_features(
+    encoded_state: np.ndarray, current_values: np.ndarray, entity_index: np.ndarray
+) -> np.ndarray:
+    if current_values.ndim != 1:
+        raise ValueError("current_values must be one-dimensional")
+    entity_scale = entity_index / max(1.0, float(len(entity_index) - 1))
+    repeated_state = np.repeat(encoded_state.reshape(1, -1), len(current_values), axis=0)
+    return np.column_stack(
+        [
+            np.ones(len(current_values), dtype=float),
+            repeated_state,
+            current_values,
+            entity_scale,
+        ]
+    )
+
+
+def _ridge_fit(x: np.ndarray, y: np.ndarray, ridge: float) -> np.ndarray:
+    center = np.mean(x[:, 1:], axis=0)
+    scale = np.std(x[:, 1:], axis=0)
+    scale = np.where(scale < 1.0e-12, 1.0, scale)
+    normalized = x.copy()
+    normalized[:, 1:] = (normalized[:, 1:] - center) / scale
+    penalty = np.sqrt(ridge) * np.eye(normalized.shape[1], dtype=float)
+    penalty[0, 0] = 0.0
+    x_augmented = np.vstack([normalized, penalty])
+    y_augmented = np.concatenate([y, np.zeros(normalized.shape[1], dtype=float)])
+    normalized_coef = np.linalg.lstsq(x_augmented, y_augmented, rcond=None)[0]
+    coef = np.zeros_like(normalized_coef)
+    coef[1:] = normalized_coef[1:] / scale
+    coef[0] = normalized_coef[0] - np.sum((center / scale) * normalized_coef[1:])
+    return np.clip(np.nan_to_num(coef, nan=0.0, posinf=1.0e6, neginf=-1.0e6), -1.0e6, 1.0e6)
+
+
+def _rmse(actual: np.ndarray, pred: np.ndarray) -> float:
+    return float(np.sqrt(np.mean((actual - pred) ** 2)))
 
 
 def _deterministic_matrix(rows: int, cols: int, *, seed: int, salt: str) -> np.ndarray:

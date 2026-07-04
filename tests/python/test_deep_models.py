@@ -368,14 +368,15 @@ def test_selective_ssm_public_api_metadata_scaling_and_roundtrip(tmp_path):
     np.testing.assert_array_equal(encoded, block.encode(sequence))
     assert encoded.shape == (3, 4)
 
-    y = np.column_stack(
-        [
-            np.arange(80, dtype=float),
-            np.sin(np.arange(80, dtype=float) / 5.0),
-        ]
-    )
+    t = np.arange(160, dtype=float)
+    y0 = np.zeros_like(t)
+    y1 = np.zeros_like(t)
+    for idx in range(12, len(t)):
+        y0[idx] = 0.75 * y0[idx - 9] - 0.35 * y0[idx - 5] + np.sin(idx / 13.0)
+        y1[idx] = 0.65 * y1[idx - 7] + 0.25 * y0[idx - 11] + np.cos(idx / 17.0)
+    y = np.column_stack([y0, y1])
     frame = EntityPanelFrame(y=y, timestamps=list(range(len(y))), entity_ids=["a", "b"])
-    model = TemporalSSMForecaster(lookback=32, horizon=4, state_dim=6, seed=13).fit(frame)
+    model = TemporalSSMForecaster(lookback=48, horizon=4, state_dim=8, seed=13).fit(frame)
     pred = model.predict()
     path = tmp_path / "temporal-ssm.json"
     model.save(path)
@@ -384,14 +385,21 @@ def test_selective_ssm_public_api_metadata_scaling_and_roundtrip(tmp_path):
 
     assert pred.shape == (4, 2)
     np.testing.assert_array_equal(loaded.predict(), pred)
-    assert model.metadata_["architecture"] == "selective_ssm"
+    assert model.metadata_["architecture"] == "selective_ssm_lite"
+    assert model.metadata_["architecture_scope"] == "selective_ssm_lite_not_full_mamba"
+    decoder = model.metadata_["decoder"]
+    assert decoder["uses_encoded_state"] is True
+    assert decoder["uses_entity_conditioning"] is True
+    assert decoder["rolling_origin_fit_objective"] == "squared_error"
+    assert decoder["beats_trend_extrapolation"] is True
+    assert decoder["beats_temporal_conv_baseline"] is True
     assert model.metadata_["flow_uncertainty_head"]["consumed"] is True
     assert model.metadata_["flow_uncertainty_head"]["surface"] == "TemporalSSMForecaster"
     assert model.metadata_["accelerated_scan"] is False
     assert model.metadata_["backend"] == "cpu"
     assert model.metadata_["save_load_parity_checked"] is True
     assert [row["lookback"] for row in report] == [64, 128, 256, 512, 1024]
-    assert all(row["architecture"] == "selective_ssm" for row in report)
+    assert all(row["architecture"] == "selective_ssm_lite" for row in report)
     assert all(row["memory_bytes"] > 0 for row in report)
 
 
@@ -646,6 +654,7 @@ def test_conditional_flow_head_outputs_joint_uncertainty_metrics(tmp_path):
     assert "interval_coverage" in output["metrics"]
     assert "joint_path_calibration" in output["metrics"]
     assert "tail_event_calibration" in output["metrics"]
+    assert head.metadata_["architecture"] == "conditional_residual_sampler"
     benchmark = head.benchmark_against_baselines(
         residuals,
         model_hidden_state=hidden,
@@ -763,6 +772,8 @@ def test_choice_set_transformer_competes_candidates_and_reports_calibration():
     assert any(row["nested_probability"] is not None for row in report["predictions"])
     assert "brier" in report["calibration"]
     assert "ece" in report["calibration"]
+    assert report["metadata"]["architecture"] == "choice_set_utility_softmax"
+    assert report["metadata"]["candidate_candidate_attention"] == "false"
     assert (
         report["benchmark"]["choice_set_log_loss"]
         < report["benchmark"]["independent_response_log_loss"]

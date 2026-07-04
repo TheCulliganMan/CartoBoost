@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "cartoboost"
-version = "0.2.40"
+version = "0.2.41"
 description = "Rust-backed spatial boosting for tabular modeling and forecasting."
 readme = "README.md"
 requires-python = ">=3.10"

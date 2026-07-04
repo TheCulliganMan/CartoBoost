@@ -43,7 +43,7 @@ impl SelectiveStateSpaceBlock {
             input_dim,
             state_dim,
             seed,
-            architecture: "selective_ssm".to_string(),
+            architecture: "selective_ssm_lite_encoder".to_string(),
             gate_weights: deterministic_matrix(input_dim, state_dim, seed + 11, "gate"),
             delta_weights: deterministic_matrix(input_dim, state_dim, seed + 17, "delta"),
             b_weights: deterministic_matrix(input_dim, state_dim, seed + 23, "b"),
@@ -102,7 +102,20 @@ pub struct TemporalSsmArtifact {
     pub save_load_parity_checked: bool,
     pub last_values: Vec<f64>,
     pub trend: Vec<f64>,
+    pub encoded: Vec<Vec<f64>>,
+    pub decoder_weights: Vec<Vec<f64>>,
+    pub decoder_metrics: DecoderMetrics,
     pub block: SelectiveStateSpaceBlock,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DecoderMetrics {
+    pub rolling_origin_train_windows: usize,
+    pub ssm_decoder_rmse: f64,
+    pub trend_extrapolation_rmse: f64,
+    pub temporal_conv_baseline_rmse: f64,
+    pub beats_trend_extrapolation: bool,
+    pub beats_temporal_conv_baseline: bool,
 }
 
 impl TemporalSsmArtifact {
@@ -135,7 +148,7 @@ pub fn fit_temporal_ssm(
     }
     let input_dim = y[0].len();
     let block = SelectiveStateSpaceBlock::new(input_dim, state_dim, seed)?;
-    let _encoded = block.encode(y)?;
+    let encoded = block.encode(y)?;
     let start = y.len().saturating_sub(lookback.max(2));
     let recent = &y[start..];
     let last_values = y[y.len() - 1].clone();
@@ -146,9 +159,10 @@ pub fn fit_temporal_ssm(
         .zip(first.iter())
         .map(|(last, first)| (last - first) / denom)
         .collect();
+    let (decoder_weights, decoder_metrics) = fit_horizon_decoders(y, &encoded, horizon, 1.0e-6)?;
     let mut artifact = TemporalSsmArtifact {
         model_class: "TemporalSSMForecaster".to_string(),
-        architecture: "selective_ssm".to_string(),
+        architecture: "selective_ssm_lite".to_string(),
         artifact_version: SSM_ARTIFACT_VERSION,
         schema_hash: schema_hash(y, lookback, horizon, state_dim),
         lookback,
@@ -159,6 +173,9 @@ pub fn fit_temporal_ssm(
         save_load_parity_checked: false,
         last_values,
         trend,
+        encoded,
+        decoder_weights,
+        decoder_metrics,
         block,
     };
     let before = predict_temporal_ssm(&artifact, horizon)?;
@@ -172,9 +189,9 @@ pub fn predict_temporal_ssm(
     artifact: &TemporalSsmArtifact,
     horizon: usize,
 ) -> Result<Vec<Vec<f64>>> {
-    if artifact.architecture != "selective_ssm" {
+    if artifact.architecture != "selective_ssm_lite" {
         return Err(SsmError::InvalidInput(
-            "TemporalSSMForecaster only supports selective_ssm".to_string(),
+            "TemporalSSMForecaster only supports selective_ssm_lite".to_string(),
         ));
     }
     let horizon = if horizon == 0 {
@@ -182,16 +199,168 @@ pub fn predict_temporal_ssm(
     } else {
         horizon
     };
-    Ok((1..=horizon)
-        .map(|step| {
-            artifact
-                .last_values
+    let encoded_state = artifact
+        .encoded
+        .last()
+        .ok_or_else(|| SsmError::InvalidInput("encoded state cannot be empty".to_string()))?;
+    let features = decoder_features(encoded_state, &artifact.last_values);
+    let mut rows = Vec::with_capacity(horizon);
+    for step in 0..horizon {
+        let weight_idx = step.min(artifact.decoder_weights.len().saturating_sub(1));
+        rows.push(
+            features
                 .iter()
-                .zip(artifact.trend.iter())
-                .map(|(last, trend)| last + trend * step as f64)
-                .collect()
+                .map(|row| dot(row, &artifact.decoder_weights[weight_idx]))
+                .collect(),
+        );
+    }
+    Ok(rows)
+}
+
+fn fit_horizon_decoders(
+    y: &[Vec<f64>],
+    encoded: &[Vec<f64>],
+    horizon: usize,
+    ridge: f64,
+) -> Result<(Vec<Vec<f64>>, DecoderMetrics)> {
+    if y.len() <= horizon {
+        return Err(SsmError::InvalidInput(
+            "y must contain more rows than horizon".to_string(),
+        ));
+    }
+    let mut weights = Vec::with_capacity(horizon);
+    let mut ssm_rmse = Vec::with_capacity(horizon);
+    let mut trend_rmse = Vec::with_capacity(horizon);
+    let mut conv_rmse = Vec::with_capacity(horizon);
+    let mut windows = 0;
+    for step in 1..=horizon {
+        let mut x = Vec::new();
+        let mut target = Vec::new();
+        let mut trend_pred = Vec::new();
+        let mut conv_pred = Vec::new();
+        for idx in 0..(y.len() - step) {
+            x.extend(decoder_features(&encoded[idx], &y[idx]));
+            target.extend(y[idx + step].iter().copied());
+            let start = idx.saturating_sub(3);
+            let recent = &y[start..=idx];
+            let denom = (recent.len() - 1).max(1) as f64;
+            for entity in 0..y[idx].len() {
+                let trend = (recent[recent.len() - 1][entity] - recent[0][entity]) / denom;
+                trend_pred.push(y[idx][entity] + trend * step as f64);
+                conv_pred
+                    .push(recent.iter().map(|row| row[entity]).sum::<f64>() / recent.len() as f64);
+            }
+        }
+        windows += y.len() - step;
+        let coef = ridge_fit(&x, &target, ridge)?;
+        let pred = x.iter().map(|row| dot(row, &coef)).collect::<Vec<_>>();
+        ssm_rmse.push(rmse(&target, &pred));
+        trend_rmse.push(rmse(&target, &trend_pred));
+        conv_rmse.push(rmse(&target, &conv_pred));
+        weights.push(coef);
+    }
+    let ssm_mean = mean(&ssm_rmse);
+    let trend_mean = mean(&trend_rmse);
+    let conv_mean = mean(&conv_rmse);
+    Ok((
+        weights,
+        DecoderMetrics {
+            rolling_origin_train_windows: windows,
+            ssm_decoder_rmse: ssm_mean,
+            trend_extrapolation_rmse: trend_mean,
+            temporal_conv_baseline_rmse: conv_mean,
+            beats_trend_extrapolation: ssm_mean < trend_mean,
+            beats_temporal_conv_baseline: ssm_mean < conv_mean,
+        },
+    ))
+}
+
+fn decoder_features(encoded_state: &[f64], current_values: &[f64]) -> Vec<Vec<f64>> {
+    let denom = (current_values.len().saturating_sub(1)).max(1) as f64;
+    current_values
+        .iter()
+        .enumerate()
+        .map(|(idx, value)| {
+            let mut row = Vec::with_capacity(encoded_state.len() + 3);
+            row.push(1.0);
+            row.extend(encoded_state.iter().map(|value| value.clamp(-1.0e6, 1.0e6)));
+            row.push(*value);
+            row.push(idx as f64 / denom);
+            row
         })
-        .collect())
+        .collect()
+}
+
+fn ridge_fit(x: &[Vec<f64>], y: &[f64], ridge: f64) -> Result<Vec<f64>> {
+    let cols = x[0].len();
+    let mut xtx = vec![vec![0.0; cols]; cols];
+    let mut xty = vec![0.0; cols];
+    for (row, target) in x.iter().zip(y.iter()) {
+        for col in 0..cols {
+            xty[col] += row[col] * target;
+            for other in 0..cols {
+                xtx[col][other] += row[col] * row[other];
+            }
+        }
+    }
+    for (idx, row) in xtx.iter_mut().enumerate().skip(1) {
+        row[idx] += ridge;
+    }
+    solve_linear(xtx, xty)
+}
+
+fn solve_linear(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Result<Vec<f64>> {
+    let n = b.len();
+    for pivot in 0..n {
+        let mut best = pivot;
+        for row in (pivot + 1)..n {
+            if a[row][pivot].abs() > a[best][pivot].abs() {
+                best = row;
+            }
+        }
+        if a[best][pivot].abs() < 1.0e-12 {
+            return Err(SsmError::InvalidInput(
+                "decoder ridge system is singular".to_string(),
+            ));
+        }
+        a.swap(pivot, best);
+        b.swap(pivot, best);
+        let denom = a[pivot][pivot];
+        for value in a[pivot].iter_mut().skip(pivot) {
+            *value /= denom;
+        }
+        b[pivot] /= denom;
+        let pivot_row = a[pivot].clone();
+        for row in 0..n {
+            if row == pivot {
+                continue;
+            }
+            let factor = a[row][pivot];
+            for (value, pivot_value) in a[row].iter_mut().zip(pivot_row.iter()).skip(pivot) {
+                *value -= factor * pivot_value;
+            }
+            b[row] -= factor * b[pivot];
+        }
+    }
+    Ok(b)
+}
+
+fn dot(left: &[f64], right: &[f64]) -> f64 {
+    left.iter().zip(right.iter()).map(|(a, b)| a * b).sum()
+}
+
+fn rmse(actual: &[f64], pred: &[f64]) -> f64 {
+    (actual
+        .iter()
+        .zip(pred.iter())
+        .map(|(actual, pred)| (actual - pred).powi(2))
+        .sum::<f64>()
+        / actual.len() as f64)
+        .sqrt()
+}
+
+fn mean(values: &[f64]) -> f64 {
+    values.iter().sum::<f64>() / values.len() as f64
 }
 
 fn deterministic_matrix(rows: usize, cols: usize, seed: u64, salt: &str) -> Vec<Vec<f64>> {

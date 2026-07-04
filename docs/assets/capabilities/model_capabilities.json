@@ -1,0 +1,164 @@
+[
+  {
+    "architecture": "gradient_boosted_oblivious_trees",
+    "benchmark_evidence": "real-data evidence",
+    "class_name": "CartoBoostRegressor",
+    "experimental_status": "stable_native",
+    "implementation_backend": "rust_native",
+    "trainable_parameters": "tree_splits_leaf_values",
+    "uses_native_core": true
+  },
+  {
+    "architecture": "gradient_boosted_oblivious_trees_classifier",
+    "benchmark_evidence": "real-data evidence",
+    "class_name": "CartoBoostClassifier",
+    "experimental_status": "stable_native",
+    "implementation_backend": "rust_native",
+    "trainable_parameters": "tree_splits_leaf_values",
+    "uses_native_core": true
+  },
+  {
+    "architecture": "gradient_boosted_pairwise_ranker",
+    "benchmark_evidence": "API contract only",
+    "class_name": "CartoBoostRanker",
+    "experimental_status": "stable_native",
+    "implementation_backend": "rust_native",
+    "trainable_parameters": "tree_splits_leaf_values",
+    "uses_native_core": true
+  },
+  {
+    "architecture": "model_selection_stack",
+    "benchmark_evidence": "real-data evidence",
+    "class_name": "AutoGeoModel",
+    "experimental_status": "stable_native",
+    "implementation_backend": "python_orchestration_rust_models",
+    "trainable_parameters": "selected_candidate_models",
+    "uses_native_core": true
+  },
+  {
+    "architecture": "entity_embedding",
+    "benchmark_evidence": "API contract only",
+    "class_name": "EntityEmbedding",
+    "experimental_status": "deterministic_python",
+    "implementation_backend": "deterministic_python_numpy",
+    "trainable_parameters": "deterministic_hash_projection",
+    "uses_native_core": false
+  },
+  {
+    "architecture": "pair_embedding",
+    "benchmark_evidence": "synthetic claim evidence",
+    "class_name": "PairEmbedding",
+    "experimental_status": "deterministic_python",
+    "implementation_backend": "deterministic_python_numpy",
+    "trainable_parameters": "deterministic_hash_projection",
+    "uses_native_core": false
+  },
+  {
+    "architecture": "spatiotemporal_adaptive_embedding",
+    "benchmark_evidence": "API contract only",
+    "class_name": "SpatioTemporalAdaptiveEmbedding",
+    "experimental_status": "deterministic_python",
+    "implementation_backend": "deterministic_python_numpy",
+    "trainable_parameters": "deterministic_hash_projection",
+    "uses_native_core": false
+  },
+  {
+    "architecture": "exact_knn_memory",
+    "benchmark_evidence": "synthetic claim evidence",
+    "class_name": "HistoricalAnalogRetriever",
+    "experimental_status": "deterministic_python",
+    "implementation_backend": "deterministic_python_numpy",
+    "trainable_parameters": "stored_normalized_memory",
+    "uses_native_core": false
+  },
+  {
+    "architecture": "multi_view_spatial_attention",
+    "benchmark_evidence": "API contract only",
+    "class_name": "MultiViewSpatialAttention",
+    "experimental_status": "shallow_neural",
+    "implementation_backend": "deterministic_python_numpy",
+    "trainable_parameters": "view_weights",
+    "uses_native_core": false
+  },
+  {
+    "architecture": "pair_embedding_mlp",
+    "benchmark_evidence": "synthetic claim evidence",
+    "class_name": "DirectionalPairForecaster",
+    "experimental_status": "native_deep",
+    "implementation_backend": "rust_native",
+    "trainable_parameters": "pair_embeddings_mlp_weights",
+    "uses_native_core": true
+  },
+  {
+    "architecture": "selective_ssm_lite",
+    "benchmark_evidence": "synthetic claim evidence",
+    "class_name": "TemporalSSMForecaster",
+    "experimental_status": "shallow_neural",
+    "implementation_backend": "python_numpy_decoder",
+    "trainable_parameters": "horizon_specific_ridge_decoder",
+    "uses_native_core": false
+  },
+  {
+    "architecture": "selective_ssm_lite_encoder",
+    "benchmark_evidence": "synthetic claim evidence",
+    "class_name": "SelectiveStateSpaceBlock",
+    "experimental_status": "shallow_neural",
+    "implementation_backend": "python_numpy_recurrence",
+    "trainable_parameters": "deterministic_projection_matrices",
+    "uses_native_core": false
+  },
+  {
+    "architecture": "inverted_transformer",
+    "benchmark_evidence": "synthetic claim evidence",
+    "class_name": "InvertedTemporalTransformer",
+    "experimental_status": "shallow_neural",
+    "implementation_backend": "python_numpy",
+    "trainable_parameters": "entity_token_projection",
+    "uses_native_core": false
+  },
+  {
+    "architecture": "delay_aware_graph_transformer",
+    "benchmark_evidence": "synthetic claim evidence",
+    "class_name": "PropagationDelayGraphForecaster",
+    "experimental_status": "native_deep",
+    "implementation_backend": "rust_native_with_python_facade",
+    "trainable_parameters": "graph_delay_weights",
+    "uses_native_core": true
+  },
+  {
+    "architecture": "conditional_residual_sampler",
+    "benchmark_evidence": "synthetic claim evidence",
+    "class_name": "ConditionalFlowDistributionHead",
+    "experimental_status": "native_deep",
+    "implementation_backend": "rust_native",
+    "trainable_parameters": "location_scale_ridge_weights",
+    "uses_native_core": true
+  },
+  {
+    "architecture": "choice_set_utility_softmax",
+    "benchmark_evidence": "synthetic claim evidence",
+    "class_name": "ChoiceSetTransformer",
+    "experimental_status": "native_deep",
+    "implementation_backend": "rust_native",
+    "trainable_parameters": "utility_softmax_temperature",
+    "uses_native_core": true
+  },
+  {
+    "architecture": "conditional_residual_diffusion",
+    "benchmark_evidence": "experimental only",
+    "class_name": "GeoTemporalDiffusionScenarioModel",
+    "experimental_status": "experimental",
+    "implementation_backend": "rust_native",
+    "trainable_parameters": "scenario_noise_graph_diffusion",
+    "uses_native_core": true
+  },
+  {
+    "architecture": "graph_neural_operator",
+    "benchmark_evidence": "experimental only",
+    "class_name": "GraphNeuralOperator",
+    "experimental_status": "experimental",
+    "implementation_backend": "rust_native",
+    "trainable_parameters": "field_smoothing_operator_weights",
+    "uses_native_core": true
+  }
+]

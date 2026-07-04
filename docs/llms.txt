@@ -30,6 +30,10 @@ Use this directory as the navigation map for the user-facing docs site.
 - [CartoBoost Graph Model Guides](./user-guide/graph-models/index.md)
 - [CartoBoost Neural Model Guides](./user-guide/neural-models/index.md)
 - [Deep model guides](./user-guide/deep-models.md)
+- [Deep model capability table](./reference/model-capabilities.md)
+- [Deep claim benchmark report](./benchmarks/deep-claims.md)
+- Deep claim benchmark artifact: `./assets/deep_claim_benchmarks/results.json`
+- Model capability artifact: `./assets/capabilities/model_capabilities.json`
 - [Shared representation primitives](./user-guide/deep-models.md)
 - [Retrieval-augmented forecasting](./user-guide/deep-models.md)
 - [Optional foundation model adapters](./user-guide/deep-models.md)
@@ -55,6 +59,10 @@ Use this directory as the navigation map for the user-facing docs site.
 - [Benchmarks](./benchmarks/index.md)
 - [Benchmark methodology and geo manifest contract](./benchmarks/methodology.md)
 - [NYC Taxi Path C claim gates](./benchmarks/nyc-taxi-path-c.md)
+- Deep claim benchmark gate: `../scripts/check_deep_claim_gates.py`
+- Deep claim benchmark harness: `../scripts/run_deep_claim_benchmarks.py`
+- Capability status gate: `../scripts/check_capability_status.py`
+- Capability table generator: `../scripts/generate_capability_table.py`
 - Release gate audit: `../scripts/check_release_gates.py`
 - Public API contract audit: `../scripts/check_public_api_contract.py`
 - Artifact compatibility audit: `../scripts/check_artifact_compatibility.py`

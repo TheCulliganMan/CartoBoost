@@ -1,6 +1,6 @@
 [package]
 name = "cartoboost-geo-core"
-version = "0.2.40"
+version = "0.2.41"
 edition.workspace = true
 license.workspace = true
 description = "Typed geo evaluation containers and leakage-safe split manifests for CartoBoost"

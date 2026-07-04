@@ -3,6 +3,7 @@
 from . import causal, experimental, graph, models, plotting, prob, representation
 from . import deep as deep
 from ._native import GraphSageEncoder, HeteroGraphSageEncoder, HinSageEncoder, Node2VecEncoder
+from .capabilities import capability_table, validate_capability_table
 from .classifier import CartoBoostClassifier
 from .evaluation import (
     environmental_blocked_cv,
@@ -221,10 +222,12 @@ from .utilities import (
     tsb_forecast,
 )
 
-__version__ = "0.2.40"
+__version__ = "0.2.41"
 
 __all__ = [
     "ArtifactFallback",
+    "capability_table",
+    "validate_capability_table",
     "CoordinateMatrix",
     "GeoSpatialWeights",
     "GraphSageEncoder",

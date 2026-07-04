@@ -60,6 +60,29 @@ These guides are for Python developers and data scientists choosing a model
 surface. Start with the page that matches the unit being modeled, then validate
 against a simpler baseline under the same split.
 
+## Evidence Status
+
+| Model surface | Architecture | Evidence label |
+| --- | --- | --- |
+| `DirectionalPairForecaster(architecture="pair_embedding_mlp")` | `pair_embedding_mlp` | synthetic claim evidence |
+| `TemporalSSMForecaster` | `selective_ssm_lite` | synthetic claim evidence |
+| `InvertedTemporalTransformer` | `inverted_transformer` | synthetic claim evidence |
+| `PropagationDelayGraphForecaster` | `delay_aware_graph_transformer` | synthetic claim evidence |
+| `RetrievalAugmentedForecaster` | `retrieval_augmented_forecaster` | synthetic claim evidence |
+| `ConditionalFlowDistributionHead` | `conditional_residual_sampler` | synthetic claim evidence |
+| `ChoiceSetTransformer` | `choice_set_utility_softmax` | synthetic claim evidence |
+| `EntityEmbedding`, `PairEmbedding`, `SpatioTemporalAdaptiveEmbedding` | deterministic embedding contracts | API contract only |
+| `ResponseCurveModel`, `EventOutcomeModel`, `ServiceTimeResidualModel`, `ConstrainedDecisionOptimizer` | native utility/residual heads | API contract only |
+| `GeoTemporalDiffusionScenarioModel` | `conditional_residual_diffusion` | experimental only |
+| `GraphNeuralOperator` | `graph_neural_operator` | experimental only |
+
+The generated capability table is maintained at
+`docs/reference/model-capabilities.md`, with the machine-readable artifact at
+`docs/assets/capabilities/model_capabilities.json`. Docs CI should run
+`PYTHONPATH=python python scripts/check_capability_status.py` so exported model
+classes cannot ship without architecture, backend, parameter, native-core,
+evidence, and maturity status.
+
 ## Choose A Guide
 
 | Need | Guide |
@@ -98,9 +121,11 @@ representation results unless the artifact backend says that accelerator was
 selected.
 
 `TemporalSSMForecaster` and `SelectiveStateSpaceBlock` expose the selective
-state-space backbone under `architecture="selective_ssm"`.
-This is a deterministic CPU recurrence with one public architecture name;
-accelerator kernels should attach to the same surface later.
+state-space-lite backbone under `architecture="selective_ssm_lite"`. This is
+not a full Mamba implementation. It uses a deterministic selective recurrence
+plus encoded-state, horizon-specific ridge decoders fitted with a rolling-origin
+squared-error objective. Accelerator kernels should attach to the same surface
+later.
 Runtime scaling reports cover lookbacks 64, 128, 256, 512, and 1024, and
 artifacts record save/load parity.
 
@@ -118,8 +143,10 @@ backend contract reserving CUDA, ROCm, and MLX accelerator targets. The current
 verified implementation selects CPU and raises clearly if an accelerator is
 requested before native kernels are available.
 
-`ConditionalFlowDistributionHead` models joint residual uncertainty instead of
-only independent quantile bands. Fit it on the hidden state emitted by a deep
+`ConditionalFlowDistributionHead` reports
+`architecture="conditional_residual_sampler"` because the current native math is
+a conditional location/scale residual sampler, not an invertible normalizing
+flow. Fit it on the hidden state emitted by a deep
 forecaster and the matching residual vector; pass optional horizon embeddings,
 entity or pair embeddings, and graph context when those features are part of
 the upstream model state. Prediction returns samples, marginal quantiles, joint
@@ -142,10 +169,11 @@ or event-intensity-to-response maps. It is marked
 `capability_tier="advanced_experimental"` until real-data benchmark evidence is
 available.
 
-`ChoiceSetTransformer` models candidate competition within decision groups
-instead of scoring each candidate independently. Candidate value, candidate
-features, context features, optional entity or pair embeddings, and existing
-utility/probability fields feed a native utility head. The report includes
+`ChoiceSetTransformer` reports `architecture="choice_set_utility_softmax"`.
+It models candidate competition within decision groups through a native utility
+softmax, not candidate-candidate attention. Candidate value, candidate features,
+context features, optional entity or pair embeddings, and existing
+utility/probability fields feed the utility head. The report includes
 choice probabilities, nested probabilities when `nest_id` is present,
 counterfactual best candidates by decision, and Brier/ECE calibration when
 binary `chosen` labels are supplied.
@@ -177,6 +205,18 @@ compiled in. On Linux or WSL builds with ROCm support compiled in and a usable
 HIP device present, `backend="rocm"` is advertised for the same verified shared
 kernels. On Windows or Linux builds with the CUDA driver and NVRTC available,
 `backend="cuda"` is advertised for the same verified shared kernels.
+
+## Rust-Native Migration Priorities
+
+Only move Python/NumPy deep components into Rust when benchmark evidence shows
+the port changes runtime, memory, or reliability enough to matter. Current
+priority order is:
+
+1. `PairEmbedding` / `EntityEmbedding` ID maps and transforms.
+2. `SpatioTemporalAdaptiveEmbedding`.
+3. `HistoricalAnalogRetriever` exact KNN.
+4. `SelectiveStateSpaceBlock`.
+5. `MultiViewSpatialAttention`.
 
 ## Input Validation
 

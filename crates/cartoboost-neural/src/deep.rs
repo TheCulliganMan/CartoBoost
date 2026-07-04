@@ -1464,7 +1464,11 @@ pub fn choice_set_transformer_report(
     );
     metadata.insert(
         "architecture".to_string(),
-        "choice_set_transformer".to_string(),
+        "choice_set_utility_softmax".to_string(),
+    );
+    metadata.insert(
+        "candidate_candidate_attention".to_string(),
+        "false".to_string(),
     );
     metadata.insert("utility_head".to_string(), "UtilityNet".to_string());
     metadata.insert("nested_head".to_string(), "NestedChoiceHead".to_string());

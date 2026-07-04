@@ -33,6 +33,7 @@ runtime, and memory before results can be promoted as benchmark evidence.
 | [NYC Taxi Path C Claims](nyc-taxi-path-c.md) | Claim-based real TLC gates for generic geo-temporal behavior. | Directional, temporal, known-future, spatial-transfer, and residual-correction falsifier rows. |
 | [Forecasting Tool Benchmark](forecasting.md) | Real taxi lane demand, synthetic taxi-shaped forecasting, M4 sample, M5 full-roster sample, and M5/M6 full-run protocols. | RMSE/WAPE tables, M5/M6 model rosters, run commands, horizon plot, forecast-line plot. |
 | [Model Benchmark Suite](model-suite.md) | Public tabular regression and graph diagnostics. | CartoBoost versus external baselines, validation-search selections, full RMSE/MAE/R2/WAPE tables. |
+| [Deep Claim Benchmarks](deep-claims.md) | Synthetic mechanism checks for deep model claims. | Seven gate rows, exact command, and JSON artifact. |
 | [Taxi Zone Acceptance](taxi-zone.md) | Deterministic taxi-lane feature acceptance. | Lane heatmap, hour profile, route midpoint geometry. |
 | [Neural Embedding Benchmark](neural-embedding-benchmark-latest.md) | Synthetic repeated-ID/cold-ID diagnostic. | Scenario table showing random/tail gains and cold-origin failure. |
 
@@ -64,6 +65,7 @@ runtime, and memory before results can be promoted as benchmark evidence.
 | Model diagnostic suite aggregate JSON | `docs/assets/model_benchmarks_public/results_aggregate.json` |
 | Model diagnostic suite report | `docs/assets/model_benchmarks_public/results.md` |
 | Lane acceptance JSON | `docs/assets/lane_level_tests/acceptance_metrics.json` |
+| Deep claim benchmark JSON | `docs/assets/deep_claim_benchmarks/results.json` |
 
 ## v0.2 Release Gate Harness
 

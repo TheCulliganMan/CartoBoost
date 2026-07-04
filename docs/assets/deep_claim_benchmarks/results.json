@@ -1,0 +1,53 @@
+{
+  "all_passed": true,
+  "claims": {
+    "choice_set_utility_softmax": {
+      "architecture": "choice_set_utility_softmax",
+      "baseline_metric": 0.6931471805599453,
+      "claim": "choice set model beats independent candidate scoring when candidates compete",
+      "model_metric": 0.022233890767429473,
+      "passed": true
+    },
+    "conditional_residual_sampler": {
+      "architecture": "conditional_residual_sampler",
+      "baseline_metric": 0.2693891443236503,
+      "claim": "flow head improves calibration or sharpness over quantile/Gaussian/conformal baseline",
+      "model_metric": 0.45078267734795086,
+      "passed": true
+    },
+    "delay_aware_graph": {
+      "claim": "delay-aware graph beats reversed-edge/no-delay graph",
+      "model_metric": 0.48644581690559036,
+      "no_delay_metric": 0.49100056405105974,
+      "passed": true,
+      "reversed_edge_metric": 0.5452563746497907
+    },
+    "inverted_transformer": {
+      "baseline_metric": 1.4612005470891405,
+      "claim": "inverted transformer beats independent panel baseline",
+      "model_metric": 0.507958593925773,
+      "passed": true
+    },
+    "pair_embedding_mlp": {
+      "baseline_metric": 22.372102947555817,
+      "claim": "pair_embedding_mlp beats shrinkage on nonlinear pair task",
+      "model_metric": 0.5260106988911168,
+      "passed": true
+    },
+    "retrieval_augmented": {
+      "baseline_metric": 7.44495319174972,
+      "claim": "retrieval beats no-retrieval on rare-pattern task",
+      "model_metric": 0.5226731113475332,
+      "passed": true
+    },
+    "selective_ssm_lite": {
+      "baseline_metric": 0.8713463093411957,
+      "claim": "SSM beats trend extrapolation on long-memory task",
+      "model_metric": 0.5037468281897375,
+      "passed": true,
+      "temporal_conv_baseline_metric": 0.6631476460149411
+    }
+  },
+  "command": "PYTHONPATH=python python scripts/run_deep_claim_benchmarks.py --output docs/assets/deep_claim_benchmarks/results.json",
+  "data": "deterministic synthetic fixtures"
+}

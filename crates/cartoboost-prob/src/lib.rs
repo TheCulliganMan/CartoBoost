@@ -284,7 +284,11 @@ impl ConditionalFlowDistributionHead {
             .sqrt()
             .max(1.0e-9);
         let mut metadata = BTreeMap::new();
-        metadata.insert("architecture".to_string(), "conditional_flow".to_string());
+        metadata.insert(
+            "architecture".to_string(),
+            "conditional_residual_sampler".to_string(),
+        );
+        metadata.insert("invertible_flow".to_string(), "false".to_string());
         metadata.insert("sample_count".to_string(), sample_count.to_string());
         metadata.insert(
             "quantiles".to_string(),

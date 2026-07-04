@@ -499,7 +499,7 @@ Selective state-space:
 | Entry point | Notes |
 | --- | --- |
 | `cartoboost.deep.SelectiveStateSpaceBlock` | CPU deterministic selective state-space inspired recurrence with gate, delta, input, output, state decay, and direct terms. |
-| `cartoboost.deep.TemporalSSMForecaster` | Entity-panel forecaster using `architecture="selective_ssm"`, runtime scaling reports, and save/load parity. |
+| `cartoboost.deep.TemporalSSMForecaster` | Entity-panel forecaster using `architecture="selective_ssm_lite"`, encoded-state horizon decoders, runtime scaling reports, and save/load parity. |
 | `cartoboost.deep.EntityTemporalSSM` / `PairTemporalSSM` / `GraphTemporalSSM` | First-cut aliases for the same selective SSM backbone while specialized heads are built out. |
 
 Inverted temporal transformer:
