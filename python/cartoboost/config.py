@@ -16,6 +16,7 @@ class Backend(ChoiceStrEnum):
     CUDA = "cuda"
     ROCM = "rocm"
     METAL = "metal"
+    MLX = "mlx"
 
 
 class FallbackMode(ChoiceStrEnum):
@@ -108,6 +109,7 @@ class GraphBackbone(ChoiceStrEnum):
     DCRNN = "dcrnn"
     GRAPH_WAVENET = "graph_wavenet"
     TEMPORAL_GRAPH_ATTENTION = "temporal_graph_attention"
+    DELAY_AWARE_GRAPH_TRANSFORMER = "delay_aware_graph_transformer"
 
 
 class OverlayKernel(ChoiceStrEnum):

@@ -10,8 +10,9 @@
 use cartoboost_geo_st::{available_compute_backends, select_compute_backend};
 use cartoboost_geo_st::{
     graph_metrics, synthetic_graph_diffusion_frame, traffic_style_fixture_frame, CsrAdjacency,
-    DcrnnConfig, DcrnnForecaster, GraphTemporalFrame, GraphWaveNetConfig, GraphWaveNetForecaster,
-    STAEformerConfig, STAEformerForecaster,
+    DcrnnConfig, DcrnnForecaster, DelayAwareGraphConfig, DelayAwareGraphTransformer,
+    GraphTemporalFrame, GraphWaveNetConfig, GraphWaveNetForecaster, STAEformerConfig,
+    STAEformerForecaster,
 };
 
 #[test]
@@ -172,6 +173,74 @@ fn graph_wavenet_fits_predicts_scores_and_roundtrips() {
         loaded.predict(frame.horizon).unwrap().len(),
         prediction.len()
     );
+}
+
+#[test]
+fn delay_aware_graph_transformer_beats_reversed_and_no_delay() {
+    let mut target = vec![vec![0.0; 3]; 90];
+    for step in 0..90 {
+        target[step][0] = (step as f64 / 4.0).sin() + 0.02 * step as f64;
+        if step >= 2 {
+            target[step][1] = 0.35 * target[step - 1][1] + 0.9 * target[step - 2][0];
+        }
+        if step >= 3 {
+            target[step][2] = 0.25 * target[step - 1][2] + 0.7 * target[step - 1][1];
+        }
+    }
+    let timestamps = (0..86).collect::<Vec<_>>();
+    let train_target = target[..86].to_vec();
+    let actual = target[86..90].to_vec();
+    let forward_adjacency =
+        CsrAdjacency::new(vec![0, 1, 2, 2], vec![1, 2], vec![1.0, 1.0], 3).unwrap();
+    let reverse_adjacency =
+        CsrAdjacency::new(vec![0, 0, 1, 2], vec![0, 1], vec![1.0, 1.0], 3).unwrap();
+    let forward = GraphTemporalFrame::new(
+        vec!["pickup".into(), "midway".into(), "dropoff".into()],
+        timestamps.clone(),
+        train_target.clone(),
+        None,
+        forward_adjacency,
+        4,
+        "hourly".into(),
+    )
+    .unwrap();
+    let reverse = GraphTemporalFrame::new(
+        forward.node_ids.clone(),
+        timestamps,
+        train_target,
+        None,
+        reverse_adjacency,
+        4,
+        "hourly".into(),
+    )
+    .unwrap();
+
+    let config = DelayAwareGraphConfig {
+        horizon: 4,
+        edge_delay_prior: vec![2, 1],
+        ..DelayAwareGraphConfig::default()
+    };
+    let mut model = DelayAwareGraphTransformer::new(config.clone()).unwrap();
+    let mut reversed = DelayAwareGraphTransformer::new(config).unwrap();
+    let mut no_delay = DelayAwareGraphTransformer::new(DelayAwareGraphConfig {
+        horizon: 4,
+        edge_delay_prior: vec![1, 1],
+        ..DelayAwareGraphConfig::default()
+    })
+    .unwrap();
+    model.fit(&forward).unwrap();
+    reversed.fit(&reverse).unwrap();
+    no_delay.fit(&forward).unwrap();
+
+    assert!(model.score(&actual).unwrap() < reversed.score(&actual).unwrap());
+    assert!(model.score(&actual).unwrap() < no_delay.score(&actual).unwrap());
+    assert_eq!(
+        model.edge_delay_sensitivity().delay_counts,
+        vec![(1, 1), (2, 1)]
+    );
+    let artifact = model.to_json_string().unwrap();
+    let loaded = DelayAwareGraphTransformer::from_json_string(&artifact).unwrap();
+    assert_eq!(loaded.predict(4).unwrap(), model.predict(4).unwrap());
 }
 
 #[test]

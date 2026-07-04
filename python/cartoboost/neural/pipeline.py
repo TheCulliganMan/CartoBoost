@@ -88,6 +88,8 @@ class NeuralEmbeddingRegressor:
             sample_weight = np.asarray(sample_weight, dtype=np.float64)
             if sample_weight.shape != (target.shape[0],):
                 raise ValueError("sample_weight length must match y")
+            if not np.all(np.isfinite(sample_weight)) or np.any(sample_weight < 0.0):
+                raise ValueError("sample_weight must contain only finite non-negative values")
 
         fit_kwargs = dict(fit_kwargs)
         feature_schema = fit_kwargs.pop("feature_schema", None)
@@ -527,6 +529,8 @@ def _to_2d_float_array(values: Any) -> np.ndarray:
         raise ValueError("X must not be empty")
     if array.shape[1] == 0:
         raise ValueError("X must include at least one feature")
+    if not np.all(np.isfinite(array)):
+        raise ValueError("X must contain only finite values")
     return np.ascontiguousarray(array, dtype=np.float64)
 
 
@@ -536,6 +540,8 @@ def _to_1d_float_array(values: Any) -> np.ndarray:
         raise ValueError("y must be a 1D numeric array")
     if array.shape[0] == 0:
         raise ValueError("y must not be empty")
+    if not np.all(np.isfinite(array)):
+        raise ValueError("y must contain only finite values")
     return np.ascontiguousarray(array, dtype=np.float64)
 
 

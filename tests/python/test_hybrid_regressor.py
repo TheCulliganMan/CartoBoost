@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 from cartoboost import (
     CartoBoostRegressor,
     NeuralEmbeddingRegressor,
@@ -71,6 +72,28 @@ def test_neural_embedding_regressor_train_predict_with_ids_array():
     assert transformed.shape == (rows, x.shape[1] + regressor.dim)
     assert train_mae < 0.8
     assert regressor.timings["final_fit_ms"] > 0.0
+
+
+def test_neural_embedding_regressor_rejects_non_finite_numeric_inputs():
+    model = NeuralEmbeddingRegressor(
+        dim=2,
+        base_model_kwargs={"n_estimators": 2, "max_depth": 1, "min_samples_leaf": 1},
+    )
+    ids = np.asarray([1, 2, 3], dtype=np.uint64)
+
+    with pytest.raises(ValueError, match="X must contain only finite values"):
+        model.fit([[0.0], [np.nan], [2.0]], [0.0, 1.0, 2.0], ids=ids)
+
+    with pytest.raises(ValueError, match="y must contain only finite values"):
+        model.fit([[0.0], [1.0], [2.0]], [0.0, np.inf, 2.0], ids=ids)
+
+    with pytest.raises(ValueError, match="sample_weight"):
+        model.fit(
+            [[0.0], [1.0], [2.0]],
+            [0.0, 1.0, 2.0],
+            ids=ids,
+            sample_weight=[1.0, np.nan, 1.0],
+        )
 
 
 def test_neural_embedding_regressor_with_id_column():

@@ -170,6 +170,17 @@ model.fit(X_train, y_train, sample_weight=weights)
 
 Weights affect split scoring and leaf values during training.
 
+## Missing Numeric Values
+
+CartoBoost's supervised estimators require finite numeric features, targets,
+coordinates, sparse-set weights, and sample weights. They do not silently
+impute numeric `NaN`, `None`, `pd.NA`, `inf`, or `-inf` values. Clean or impute
+numeric columns before calling `fit`, `predict`, or explanation helpers.
+
+Categorical columns are different: pandas categorical, string, or object
+columns can carry missing category sentinels, which are encoded as a stable
+missing-category token during fit and reused from the saved artifact.
+
 ## Optuna Tuning
 
 Optuna tuning works through the same estimator contract. Install the optional

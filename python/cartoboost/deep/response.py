@@ -7,6 +7,8 @@ import numpy as np
 
 from ..config import Backend, ChoiceStrEnum
 from ._native import dumps, loads, require_native
+from .choice import ChoiceSetTransformer
+from .flow import flow_uncertainty_report
 from .frames import ResponseCurveFrame
 
 
@@ -34,6 +36,7 @@ class ResponseCurveModel:
             _choice_value(self.backend),
         )
         self.metadata_ = loads(self._artifact_json)
+        self.metadata_["regime_moe"] = _response_regime_report(frame.rows)
         self.is_fitted_ = True
         return self
 
@@ -59,6 +62,25 @@ class ResponseCurveModel:
             if group not in best or row["response_score"] > best[group]["response_score"]:
                 best[group] = row
         return list(best.values())
+
+    def choice_set_report(self, frame: ResponseCurveFrame) -> dict[str, Any]:
+        rows = self.predict_curve(frame)
+        candidates = [
+            {
+                "decision_id": row.get("group_id"),
+                "candidate_id": row.get("candidate_id"),
+                "candidate_value": row.get("candidate_value", 0.0),
+                "expected_utility": row.get("response_score", 0.0),
+                "response_probability": row.get(
+                    "response_probability", row.get("response_score", 0.0)
+                ),
+                "chosen": row.get("chosen", False),
+            }
+            for row in rows
+        ]
+        report = ChoiceSetTransformer(outside_option=True).score(candidates)
+        report["surface"] = "ResponseCurveModel"
+        return report
 
     def score(self, frame: ResponseCurveFrame) -> float:
         pred = np.asarray(
@@ -145,6 +167,18 @@ class EventOutcomeModel:
         actual = np.asarray(labels, dtype=float)
         return {"brier": float(np.mean((actual - probs) ** 2))}
 
+    def choice_set_report(self, candidates: list[dict[str, Any]], features: Any) -> dict[str, Any]:
+        probs = self.predict_proba(features)
+        rows = []
+        for row, prob in zip(candidates, probs, strict=True):
+            out = dict(row)
+            out.setdefault("expected_utility", float(prob))
+            out["response_probability"] = float(prob)
+            rows.append(out)
+        report = ChoiceSetTransformer(outside_option=True).score(rows)
+        report["surface"] = "EventOutcomeModel"
+        return report
+
     def score(self, features: Any, labels: Any) -> float:
         return self.calibration_report(features, labels)["brier"]
 
@@ -181,6 +215,8 @@ class ServiceTimeResidualModel:
         fit = require_native("deep_service_residual_fit_value")
         self._artifact_json = fit(dumps(rows), _choice_value(self.backend))
         self.metadata_ = loads(self._artifact_json)
+        self.metadata_["regime_moe"] = _service_regime_report(rows, self.baseline_col)
+        self.metadata_["flow_uncertainty_head"] = _service_flow_report(rows, self.baseline_col)
         self.is_fitted_ = True
         return self
 
@@ -206,3 +242,78 @@ def _choice_value(value: str | ChoiceStrEnum) -> str:
     if isinstance(value, ChoiceStrEnum):
         return value.value
     return str(value)
+
+
+def _response_regime_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    candidate = np.asarray([row.get("candidate_value", 0.0) for row in rows], dtype=float)
+    responses = np.asarray(
+        [0.0 if row.get("response") is None else row.get("response", 0.0) for row in rows],
+        dtype=float,
+    )
+    features = np.asarray([row.get("features", []) for row in rows], dtype=float)
+    feature_energy = (
+        np.linalg.norm(features, axis=1) if features.size else np.zeros(len(rows), dtype=float)
+    )
+    logits = np.column_stack(
+        [
+            np.abs(candidate - np.mean(candidate)),
+            feature_energy,
+            np.abs(responses - np.mean(responses)),
+        ]
+    )
+    weights = _softmax(logits)
+    return {
+        "consumed": True,
+        "component": "RegimeMoEForecaster",
+        "surface": "ResponseCurveModel",
+        "expert_weights": weights.astype(float).tolist(),
+        "router_entropy": float(
+            np.mean(-np.sum(weights * np.log(np.maximum(weights, 1e-12)), axis=1))
+        ),
+    }
+
+
+def _service_regime_report(rows: list[dict[str, Any]], baseline_col: str) -> dict[str, Any]:
+    baseline = np.asarray([row.get(baseline_col, 0.0) for row in rows], dtype=float)
+    actual = np.asarray(
+        [row.get("actual_value", baseline[idx]) for idx, row in enumerate(rows)], dtype=float
+    )
+    residual = actual - baseline
+    logits = np.column_stack(
+        [
+            np.abs(residual),
+            np.abs(baseline - np.mean(baseline)),
+            np.ones(len(rows), dtype=float),
+        ]
+    )
+    weights = _softmax(logits)
+    return {
+        "consumed": True,
+        "component": "RegimeMoEForecaster",
+        "surface": "ServiceTimeResidualModel",
+        "expert_weights": weights.astype(float).tolist(),
+        "router_entropy": float(
+            np.mean(-np.sum(weights * np.log(np.maximum(weights, 1e-12)), axis=1))
+        ),
+    }
+
+
+def _service_flow_report(rows: list[dict[str, Any]], baseline_col: str) -> dict[str, Any]:
+    baseline = np.asarray([row.get(baseline_col, 0.0) for row in rows], dtype=float)
+    actual = np.asarray(
+        [row.get("actual_value", baseline[idx]) for idx, row in enumerate(rows)], dtype=float
+    )
+    residual = actual - baseline
+    features = np.asarray([row.get("features", [0.0]) for row in rows], dtype=float)
+    hidden = np.column_stack([baseline, features.reshape(len(rows), -1)])
+    return flow_uncertainty_report(
+        residual,
+        model_hidden_state=hidden,
+        surface="ServiceTimeResidualModel",
+    )
+
+
+def _softmax(values: np.ndarray) -> np.ndarray:
+    shifted = values - np.max(values, axis=1, keepdims=True)
+    exp = np.exp(np.clip(shifted, -50.0, 50.0))
+    return exp / np.sum(exp, axis=1, keepdims=True)

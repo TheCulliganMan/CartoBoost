@@ -91,6 +91,37 @@ type WasmModule = {
   deepDirectionalPairPredict?: (rows: unknown) => unknown;
   deepServiceResidualFit?: (rows: unknown, backend?: string) => unknown;
   deepServiceResidualPredict?: (artifact: unknown, rows: unknown) => unknown;
+  deepTemporalEntityFit?: (y: unknown, lookback: number, horizon: number) => unknown;
+  deepTemporalEntityPredict?: (artifact: unknown, horizon: number) => unknown;
+  deepConditionalFlowFit?: (
+    hidden: unknown,
+    residuals: Float64Array,
+    quantiles: Float64Array,
+    sampleCount: number,
+  ) => unknown;
+  deepConditionalFlowPredict?: (artifact: unknown, hidden: unknown, actual?: Float64Array) => unknown;
+  deepDiffusionScenarioGenerate?: (
+    pointForecast: unknown,
+    edges: unknown,
+    scenarioCount: number,
+    diffusionSteps: number,
+    shockScale: number,
+  ) => unknown;
+  deepGraphNeuralOperatorPredict?: (
+    fieldValues: unknown,
+    coordinates: unknown,
+    edges: unknown,
+    exogenousFields: unknown,
+    smoothing: number,
+    coordinateScale: number,
+  ) => unknown;
+  deepNeuralOperatorSyntheticBenchmark?: () => unknown;
+  deepChoiceSetTransformerReport?: (
+    candidates: unknown,
+    temperature: number,
+    monotoneCandidateValue?: string,
+  ) => unknown;
+  deepRegimeMoeReport?: (features: unknown, target: Float64Array) => unknown;
   deepConstrainedDecisionSelect?: (
     candidates: unknown,
     objective: string,
@@ -581,6 +612,107 @@ function runDeepModelWasmExample(wasmModule: WasmModule, model: string): unknown
       }
       return wasmModule.runGraphForecast(deepGraphForecastRequest());
     }
+    case 'DelayAwareGraphTransformer':
+    case 'PropagationDelayGraphForecaster':
+    case 'DynamicAdjacencyTransformer': {
+      if (!wasmModule.runGraphForecast) {
+        throw new Error('CartoBoost graph forecast Wasm export is not available from this bundle.');
+      }
+      return wasmModule.runGraphForecast(deepGraphForecastRequest());
+    }
+    case 'TemporalSSMForecaster':
+    case 'SelectiveStateSpaceBlock':
+    case 'EntityTemporalSSM':
+    case 'PairTemporalSSM':
+    case 'GraphTemporalSSM':
+    case 'TemporalEntityTransformer':
+    case 'InvertedTemporalTransformer':
+    case 'InvertedEntityTransformer': {
+      if (!wasmModule.deepTemporalEntityFit || !wasmModule.deepTemporalEntityPredict) {
+        throw new Error('CartoBoost temporal entity Wasm exports are not available from this bundle.');
+      }
+      const panel = deepTemporalPanel();
+      const artifact = wasmModule.deepTemporalEntityFit(panel, 4, 2);
+      return wasmModule.deepTemporalEntityPredict(artifact, 2);
+    }
+    case 'ConditionalFlowDistributionHead':
+    case 'JointHorizonFlowHead':
+    case 'ResidualFlowCalibrator': {
+      if (!wasmModule.deepConditionalFlowFit || !wasmModule.deepConditionalFlowPredict) {
+        throw new Error('CartoBoost conditional flow Wasm exports are not available from this bundle.');
+      }
+      const hidden = deepFlowHidden();
+      const artifact = wasmModule.deepConditionalFlowFit(
+        hidden.slice(0, 6),
+        new Float64Array([0.3, -0.2, 0.5, 0.1, -0.4, 0.2]),
+        new Float64Array([0.05, 0.5, 0.95]),
+        12,
+      );
+      return wasmModule.deepConditionalFlowPredict(artifact, hidden.slice(6), new Float64Array([0.15, -0.05]));
+    }
+    case 'GeoTemporalDiffusionScenarioModel':
+    case 'FlowScenarioGenerator':
+    case 'ConditionalResidualDiffusion': {
+      if (!wasmModule.deepDiffusionScenarioGenerate) {
+        throw new Error('CartoBoost diffusion scenario Wasm export is not available from this bundle.');
+      }
+      return wasmModule.deepDiffusionScenarioGenerate(
+        [
+          [42, 35, 18],
+          [44, 36, 19],
+          [51, 40, 24],
+        ],
+        deepSpatialEdges(),
+        8,
+        2,
+        0.6,
+      );
+    }
+    case 'GraphNeuralOperator':
+    case 'FourierGeoOperator':
+    case 'SpatioTemporalOperator': {
+      if (!wasmModule.deepGraphNeuralOperatorPredict) {
+        throw new Error('CartoBoost graph neural operator Wasm export is not available from this bundle.');
+      }
+      return wasmModule.deepGraphNeuralOperatorPredict(
+        [
+          [42, 35, 18],
+          [44, 36, 19],
+          [51, 40, 24],
+        ],
+        [
+          [0, 0],
+          [0.5, 0.4],
+          [1, 0.1],
+        ],
+        deepSpatialEdges(),
+        [
+          [0.1, 0.2, 0.0],
+          [0.1, 0.3, 0.1],
+          [0.2, 0.2, 0.1],
+        ],
+        0.25,
+        0.1,
+      );
+    }
+    case 'ChoiceSetTransformer':
+    case 'UtilityNet':
+    case 'NestedChoiceHead':
+    case 'CounterfactualCandidateScorer': {
+      if (!wasmModule.deepChoiceSetTransformerReport) {
+        throw new Error('CartoBoost choice-set Wasm export is not available from this bundle.');
+      }
+      return wasmModule.deepChoiceSetTransformerReport(deepDecisionCandidates(), 0.85, 'decreasing');
+    }
+    case 'RegimeMoEForecaster':
+    case 'GeoTemporalMixtureOfExperts':
+    case 'PairRegimeRouter':
+    case 'EntityRegimeRouter': {
+      if (!wasmModule.deepRegimeMoeReport) {
+        throw new Error('CartoBoost regime MoE Wasm export is not available from this bundle.');
+      }
+      return wasmModule.deepRegimeMoeReport(deepRegimeFeatures(), new Float64Array([18, 21, 48, 51, 24, 55]));
+    }
     case 'ConstrainedDecisionOptimizer': {
       if (!wasmModule.deepConstrainedDecisionSelect) {
         throw new Error('CartoBoost constrained decision Wasm export is not available from this bundle.');
@@ -596,6 +728,49 @@ function runDeepModelWasmExample(wasmModule: WasmModule, model: string): unknown
     default:
       throw new Error(`Unknown deep model example: ${model}`);
   }
+}
+
+function deepTemporalPanel() {
+  return [
+    [42, 35, 18],
+    [44, 36, 19],
+    [51, 40, 24],
+    [58, 46, 31],
+    [55, 45, 34],
+    [49, 43, 30],
+  ];
+}
+
+function deepFlowHidden() {
+  return [
+    [1.2, 8, 0.35],
+    [2.4, 9, 0.44],
+    [4.8, 17, 0.78],
+    [5.2, 18, 0.82],
+    [1.6, 11, 0.38],
+    [6.1, 19, 0.88],
+    [3.2, 16, 0.65],
+    [5.8, 20, 0.9],
+  ];
+}
+
+function deepSpatialEdges() {
+  return [
+    {source: 0, target: 1, weight: 0.7},
+    {source: 0, target: 2, weight: 0.3},
+    {source: 1, target: 2, weight: 1.0},
+  ];
+}
+
+function deepRegimeFeatures() {
+  return [
+    [1.8, 8, 0.35],
+    [2.1, 9, 0.42],
+    [12.4, 17, 0.83],
+    [13.1, 18, 0.88],
+    [3.2, 11, 0.51],
+    [14.8, 19, 0.91],
+  ];
 }
 
 function deepDirectionalPairRows() {

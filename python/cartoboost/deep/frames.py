@@ -45,6 +45,8 @@ class EntityPanelFrame:
             y[t_pos[row[timestamp_col]], e_pos[str(row[entity_col])]] = float(row[target_col])
         if np.isnan(y).any():
             raise ValueError("entity panel contains missing timestamp/entity target cells")
+        if not np.isfinite(y).all():
+            raise ValueError("entity panel targets must contain only finite values")
         hist = _panel_covariates(
             rows, timestamps, entities, timestamp_col, entity_col, historical_covariates
         )
@@ -57,6 +59,8 @@ class EntityPanelFrame:
             first = {str(row[entity_col]): row for row in rows}
             for entity, idx in e_pos.items():
                 static[idx] = [float(first[entity][col]) for col in static_covariates]
+            if not np.isfinite(static).all():
+                raise ValueError("static_covariates must contain only finite values")
         return cls(y, timestamps, entities, hist, future, static, freq)
 
 
@@ -79,13 +83,19 @@ class DirectionalPairFrame:
         feature_cols = [*(numeric_covariates or []), *(known_future_covariates or [])]
         rows = []
         for row in _records_from_pandas(df):
+            features = [float(row[col]) for col in feature_cols]
+            if not np.isfinite(features).all():
+                raise ValueError("directional pair features must contain only finite values")
+            target = None if target_value_col is None else float(row[target_value_col])
+            if target is not None and not np.isfinite(target):
+                raise ValueError("directional pair targets must contain only finite values")
             rows.append(
                 {
                     "source_id": str(row[source_col]),
                     "target_id": str(row[target_col]),
                     "timestamp": None if timestamp_col is None else int(row[timestamp_col]),
-                    "features": [float(row[col]) for col in feature_cols],
-                    "target": None if target_value_col is None else float(row[target_value_col]),
+                    "features": features,
+                    "target": target,
                 }
             )
         return cls(rows)
@@ -98,7 +108,9 @@ class GraphTemporalFrame:
     node_ids: list[str]
     edges: list[tuple[int, int]]
     edge_weights: list[float]
+    edge_distances: list[float] | None = None
     node_covariates: np.ndarray | None = None
+    known_future_covariates: np.ndarray | None = None
     static_node_covariates: np.ndarray | None = None
     directed: bool = True
 
@@ -120,11 +132,18 @@ class ResponseCurveFrame:
     ) -> ResponseCurveFrame:
         rows = []
         for idx, row in enumerate(_records_from_pandas(df)):
+            features = [float(row[col]) for col in feature_cols]
+            candidate_value = float(row[candidate_value_col])
+            response = None if response_col is None else float(row[response_col])
+            if not np.isfinite([*features, candidate_value]).all():
+                raise ValueError("response curve features must contain only finite values")
+            if response is not None and not np.isfinite(response):
+                raise ValueError("response curve responses must contain only finite values")
             rows.append(
                 {
-                    "features": [float(row[col]) for col in feature_cols],
-                    "candidate_value": float(row[candidate_value_col]),
-                    "response": None if response_col is None else float(row[response_col]),
+                    "features": features,
+                    "candidate_value": candidate_value,
+                    "response": response,
                     "group_id": None if group_col is None else str(row[group_col]),
                     "candidate_id": str(row[candidate_id_col]) if candidate_id_col else str(idx),
                 }
@@ -149,4 +168,6 @@ def _panel_covariates(
         values[t_pos[row[timestamp_col]], e_pos[str(row[entity_col])]] = [
             float(row[col]) for col in cols
         ]
+    if not np.isfinite(values).all():
+        raise ValueError("panel covariates must contain only finite values")
     return values

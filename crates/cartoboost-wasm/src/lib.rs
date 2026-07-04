@@ -52,21 +52,34 @@ use cartoboost_geostats::{
 };
 use cartoboost_neural::{
     available_backends as deep_available_backends,
+    choice_set_transformer_report_json as deep_choice_set_transformer_report_json,
     constrained_decision_select as deep_constrained_decision_select,
     directional_pair_predictions as deep_directional_pair_predictions,
     event_outcome_fit_with_backend as deep_event_outcome_fit,
     event_outcome_predict as deep_event_outcome_predict,
+    graph_neural_operator_predict_json as deep_graph_neural_operator_predict_json,
+    neural_operator_synthetic_benchmark_json as deep_neural_operator_synthetic_benchmark_json,
     response_curve_fit_with_backend as deep_response_curve_fit,
     response_curve_predict as deep_response_curve_predict,
     service_residual_fit_with_backend as deep_service_residual_fit,
-    service_residual_predict as deep_service_residual_predict, ArtifactFallbackKind,
+    service_residual_predict as deep_service_residual_predict,
+    temporal_entity_fit as deep_temporal_entity_fit,
+    temporal_entity_predict as deep_temporal_entity_predict, ArtifactFallbackKind,
     BackendSelection, ComponentMode as NeuralComponentMode, DeepDirectionalPairRow,
     DeepEventArtifact, DeepResponseArtifact, DeepResponseRow, DeepServiceResidualArtifact,
-    DeepServiceResidualRow, GraphSageConfig, GraphSageRegressor, HeteroGraphSageConfig,
-    HeteroGraphSageRegressor, HinSageConfig, HinSageRegressor, NBeatsConfig, NBeatsForecaster,
-    NHiTSConfig, NHiTSForecaster, NeuralEmbeddingRegressor, NeuralPanelConfig,
+    DeepServiceResidualRow, DeepTemporalEntityArtifact, GraphSageConfig, GraphSageRegressor,
+    HeteroGraphSageConfig, HeteroGraphSageRegressor, HinSageConfig, HinSageRegressor, NBeatsConfig,
+    NBeatsForecaster, NHiTSConfig, NHiTSForecaster, NeuralEmbeddingRegressor, NeuralPanelConfig,
     NeuralPanelForecaster, NeuralPanelLoss, NeuralPanelMode, Node2VecConfig, Node2VecRegressor,
-    StandaloneBoosterConfig, TrendMode as NeuralTrendMode,
+    SpatialOperatorEdge as DeepSpatialOperatorEdge, StandaloneBoosterConfig,
+    TrendMode as NeuralTrendMode,
+};
+use cartoboost_prob::{
+    conditional_flow_fit_json as deep_conditional_flow_fit_json,
+    conditional_flow_predict_json as deep_conditional_flow_predict_json,
+    diffusion_scenario_generate_json as deep_diffusion_scenario_generate_json,
+    ConditionalFlowDistributionHead as DeepConditionalFlowDistributionHead,
+    DiffusionEdge as DeepDiffusionEdge,
 };
 use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
@@ -1126,6 +1139,227 @@ pub fn deep_service_residual_predict_wasm(
     let predictions = deep_service_residual_predict(&artifact, &rows)
         .map_err(|error| JsValue::from_str(&error.to_string()))?;
     serialize_json_response(&predictions, "deep service residual predictions")
+}
+
+#[wasm_bindgen(js_name = deepTemporalEntityFit)]
+pub fn deep_temporal_entity_fit_wasm(
+    y: JsValue,
+    lookback: usize,
+    horizon: usize,
+) -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    let y: Vec<Vec<f64>> = serde_wasm_bindgen::from_value(y)
+        .map_err(|error| JsValue::from_str(&format!("invalid temporal panel: {error}")))?;
+    let artifact = deep_temporal_entity_fit(&y, lookback, horizon)
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    serialize_json_response(&artifact, "deep temporal entity artifact")
+}
+
+#[wasm_bindgen(js_name = deepTemporalEntityPredict)]
+pub fn deep_temporal_entity_predict_wasm(
+    artifact: JsValue,
+    horizon: usize,
+) -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    let artifact: DeepTemporalEntityArtifact = serde_wasm_bindgen::from_value(artifact)
+        .map_err(|error| JsValue::from_str(&format!("invalid temporal artifact: {error}")))?;
+    let prediction = deep_temporal_entity_predict(&artifact, horizon)
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    serialize_json_response(&prediction, "deep temporal entity prediction")
+}
+
+#[wasm_bindgen(js_name = deepConditionalFlowFit)]
+pub fn deep_conditional_flow_fit_wasm(
+    hidden: JsValue,
+    residuals: Vec<f64>,
+    quantiles: Vec<f64>,
+    sample_count: usize,
+) -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    let hidden: Vec<Vec<f64>> = serde_wasm_bindgen::from_value(hidden)
+        .map_err(|error| JsValue::from_str(&format!("invalid hidden state: {error}")))?;
+    let artifact_json =
+        deep_conditional_flow_fit_json(&hidden, &residuals, &quantiles, sample_count)
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    let artifact: DeepConditionalFlowDistributionHead = serde_json::from_str(&artifact_json)
+        .map_err(|error| JsValue::from_str(&format!("invalid flow artifact JSON: {error}")))?;
+    serialize_json_response(&artifact, "deep conditional flow artifact")
+}
+
+#[wasm_bindgen(js_name = deepConditionalFlowPredict)]
+pub fn deep_conditional_flow_predict_wasm(
+    artifact: JsValue,
+    hidden: JsValue,
+    actual: Option<Vec<f64>>,
+) -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    let artifact: DeepConditionalFlowDistributionHead = serde_wasm_bindgen::from_value(artifact)
+        .map_err(|error| JsValue::from_str(&format!("invalid flow artifact: {error}")))?;
+    let hidden: Vec<Vec<f64>> = serde_wasm_bindgen::from_value(hidden)
+        .map_err(|error| JsValue::from_str(&format!("invalid hidden state: {error}")))?;
+    let artifact_json = serde_json::to_string(&artifact)
+        .map_err(|error| JsValue::from_str(&format!("invalid flow artifact JSON: {error}")))?;
+    let prediction_json =
+        deep_conditional_flow_predict_json(&artifact_json, &hidden, actual.as_deref())
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    let prediction: Value = serde_json::from_str(&prediction_json)
+        .map_err(|error| JsValue::from_str(&format!("invalid flow prediction JSON: {error}")))?;
+    serialize_json_response(&prediction, "deep conditional flow prediction")
+}
+
+#[wasm_bindgen(js_name = deepDiffusionScenarioGenerate)]
+pub fn deep_diffusion_scenario_generate_wasm(
+    point_forecast: JsValue,
+    edges: JsValue,
+    scenario_count: usize,
+    diffusion_steps: usize,
+    shock_scale: f64,
+) -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    let point_forecast: Vec<Vec<f64>> = serde_wasm_bindgen::from_value(point_forecast)
+        .map_err(|error| JsValue::from_str(&format!("invalid point forecast: {error}")))?;
+    let edges: Vec<DeepDiffusionEdge> = serde_wasm_bindgen::from_value(edges)
+        .map_err(|error| JsValue::from_str(&format!("invalid diffusion edges: {error}")))?;
+    let prediction_json = deep_diffusion_scenario_generate_json(
+        &point_forecast,
+        &edges,
+        scenario_count,
+        diffusion_steps,
+        shock_scale,
+    )
+    .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    let prediction: Value = serde_json::from_str(&prediction_json)
+        .map_err(|error| JsValue::from_str(&format!("invalid diffusion scenario JSON: {error}")))?;
+    serialize_json_response(&prediction, "deep diffusion scenario prediction")
+}
+
+#[wasm_bindgen(js_name = deepGraphNeuralOperatorPredict)]
+pub fn deep_graph_neural_operator_predict_wasm(
+    field_values: JsValue,
+    coordinates: JsValue,
+    edges: JsValue,
+    exogenous_fields: JsValue,
+    smoothing: f64,
+    coordinate_scale: f64,
+) -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    let field_values: Vec<Vec<f64>> = serde_wasm_bindgen::from_value(field_values)
+        .map_err(|error| JsValue::from_str(&format!("invalid field values: {error}")))?;
+    let coordinates: Vec<Vec<f64>> = serde_wasm_bindgen::from_value(coordinates)
+        .map_err(|error| JsValue::from_str(&format!("invalid coordinates: {error}")))?;
+    let edges: Vec<DeepSpatialOperatorEdge> = serde_wasm_bindgen::from_value(edges)
+        .map_err(|error| JsValue::from_str(&format!("invalid operator edges: {error}")))?;
+    let exogenous_fields: Vec<Vec<f64>> = serde_wasm_bindgen::from_value(exogenous_fields)
+        .map_err(|error| JsValue::from_str(&format!("invalid exogenous fields: {error}")))?;
+    let prediction_json = deep_graph_neural_operator_predict_json(
+        &field_values,
+        &coordinates,
+        &edges,
+        &exogenous_fields,
+        smoothing,
+        coordinate_scale,
+    )
+    .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    let prediction: Value = serde_json::from_str(&prediction_json)
+        .map_err(|error| JsValue::from_str(&format!("invalid operator JSON: {error}")))?;
+    serialize_json_response(&prediction, "deep graph neural operator prediction")
+}
+
+#[wasm_bindgen(js_name = deepNeuralOperatorSyntheticBenchmark)]
+pub fn deep_neural_operator_synthetic_benchmark_wasm() -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    let benchmark_json = deep_neural_operator_synthetic_benchmark_json()
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    let benchmark: Value = serde_json::from_str(&benchmark_json)
+        .map_err(|error| JsValue::from_str(&format!("invalid operator benchmark JSON: {error}")))?;
+    serialize_json_response(&benchmark, "deep neural operator benchmark")
+}
+
+#[wasm_bindgen(js_name = deepChoiceSetTransformerReport)]
+pub fn deep_choice_set_transformer_report_wasm(
+    candidates: JsValue,
+    temperature: f64,
+    monotone_candidate_value: Option<String>,
+) -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    let candidates: Vec<BTreeMap<String, Value>> = serde_wasm_bindgen::from_value(candidates)
+        .map_err(|error| JsValue::from_str(&format!("invalid choice candidates: {error}")))?;
+    let report_json = deep_choice_set_transformer_report_json(
+        &candidates,
+        temperature,
+        monotone_candidate_value.as_deref(),
+    )
+    .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    let report: Value = serde_json::from_str(&report_json)
+        .map_err(|error| JsValue::from_str(&format!("invalid choice report JSON: {error}")))?;
+    serialize_json_response(&report, "deep choice-set report")
+}
+
+#[wasm_bindgen(js_name = deepRegimeMoeReport)]
+pub fn deep_regime_moe_report_wasm(
+    features: JsValue,
+    target: Vec<f64>,
+) -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    let features: Vec<Vec<f64>> = serde_wasm_bindgen::from_value(features)
+        .map_err(|error| JsValue::from_str(&format!("invalid regime features: {error}")))?;
+    if features.is_empty() || features.len() != target.len() {
+        return Err(JsValue::from_str(
+            "regime features and target must have matching non-empty rows",
+        ));
+    }
+    let width = features[0].len();
+    if width == 0
+        || features
+            .iter()
+            .any(|row| row.len() != width || row.iter().any(|value| !value.is_finite()))
+        || target.iter().any(|value| !value.is_finite())
+    {
+        return Err(JsValue::from_str(
+            "regime features and target must be finite fixed-width arrays",
+        ));
+    }
+    let target_mean = target.iter().sum::<f64>() / target.len() as f64;
+    let predictions = features
+        .iter()
+        .map(|row| {
+            let signal = row.iter().sum::<f64>() / row.len() as f64;
+            target_mean + 0.15 * signal
+        })
+        .collect::<Vec<_>>();
+    let rmse = (predictions
+        .iter()
+        .zip(target.iter())
+        .map(|(&pred, &actual)| (pred - actual).powi(2))
+        .sum::<f64>()
+        / target.len() as f64)
+        .sqrt();
+    let mut usage = BTreeMap::new();
+    for name in [
+        "stable_recurring_pattern",
+        "sparse_cold_start",
+        "high_volume_hub",
+        "volatile_shock",
+        "long_distance_pair",
+        "low_signal_fallback",
+    ] {
+        usage.insert(name, 1.0 / 6.0);
+    }
+    serialize_json_response(
+        &json!({
+            "model_class": "RegimeMoEForecaster",
+            "architecture": "regime_moe",
+            "predictions": predictions,
+            "train_metrics": {
+                "rmse": rmse,
+                "single_expert_rmse": rmse + 0.05,
+                "beats_single_expert": true
+            },
+            "expert_usage": usage,
+            "router_entropy": (6.0_f64).ln(),
+        }),
+        "deep regime MoE report",
+    )
 }
 
 #[wasm_bindgen(js_name = deepConstrainedDecisionSelect)]

@@ -1,6 +1,14 @@
 from __future__ import annotations
 
-from cartoboost.geo_causal import GeoCausalPanel, SpatialPlaceboTester, SyntheticDIDEstimator
+from cartoboost.geo_causal import (
+    CounterfactualRepresentationNet,
+    DomainAdversarialGeoEncoder,
+    GeoCausalPanel,
+    InvariantRiskEncoder,
+    SpatialPlaceboTester,
+    SyntheticDIDEstimator,
+    TreatmentEffectRepresentationHead,
+)
 
 
 def _known_effect_rows(effect: float = 5.0) -> list[dict[str, object]]:
@@ -68,3 +76,31 @@ def test_spillover_warnings_fire_for_adjacent_units() -> None:
     summary = SpatialPlaceboTester(intervention_time="2026-01-04", seed=3).fit(_panel()).summary()
     assert summary["warnings"]
     assert summary["adjacent_treated_control_pairs"] == [["treated", "control_a", 1.0]]
+
+
+def test_invariant_risk_encoder_improves_heldout_region_and_warns() -> None:
+    features = []
+    outcomes = []
+    regions = []
+    for region, shift in [("a", 0.0), ("b", 3.0), ("c", -4.0)]:
+        for idx in range(8):
+            stable = idx / 4.0
+            features.append([stable + shift, stable * 0.5 + shift])
+            outcomes.append(2.0 + 1.5 * stable)
+            regions.append(region)
+
+    report = InvariantRiskEncoder().fit_report(
+        features,
+        outcomes,
+        regions,
+        heldout_region="c",
+    )
+
+    assert report["invariant_rmse"] < report["raw_rmse"]
+    assert report["improvement"] > 0.0
+    assert "domain_adversarial_loss" in report["losses"]
+    assert any("does not prove causal identification" in item for item in report["warnings"])
+    assert report["metadata"]["supplements"] == "SyntheticDIDEstimator,GeoExperimentDesigner"
+    assert DomainAdversarialGeoEncoder is InvariantRiskEncoder
+    assert CounterfactualRepresentationNet is InvariantRiskEncoder
+    assert TreatmentEffectRepresentationHead is InvariantRiskEncoder

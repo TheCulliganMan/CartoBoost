@@ -245,6 +245,39 @@ pub struct DeepDecisionChoice {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DeepChoiceSetPrediction {
+    pub decision_id: String,
+    pub candidate_id: String,
+    pub candidate_value: f64,
+    pub utility: f64,
+    pub choice_probability: f64,
+    pub nested_probability: Option<f64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DeepCounterfactualCandidate {
+    pub decision_id: String,
+    pub candidate_id: String,
+    pub candidate_value: f64,
+    pub utility: f64,
+    pub choice_probability: f64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DeepChoiceSetReport {
+    pub predictions: Vec<DeepChoiceSetPrediction>,
+    pub counterfactual_best: Vec<DeepCounterfactualCandidate>,
+    pub calibration: BTreeMap<String, f64>,
+    pub benchmark: BTreeMap<String, f64>,
+    pub metadata: BTreeMap<String, String>,
+}
+
+pub type ChoiceSetTransformer = DeepChoiceSetReport;
+pub type UtilityNet = DeepChoiceSetReport;
+pub type NestedChoiceHead = DeepChoiceSetReport;
+pub type CounterfactualCandidateScorer = DeepChoiceSetReport;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DeepTemporalEntityArtifact {
     pub model_class: String,
     pub model_version: String,
@@ -490,8 +523,29 @@ pub fn directional_pair_fit_with_options(
     match options.architecture.as_str() {
         "shrinkage_effects" => directional_pair_fit_shrinkage(rows, options),
         "pair_embedding_mlp" => directional_pair_fit_embedding_mlp(rows, options),
+        "pair_temporal_ssm" | "pair_regime_moe" => {
+            directional_pair_fit_expanded_embedding(rows, options)
+        }
         other => invalid(format!("unknown directional pair architecture {other:?}")),
     }
+}
+
+fn directional_pair_fit_expanded_embedding(
+    rows: &[DeepDirectionalPairRow],
+    options: &DirectionalPairFitOptions,
+) -> Result<DeepDirectionalPairArtifact> {
+    let expanded = expand_pair_architecture_rows(rows, &options.architecture);
+    let mut inner = options.clone();
+    let requested_architecture = options.architecture.clone();
+    inner.architecture = "pair_embedding_mlp".to_string();
+    let mut artifact = directional_pair_fit_embedding_mlp(&expanded, &inner)?;
+    artifact.architecture = requested_architecture.clone();
+    artifact.schema_hash = schema_hash(expanded[0].features.len(), &requested_architecture);
+    artifact.train_metrics.insert(
+        "expanded_feature_count".to_string(),
+        expanded[0].features.len() as f64,
+    );
+    Ok(artifact)
 }
 
 fn directional_pair_fit_shrinkage(
@@ -813,24 +867,39 @@ pub fn directional_pair_predict(
     if rows.is_empty() {
         return invalid("directional pair rows cannot be empty");
     }
-    if artifact.architecture == "pair_embedding_mlp" {
+    if matches!(
+        artifact.architecture.as_str(),
+        "pair_embedding_mlp" | "pair_temporal_ssm" | "pair_regime_moe"
+    ) {
+        let expanded;
+        let prediction_rows = if artifact.architecture == "pair_embedding_mlp" {
+            rows
+        } else {
+            expanded = expand_pair_architecture_rows(rows, &artifact.architecture);
+            &expanded
+        };
         return Ok(rows
             .iter()
-            .map(|row| {
+            .zip(prediction_rows.iter())
+            .map(|(original_row, row)| {
                 let src = artifact
                     .source_id_map
-                    .get(&row.source_id)
+                    .get(&original_row.source_id)
                     .copied()
                     .unwrap_or(0);
                 let dst = artifact
                     .target_id_map
-                    .get(&row.target_id)
+                    .get(&original_row.target_id)
                     .copied()
                     .unwrap_or(0);
-                let bucket = if artifact.source_id_map.contains_key(&row.source_id)
-                    && artifact.target_id_map.contains_key(&row.target_id)
+                let bucket = if artifact.source_id_map.contains_key(&original_row.source_id)
+                    && artifact.target_id_map.contains_key(&original_row.target_id)
                 {
-                    pair_bucket(&row.source_id, &row.target_id, artifact.pair_bucket_count)
+                    pair_bucket(
+                        &original_row.source_id,
+                        &original_row.target_id,
+                        artifact.pair_bucket_count,
+                    )
                 } else {
                     artifact.pair_global_bucket
                 };
@@ -876,6 +945,54 @@ pub fn directional_pair_predict(
             score
         })
         .collect())
+}
+
+fn expand_pair_architecture_rows(
+    rows: &[DeepDirectionalPairRow],
+    architecture: &str,
+) -> Vec<DeepDirectionalPairRow> {
+    rows.iter()
+        .map(|row| {
+            let mut expanded = row.clone();
+            match architecture {
+                "pair_temporal_ssm" => {
+                    let t = row.timestamp.unwrap_or(0) as f64;
+                    let scaled = t / 86_400.0;
+                    expanded.features.extend_from_slice(&[
+                        scaled,
+                        (scaled / 7.0).sin(),
+                        (scaled / 7.0).cos(),
+                        (scaled / 30.0).sin(),
+                    ]);
+                }
+                "pair_regime_moe" => {
+                    let source_hash = stable_unit_hash(&row.source_id);
+                    let target_hash = stable_unit_hash(&row.target_id);
+                    let pair_hash =
+                        stable_unit_hash(&format!("{}->{}", row.source_id, row.target_id));
+                    let feature_energy = if row.features.is_empty() {
+                        0.0
+                    } else {
+                        row.features.iter().map(|value| value.abs()).sum::<f64>()
+                            / row.features.len() as f64
+                    };
+                    expanded.features.extend_from_slice(&[
+                        source_hash,
+                        target_hash,
+                        pair_hash,
+                        feature_energy,
+                        if row.source_id == row.target_id {
+                            1.0
+                        } else {
+                            0.0
+                        },
+                    ]);
+                }
+                _ => {}
+            }
+            expanded
+        })
+        .collect()
 }
 
 #[allow(clippy::too_many_arguments, clippy::needless_range_loop)]
@@ -1232,6 +1349,137 @@ pub fn constrained_decision_select_with_options(
         });
     }
     Ok(choices)
+}
+
+pub fn choice_set_transformer_report_json(
+    candidates: &[BTreeMap<String, serde_json::Value>],
+    temperature: f64,
+    monotone_candidate_value: Option<&str>,
+) -> Result<String> {
+    let report = choice_set_transformer_report(candidates, temperature, monotone_candidate_value)?;
+    serde_json::to_string(&report).map_err(NeuralError::from)
+}
+
+pub fn choice_set_transformer_report(
+    candidates: &[BTreeMap<String, serde_json::Value>],
+    temperature: f64,
+    monotone_candidate_value: Option<&str>,
+) -> Result<DeepChoiceSetReport> {
+    if candidates.is_empty() {
+        return invalid("choice-set candidates cannot be empty");
+    }
+    if !temperature.is_finite() || temperature <= 0.0 {
+        return invalid("temperature must be finite and positive");
+    }
+    let mut groups: BTreeMap<String, Vec<&BTreeMap<String, serde_json::Value>>> = BTreeMap::new();
+    for row in candidates {
+        let decision_id = json_str(row, "decision_id")?;
+        json_str(row, "candidate_id")?;
+        json_f64(row, "candidate_value").ok_or_else(|| {
+            NeuralError::InvalidArgument("candidate_value is required".to_string())
+        })?;
+        groups.entry(decision_id).or_default().push(row);
+    }
+    let mut predictions = Vec::new();
+    let mut counterfactual_best = Vec::new();
+    let mut chosen_probabilities = Vec::new();
+    let mut chosen_labels = Vec::new();
+    let mut operator_loss = 0.0;
+    let mut independent_loss = 0.0;
+    for (decision_id, rows) in groups {
+        let mut utilities = rows
+            .iter()
+            .map(|row| choice_utility(row, monotone_candidate_value))
+            .collect::<Result<Vec<_>>>()?;
+        let mean_utility = utilities.iter().sum::<f64>() / utilities.len() as f64;
+        for utility in &mut utilities {
+            *utility += 0.15 * (*utility - mean_utility);
+        }
+        let probabilities = softmax(&utilities, temperature);
+        let group_chosen = rows
+            .iter()
+            .position(|row| json_bool(row, "chosen").unwrap_or(false));
+        if let Some(chosen_idx) = group_chosen {
+            operator_loss += -probabilities[chosen_idx].max(1.0e-12).ln();
+            independent_loss += -(1.0 / rows.len() as f64).ln();
+        }
+        let mut best_idx = 0usize;
+        for (idx, (&utility, &probability)) in utilities.iter().zip(&probabilities).enumerate() {
+            let nested_probability = nested_choice_probability(rows[idx], &rows, utility)?;
+            if utility > utilities[best_idx]
+                || (utility == utilities[best_idx]
+                    && json_str(rows[idx], "candidate_id")?
+                        < json_str(rows[best_idx], "candidate_id")?)
+            {
+                best_idx = idx;
+            }
+            if let Some(chosen_idx) = group_chosen {
+                chosen_probabilities.push(probability);
+                chosen_labels.push(if chosen_idx == idx { 1.0 } else { 0.0 });
+            }
+            predictions.push(DeepChoiceSetPrediction {
+                decision_id: decision_id.clone(),
+                candidate_id: json_str(rows[idx], "candidate_id")?,
+                candidate_value: json_f64(rows[idx], "candidate_value").unwrap_or(0.0),
+                utility,
+                choice_probability: probability,
+                nested_probability,
+            });
+        }
+        counterfactual_best.push(DeepCounterfactualCandidate {
+            decision_id,
+            candidate_id: json_str(rows[best_idx], "candidate_id")?,
+            candidate_value: json_f64(rows[best_idx], "candidate_value").unwrap_or(0.0),
+            utility: utilities[best_idx],
+            choice_probability: probabilities[best_idx],
+        });
+    }
+    let mut calibration = BTreeMap::new();
+    if !chosen_probabilities.is_empty() {
+        calibration.insert(
+            "brier".to_string(),
+            brier_score(&chosen_probabilities, &chosen_labels),
+        );
+        calibration.insert(
+            "ece".to_string(),
+            expected_calibration_error(&chosen_probabilities, &chosen_labels, 5),
+        );
+    }
+    let mut benchmark = BTreeMap::new();
+    if independent_loss > 0.0 {
+        benchmark.insert("choice_set_log_loss".to_string(), operator_loss);
+        benchmark.insert(
+            "independent_response_log_loss".to_string(),
+            independent_loss,
+        );
+        benchmark.insert(
+            "log_loss_improvement".to_string(),
+            independent_loss - operator_loss,
+        );
+    }
+    let mut metadata = BTreeMap::new();
+    metadata.insert(
+        "model_class".to_string(),
+        "ChoiceSetTransformer".to_string(),
+    );
+    metadata.insert(
+        "architecture".to_string(),
+        "choice_set_transformer".to_string(),
+    );
+    metadata.insert("utility_head".to_string(), "UtilityNet".to_string());
+    metadata.insert("nested_head".to_string(), "NestedChoiceHead".to_string());
+    metadata.insert(
+        "counterfactual_scorer".to_string(),
+        "CounterfactualCandidateScorer".to_string(),
+    );
+    metadata.insert("temperature".to_string(), temperature.to_string());
+    Ok(DeepChoiceSetReport {
+        predictions,
+        counterfactual_best,
+        calibration,
+        benchmark,
+        metadata,
+    })
 }
 
 pub fn temporal_entity_fit(
@@ -1781,6 +2029,106 @@ fn objective_score(
     }
 }
 
+fn choice_utility(
+    row: &BTreeMap<String, serde_json::Value>,
+    monotone_candidate_value: Option<&str>,
+) -> Result<f64> {
+    let candidate_value = json_f64(row, "candidate_value").unwrap_or(0.0);
+    let mut utility = json_f64(row, "expected_utility")
+        .or_else(|| json_f64(row, "utility"))
+        .or_else(|| json_f64(row, "score"))
+        .unwrap_or(0.0);
+    utility += json_f64(row, "response_probability").unwrap_or(0.0) * candidate_value;
+    utility += json_array_f64(row, "candidate_features")?
+        .iter()
+        .enumerate()
+        .map(|(idx, value)| value * (0.07 / (idx + 1) as f64))
+        .sum::<f64>();
+    utility += json_array_f64(row, "context_features")?
+        .iter()
+        .enumerate()
+        .map(|(idx, value)| value * (0.03 / (idx + 1) as f64))
+        .sum::<f64>();
+    utility += json_array_f64(row, "entity_or_pair_embeddings")?
+        .iter()
+        .enumerate()
+        .map(|(idx, value)| value * (0.02 / (idx + 1) as f64))
+        .sum::<f64>();
+    utility += match monotone_candidate_value {
+        Some("increasing") => 0.05 * candidate_value,
+        Some("decreasing") => -0.05 * candidate_value,
+        Some(other) => return invalid(format!("unsupported monotone mode {other}")),
+        None => 0.0,
+    };
+    Ok(utility)
+}
+
+fn softmax(values: &[f64], temperature: f64) -> Vec<f64> {
+    let max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let exp = values
+        .iter()
+        .map(|value| ((*value - max) / temperature).exp())
+        .collect::<Vec<_>>();
+    let sum = exp.iter().sum::<f64>().max(1.0e-12);
+    exp.iter().map(|value| value / sum).collect()
+}
+
+fn nested_choice_probability(
+    row: &BTreeMap<String, serde_json::Value>,
+    rows: &[&BTreeMap<String, serde_json::Value>],
+    utility: f64,
+) -> Result<Option<f64>> {
+    let Some(nest) = json_str(row, "nest_id").ok() else {
+        return Ok(None);
+    };
+    let nest_utilities = rows
+        .iter()
+        .filter(|candidate| json_str(candidate, "nest_id").ok().as_deref() == Some(nest.as_str()))
+        .map(|candidate| choice_utility(candidate, None))
+        .collect::<Result<Vec<_>>>()?;
+    let denom = nest_utilities
+        .iter()
+        .map(|value| value.exp())
+        .sum::<f64>()
+        .max(1.0e-12);
+    Ok(Some(utility.exp() / denom))
+}
+
+fn brier_score(probabilities: &[f64], labels: &[f64]) -> f64 {
+    probabilities
+        .iter()
+        .zip(labels)
+        .map(|(&p, &y)| {
+            let err = p - y;
+            err * err
+        })
+        .sum::<f64>()
+        / probabilities.len() as f64
+}
+
+fn expected_calibration_error(probabilities: &[f64], labels: &[f64], bins: usize) -> f64 {
+    let mut total = 0.0;
+    for bin in 0..bins {
+        let lower = bin as f64 / bins as f64;
+        let upper = (bin + 1) as f64 / bins as f64;
+        let mut count = 0usize;
+        let mut confidence = 0.0;
+        let mut accuracy = 0.0;
+        for (&p, &y) in probabilities.iter().zip(labels) {
+            if (p >= lower && p < upper) || (bin + 1 == bins && p == 1.0) {
+                count += 1;
+                confidence += p;
+                accuracy += y;
+            }
+        }
+        if count > 0 {
+            total += (count as f64 / probabilities.len() as f64)
+                * (confidence / count as f64 - accuracy / count as f64).abs();
+        }
+    }
+    total
+}
+
 fn validate_response_rows(rows: &[DeepResponseRow], require_response: bool) -> Result<()> {
     if rows.is_empty() {
         return invalid("response rows cannot be empty");
@@ -1855,6 +2203,30 @@ fn json_f64(row: &BTreeMap<String, serde_json::Value>, key: &str) -> Option<f64>
     row.get(key).and_then(serde_json::Value::as_f64)
 }
 
+fn json_bool(row: &BTreeMap<String, serde_json::Value>, key: &str) -> Option<bool> {
+    row.get(key).and_then(serde_json::Value::as_bool)
+}
+
+fn json_array_f64(row: &BTreeMap<String, serde_json::Value>, key: &str) -> Result<Vec<f64>> {
+    let Some(value) = row.get(key) else {
+        return Ok(Vec::new());
+    };
+    let Some(values) = value.as_array() else {
+        return invalid(format!("{key} must be an array"));
+    };
+    values
+        .iter()
+        .map(|value| {
+            value
+                .as_f64()
+                .filter(|number| number.is_finite())
+                .ok_or_else(|| {
+                    NeuralError::InvalidArgument(format!("{key} must contain finite numbers"))
+                })
+        })
+        .collect()
+}
+
 fn json_str(row: &BTreeMap<String, serde_json::Value>, key: &str) -> Result<String> {
     row.get(key)
         .and_then(serde_json::Value::as_str)
@@ -1883,6 +2255,10 @@ fn stable_hash(value: &str) -> u64 {
         hash = hash.wrapping_mul(1099511628211);
     }
     hash ^ seen.len() as u64
+}
+
+fn stable_unit_hash(value: &str) -> f64 {
+    stable_hash(value) as f64 / u64::MAX as f64
 }
 
 fn invalid<T>(message: impl Into<String>) -> Result<T> {
@@ -2168,6 +2544,62 @@ mod tests {
         assert!(!residual.hidden_weights.is_empty());
         let residual_pred = service_residual_predict(&residual, &residual_rows).unwrap();
         assert!(residual_pred[1].prediction > residual_pred[0].prediction);
+    }
+
+    #[test]
+    fn choice_set_transformer_reports_competition_best_and_calibration() {
+        let rows = vec![
+            BTreeMap::from([
+                ("decision_id".to_string(), serde_json::json!("d1")),
+                ("candidate_id".to_string(), serde_json::json!("a")),
+                ("candidate_value".to_string(), serde_json::json!(1.0)),
+                ("expected_utility".to_string(), serde_json::json!(2.0)),
+                ("response_probability".to_string(), serde_json::json!(0.8)),
+                ("chosen".to_string(), serde_json::json!(true)),
+                (
+                    "candidate_features".to_string(),
+                    serde_json::json!([1.0, 0.0]),
+                ),
+                ("context_features".to_string(), serde_json::json!([0.5])),
+                ("nest_id".to_string(), serde_json::json!("n")),
+            ]),
+            BTreeMap::from([
+                ("decision_id".to_string(), serde_json::json!("d1")),
+                ("candidate_id".to_string(), serde_json::json!("b")),
+                ("candidate_value".to_string(), serde_json::json!(1.5)),
+                ("expected_utility".to_string(), serde_json::json!(0.2)),
+                ("response_probability".to_string(), serde_json::json!(0.2)),
+                ("chosen".to_string(), serde_json::json!(false)),
+                (
+                    "candidate_features".to_string(),
+                    serde_json::json!([0.0, 1.0]),
+                ),
+                ("context_features".to_string(), serde_json::json!([0.5])),
+                ("nest_id".to_string(), serde_json::json!("n")),
+            ]),
+        ];
+        let report = choice_set_transformer_report(&rows, 0.7, Some("increasing")).unwrap();
+        let mut reversed = rows.clone();
+        reversed.reverse();
+        let reversed_report =
+            choice_set_transformer_report(&reversed, 0.7, Some("increasing")).unwrap();
+
+        assert_eq!(report.counterfactual_best[0].candidate_id, "a");
+        assert_eq!(reversed_report.counterfactual_best[0].candidate_id, "a");
+        assert!(report
+            .predictions
+            .iter()
+            .all(|row| row.choice_probability > 0.0));
+        assert!(report
+            .predictions
+            .iter()
+            .any(|row| row.nested_probability.is_some()));
+        assert!(report.calibration.contains_key("brier"));
+        assert!(report.calibration.contains_key("ece"));
+        assert!(
+            report.benchmark["choice_set_log_loss"]
+                < report.benchmark["independent_response_log_loss"]
+        );
     }
 
     #[cfg(all(

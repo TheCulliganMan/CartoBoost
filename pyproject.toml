@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "cartoboost"
-version = "0.2.39"
+version = "0.2.40"
 description = "Rust-backed spatial boosting for tabular modeling and forecasting."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -67,6 +67,28 @@ visualization = [
 polars = [
     "polars>=1.0",
 ]
+foundation = [
+    "chronos-forecasting>=1.5",
+    "timesfm>=1.2",
+    "uni2ts>=1.2; python_version < '3.13'",
+    "nixtla>=0.6",
+    "tabpfn>=2.0",
+]
+chronos = [
+    "chronos-forecasting>=1.5",
+]
+timesfm = [
+    "timesfm>=1.2",
+]
+moirai = [
+    "uni2ts>=1.2; python_version < '3.13'",
+]
+timegpt = [
+    "nixtla>=0.6",
+]
+tabpfn = [
+    "tabpfn>=2.0",
+]
 
 [dependency-groups]
 bench = [
@@ -101,6 +123,7 @@ dev = [
     "pytest>=8",
     "ruff>=0.6",
     "scikit-learn>=1.2",
+    "scipy>=1.14; python_version >= '3.13'",
     "ty>=0.0.50",
 ]
 [project.urls]

@@ -89,6 +89,7 @@ use cartoboost_core::{
     RankerConfig, RankerModel, RankingObjective,
 };
 use cartoboost_geo_causal::{
+    causal_representation_report_json as core_geo_causal_representation_report_json,
     spillover_diagnostics as core_geo_causal_spillover_diagnostics, GeoCausalPanel, GeoCausalRow,
     GeoExperimentDesigner as CoreGeoExperimentDesigner, SpatialPlaceboTester, SpatialWeight,
     SyntheticDIDConfig, SyntheticDIDEstimator as CoreSyntheticDIDEstimator,
@@ -106,6 +107,8 @@ use cartoboost_geo_st::{
     available_compute_backends as graph_st_available_compute_backends,
     select_compute_backend as graph_st_select_compute_backend, CsrAdjacency as CoreStCsrAdjacency,
     DcrnnConfig as CoreDcrnnConfig, DcrnnForecaster as CoreDcrnnForecaster,
+    DelayAwareGraphConfig as CoreDelayAwareGraphConfig,
+    DelayAwareGraphTransformer as CoreDelayAwareGraphTransformer,
     GraphTemporalFrame as CoreGraphTemporalFrame, GraphWaveNetConfig as CoreGraphWaveNetConfig,
     GraphWaveNetForecaster as CoreGraphWaveNetForecaster, STAEformerConfig as CoreSTAEformerConfig,
     STAEformerForecaster as CoreSTAEformerForecaster,
@@ -119,6 +122,7 @@ use cartoboost_geostats::{
 use cartoboost_neural::{
     available_backends as neural_available_backends,
     backend_dispatch_report as neural_backend_dispatch_report, build_embedding_table_artifact,
+    choice_set_transformer_report_json as core_choice_set_transformer_report_json,
     compute_directional_features,
     constrained_decision_select_with_options as core_deep_constrained_decision_select,
     directional_pair_fit as core_deep_directional_pair_fit,
@@ -146,6 +150,11 @@ use cartoboost_neural::{
     Node2VecEncoder, Node2VecLinkPredictor, Node2VecRegressor, StandaloneBoosterConfig,
 };
 use cartoboost_neural::{
+    graph_neural_operator_predict_json as core_graph_neural_operator_predict_json,
+    neural_operator_synthetic_benchmark_json as core_neural_operator_synthetic_benchmark_json,
+    SpatialOperatorEdge as CoreSpatialOperatorEdge,
+};
+use cartoboost_neural::{
     ComponentMode as CoreNeuralPanelComponentMode,
     LaneNeuralPanelConfig as CoreLaneNeuralPanelConfig,
     LaneNeuralPanelForecaster as CoreLaneNeuralPanelForecaster, NBeatsConfig as CoreNBeatsConfig,
@@ -156,7 +165,10 @@ use cartoboost_neural::{
 };
 use cartoboost_prob::{
     benchmark_calibration_report_fields as core_prob_benchmark_calibration_report_fields,
+    conditional_flow_fit_json as core_prob_conditional_flow_fit_json,
+    conditional_flow_predict_json as core_prob_conditional_flow_predict_json,
     crps_approximation as core_prob_crps_approximation,
+    diffusion_scenario_generate_json as core_prob_diffusion_scenario_generate_json,
     group_conformal_residual_quantiles as core_prob_group_conformal_residual_quantiles,
     interval_coverage as core_prob_interval_coverage,
     mean_interval_width as core_prob_mean_interval_width,
@@ -165,7 +177,8 @@ use cartoboost_prob::{
     rolling_origin_conformal_residual_quantiles as core_prob_rolling_origin_conformal_residual_quantiles,
     split_conformal_residual_quantile as core_prob_split_conformal_residual_quantile,
     weighted_conformal_residual_quantile as core_prob_weighted_conformal_residual_quantile,
-    weighted_interval_score as core_prob_weighted_interval_score, SplitOrder as CoreProbSplitOrder,
+    weighted_interval_score as core_prob_weighted_interval_score,
+    DiffusionEdge as CoreDiffusionEdge, SplitOrder as CoreProbSplitOrder,
 };
 use cartoboost_spatial_econ::{
     spatial_weights_from_coo, SpatialEconError, SpatialModelKind, SpatialRegressionModel,
@@ -3474,6 +3487,12 @@ struct NativeGraphWaveNetForecaster {
     model: CoreGraphWaveNetForecaster,
 }
 
+#[pyclass(name = "PropagationDelayGraphForecaster")]
+#[derive(Clone, Debug)]
+struct NativePropagationDelayGraphForecaster {
+    model: CoreDelayAwareGraphTransformer,
+}
+
 #[pymethods]
 impl NativeSTAEformerForecaster {
     #[new]
@@ -3622,6 +3641,75 @@ impl NativeGraphWaveNetForecaster {
     fn from_json(_cls: &Bound<'_, PyType>, value: &str) -> PyResult<Self> {
         Ok(Self {
             model: CoreGraphWaveNetForecaster::from_json_string(value)
+                .map_err(to_py_geo_st_error)?,
+        })
+    }
+
+    fn backend(&self) -> PyResult<String> {
+        Ok(self.model.backend())
+    }
+}
+
+#[pymethods]
+impl NativePropagationDelayGraphForecaster {
+    #[new]
+    #[pyo3(signature = (horizon=1, edge_delay_prior=None, ridge=0.000001, backend=None))]
+    fn new(
+        horizon: usize,
+        edge_delay_prior: Option<Vec<usize>>,
+        ridge: f64,
+        backend: Option<&str>,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            model: CoreDelayAwareGraphTransformer::new(CoreDelayAwareGraphConfig {
+                horizon,
+                edge_delay_prior: edge_delay_prior.unwrap_or_default(),
+                ridge,
+                backend: graph_st_select_compute_backend(backend).map_err(to_py_geo_st_error)?,
+            })
+            .map_err(to_py_geo_st_error)?,
+        })
+    }
+
+    fn fit(&mut self, py: Python<'_>, frame: &NativeGraphTemporalFrame) -> PyResult<()> {
+        py.allow_threads(|| self.model.fit(&frame.frame))
+            .map_err(to_py_geo_st_error)
+    }
+
+    fn predict(&self, py: Python<'_>, horizon: usize) -> PyResult<Vec<Vec<f64>>> {
+        py.allow_threads(|| self.model.predict(horizon))
+            .map_err(to_py_geo_st_error)
+    }
+
+    fn score(&self, py: Python<'_>, actual: Vec<Vec<f64>>) -> PyResult<f64> {
+        py.allow_threads(|| self.model.score(&actual))
+            .map_err(to_py_geo_st_error)
+    }
+
+    fn edge_delay_sensitivity(&self) -> PyResult<String> {
+        serde_json::to_string(&self.model.edge_delay_sensitivity())
+            .map_err(|err| PyRuntimeError::new_err(err.to_string()))
+    }
+
+    fn save(&self, path: PathBuf) -> PyResult<()> {
+        self.model.save(path).map_err(to_py_geo_st_error)
+    }
+
+    #[classmethod]
+    fn load(_cls: &Bound<'_, PyType>, path: PathBuf) -> PyResult<Self> {
+        Ok(Self {
+            model: CoreDelayAwareGraphTransformer::load(path).map_err(to_py_geo_st_error)?,
+        })
+    }
+
+    fn to_json(&self) -> PyResult<String> {
+        self.model.to_json_string().map_err(to_py_geo_st_error)
+    }
+
+    #[classmethod]
+    fn from_json(_cls: &Bound<'_, PyType>, value: &str) -> PyResult<Self> {
+        Ok(Self {
+            model: CoreDelayAwareGraphTransformer::from_json_string(value)
                 .map_err(to_py_geo_st_error)?,
         })
     }
@@ -8973,6 +9061,53 @@ fn prob_pit_bins_value(
 }
 
 #[pyfunction]
+fn prob_conditional_flow_fit_value(
+    hidden: Vec<Vec<f64>>,
+    residuals: Vec<f64>,
+    quantiles: Vec<f64>,
+    sample_count: usize,
+) -> PyResult<String> {
+    core_prob_conditional_flow_fit_json(&hidden, &residuals, &quantiles, sample_count)
+        .map_err(to_py_value_error)
+}
+
+#[pyfunction(signature = (artifact_json, hidden, actual=None))]
+fn prob_conditional_flow_predict_value(
+    artifact_json: String,
+    hidden: Vec<Vec<f64>>,
+    actual: Option<Vec<f64>>,
+) -> PyResult<String> {
+    core_prob_conditional_flow_predict_json(&artifact_json, &hidden, actual.as_deref())
+        .map_err(to_py_value_error)
+}
+
+#[pyfunction]
+fn prob_diffusion_scenario_generate_value(
+    point_forecast: Vec<Vec<f64>>,
+    edges: Vec<(usize, usize, f64)>,
+    scenario_count: usize,
+    diffusion_steps: usize,
+    shock_scale: f64,
+) -> PyResult<String> {
+    let edges = edges
+        .into_iter()
+        .map(|(source, target, weight)| CoreDiffusionEdge {
+            source,
+            target,
+            weight,
+        })
+        .collect::<Vec<_>>();
+    core_prob_diffusion_scenario_generate_json(
+        &point_forecast,
+        &edges,
+        scenario_count,
+        diffusion_steps,
+        shock_scale,
+    )
+    .map_err(to_py_value_error)
+}
+
+#[pyfunction]
 #[allow(clippy::too_many_arguments)]
 fn prob_split_conformal_residual_quantile_value(
     actual: Vec<f64>,
@@ -10896,6 +11031,19 @@ fn deep_constrained_decision_select_value(
 }
 
 #[pyfunction]
+#[pyo3(signature = (candidates_json, temperature=1.0, monotone_candidate_value=None))]
+fn deep_choice_set_transformer_report_value(
+    candidates_json: &str,
+    temperature: f64,
+    monotone_candidate_value: Option<&str>,
+) -> PyResult<String> {
+    let candidates: Vec<BTreeMap<String, Value>> =
+        serde_json::from_str(candidates_json).map_err(to_py_json_error)?;
+    core_choice_set_transformer_report_json(&candidates, temperature, monotone_candidate_value)
+        .map_err(to_py_neural_error)
+}
+
+#[pyfunction]
 fn deep_temporal_entity_fit_value(
     y_json: &str,
     lookback: usize,
@@ -10914,6 +11062,45 @@ fn deep_temporal_entity_predict_value(artifact_json: &str, horizon: usize) -> Py
     let prediction =
         core_deep_temporal_entity_predict(&artifact, horizon).map_err(to_py_neural_error)?;
     serde_json::to_string(&prediction).map_err(to_py_json_error)
+}
+
+#[pyfunction]
+fn deep_graph_neural_operator_predict_value(
+    field_values_json: &str,
+    coordinates_json: &str,
+    edges: Vec<(usize, usize, f64)>,
+    exogenous_fields_json: &str,
+    smoothing: f64,
+    coordinate_scale: f64,
+) -> PyResult<String> {
+    let field_values: Vec<Vec<f64>> =
+        serde_json::from_str(field_values_json).map_err(to_py_json_error)?;
+    let coordinates: Vec<Vec<f64>> =
+        serde_json::from_str(coordinates_json).map_err(to_py_json_error)?;
+    let exogenous_fields: Vec<Vec<f64>> =
+        serde_json::from_str(exogenous_fields_json).map_err(to_py_json_error)?;
+    let edges = edges
+        .into_iter()
+        .map(|(source, target, weight)| CoreSpatialOperatorEdge {
+            source,
+            target,
+            weight,
+        })
+        .collect::<Vec<_>>();
+    core_graph_neural_operator_predict_json(
+        &field_values,
+        &coordinates,
+        &edges,
+        &exogenous_fields,
+        smoothing,
+        coordinate_scale,
+    )
+    .map_err(to_py_neural_error)
+}
+
+#[pyfunction]
+fn deep_neural_operator_synthetic_benchmark_value() -> PyResult<String> {
+    core_neural_operator_synthetic_benchmark_json().map_err(to_py_neural_error)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -11101,6 +11288,17 @@ fn geo_causal_spillover_diagnostics(
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))
 }
 
+#[pyfunction]
+fn geo_causal_representation_report_value(
+    features: Vec<Vec<f64>>,
+    outcomes: Vec<f64>,
+    regions: Vec<String>,
+    heldout_region: String,
+) -> PyResult<String> {
+    core_geo_causal_representation_report_json(&features, &outcomes, &regions, &heldout_region)
+        .map_err(to_py_geo_causal_error)
+}
+
 fn build_geo_causal_panel(
     rows: Vec<PyGeoCausalRow>,
     spatial_weights: Vec<(String, String, f64)>,
@@ -11201,6 +11399,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<NativeDcrnnForecaster>()?;
     m.add_class::<NativeSTAEformerForecaster>()?;
     m.add_class::<NativeGraphWaveNetForecaster>()?;
+    m.add_class::<NativePropagationDelayGraphForecaster>()?;
     m.add_class::<NativeNBeatsForecaster>()?;
     m.add_class::<NativeNHiTSForecaster>()?;
     m.add_class::<NativeNeuralPanelForecaster>()?;
@@ -11316,6 +11515,9 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(prob_crps_approximation_value, m)?)?;
     m.add_function(wrap_pyfunction!(prob_weighted_interval_score_value, m)?)?;
     m.add_function(wrap_pyfunction!(prob_pit_bins_value, m)?)?;
+    m.add_function(wrap_pyfunction!(prob_conditional_flow_fit_value, m)?)?;
+    m.add_function(wrap_pyfunction!(prob_conditional_flow_predict_value, m)?)?;
+    m.add_function(wrap_pyfunction!(prob_diffusion_scenario_generate_value, m)?)?;
     m.add_function(wrap_pyfunction!(
         prob_split_conformal_residual_quantile_value,
         m
@@ -11398,6 +11600,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(geo_causal_design_summary, m)?)?;
     m.add_function(wrap_pyfunction!(geo_causal_spatial_placebos, m)?)?;
     m.add_function(wrap_pyfunction!(geo_causal_spillover_diagnostics, m)?)?;
+    m.add_function(wrap_pyfunction!(geo_causal_representation_report_value, m)?)?;
     m.add_function(wrap_pyfunction!(weighted_overlay, m)?)?;
     m.add_function(wrap_pyfunction!(forecast_parse_frequency, m)?)?;
     m.add_function(wrap_pyfunction!(forecast_evaluate_metrics, m)?)?;
@@ -11419,7 +11622,19 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(deep_available_backends_value, m)?)?;
     m.add_function(wrap_pyfunction!(deep_backend_dispatch_report_value, m)?)?;
     m.add_function(wrap_pyfunction!(deep_constrained_decision_select_value, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        deep_choice_set_transformer_report_value,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(deep_temporal_entity_fit_value, m)?)?;
     m.add_function(wrap_pyfunction!(deep_temporal_entity_predict_value, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        deep_graph_neural_operator_predict_value,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        deep_neural_operator_synthetic_benchmark_value,
+        m
+    )?)?;
     Ok(())
 }

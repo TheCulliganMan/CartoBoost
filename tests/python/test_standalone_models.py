@@ -81,6 +81,37 @@ def test_neural_embedding_standalone_regressor_predicts_and_reloads() -> None:
         np.testing.assert_allclose(loaded.predict(ids, dense=dense), pred)
 
 
+def test_standalone_regressors_reject_non_finite_inputs() -> None:
+    model = NeuralEmbeddingStandaloneRegressor(
+        dim=2,
+        n_estimators=3,
+        max_depth=1,
+        min_samples_leaf=1,
+    )
+
+    with pytest.raises(ValueError, match="y must contain only finite values"):
+        model.fit([1, 2], [1.0, np.nan])
+
+    with pytest.raises(ValueError, match="dense must contain only finite values"):
+        model.fit([1, 2], [1.0, 2.0], dense=[[0.0], [np.inf]])
+
+    graph = GraphSageStandaloneRegressor(
+        input_dim=2,
+        hidden_dims=(2,),
+        epochs=1,
+        n_estimators=3,
+        max_depth=1,
+        min_samples_leaf=1,
+    )
+    with pytest.raises(ValueError, match="node_features must contain only finite values"):
+        graph.fit(
+            node_features=[[1.0, 0.0], [np.nan, 1.0]],
+            edges=[(0, 1)],
+            row_nodes=[0],
+            y=[1.0],
+        )
+
+
 def test_node2vec_standalone_pair_regressor_predicts() -> None:
     edges = [(0, 1), (1, 2), (2, 3), (3, 0), (0, 2)]
     row_nodes = np.array([0, 1, 2, 3])

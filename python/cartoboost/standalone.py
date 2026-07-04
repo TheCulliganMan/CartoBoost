@@ -745,6 +745,8 @@ def _f64_matrix(values: Any, name: str) -> list[list[float]]:
     array = np.asarray(values, dtype=np.float64)
     if array.ndim != 2:
         raise ValueError(f"{name} must be 2D")
+    if not np.all(np.isfinite(array)):
+        raise ValueError(f"{name} must contain only finite values")
     return np.ascontiguousarray(array).tolist()
 
 
@@ -752,6 +754,8 @@ def _f32_matrix(values: Any, name: str) -> list[list[float]]:
     array = np.asarray(values, dtype=np.float32)
     if array.ndim != 2:
         raise ValueError(f"{name} must be 2D")
+    if not np.all(np.isfinite(array)):
+        raise ValueError(f"{name} must contain only finite values")
     return np.ascontiguousarray(array).tolist()
 
 
@@ -782,6 +786,8 @@ def _f64_list(values: Any, name: str) -> list[float]:
     array = np.asarray(values, dtype=np.float64)
     if array.ndim != 1:
         raise ValueError(f"{name} must be 1D")
+    if not np.all(np.isfinite(array)):
+        raise ValueError(f"{name} must contain only finite values")
     return [float(value) for value in array]
 
 
@@ -789,6 +795,8 @@ def _f32_list(values: Any, name: str) -> list[float]:
     array = np.asarray(values, dtype=np.float32)
     if array.ndim != 1:
         raise ValueError(f"{name} must be 1D")
+    if not np.all(np.isfinite(array)):
+        raise ValueError(f"{name} must contain only finite values")
     return [float(value) for value in array]
 
 

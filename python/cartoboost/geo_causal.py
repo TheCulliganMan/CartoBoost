@@ -8,6 +8,7 @@ from typing import Any
 from ._artifacts import require_artifact_payload, versioned_artifact_payload
 from ._native import (
     geo_causal_design_summary,
+    geo_causal_representation_report_value,
     geo_causal_spatial_placebos,
     geo_causal_spillover_diagnostics,
     geo_causal_synthetic_did_summary,
@@ -18,6 +19,10 @@ __all__ = [
     "SyntheticDIDEstimator",
     "GeoLiftEstimator",
     "GeoExperimentDesigner",
+    "InvariantRiskEncoder",
+    "DomainAdversarialGeoEncoder",
+    "CounterfactualRepresentationNet",
+    "TreatmentEffectRepresentationHead",
     "SpatialPlaceboTester",
 ]
 
@@ -51,6 +56,55 @@ class GeoCausalPanel:
             region_col=region_col,
         )
         self.spatial_weights = [(str(a), str(b), float(w)) for a, b, w in (spatial_weights or [])]
+
+
+class InvariantRiskEncoder:
+    """Native-backed representation supplement for geo-causal workflows."""
+
+    causal_warning = (
+        "Representation learning does not prove causal identification; use it only as a "
+        "supplement to an identified design."
+    )
+
+    def fit_report(
+        self,
+        features: Any,
+        outcomes: Any,
+        regions: Any,
+        *,
+        heldout_region: str,
+    ) -> dict[str, Any]:
+        rows = _matrix(features, "features")
+        y = [float(value) for value in _flatten(outcomes)]
+        region_values = [str(value) for value in _flatten(regions)]
+        return json.loads(
+            geo_causal_representation_report_value(
+                rows,
+                y,
+                region_values,
+                str(heldout_region),
+            )
+        )
+
+    def transform(
+        self,
+        features: Any,
+        outcomes: Any,
+        regions: Any,
+        *,
+        heldout_region: str,
+    ) -> list[list[float]]:
+        return self.fit_report(
+            features,
+            outcomes,
+            regions,
+            heldout_region=heldout_region,
+        )["transformed_features"]
+
+
+DomainAdversarialGeoEncoder = InvariantRiskEncoder
+CounterfactualRepresentationNet = InvariantRiskEncoder
+TreatmentEffectRepresentationHead = InvariantRiskEncoder
 
 
 class SyntheticDIDEstimator:
@@ -436,3 +490,30 @@ def _coerce_covariate_mapping(value: Any) -> dict[str, float]:
     if not isinstance(value, Mapping):
         raise ValueError("normalized geo-causal covariates must be a mapping")
     return {str(key): float(item) for key, item in value.items()}
+
+
+def _matrix(values: Any, name: str) -> list[list[float]]:
+    to_numpy = getattr(values, "to_numpy", None)
+    if callable(to_numpy):
+        values = to_numpy()
+    rows = values.tolist() if hasattr(values, "tolist") else values
+    out = []
+    for row in rows:
+        row_values = [float(value) for value in row]
+        if not row_values or any(value != value for value in row_values):
+            raise ValueError(f"{name} must contain finite rows")
+        out.append(row_values)
+    if not out:
+        raise ValueError(f"{name} must be non-empty")
+    width = len(out[0])
+    if any(len(row) != width for row in out):
+        raise ValueError(f"{name} must have fixed width")
+    return out
+
+
+def _flatten(values: Any) -> list[Any]:
+    if hasattr(values, "tolist"):
+        values = values.tolist()
+    if isinstance(values, Sequence) and not isinstance(values, (str, bytes)):
+        return list(values)
+    return [values]

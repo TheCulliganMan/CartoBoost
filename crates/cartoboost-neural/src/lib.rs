@@ -8,6 +8,7 @@ pub mod forecasting;
 pub mod graph_features;
 pub mod graphsage;
 pub mod node2vec;
+pub mod operator;
 pub mod standalone;
 mod trainer;
 
@@ -22,16 +23,18 @@ pub use backend::{
     ComputeBackend,
 };
 pub use deep::{
-    constrained_decision_select, constrained_decision_select_with_options, directional_pair_fit,
+    choice_set_transformer_report, choice_set_transformer_report_json, constrained_decision_select,
+    constrained_decision_select_with_options, directional_pair_fit,
     directional_pair_fit_with_options, directional_pair_predict, directional_pair_predictions,
     event_outcome_fit, event_outcome_fit_with_backend, event_outcome_predict, response_curve_fit,
     response_curve_fit_with_backend, response_curve_predict, service_residual_fit,
     service_residual_fit_with_backend, service_residual_predict, temporal_entity_fit,
-    temporal_entity_predict, DeepDecisionChoice, DeepDirectionalPairArtifact,
-    DeepDirectionalPairRow, DeepEventArtifact, DeepEventPrediction, DeepResponseArtifact,
-    DeepResponsePrediction, DeepResponseRow, DeepServiceResidualArtifact,
+    temporal_entity_predict, ChoiceSetTransformer, CounterfactualCandidateScorer,
+    DeepChoiceSetPrediction, DeepChoiceSetReport, DeepCounterfactualCandidate, DeepDecisionChoice,
+    DeepDirectionalPairArtifact, DeepDirectionalPairRow, DeepEventArtifact, DeepEventPrediction,
+    DeepResponseArtifact, DeepResponsePrediction, DeepResponseRow, DeepServiceResidualArtifact,
     DeepServiceResidualPrediction, DeepServiceResidualRow, DeepTemporalEntityArtifact,
-    DirectionalPairFitOptions,
+    DirectionalPairFitOptions, NestedChoiceHead, UtilityNet,
 };
 pub use encoder::{EmbeddingTableEncoder, NeuralEncoder};
 pub use error::{NeuralError, Result};
@@ -56,6 +59,11 @@ pub use node2vec::{
     AliasSampler, EdgeEmbeddingFeatures, EdgeEmbeddingModel, EmbeddingFeatureTransformer,
     Node2VecConfig, Node2VecEncoder, Node2VecEncoderArtifact, Node2VecLoss, Node2VecTrainer,
     RandomWalkGenerator,
+};
+pub use operator::{
+    graph_neural_operator_predict_json, neural_operator_synthetic_benchmark_json,
+    FourierGeoOperator, GraphNeuralOperator, NeuralOperatorPrediction,
+    NeuralOperatorSyntheticBenchmark, SpatialOperatorEdge, SpatioTemporalOperator,
 };
 pub use standalone::{
     GraphRegressionMode, GraphSageLinkPredictor, GraphSageLinkPredictorArtifact,

@@ -1,6 +1,6 @@
 """Python interface for Rust-backed CartoBoost spatial modeling tools."""
 
-from . import causal, experimental, graph, models, plotting, prob
+from . import causal, experimental, graph, models, plotting, prob, representation
 from . import deep as deep
 from ._native import GraphSageEncoder, HeteroGraphSageEncoder, HinSageEncoder, Node2VecEncoder
 from .classifier import CartoBoostClassifier
@@ -14,6 +14,17 @@ from .evaluation import (
     temporal_blocked_cv,
 )
 from .explain import explain_shap, make_shap_explainer
+from .foundation import (
+    ChronosAdapter,
+    FoundationAdapterUnavailable,
+    FoundationForecastFeatures,
+    MoiraiAdapter,
+    PriorFittedBaseline,
+    TabPFNAdapter,
+    TabPFNFeatureGenerator,
+    TimeGPTAdapter,
+    TimesFMAdapter,
+)
 from .geo import (
     CoordinateMatrix,
     GeoSpatialWeights,
@@ -44,11 +55,15 @@ from .geo import (
     spatial_temporal_blocked_split_manifest,
 )
 from .geo_causal import (
+    CounterfactualRepresentationNet,
+    DomainAdversarialGeoEncoder,
     GeoCausalPanel,
     GeoExperimentDesigner,
     GeoLiftEstimator,
+    InvariantRiskEncoder,
     SpatialPlaceboTester,
     SyntheticDIDEstimator,
+    TreatmentEffectRepresentationHead,
 )
 from .geostats import (
     NearestNeighborGPRegressor,
@@ -139,6 +154,21 @@ from .plotting import (
 )
 from .ranker import CartoBoostRanker
 from .regressor import CartoBoostRegressor
+from .representation import (
+    EntityEmbedding,
+    GraphContextEmbedding,
+    HistoricalAnalogRetriever,
+    KNNContextMemory,
+    LocalGlobalHubAttention,
+    MultiViewSpatialAttention,
+    PairEmbedding,
+    RegimeRouter,
+    RetrievalAugmentedForecaster,
+    RetrievalAugmentedPairModel,
+    SelfSupervisedPretrainer,
+    SpatialSemanticGraphTransformer,
+    SpatioTemporalAdaptiveEmbedding,
+)
 from .s2 import (
     build_s2_route_sparse_sets,
     build_s2_sparse_sets,
@@ -191,7 +221,7 @@ from .utilities import (
     tsb_forecast,
 )
 
-__version__ = "0.2.39"
+__version__ = "0.2.40"
 
 __all__ = [
     "ArtifactFallback",
@@ -199,8 +229,11 @@ __all__ = [
     "GeoSpatialWeights",
     "GraphSageEncoder",
     "GeoCausalPanel",
+    "CounterfactualRepresentationNet",
+    "DomainAdversarialGeoEncoder",
     "GeoExperimentDesigner",
     "GeoLiftEstimator",
+    "InvariantRiskEncoder",
     "HeteroGraphSageEncoder",
     "HinSageEncoder",
     "Node2VecEncoder",
@@ -209,6 +242,7 @@ __all__ = [
     "TimeIndex",
     "SpatialPlaceboTester",
     "SyntheticDIDEstimator",
+    "TreatmentEffectRepresentationHead",
     "FeatureSchema",
     "causal",
     "experimental",
@@ -216,6 +250,7 @@ __all__ = [
     "models",
     "plotting",
     "prob",
+    "representation",
     "NeuralEmbeddingFeatures",
     "NeuralEmbeddingRegressor",
     "NeuralEmbeddingStandaloneRegressor",
@@ -229,6 +264,16 @@ __all__ = [
     "HinSageLinkPredictor",
     "benchmark_neural_vs_cartoboost",
     "FeatureKind",
+    "EntityEmbedding",
+    "ChronosAdapter",
+    "FoundationAdapterUnavailable",
+    "FoundationForecastFeatures",
+    "MoiraiAdapter",
+    "PriorFittedBaseline",
+    "TabPFNAdapter",
+    "TabPFNFeatureGenerator",
+    "TimeGPTAdapter",
+    "TimesFMAdapter",
     "CartoBoostRegressor",
     "CartoBoostClassifier",
     "CartoBoostRanker",
@@ -238,6 +283,18 @@ __all__ = [
     "ModelMetadata",
     "ModelRegistry",
     "ModelSpec",
+    "GraphContextEmbedding",
+    "HistoricalAnalogRetriever",
+    "KNNContextMemory",
+    "LocalGlobalHubAttention",
+    "MultiViewSpatialAttention",
+    "PairEmbedding",
+    "RegimeRouter",
+    "RetrievalAugmentedForecaster",
+    "RetrievalAugmentedPairModel",
+    "SelfSupervisedPretrainer",
+    "SpatialSemanticGraphTransformer",
+    "SpatioTemporalAdaptiveEmbedding",
     "SpatialWeights",
     "SpatialLagRegressor",
     "SpatialErrorRegressor",

@@ -68,11 +68,14 @@ pred = model.predict(X_test, coords=pickup_xy_test)
 card = model_card(model)
 ```
 
-Use `AutoGeoModel` when model choice itself is part of the workflow. It records
-which candidates were eligible, which were skipped, the holdout metric, interval
-or calibration diagnostics when present, residual Moran's I when coordinates
-are supplied, and whether the selected artifact can be saved and reloaded
-without prediction drift.
+Start with `AutoGeoModel` when model choice itself is part of the workflow.
+Inspect its evidence card first: it records which candidates were tried, which
+were skipped with typed reasons, the baseline comparison, split hash, leakage
+policy, interval or calibration diagnostics when present, residual Moran's I
+when coordinates are supplied, and whether the selected artifact can be saved
+and reloaded without prediction drift. Drop down to individual models only when
+the evidence card shows that a specific family, contract field, or diagnostic
+needs direct control.
 
 The executable contract for this registry and selector example is checked by
 `scripts/check_docs_examples.py` in CI.

@@ -7,6 +7,8 @@ members = [
     "crates/cartoboost-prob",
     "crates/cartoboost-geo-st",
     "crates/cartoboost-spatial-econ",
+    "crates/cartoboost-representation",
+    "crates/cartoboost-ssm",
     "crates/cartoboost-neural",
     "crates/cartoboost-cli",
     "crates/cartoboost-py",
@@ -15,7 +17,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.2.39"
+version = "0.2.40"
 edition = "2021"
 rust-version = "1.85"
 license = "MIT"

@@ -13,10 +13,19 @@ be reported as forecast accuracy evidence.
 | `GeoLiftEstimator` | Alias for GeoLift-style experiment design helpers. |
 | `GeoExperimentDesigner` | Choose candidate test geos, check balance, estimate detectable lift, and run placebos. |
 | `SpatialPlaceboTester` | Run deterministic placebo assignments and spillover diagnostics. |
+| `InvariantRiskEncoder` | Representation supplement for held-out-region diagnostics; not a causal estimator. |
 
 All fitting and causal scoring behavior is implemented in Rust under
 `crates/cartoboost-geo-causal`. Python wraps the native routines and only adds
 data coercion, `.plot()`, and ergonomics.
+
+Representation supplements such as `InvariantRiskEncoder`,
+`DomainAdversarialGeoEncoder`, `CounterfactualRepresentationNet`, and
+`TreatmentEffectRepresentationHead` can reduce held-out-region prediction error
+in domain-shift diagnostics, but they do not identify causal effects by
+themselves. Use them only alongside an identified design such as
+`SyntheticDIDEstimator` or `GeoExperimentDesigner`, and keep the estimator's
+assumptions, placebo checks, and spillover diagnostics in the causal report.
 
 ## Panel Contract
 

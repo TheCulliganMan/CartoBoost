@@ -9,6 +9,7 @@ Use this directory as the navigation map for the user-facing docs site.
   current docs, and retained release docs are added only for real tagged
   versions listed in that manifest.
 - [Getting started](./getting-started.md)
+- [Python estimator numeric input and missing-value contract](./user-guide/python-estimator.md)
 - [Choose a model](./user-guide/model-types.md)
 - [Unified model registry and AutoGeoModel](./user-guide/model-types.md)
 - [Spatial econometrics models](./user-guide/spatial-econometrics.md)
@@ -29,6 +30,20 @@ Use this directory as the navigation map for the user-facing docs site.
 - [CartoBoost Graph Model Guides](./user-guide/graph-models/index.md)
 - [CartoBoost Neural Model Guides](./user-guide/neural-models/index.md)
 - [Deep model guides](./user-guide/deep-models.md)
+- [Shared representation primitives](./user-guide/deep-models.md)
+- [Retrieval-augmented forecasting](./user-guide/deep-models.md)
+- [Optional foundation model adapters](./user-guide/deep-models.md)
+- [Multi-view spatial attention](./user-guide/deep-models.md)
+- [Self-supervised representation pretraining](./user-guide/deep-models.md)
+- [Mixture-of-experts regime modeling](./user-guide/deep-models/cartoboost-regime-moe-forecaster.md)
+- [Selective state-space](./user-guide/deep-models/cartoboost-temporal-ssm-forecaster.md)
+- [Inverted temporal transformer](./user-guide/deep-models/cartoboost-inverted-temporal-transformer.md)
+- [Delay-aware graph transformer](./user-guide/deep-models/cartoboost-propagation-delay-graph-forecaster.md)
+- [Conditional flow uncertainty head](./user-guide/deep-models/cartoboost-conditional-flow-distribution-head.md)
+- [Experimental diffusion scenario generator](./user-guide/deep-models/cartoboost-geotemporal-diffusion-scenario-model.md)
+- [Advanced experimental neural operators](./user-guide/deep-models/cartoboost-graph-neural-operator.md)
+- [Choice-set candidate competition](./user-guide/deep-models/cartoboost-choice-set-transformer.md)
+- [Directional pair forecasting architectures](./user-guide/deep-models/cartoboost-directional-pair-forecaster.md)
 - [Native deep backend selection and Metal availability](./user-guide/deep-models.md)
 - [Forecasting reference](./forecasting.md)
 - [Graph features contract](./graph-features.md)
@@ -36,6 +51,7 @@ Use this directory as the navigation map for the user-facing docs site.
 - [Sparse H3/S2 and route-cell features](./sparse_features.md)
 - [Spatial modeling and bearing unit-vector features](./spatial_modeling.md)
 - [Geo evaluation standard](./user-guide/geo-evaluation-standard.md)
+- [Geo-causal representation supplements](./user-guide/geo-causal-models.md)
 - [Benchmarks](./benchmarks/index.md)
 - [Benchmark methodology and geo manifest contract](./benchmarks/methodology.md)
 - [NYC Taxi Path C claim gates](./benchmarks/nyc-taxi-path-c.md)
@@ -53,6 +69,140 @@ Use this directory as the navigation map for the user-facing docs site.
 - [NYC taxi benchmark report](./benchmarks/nyc-taxi.md)
 - [Python API reference](./reference/python-api.md)
 - [CLI reference](./reference/cli.md)
+
+## Model Lists
+
+Stable `cartoboost.models.ModelRegistry.defaults()` models:
+
+- `models.cartoboost_regressor` / `cartoboost.CartoBoostRegressor`
+- `models.cartoboost_classifier` / `cartoboost.CartoBoostClassifier`
+- `models.cartoboost_ranker` / `cartoboost.CartoBoostRanker`
+- `models.auto_geo_model` / `cartoboost.AutoGeoModel`
+- `models.geo_model_stack` / `cartoboost.GeoModelStack`
+- `forecasting.auto_forecaster` / `cartoboost.forecasting.AutoForecaster`
+- `forecasting.cartoboost_lag` / `cartoboost.forecasting.CartoBoostLagForecaster`
+- `graph.dcrnn` / `cartoboost.forecasting.DCRNNForecaster`
+- `geo.nngp` / `cartoboost.NearestNeighborGPRegressor`
+- `geo.residual_nngp` / `cartoboost.ResidualNNGPRegressor`
+- `geo.spatial_lag` / `cartoboost.SpatialLagRegressor`
+- `geo.spatial_error` / `cartoboost.SpatialErrorRegressor`
+- `geo.spatial_durbin` / `cartoboost.SpatialDurbinRegressor`
+- `causal.synthetic_did` / `cartoboost.SyntheticDIDEstimator`
+- `causal.geo_lift_design` / `cartoboost.GeoExperimentDesigner`
+- `causal.spatial_placebo` / `cartoboost.SpatialPlaceboTester`
+- `prob.conformal_interval` / `cartoboost.prob.ConformalIntervalRegressor`
+- `prob.spatial_conformal` / `cartoboost.prob.SpatialConformalRegressor`
+
+Forecasting model ids and classes:
+
+- `naive` / `NaiveForecaster`
+- `seasonal_naive` / `SeasonalNaiveForecaster`
+- `theta` / `ThetaForecaster`
+- `optimized_theta` / `OptimizedThetaForecaster`
+- `piecewise_linear_seasonal` / `PiecewiseLinearSeasonalForecaster`
+- `ets` / `ETSForecaster`
+- `auto_ets` / Auto ETS browser model
+- `seasonal_ets` / Seasonal ETS browser model
+- `arima` / `ArimaForecaster`
+- `auto_arima` / `AutoARIMAForecaster`
+- `autostats_bank` / `AutoStatsBank`
+- `classical_expert_bank` / Classical Expert Bank browser model
+- `croston` / `CrostonForecaster`
+- `sba` / `SbaForecaster`
+- `tsb` / `TsbForecaster`
+- `intermittent_demand` / Intermittent Demand browser model
+- `kalman` / `KalmanForecaster`
+- `local_level_kalman` / `LocalLevelKalmanForecaster`
+- `auto_kalman` / `AutoKalmanForecaster`
+- `auto_local_level_kalman` / `AutoLocalLevelKalmanForecaster`
+- `cartoboost_lag` / `CartoBoostLagForecaster`
+- `cartoboost_direct` / CartoBoost Direct browser model
+- `rectified_recursive` / Rectified Recursive browser model
+- `lag_plus` / Lag Plus browser model
+- `scaled_cartoboost_lag` / Scaled CartoBoost Lag browser model
+- `log1p_cartoboost_lag` / Log1p CartoBoost Lag browser model
+- `auto_forecaster` and `auto_forecast` / `AutoForecaster`
+- `neural_panel` / `NeuralPanelForecaster`
+- `nbeats` / `NBeatsForecaster` / `NBEATSForecaster`
+- `nhits` / `NHiTSForecaster` / `NHITSForecaster`
+- `dcrnn` / `DCRNNForecaster`
+- `graph_wavenet` / `GraphWaveNetForecaster`
+- `staeformer` / `STAEformerForecaster`
+- `stl_cartoboost` / STL + ARIMA browser model
+- `mstl_cartoboost` / MSTL + ARIMA browser model
+- `window_average` / Window Average browser model
+- `seasonal_window_average` / Seasonal Window Average browser model
+- `kriging` / `KrigingForecaster`
+- `spatial_piecewise_kriging` / `SpatialPiecewiseKrigingForecaster`
+
+Graph and neural model classes:
+
+- `Node2VecStandaloneRegressor`
+- `GraphSageStandaloneRegressor`
+- `HeteroGraphSageStandaloneRegressor`
+- `HinSageStandaloneRegressor`
+- `Node2VecLinkPredictor`
+- `GraphSageLinkPredictor`
+- `HeteroGraphSageLinkPredictor`
+- `HinSageLinkPredictor`
+- `NeuralEmbeddingRegressor`
+- `NeuralEmbeddingStandaloneRegressor`
+- `NeuralEmbeddingFeatures`
+- `GraphSageFeatureEncoder`
+- `HeteroGraphSageFeatureEncoder`
+- `HinSageFeatureEncoder`
+- `Node2VecFeatureEncoder`
+- `GraphFeatureTransformer`
+
+Deep model classes and aliases:
+
+- `DirectionalPairForecaster`
+- `ResponseCurveModel`
+- `EventOutcomeModel`
+- `ServiceTimeResidualModel`
+- `SpatioTemporalGraphForecaster`
+- `ConstrainedDecisionOptimizer`
+- `TemporalSSMForecaster`
+- `SelectiveStateSpaceBlock`
+- `EntityTemporalSSM`
+- `PairTemporalSSM`
+- `GraphTemporalSSM`
+- `TemporalEntityTransformer`
+- `InvertedTemporalTransformer`
+- `InvertedEntityTransformer`
+- `DelayAwareGraphTransformer`
+- `PropagationDelayGraphForecaster`
+- `DynamicAdjacencyTransformer`
+- `RegimeMoEForecaster`
+- `GeoTemporalMixtureOfExperts`
+- `PairRegimeRouter`
+- `EntityRegimeRouter`
+- `ConditionalFlowDistributionHead`
+- `JointHorizonFlowHead`
+- `ResidualFlowCalibrator`
+- `GeoTemporalDiffusionScenarioModel`
+- `FlowScenarioGenerator`
+- `ConditionalResidualDiffusion`
+- `GraphNeuralOperator`
+- `FourierGeoOperator`
+- `SpatioTemporalOperator`
+- `ChoiceSetTransformer`
+- `UtilityNet`
+- `NestedChoiceHead`
+- `CounterfactualCandidateScorer`
+
+Representation, foundation, geo, causal, and probabilistic model surfaces:
+
+- `EntityEmbedding`, `PairEmbedding`, `GraphContextEmbedding`, `SpatioTemporalAdaptiveEmbedding`
+- `HistoricalAnalogRetriever`, `KNNContextMemory`, `RetrievalAugmentedForecaster`, `RetrievalAugmentedPairModel`
+- `RegimeRouter`, `SelfSupervisedPretrainer`, `MultiViewSpatialAttention`
+- `LocalGlobalHubAttention`, `SpatialSemanticGraphTransformer`
+- `FoundationForecastFeatures`, `ChronosAdapter`, `TimesFMAdapter`, `MoiraiAdapter`, `TimeGPTAdapter`, `TabPFNAdapter`, `TabPFNFeatureGenerator`, `PriorFittedBaseline`
+- `SpatialLagRegressor`, `SpatialErrorRegressor`, `SpatialDurbinRegressor`, `SpatialTwoStageLeastSquares`
+- `NearestNeighborGPRegressor`, `ResidualNNGPRegressor`, `SpatialGaussianProcessRegressor`
+- `SyntheticDIDEstimator`, `GeoLiftEstimator`, `GeoExperimentDesigner`, `SpatialPlaceboTester`
+- `InvariantRiskEncoder`, `DomainAdversarialGeoEncoder`, `CounterfactualRepresentationNet`, `TreatmentEffectRepresentationHead`
+- `ConformalIntervalRegressor`, `SpatialConformalRegressor`, `ConformalCalibrator`, `ForecastConformalCalibrator`, `QuantileCartoBoostRegressor`
 
 ## What To Emphasize
 

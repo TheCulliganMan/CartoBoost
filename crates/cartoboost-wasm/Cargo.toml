@@ -1,6 +1,6 @@
 [package]
 name = "cartoboost-wasm"
-version = "0.2.39"
+version = "0.2.40"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/theculliganman/cartoboost"
@@ -16,6 +16,7 @@ cartoboost-geo-core = { path = "../cartoboost-geo-core" }
 cartoboost-geostats = { path = "../cartoboost-geostats" }
 cartoboost-geo-st = { path = "../cartoboost-geo-st" }
 cartoboost-neural = { path = "../cartoboost-neural" }
+cartoboost-prob = { path = "../cartoboost-prob" }
 chrono.workspace = true
 console_error_panic_hook = "0.1"
 serde.workspace = true

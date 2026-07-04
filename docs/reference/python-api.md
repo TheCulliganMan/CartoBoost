@@ -78,6 +78,13 @@ Set `tensorboard_log_dir` to write native per-iteration training scalars to
 TensorBoard event files; install `cartoboost[tensorboard]` for the optional
 writer dependency.
 
+Numeric model inputs must be finite. CartoBoost does not impute `NaN`, `None`,
+`pd.NA`, `inf`, or `-inf` numeric feature, target, coordinate, sample-weight,
+neural embedding, graph feature, or deep-model covariate values. Clean or
+impute those columns before fitting or prediction. The categorical encoder is
+the exception for categorical columns: missing category sentinels are converted
+to a stable missing-category token.
+
 Dense inputs may include categorical columns. Pandas categorical,
 string, or object columns are encoded during fit, and columns can be marked
 explicitly with `FeatureKind.CATEGORICAL` or `FeatureKind.ORDINAL` in
@@ -158,10 +165,13 @@ SpatialPlaceboTester(intervention_time="2026-03-08", seed=13)
 | `SyntheticDIDEstimator.plot(kind="placebo")` | matplotlib axes | Python-only helper; requires `cartoboost[visualization]`. |
 | `GeoExperimentDesigner.fit(panel).summary(candidate_count, placebo_n)` | `dict` | Chooses balanced candidate test geos and estimates detectable lift. |
 | `SpatialPlaceboTester.fit(panel).summary()` | `dict` | Reports neighbor contamination, distances, and spatial exposure. |
+| `InvariantRiskEncoder.fit_report(features, outcomes, regions, heldout_region=...)` | `dict` | Native-backed domain-shift representation diagnostic with supervised, domain-adversarial, invariant-risk, treatment-balance, and smoothness losses. It supplements, but does not replace, `SyntheticDIDEstimator` and `GeoExperimentDesigner`. |
 
 Use these APIs for marketing lift, policy rollout, store openings, and network
 changes. The summaries explicitly separate causal estimates from forecasts and
 should be reported with the stated assumptions and spillover warnings.
+Representation learning reports include an explicit warning that they do not
+prove causal identification.
 
 ## Geographic Feature Encoders
 
@@ -453,11 +463,107 @@ Unified model registry and geo selector:
 | --- | --- |
 | `cartoboost.models.ModelRegistry.defaults()` | Stable registry across `models`, `forecasting`, `geo`, `graph`, `causal`, and `prob` namespaces with typed metadata. |
 | `cartoboost.models.ModelSpec` / `ModelMetadata` | Constructor and metadata records for public model families. |
-| `cartoboost.AutoGeoModel` | Leakage-aware selector that inspects coordinates, graph structure, panel ids, time indexes, sparsity, and validation constraints before fitting eligible candidates. |
+| `cartoboost.AutoGeoModel` | Leakage-aware orchestration layer that builds a `DataContract`, dispatches eligible tabular, spatial, forecasting, graph, conformal, and deep candidate families, records typed skip reasons, and requires save/load prediction parity before selecting a model. |
+| `cartoboost.models.DataContract` / `ModelEvidenceCard` | Structured AutoGeoModel input contract and evidence summary with all candidates, candidates tried, skipped reasons, split manifest, falsifier baselines, uncertainty report, save/load parity, feature roles, diagnostics, and limitations. |
 | `cartoboost.GeoModelStack` | Explicit stack for tabular booster, optional spatial residual model, optional graph residual model, and optional conformal interval layer. |
-| `cartoboost.models.model_card(model)` | JSON-compatible lifecycle, params, and metadata summary for fitted or unfitted models. |
+| `cartoboost.models.model_card(model)` | JSON-compatible params, lifecycle, metadata, and fitted AutoGeoModel evidence-card summary. |
 | `cartoboost.causal` / `cartoboost.prob` | Stable aliases for geo-causal and probabilistic model namespaces. |
 | `cartoboost.experimental` | Unstable research adapter namespace; adapters require explicit backends and are excluded from the stable registry. |
+
+Shared representation primitives:
+
+| Entry point | Notes |
+| --- | --- |
+| `cartoboost.representation.EntityEmbedding` | Deterministic entity embedding table with known-ID lookup, unknown ID row, hash-bucket fallback, save/load JSON artifacts, and parity metadata. |
+| `cartoboost.representation.PairEmbedding` | Directional source-target representation that keeps `source -> target` distinct from `target -> source` and uses stable fallback buckets for unseen IDs or pairs. |
+| `cartoboost.representation.SpatioTemporalAdaptiveEmbedding` | Context-dependent entity embedding that combines static ID, time features, and context features into an adaptive representation. |
+| `cartoboost.representation.RegimeRouter` | Entity-aware router that emits expert weights, selected experts, router entropy, expert usage, and parity-checked artifacts for mixture-of-experts models. |
+| `cartoboost.representation.HistoricalAnalogRetriever` | Exact normalized KNN memory that returns analog IDs, distances, and row indices with optional cutoff filtering for leakage-safe retrieval. |
+| `cartoboost.representation.KNNContextMemory` | Alias for the exact KNN context memory used by retrieval-augmented models. |
+| `cartoboost.representation.RetrievalAugmentedForecaster` | Exact-KNN retrieval forecaster that attends to retrieved historical targets with deterministic inverse-distance weights, returns analog IDs/distances/targets when explanation is requested, persists the memory artifact, and supports cutoff-safe queries. |
+| `cartoboost.representation.RetrievalAugmentedPairModel` | Directional source-target variant that stores `source->target` analog IDs for pair-specific retrieval. |
+| `cartoboost.representation.SelfSupervisedPretrainer` | Deterministic pretrainer that creates reusable entity, pair, node, and temporal encoder outputs from cutoff-safe feature summaries and records masked entity, masked pair, graph-denoising, temporal-order, spatial-neighbor, and future-patch proxy metrics. |
+| `MaskedEntityTimeModeling` / `MaskedPairTimeModeling` / `GraphEdgeDenoising` / `TemporalOrderContrastiveLoss` / `SpatialNeighborContrastiveLoss` / `FuturePatchReconstruction` | Public task markers for the pretraining tasks recorded by `SelfSupervisedPretrainer`. |
+| `cartoboost.representation.MultiViewSpatialAttention` | Multi-view spatial encoder that fuses physical, flow, similarity, learned, hub, or hierarchy views; records learned view weights; emits view-ablation reports; and handles a missing fitted view during transform. |
+| `cartoboost.representation.LocalGlobalHubAttention` / `SpatialSemanticGraphTransformer` | Aliases for the multi-view spatial attention surface. |
+| `cartoboost.EntityEmbedding` / `PairEmbedding` / `SpatioTemporalAdaptiveEmbedding` / `RegimeRouter` / `HistoricalAnalogRetriever` / `RetrievalAugmentedForecaster` / `SelfSupervisedPretrainer` / `MultiViewSpatialAttention` | Top-level aliases for the stable representation primitives. |
+
+Representation artifacts include model class, architecture, artifact version,
+schema hash, ID maps, hash-bucket settings, embedding dimension, random seed,
+feature roles, training cutoff, training metrics, save/load parity status, and
+backend metadata. The first implementation selects CPU while reserving CUDA,
+ROCm, and MLX backend names for future native kernels.
+
+Selective state-space:
+
+| Entry point | Notes |
+| --- | --- |
+| `cartoboost.deep.SelectiveStateSpaceBlock` | CPU deterministic selective state-space inspired recurrence with gate, delta, input, output, state decay, and direct terms. |
+| `cartoboost.deep.TemporalSSMForecaster` | Entity-panel forecaster using `architecture="selective_ssm"`, runtime scaling reports, and save/load parity. |
+| `cartoboost.deep.EntityTemporalSSM` / `PairTemporalSSM` / `GraphTemporalSSM` | First-cut aliases for the same selective SSM backbone while specialized heads are built out. |
+
+Inverted temporal transformer:
+
+| Entry point | Notes |
+| --- | --- |
+| `cartoboost.deep.InvertedTemporalTransformer` | Entity-token panel forecaster for synchronized wide panels with cross-entity attention, horizon-wise metrics, ablation report, and save/load parity. |
+| `cartoboost.deep.InvertedEntityTransformer` | Alias for the entity-token inverted temporal transformer surface. |
+| `cartoboost.deep.TemporalEntityTransformer(architecture="inverted_transformer")` | Routes the existing temporal entity surface to the inverted transformer implementation. |
+
+Delay-aware graph transformer:
+
+| Entry point | Notes |
+| --- | --- |
+| `cartoboost.deep.DelayAwareGraphTransformer` / `PropagationDelayGraphForecaster` | Directed graph propagation forecaster with explicit per-edge delay priors, edge-delay sensitivity, save/load parity, and a future CUDA/ROCm/MLX backend contract that hard-fails until native kernels exist. |
+| `cartoboost.deep.DynamicAdjacencyTransformer` | Alias for the delay-aware graph transformer surface. |
+| `cartoboost.deep.SpatioTemporalGraphForecaster(backbone="delay_aware_graph_transformer")` | Routes the generic graph sequence facade to the delay-aware graph implementation. |
+
+Mixture-of-experts regime modeling:
+
+| Entry point | Notes |
+| --- | --- |
+| `cartoboost.deep.RegimeMoEForecaster` | Six-expert regime model for stable recurring, sparse cold-start, high-volume hub, volatile shock, long-distance pair, and low-signal fallback behavior; emits expert weights, expert predictions, combined predictions, router entropy, expert usage, and single-expert comparison metrics. |
+| `cartoboost.deep.GeoTemporalMixtureOfExperts` / `PairRegimeRouter` / `EntityRegimeRouter` | Aliases for the regime MoE surface. |
+
+Conditional flow uncertainty head:
+
+| Entry point | Notes |
+| --- | --- |
+| `cartoboost.deep.ConditionalFlowDistributionHead` | Native-backed residual distribution head that fits on model hidden state plus optional horizon, entity or pair, and graph context features; predicts deterministic samples, log likelihood, marginal quantiles, joint scenario paths, tail-risk metrics, and calibration metrics when actuals are supplied. |
+| `cartoboost.deep.JointHorizonFlowHead` / `ResidualFlowCalibrator` | Aliases for the same conditional flow uncertainty surface. |
+| `save(path)` / `ConditionalFlowDistributionHead.load(path)` | Persist and restore the fitted native JSON artifact with save/load prediction parity covered by the Python deep-model tests. |
+
+Experimental diffusion scenario generation:
+
+| Entry point | Notes |
+| --- | --- |
+| `cartoboost.deep.GeoTemporalDiffusionScenarioModel` | Native-backed graph residual scenario generator for future regional fields, residual shock fields, graph-wide stress scenarios, candidate outcome distributions, or counterfactual scenario analysis. It returns scenario panels, scenario mean, scenario variance, spatial correlation, and point-forecast comparison metrics. |
+| `cartoboost.deep.FlowScenarioGenerator` / `ConditionalResidualDiffusion` | Aliases for the same experimental scenario-generation surface. |
+| `generate(point_forecast, edges)` | Requires a finite horizon-by-node point forecast panel and directed weighted edges. Metadata marks `capability_tier="experimental"`, disables default AutoGeoModel selection, and excludes the output from primary benchmark evidence. |
+
+Advanced experimental neural operators:
+
+| Entry point | Notes |
+| --- | --- |
+| `cartoboost.deep.GraphNeuralOperator` | Native-backed spatial field operator for horizon-by-node fields with coordinates, optional directed weighted graph edges, and optional exogenous fields. It returns `future_field`, `residual_field`, `uncertainty_field`, and advanced experimental metadata. |
+| `cartoboost.deep.FourierGeoOperator` / `SpatioTemporalOperator` | Aliases for the same first-cut operator surface. |
+| `GraphNeuralOperator.synthetic_benchmark()` | Runs the maintained smooth-field synthetic benchmark and reports operator RMSE, pointwise baseline RMSE, and improvement. |
+
+Choice-set candidate competition:
+
+| Entry point | Notes |
+| --- | --- |
+| `cartoboost.deep.ChoiceSetTransformer` | Native-backed candidate competition scorer. `score(candidates)` groups by `decision_id`, encodes candidate value, candidate features, context features, optional entity/pair embeddings, and existing utility/probability fields, then emits per-candidate utility and softmax choice probability. |
+| `cartoboost.deep.UtilityNet` / `NestedChoiceHead` / `CounterfactualCandidateScorer` | Aliases for the same choice-set surface in this first cut. |
+| `counterfactual_best(candidates)` / `calibration_report(candidates)` | Returns best candidates by decision group and Brier/ECE metrics when binary `chosen` labels are supplied. |
+
+Optional foundation adapters:
+
+| Entry point | Notes |
+| --- | --- |
+| `cartoboost.ChronosAdapter` / `TimesFMAdapter` / `MoiraiAdapter` / `TimeGPTAdapter` | Optional time-series foundation adapters for baselines, feature generation, cold-start experts, and benchmark comparators. They require their optional extras or an explicit backend and otherwise raise a clear skip reason. |
+| `cartoboost.TabPFNAdapter` / `TabPFNFeatureGenerator` / `PriorFittedBaseline` | Optional tabular foundation adapters with the same cache and dependency contract. |
+| `FoundationForecastFeatures.benchmark_with_without_features(...)` | Compares current predictions with and without foundation features and reports RMSE delta. Adapter caches include external dependency name, version when installed, model id, model hash, input hash, output shape, and explicit AutoGeo enablement metadata. |
 
 Python-owned JSON model artifacts include `artifact_type` and
 `artifact_version` fields. CI runs `scripts/check_artifact_compatibility.py` to

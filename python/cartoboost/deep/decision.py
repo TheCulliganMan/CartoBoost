@@ -2,8 +2,12 @@ from __future__ import annotations
 
 from typing import Any
 
+import numpy as np
+
 from ..config import FallbackMode, Objective
 from ._native import dumps, loads, require_native
+from .choice import ChoiceSetTransformer
+from .flow import flow_uncertainty_report
 
 
 class ConstrainedDecisionOptimizer:
@@ -34,6 +38,36 @@ class ConstrainedDecisionOptimizer:
                 self.risk_aversion,
             )
         )
+
+    def flow_uncertainty_report(
+        self, candidate_frame: list[dict[str, Any]], predictions: Any | None = None
+    ) -> dict[str, Any]:
+        candidates = _merge_predictions(candidate_frame, predictions)
+        utility = np.asarray(
+            [row.get("expected_utility", row.get("candidate_value", 0.0)) for row in candidates],
+            dtype=float,
+        )
+        baseline = np.full_like(utility, float(np.mean(utility)))
+        residual = utility - baseline
+        hidden = np.column_stack(
+            [
+                np.asarray([row.get("candidate_value", 0.0) for row in candidates], dtype=float),
+                np.arange(len(candidates), dtype=float),
+            ]
+        )
+        return flow_uncertainty_report(
+            residual,
+            model_hidden_state=hidden,
+            surface="ConstrainedDecisionOptimizer",
+        )
+
+    def choice_set_report(
+        self, candidate_frame: list[dict[str, Any]], predictions: Any | None = None
+    ) -> dict[str, Any]:
+        candidates = _merge_predictions(candidate_frame, predictions)
+        report = ChoiceSetTransformer(outside_option=True).score(candidates)
+        report["surface"] = "ConstrainedDecisionOptimizer"
+        return report
 
     def get_params(self, deep: bool = True) -> dict[str, Any]:
         del deep

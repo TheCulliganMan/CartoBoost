@@ -750,6 +750,240 @@ pub struct GraphWaveNetForecaster {
     target_scale: f64,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DelayAwareGraphConfig {
+    pub horizon: usize,
+    pub edge_delay_prior: Vec<usize>,
+    pub ridge: f64,
+    pub backend: ComputeBackendSelection,
+}
+
+impl Default for DelayAwareGraphConfig {
+    fn default() -> Self {
+        Self {
+            horizon: 1,
+            edge_delay_prior: Vec::new(),
+            ridge: 1.0e-6,
+            backend: ComputeBackendSelection::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EdgeDelaySensitivity {
+    pub graph_signal_coefficient: f64,
+    pub delay_counts: Vec<(usize, usize)>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DelayAwareGraphTransformer {
+    pub config: DelayAwareGraphConfig,
+    node_ids: Vec<String>,
+    frequency: String,
+    edges: Vec<(usize, usize)>,
+    edge_weights: Vec<f64>,
+    coefficients: Vec<f64>,
+    history: Vec<Vec<f64>>,
+    target_mean: f64,
+    target_scale: f64,
+}
+
+impl DelayAwareGraphTransformer {
+    pub fn new(config: DelayAwareGraphConfig) -> Result<Self> {
+        if config.horizon == 0 {
+            return Err(GeoStError::InvalidFrame(
+                "horizon must be positive".to_string(),
+            ));
+        }
+        if !config.ridge.is_finite() || config.ridge < 0.0 {
+            return Err(GeoStError::InvalidFrame(
+                "ridge must be finite and non-negative".to_string(),
+            ));
+        }
+        if config.edge_delay_prior.contains(&0) {
+            return Err(GeoStError::InvalidFrame(
+                "edge_delay_prior values must be positive".to_string(),
+            ));
+        }
+        Ok(Self {
+            config,
+            node_ids: Vec::new(),
+            frequency: String::new(),
+            edges: Vec::new(),
+            edge_weights: Vec::new(),
+            coefficients: Vec::new(),
+            history: Vec::new(),
+            target_mean: 0.0,
+            target_scale: 1.0,
+        })
+    }
+
+    pub fn fit(&mut self, frame: &GraphTemporalFrame) -> Result<()> {
+        frame.validate()?;
+        let nodes = frame.node_ids.len();
+        let edges = csr_edges(&frame.adjacency, nodes);
+        if edges.is_empty() {
+            return Err(GeoStError::InvalidFrame(
+                "delay-aware graph transformer requires at least one directed edge".to_string(),
+            ));
+        }
+        let delays = self.resolved_delays(edges.len())?;
+        let max_delay = delays.iter().copied().max().unwrap_or(1);
+        if frame.target.len() <= max_delay + self.config.horizon {
+            return Err(GeoStError::InvalidFrame(
+                "target length must exceed maximum edge delay plus horizon".to_string(),
+            ));
+        }
+        let (target_mean, target_scale) = target_center_scale(&frame.target);
+        let normalized_target = frame
+            .target
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|value| (value - target_mean) / target_scale)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let mut xtx = vec![vec![0.0; 3]; 3];
+        let mut xty = vec![0.0; 3];
+        for time_idx in max_delay - 1..normalized_target.len() - 1 {
+            let signal = delayed_graph_signal(
+                &normalized_target,
+                &edges,
+                &frame.adjacency.data,
+                &delays,
+                time_idx,
+            );
+            for (node, signal_value) in signal.iter().enumerate().take(nodes) {
+                let x = [1.0, normalized_target[time_idx][node], *signal_value];
+                let actual = normalized_target[time_idx + 1][node];
+                for row in 0..3 {
+                    xty[row] += x[row] * actual;
+                    for col in 0..3 {
+                        xtx[row][col] += x[row] * x[col];
+                    }
+                }
+            }
+        }
+        for (idx, row) in xtx.iter_mut().enumerate() {
+            if idx > 0 {
+                row[idx] += self.config.ridge.max(1.0e-12);
+            }
+        }
+        self.coefficients = solve_linear_system(xtx, xty);
+        self.node_ids = frame.node_ids.clone();
+        self.frequency = frame.frequency.clone();
+        self.edges = edges;
+        self.edge_weights = frame.adjacency.data.clone();
+        self.history = normalized_target;
+        self.target_mean = target_mean;
+        self.target_scale = target_scale;
+        Ok(())
+    }
+
+    pub fn predict(&self, horizon: usize) -> Result<Vec<Vec<f64>>> {
+        if horizon == 0 {
+            return Err(GeoStError::InvalidFrame(
+                "prediction horizon must be positive".to_string(),
+            ));
+        }
+        if self.coefficients.is_empty() {
+            return Err(GeoStError::NotFit);
+        }
+        let delays = self.resolved_delays(self.edges.len())?;
+        let mut history = self.history.clone();
+        let mut predictions = Vec::with_capacity(horizon);
+        for _ in 0..horizon {
+            let time_idx = history.len() - 1;
+            let signal =
+                delayed_graph_signal(&history, &self.edges, &self.edge_weights, &delays, time_idx);
+            let mut next = vec![0.0; self.node_ids.len()];
+            for node in 0..self.node_ids.len() {
+                next[node] = self.coefficients[0]
+                    + self.coefficients[1] * history[time_idx][node]
+                    + self.coefficients[2] * signal[node];
+            }
+            history.push(next.clone());
+            predictions.push(
+                next.into_iter()
+                    .map(|value| quantize_prediction(value * self.target_scale + self.target_mean))
+                    .collect(),
+            );
+        }
+        Ok(predictions)
+    }
+
+    pub fn score(&self, actual: &[Vec<f64>]) -> Result<f64> {
+        if actual.is_empty() {
+            return Err(GeoStError::InvalidFrame(
+                "actual must contain at least one row".to_string(),
+            ));
+        }
+        let predictions = self.predict(actual.len())?;
+        let mut sum = 0.0;
+        let mut count = 0.0;
+        for (pred_row, actual_row) in predictions.iter().zip(actual) {
+            if pred_row.len() != actual_row.len() {
+                return Err(GeoStError::InvalidFrame(
+                    "prediction and actual row widths must match".to_string(),
+                ));
+            }
+            for (&pred, &actual) in pred_row.iter().zip(actual_row) {
+                let error = actual - pred;
+                sum += error * error;
+                count += 1.0;
+            }
+        }
+        Ok((sum / count).sqrt())
+    }
+
+    pub fn edge_delay_sensitivity(&self) -> EdgeDelaySensitivity {
+        let mut counts = std::collections::BTreeMap::<usize, usize>::new();
+        if let Ok(delays) = self.resolved_delays(self.edges.len()) {
+            for delay in delays {
+                *counts.entry(delay).or_insert(0) += 1;
+            }
+        }
+        EdgeDelaySensitivity {
+            graph_signal_coefficient: self.coefficients.get(2).copied().unwrap_or(0.0),
+            delay_counts: counts.into_iter().collect(),
+        }
+    }
+
+    pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
+        fs::write(path, serde_json::to_string_pretty(self)?)?;
+        Ok(())
+    }
+
+    pub fn load(path: impl AsRef<Path>) -> Result<Self> {
+        Ok(serde_json::from_str(&fs::read_to_string(path)?)?)
+    }
+
+    pub fn to_json_string(&self) -> Result<String> {
+        Ok(serde_json::to_string(self)?)
+    }
+
+    pub fn from_json_string(value: &str) -> Result<Self> {
+        Ok(serde_json::from_str(value)?)
+    }
+
+    pub fn backend(&self) -> String {
+        self.config.backend.selected.clone()
+    }
+
+    fn resolved_delays(&self, edge_count: usize) -> Result<Vec<usize>> {
+        if self.config.edge_delay_prior.is_empty() {
+            return Ok(vec![1; edge_count]);
+        }
+        if self.config.edge_delay_prior.len() != edge_count {
+            return Err(GeoStError::InvalidFrame(
+                "edge_delay_prior must match edge count".to_string(),
+            ));
+        }
+        Ok(self.config.edge_delay_prior.clone())
+    }
+}
+
 impl GraphWaveNetForecaster {
     pub fn new(config: GraphWaveNetConfig) -> Result<Self> {
         if config.lookback == 0
@@ -1348,6 +1582,49 @@ fn deterministic_weight_matrix(rows: usize, cols: usize, seed: u64) -> Vec<Vec<f
                 .collect()
         })
         .collect()
+}
+
+fn csr_edges(adjacency: &CsrAdjacency, node_count: usize) -> Vec<(usize, usize)> {
+    let mut edges = Vec::with_capacity(adjacency.indices.len());
+    for source in 0..node_count {
+        for edge_idx in adjacency.indptr[source]..adjacency.indptr[source + 1] {
+            edges.push((source, adjacency.indices[edge_idx]));
+        }
+    }
+    edges
+}
+
+fn delayed_graph_signal(
+    target: &[Vec<f64>],
+    edges: &[(usize, usize)],
+    weights: &[f64],
+    delays: &[usize],
+    time_idx: usize,
+) -> Vec<f64> {
+    let nodes = target.first().map_or(0, Vec::len);
+    let mut signal = vec![0.0; nodes];
+    let mut weight_sum = vec![0.0; nodes];
+    for (edge_idx, &(source, target_node)) in edges.iter().enumerate() {
+        let delay = delays[edge_idx];
+        let lag_idx = (time_idx + 1).saturating_sub(delay);
+        let weight = weights[edge_idx];
+        signal[target_node] += weight * target[lag_idx][source];
+        weight_sum[target_node] += weight.abs();
+    }
+    for node in 0..nodes {
+        if weight_sum[node] > 1.0e-12 {
+            signal[node] /= weight_sum[node];
+        }
+    }
+    signal
+}
+
+fn quantize_prediction(value: f64) -> f64 {
+    if value.is_finite() {
+        (value * 1.0e12).round() / 1.0e12
+    } else {
+        value
+    }
 }
 
 fn solve_linear_system(mut matrix: Vec<Vec<f64>>, mut rhs: Vec<f64>) -> Vec<f64> {

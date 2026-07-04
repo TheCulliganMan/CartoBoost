@@ -143,14 +143,14 @@ dependencies = [
 
 [[package]]
 name = "cartoboost-cli"
-version = "0.2.39"
+version = "0.2.40"
 dependencies = [
  "cartoboost-core",
 ]
 
 [[package]]
 name = "cartoboost-core"
-version = "0.2.39"
+version = "0.2.40"
 dependencies = [
  "chrono",
  "criterion",
@@ -164,7 +164,7 @@ dependencies = [
 
 [[package]]
 name = "cartoboost-geo-causal"
-version = "0.2.39"
+version = "0.2.40"
 dependencies = [
  "cartoboost-geo-core",
  "serde",
@@ -174,7 +174,7 @@ dependencies = [
 
 [[package]]
 name = "cartoboost-geo-core"
-version = "0.2.39"
+version = "0.2.40"
 dependencies = [
  "chrono",
  "serde",
@@ -184,7 +184,7 @@ dependencies = [
 
 [[package]]
 name = "cartoboost-geo-st"
-version = "0.2.39"
+version = "0.2.40"
 dependencies = [
  "cartoboost-neural",
  "serde",
@@ -195,7 +195,7 @@ dependencies = [
 
 [[package]]
 name = "cartoboost-geostats"
-version = "0.2.39"
+version = "0.2.40"
 dependencies = [
  "cartoboost-geo-core",
  "criterion",
@@ -205,7 +205,7 @@ dependencies = [
 
 [[package]]
 name = "cartoboost-neural"
-version = "0.2.39"
+version = "0.2.40"
 dependencies = [
  "cartoboost-core",
  "chrono",
@@ -222,7 +222,7 @@ dependencies = [
 
 [[package]]
 name = "cartoboost-prob"
-version = "0.2.39"
+version = "0.2.40"
 dependencies = [
  "cartoboost-core",
  "serde",
@@ -232,7 +232,7 @@ dependencies = [
 
 [[package]]
 name = "cartoboost-py"
-version = "0.2.39"
+version = "0.2.40"
 dependencies = [
  "cartoboost-core",
  "cartoboost-geo-causal",
@@ -250,8 +250,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "cartoboost-representation"
+version = "0.2.40"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "cartoboost-spatial-econ"
-version = "0.2.39"
+version = "0.2.40"
 dependencies = [
  "cartoboost-geo-core",
  "serde",
@@ -260,8 +271,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "cartoboost-ssm"
+version = "0.2.40"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "cartoboost-wasm"
-version = "0.2.39"
+version = "0.2.40"
 dependencies = [
  "cartoboost-core",
  "cartoboost-geo-causal",
@@ -269,6 +291,7 @@ dependencies = [
  "cartoboost-geo-st",
  "cartoboost-geostats",
  "cartoboost-neural",
+ "cartoboost-prob",
  "chrono",
  "console_error_panic_hook",
  "js-sys",
