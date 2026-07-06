@@ -24,6 +24,57 @@ export function availableForecastModels() {
 
 /**
  * @param {any} candidates
+ * @param {number} temperature
+ * @param {string | null} [monotone_candidate_value]
+ * @returns {any}
+ */
+export function deepChoiceSetTransformerReport(candidates, temperature, monotone_candidate_value) {
+    var ptr0 = isLikeNone(monotone_candidate_value) ? 0 : passStringToWasm0(monotone_candidate_value, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    var len0 = WASM_VECTOR_LEN;
+    const ret = wasm.deepChoiceSetTransformerReport(candidates, temperature, ptr0, len0);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * @param {any} hidden
+ * @param {Float64Array} residuals
+ * @param {Float64Array} quantiles
+ * @param {number} sample_count
+ * @returns {any}
+ */
+export function deepConditionalFlowFit(hidden, residuals, quantiles, sample_count) {
+    const ptr0 = passArrayF64ToWasm0(residuals, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArrayF64ToWasm0(quantiles, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.deepConditionalFlowFit(hidden, ptr0, len0, ptr1, len1, sample_count);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * @param {any} artifact
+ * @param {any} hidden
+ * @param {Float64Array | null} [actual]
+ * @returns {any}
+ */
+export function deepConditionalFlowPredict(artifact, hidden, actual) {
+    var ptr0 = isLikeNone(actual) ? 0 : passArrayF64ToWasm0(actual, wasm.__wbindgen_malloc);
+    var len0 = WASM_VECTOR_LEN;
+    const ret = wasm.deepConditionalFlowPredict(artifact, hidden, ptr0, len0);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * @param {any} candidates
  * @param {string} objective
  * @param {any} constraints
  * @param {string} fallback
@@ -35,6 +86,22 @@ export function deepConstrainedDecisionSelect(candidates, objective, constraints
     const ptr1 = passStringToWasm0(fallback, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
     const len1 = WASM_VECTOR_LEN;
     const ret = wasm.deepConstrainedDecisionSelect(candidates, ptr0, len0, constraints, ptr1, len1);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * @param {any} point_forecast
+ * @param {any} edges
+ * @param {number} scenario_count
+ * @param {number} diffusion_steps
+ * @param {number} shock_scale
+ * @returns {any}
+ */
+export function deepDiffusionScenarioGenerate(point_forecast, edges, scenario_count, diffusion_steps, shock_scale) {
+    const ret = wasm.deepDiffusionScenarioGenerate(point_forecast, edges, scenario_count, diffusion_steps, shock_scale);
     if (ret[2]) {
         throw takeFromExternrefTable0(ret[1]);
     }
@@ -78,6 +145,49 @@ export function deepEventOutcomeFit(features, labels, backend) {
  */
 export function deepEventOutcomePredict(artifact, features) {
     const ret = wasm.deepEventOutcomePredict(artifact, features);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * @param {any} field_values
+ * @param {any} coordinates
+ * @param {any} edges
+ * @param {any} exogenous_fields
+ * @param {number} smoothing
+ * @param {number} coordinate_scale
+ * @returns {any}
+ */
+export function deepGraphNeuralOperatorPredict(field_values, coordinates, edges, exogenous_fields, smoothing, coordinate_scale) {
+    const ret = wasm.deepGraphNeuralOperatorPredict(field_values, coordinates, edges, exogenous_fields, smoothing, coordinate_scale);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * @returns {any}
+ */
+export function deepNeuralOperatorSyntheticBenchmark() {
+    const ret = wasm.deepNeuralOperatorSyntheticBenchmark();
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * @param {any} features
+ * @param {Float64Array} target
+ * @returns {any}
+ */
+export function deepRegimeMoeReport(features, target) {
+    const ptr0 = passArrayF64ToWasm0(target, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.deepRegimeMoeReport(features, ptr0, len0);
     if (ret[2]) {
         throw takeFromExternrefTable0(ret[1]);
     }
@@ -140,6 +250,33 @@ export function deepServiceResidualFit(rows, backend) {
  */
 export function deepServiceResidualPredict(artifact, rows) {
     const ret = wasm.deepServiceResidualPredict(artifact, rows);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * @param {any} y
+ * @param {number} lookback
+ * @param {number} horizon
+ * @returns {any}
+ */
+export function deepTemporalEntityFit(y, lookback, horizon) {
+    const ret = wasm.deepTemporalEntityFit(y, lookback, horizon);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * @param {any} artifact
+ * @param {number} horizon
+ * @returns {any}
+ */
+export function deepTemporalEntityPredict(artifact, horizon) {
+    const ret = wasm.deepTemporalEntityPredict(artifact, horizon);
     if (ret[2]) {
         throw takeFromExternrefTable0(ret[1]);
     }
