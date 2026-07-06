@@ -408,6 +408,46 @@ const fallbackModelOptions: ModelOption[] = [
   {value: 'spatial_piecewise_kriging', label: 'Spatial Piecewise Kriging', group: 'spatial'},
   {value: 'optimized_theta', label: 'Optimized Theta', group: 'local'},
   {value: 'naive', label: 'Naive', group: 'local'},
+  {value: 'temporal_ssm_forecaster', label: 'Temporal SSM Forecaster', group: 'deep_forecast'},
+  {value: 'inverted_temporal_transformer', label: 'Inverted Temporal Transformer', group: 'deep_forecast'},
+];
+
+const DEEP_FORECAST_MODEL_IDS = new Set(['temporal_ssm_forecaster', 'inverted_temporal_transformer']);
+
+const deepModelGroups: {label: string; options: {value: string; label: string}[]}[] = [
+  {
+    label: 'Pair & Sequence',
+    options: [{value: 'DirectionalPairForecaster', label: 'Directional Pair Forecaster'}],
+  },
+  {
+    label: 'Response & Event',
+    options: [
+      {value: 'ResponseCurveModel', label: 'Response Curve Model'},
+      {value: 'EventOutcomeModel', label: 'Event Outcome Model'},
+      {value: 'ServiceTimeResidualModel', label: 'Service Time Residual Model'},
+    ],
+  },
+  {
+    label: 'Graph & Spatial',
+    options: [
+      {value: 'SpatioTemporalGraphForecaster', label: 'SpatioTemporal Graph Forecaster'},
+      {value: 'PropagationDelayGraphForecaster', label: 'Propagation Delay Graph Forecaster'},
+      {value: 'GraphNeuralOperator', label: 'Graph Neural Operator'},
+      {value: 'GeoTemporalDiffusionScenarioModel', label: 'GeoTemporal Diffusion Scenario Model'},
+    ],
+  },
+  {
+    label: 'Uncertainty',
+    options: [{value: 'ConditionalFlowDistributionHead', label: 'Conditional Flow Distribution Head'}],
+  },
+  {
+    label: 'Decisions',
+    options: [
+      {value: 'ChoiceSetTransformer', label: 'Choice Set Transformer'},
+      {value: 'RegimeMoEForecaster', label: 'Regime MoE Forecaster'},
+      {value: 'ConstrainedDecisionOptimizer', label: 'Constrained Decision Optimizer'},
+    ],
+  },
 ];
 
 export function RegressionModelExample({
@@ -1856,6 +1896,7 @@ const forecastPipelineLabels: Record<string, string> = {
   decomposition: 'Decomposition',
   spatial: 'Geographic',
   local: 'Local statistical',
+  deep_forecast: 'Deep forecasters',
 };
 
 const neuralPipelineLabels: Record<string, string> = {
@@ -1970,6 +2011,8 @@ export default function ModelingLabClient(): React.ReactElement {
   const [hiddenBenchmarkSeries, setHiddenBenchmarkSeries] = useState<string[]>([]);
   const [regressionResult, setRegressionResult] = useState<RegressionResponse | null>(null);
   const [neuralResult, setNeuralResult] = useState<RegressionResponse | null>(null);
+  const [deepModel, setDeepModel] = useState('DirectionalPairForecaster');
+  const [deepResult, setDeepResult] = useState<unknown>(null);
   const [featureCols, setFeatureCols] = useState<string[]>([]);
   const [sparseFeatureCols, setSparseFeatureCols] = useState<string[]>([]);
   const [modelingMode, setModelingMode] = useState('full');
@@ -2585,6 +2628,31 @@ export default function ModelingLabClient(): React.ReactElement {
     wasmJsUrl,
   ]);
 
+  const runDeep = useCallback(async () => {
+    setIsRunning(true);
+    setRunProgress({label: `Fitting ${deepModel}`});
+    setResult(null);
+    setComparisonResults([]);
+    setBacktestResults([]);
+    setHiddenBenchmarkSeries([]);
+    setRegressionResult(null);
+    setNeuralResult(null);
+    setDeepResult(null);
+    setStatus(`Fitting ${deepModel} in this page.`);
+    try {
+      await waitForBrowserPaint();
+      const wasmModule = await getInitializedWasmModule(wasmJsUrl, wasmBinaryUrl);
+      const response = runDeepModelWasmExample(wasmModule, deepModel);
+      setDeepResult(response);
+      setStatus(`${deepModel} complete.`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsRunning(false);
+      setRunProgress(null);
+    }
+  }, [deepModel, wasmBinaryUrl, wasmJsUrl]);
+
   const exportSuggestedConfig = useCallback(() => {
     if (!table) {
       setStatus('Load a dataset before exporting a suggested config.');
@@ -2879,24 +2947,13 @@ export default function ModelingLabClient(): React.ReactElement {
             )}
 
             {activeModelingSurface === 'deep' && (
-              <ControlSection title="Deep model Wasm examples" step="3">
+              <ControlSection title="Deep model" step="3">
                 <div className={styles.neuralSummary}>
                   <strong>Browser-native deep models</strong>
-                  <span>Run the Rust-backed deep-model examples directly in this page with tiny synthetic taxi-shaped samples.</span>
+                  <span>Runs the Rust-backed deep model directly in this page with a small taxi-shaped sample.</span>
                 </div>
                 <div className={styles.controlsGrid}>
-                  <DeepModelWasmExample model="DirectionalPairForecaster" />
-                  <DeepModelWasmExample model="ResponseCurveModel" />
-                  <DeepModelWasmExample model="EventOutcomeModel" />
-                  <DeepModelWasmExample model="ServiceTimeResidualModel" />
-                  <DeepModelWasmExample model="SpatioTemporalGraphForecaster" />
-                  <DeepModelWasmExample model="TemporalSSMForecaster" />
-                  <DeepModelWasmExample model="ConditionalFlowDistributionHead" />
-                  <DeepModelWasmExample model="GeoTemporalDiffusionScenarioModel" />
-                  <DeepModelWasmExample model="GraphNeuralOperator" />
-                  <DeepModelWasmExample model="ChoiceSetTransformer" />
-                  <DeepModelWasmExample model="RegimeMoEForecaster" />
-                  <DeepModelWasmExample model="ConstrainedDecisionOptimizer" />
+                  <GroupedSelect label="Deep model" value={deepModel} onChange={setDeepModel} groups={deepModelGroups} />
                 </div>
               </ControlSection>
             )}
@@ -2930,7 +2987,9 @@ export default function ModelingLabClient(): React.ReactElement {
               </button>
             )}
             {activeModelingSurface === 'deep' && (
-              <div className={styles.settingHint}>These examples run directly in the browser and do not require uploaded data.</div>
+              <button className={styles.primaryButton} type="button" disabled={isRunning || isLoadingTaxiSample} onClick={() => scheduleRun(runDeep)}>
+                {isRunning ? 'Running deep model' : 'Run deep model'}
+              </button>
             )}
             <button className={styles.secondaryActionButton} type="button" disabled={!table || isRunning || isLoadingTaxiSample} onClick={exportSuggestedConfig}>
               Export config
@@ -2954,7 +3013,17 @@ export default function ModelingLabClient(): React.ReactElement {
         </div>
 
         <div className={styles.outputPanel}>
-          {neuralResult ? (
+          {deepResult ? (
+            <>
+              <div className={styles.resultHeader}>
+                <div>
+                  <span className={styles.eyebrow}>Deep model</span>
+                  <h2>{deepModel}</h2>
+                </div>
+              </div>
+              <DeepModelWasmResult result={deepResult} />
+            </>
+          ) : neuralResult ? (
             <>
               <div className={styles.resultHeader}>
                 <div>
@@ -3311,6 +3380,13 @@ function forecastSettingsProfile(selectedModel?: ModelOption) {
     'piecewise_linear_seasonal',
   ]);
   const needsCoordinates = forecastModelNeedsCoordinates(selectedModel);
+  if (DEEP_FORECAST_MODEL_IDS.has(value)) {
+    return {
+      needsCoordinates: false,
+      showSeasonality: true,
+      notice: 'This deep forecaster fits directly on your loaded series. Season length sets the lookback window used for attention features.',
+    };
+  }
   if (needsCoordinates) {
     if (isSpatialPiecewiseKrigingModel(value)) {
       return {
@@ -7273,7 +7349,12 @@ async function getForecastModelOptions(wasmJsUrl: string, wasmBinaryUrl: string)
       label: model.label,
       group: model.pipeline,
     }));
-  return options.length > 0 ? options : fallbackModelOptions;
+  const baseOptions = options.length > 0 ? options : fallbackModelOptions;
+  const deepForecastOptions = fallbackModelOptions.filter((option) => DEEP_FORECAST_MODEL_IDS.has(option.value));
+  const missingDeepOptions = deepForecastOptions.filter(
+    (deepOption) => !baseOptions.some((option) => option.value === deepOption.value),
+  );
+  return [...baseOptions, ...missingDeepOptions];
 }
 
 async function runBrowserForecast({
@@ -7303,6 +7384,27 @@ async function runBrowserForecast({
   isolatedWorker?: boolean;
   timeoutMs?: number;
 }) {
+  if (DEEP_FORECAST_MODEL_IDS.has(model)) {
+    const wasmModule = await getInitializedWasmModule(wasmJsUrl, wasmBinaryUrl);
+    try {
+      const response = runDeepTemporalForecast(wasmModule, {
+        table,
+        timestampCol,
+        targetCol,
+        seriesCol,
+        frequency,
+        horizon,
+        model,
+        seasonLength,
+      });
+      assertForecastResponseRecords(response, model);
+      return response;
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error(`[${model}] deep forecast failed`, error);
+      throw error;
+    }
+  }
   const request = buildBrowserForecastRequest({
     table,
     timestampCol,
@@ -7321,6 +7423,120 @@ async function runBrowserForecast({
         : await runForecastRequestInWorker(wasmJsUrl, wasmBinaryUrl, request);
   assertForecastResponseRecords(response, model);
   return response;
+}
+
+function seriesTimestampDeltaMs(timestamps: number[]): number {
+  if (timestamps.length < 2) {
+    return 3_600_000;
+  }
+  const deltas = [];
+  for (let i = 1; i < timestamps.length; i += 1) {
+    const delta = timestamps[i] - timestamps[i - 1];
+    if (Number.isFinite(delta) && delta > 0) {
+      deltas.push(delta);
+    }
+  }
+  if (deltas.length === 0) {
+    return 3_600_000;
+  }
+  deltas.sort((a, b) => a - b);
+  return deltas[Math.floor(deltas.length / 2)];
+}
+
+function runDeepTemporalForecast(
+  wasmModule: WasmModule,
+  {
+    table,
+    timestampCol,
+    targetCol,
+    seriesCol,
+    horizon,
+    seasonLength,
+    model,
+  }: {
+    table: ParsedTable;
+    timestampCol: string;
+    targetCol: string;
+    seriesCol: string;
+    frequency: string;
+    horizon: number;
+    seasonLength: number;
+    model: string;
+  },
+): ForecastResponse {
+  if (!wasmModule.deepTemporalEntityFit || !wasmModule.deepTemporalEntityPredict) {
+    throw new Error(`${model} Wasm exports are not available from this bundle.`);
+  }
+  console.log('[deep-debug] stage=start', {rowCount: table.rows.length, timestampCol, targetCol, seriesCol});
+  const groupsObj: Record<string, {timestampMs: number; timestamp: string; value: number}[]> = {};
+  for (const row of table.rows) {
+    const rawSeriesId = seriesCol ? row[seriesCol] : '__single__';
+    const seriesId = String(rawSeriesId);
+    const timestampMs = Date.parse(normalizeTimestamp(row[timestampCol]));
+    const value = Number(row[targetCol]);
+    if (!Number.isFinite(timestampMs) || !Number.isFinite(value)) {
+      continue;
+    }
+    if (!groupsObj[seriesId]) {
+      groupsObj[seriesId] = [];
+    }
+    groupsObj[seriesId].push({timestampMs, timestamp: row[timestampCol], value});
+  }
+  const seriesIds = Object.keys(groupsObj);
+  console.log('[deep-debug] stage=grouped', {groupCount: seriesIds.length, keys: seriesIds});
+  if (seriesIds.length === 0) {
+    throw new Error(`${model} needs at least one series with valid timestamp and target values.`);
+  }
+  console.log('[deep-debug] stage=before-sort', {seriesIds, sizes: seriesIds.map((id) => groupsObj[id]?.length)});
+  for (const seriesId of seriesIds) {
+    groupsObj[seriesId].sort((a, b) => a.timestampMs - b.timestampMs);
+  }
+  console.log('[deep-debug] stage=after-sort');
+  const panelLength = Math.min(...seriesIds.map((seriesId) => groupsObj[seriesId].length));
+  const lookback = Math.max(2, Math.min(seasonLength > 0 ? seasonLength : 7, panelLength - horizon - 1));
+  if (panelLength <= lookback + horizon) {
+    throw new Error(
+      `${model} needs at least ${lookback + horizon + 1} rows in every series for a lookback of ${lookback} and horizon of ${horizon}.`,
+    );
+  }
+  const tail = (rows: {timestampMs: number; timestamp: string; value: number}[]) => rows.slice(rows.length - panelLength);
+  const alignedSeries = seriesIds.map((seriesId) => tail(groupsObj[seriesId]));
+  const panel: number[][] = [];
+  for (let step = 0; step < panelLength; step += 1) {
+    panel.push(alignedSeries.map((rows) => rows[step].value));
+  }
+  const artifact = wasmModule.deepTemporalEntityFit!(panel, lookback, horizon);
+  console.log('[deep-debug] stage=fit-done', {artifact});
+  const predictions = wasmModule.deepTemporalEntityPredict!(artifact, horizon) as number[][];
+  console.log('[deep-debug] stage=predict-done', {predictions});
+  const records: ForecastRecord[] = [];
+  seriesIds.forEach((seriesId, entityIndex) => {
+    const rows = alignedSeries[entityIndex];
+    const lastRow = rows[rows.length - 1];
+    const stepMs = seriesTimestampDeltaMs(rows.map((row) => row.timestampMs));
+    for (let h = 0; h < predictions.length; h += 1) {
+      const timestampMs = lastRow.timestampMs + stepMs * (h + 1);
+      records.push({
+        series_id: seriesId,
+        timestamp: new Date(timestampMs).toISOString().slice(0, 19),
+        horizon: h + 1,
+        model,
+        prediction: predictions[h][entityIndex],
+      });
+    }
+  });
+  return {
+    metadata: {
+      model,
+      input: {
+        n_rows: table.rows.length,
+        is_panel: seriesIds.length > 1,
+        series_ids: seriesIds,
+        frequency: 'inferred',
+      },
+    },
+    forecast: {records},
+  };
 }
 
 function buildBrowserForecastRequest({
