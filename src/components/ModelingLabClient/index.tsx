@@ -1867,7 +1867,7 @@ const neuralPipelineLabels: Record<string, string> = {
 };
 
 const graphNeuralPipelines = new Set(['node2vec', 'graphsage', 'hetero_graphsage', 'hinsage']);
-type ActiveModelingSurface = 'forecast' | 'model' | 'neural';
+type ActiveModelingSurface = 'forecast' | 'model' | 'neural' | 'deep';
 
 type PendingLabRun = {
   action: 'forecast' | 'compare' | 'backtest' | 'benchmark';
@@ -2743,6 +2743,13 @@ export default function ModelingLabClient(): React.ReactElement {
                 >
                   Neural
                 </button>
+                <button
+                  className={activeModelingSurface === 'deep' ? styles.surfaceTabActive : undefined}
+                  type="button"
+                  onClick={() => setActiveModelingSurface('deep')}
+                >
+                  Deep
+                </button>
               </div>
             </div>
 
@@ -2871,6 +2878,29 @@ export default function ModelingLabClient(): React.ReactElement {
               </ControlSection>
             )}
 
+            {activeModelingSurface === 'deep' && (
+              <ControlSection title="Deep model Wasm examples" step="3">
+                <div className={styles.neuralSummary}>
+                  <strong>Browser-native deep models</strong>
+                  <span>Run the Rust-backed deep-model examples directly in this page with tiny synthetic taxi-shaped samples.</span>
+                </div>
+                <div className={styles.controlsGrid}>
+                  <DeepModelWasmExample model="DirectionalPairForecaster" />
+                  <DeepModelWasmExample model="ResponseCurveModel" />
+                  <DeepModelWasmExample model="EventOutcomeModel" />
+                  <DeepModelWasmExample model="ServiceTimeResidualModel" />
+                  <DeepModelWasmExample model="SpatioTemporalGraphForecaster" />
+                  <DeepModelWasmExample model="TemporalSSMForecaster" />
+                  <DeepModelWasmExample model="ConditionalFlowDistributionHead" />
+                  <DeepModelWasmExample model="GeoTemporalDiffusionScenarioModel" />
+                  <DeepModelWasmExample model="GraphNeuralOperator" />
+                  <DeepModelWasmExample model="ChoiceSetTransformer" />
+                  <DeepModelWasmExample model="RegimeMoEForecaster" />
+                  <DeepModelWasmExample model="ConstrainedDecisionOptimizer" />
+                </div>
+              </ControlSection>
+            )}
+
           </div>
 
           <div className={styles.actionBlock}>
@@ -2898,6 +2928,9 @@ export default function ModelingLabClient(): React.ReactElement {
               <button className={styles.primaryButton} type="button" disabled={!selectedColumnsReady || featureCols.length === 0 || isRunning || isLoadingTaxiSample} onClick={() => scheduleRun(runNeural)}>
                 {isRunning ? 'Running neural' : 'Run neural'}
               </button>
+            )}
+            {activeModelingSurface === 'deep' && (
+              <div className={styles.settingHint}>These examples run directly in the browser and do not require uploaded data.</div>
             )}
             <button className={styles.secondaryActionButton} type="button" disabled={!table || isRunning || isLoadingTaxiSample} onClick={exportSuggestedConfig}>
               Export config
