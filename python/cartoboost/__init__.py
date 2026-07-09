@@ -153,6 +153,7 @@ from .plotting import (
     write_pydeck_point_map,
     write_pydeck_route_map,
 )
+from .prophet import Prophet  # noqa: F401
 from .ranker import CartoBoostRanker
 from .regressor import CartoBoostRegressor
 from .representation import (
@@ -222,7 +223,7 @@ from .utilities import (
     tsb_forecast,
 )
 
-__version__ = "0.2.42"
+__version__ = "0.2.43"
 
 __all__ = [
     "ArtifactFallback",

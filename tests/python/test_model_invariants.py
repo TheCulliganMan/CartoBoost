@@ -4,7 +4,7 @@ import json
 
 import numpy as np
 import pytest
-from cartoboost import CartoBoostRegressor
+from cartoboost import CartoBoostRegressor, Prophet
 from cartoboost.forecasting import ForecastFrame, PiecewiseLinearSeasonalForecaster
 
 
@@ -29,6 +29,72 @@ def _assert_json_close(left, right) -> None:
             _assert_json_close(left_item, right_item)
     else:
         assert left == right
+
+
+def test_prophet_compatibility_surface_accepts_pandas_and_polars():
+    pd = pytest.importorskip("pandas")
+    pytest.importorskip("polars")
+    frame = pd.DataFrame(
+        {
+            "ds": pd.date_range("2026-01-01", periods=36, freq="D"),
+            "y": np.linspace(10.0, 30.0, 36) + np.sin(np.arange(36)),
+            "promo": np.arange(36) % 2,
+        }
+    )
+    model = (
+        Prophet(
+            yearly_seasonality=False,
+            weekly_seasonality=2,
+            daily_seasonality=False,
+            uncertainty_samples=0,
+        )
+        .add_regressor("promo")
+        .fit(frame)
+    )
+    future = model.make_future_dataframe(5)
+    future["promo"] = 0.0
+    forecast = model.predict(future)
+    assert list(forecast.columns[:4]) == ["ds", "yhat", "yhat_lower", "yhat_upper"]
+    assert len(forecast) == 41
+    assert np.isfinite(forecast["yhat"].to_numpy()).all()
+
+    import polars as pl
+
+    polars_model = Prophet(
+        yearly_seasonality=False,
+        weekly_seasonality=False,
+        daily_seasonality=False,
+        uncertainty_samples=0,
+    ).fit(pl.from_pandas(frame[["ds", "y"]]))
+    polars_forecast = polars_model.predict(polars_model.make_future_dataframe(3))
+    assert len(polars_forecast) == 39
+    assert np.isfinite(polars_forecast["yhat"].to_numpy()).all()
+
+
+def test_prophet_compatibility_surface_matches_prophet_changepoint_spacing():
+    pd = pytest.importorskip("pandas")
+    frame = pd.DataFrame(
+        {
+            "ds": pd.date_range("2026-01-01", periods=30, freq="D"),
+            "y": np.arange(30, dtype=float),
+        }
+    )
+    model = Prophet(
+        n_changepoints=5,
+        changepoint_range=0.8,
+        yearly_seasonality=False,
+        weekly_seasonality=False,
+        daily_seasonality=False,
+        uncertainty_samples=0,
+    ).fit(frame)
+    assert model.changepoints.dt.day.tolist() == [6, 10, 15, 19, 24]
+    assert model._model.metadata_["changepoint_timestamps"] == [
+        "2026-01-06T00:00:00",
+        "2026-01-10T00:00:00",
+        "2026-01-15T00:00:00",
+        "2026-01-19T00:00:00",
+        "2026-01-24T00:00:00",
+    ]
 
 
 def test_piecewise_linear_seasonal_python_wrapper_uses_native_features():

@@ -343,6 +343,19 @@ tables, and provide leakage-safe evaluation for single-series and panel data.
 Use these APIs when the question is future demand rather than
 row-level fare or duration prediction.
 
+`cartoboost.Prophet` is a Prophet-shaped compatibility façade for the
+Rust-native piecewise model. It accepts pandas or Polars `ds`/`y` dataframes
+and exposes `fit`, `predict`, `make_future_dataframe`, `add_seasonality`,
+`add_regressor`, `add_country_holidays`, `setup_dataframe`, and
+`predictive_samples`. Predictions use Prophet column names while retaining
+CartoBoost component and interval diagnostics.
+
+The audited Prophet 1.2.2 public method surface contains 33 methods; the
+CartoBoost façade exposes all 33 names, including growth initialization,
+Fourier, holiday, plotting, component, uncertainty, and validation helpers.
+Run `scripts/prophet_parity_audit.py` in both environments to compare the
+machine-readable method and signature inventories.
+
 Core schema:
 
 | Entry point | Purpose |

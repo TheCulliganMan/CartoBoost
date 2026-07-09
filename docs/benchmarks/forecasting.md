@@ -41,6 +41,55 @@ benchmark suite. They are not real TLC data.
 
 Read: the current scalable synthetic checks favor CartoBoost.
 
+## Prophet-Compatible Surface
+
+`cartoboost.Prophet` provides the familiar `ds`/`y` workflow over the Rust
+piecewise-linear core. The façade accepts pandas or Polars input, creates
+future dataframes, supports Fourier seasonalities, extra regressors, holidays,
+intervals, component columns, and predictive-sample access, and returns
+Prophet-shaped `ds`, `yhat`, `yhat_lower`, and `yhat_upper` results.
+
+The matched smoke benchmark uses the same deterministic daily fixture, weekly
+seasonality, 30-day horizon, and `uncertainty_samples=0`. Timings below are
+model timings after imports; the upstream Prophet run uses `prophet==1.2.2`
+and converts Polars to pandas, while CartoBoost fits the Polars frame directly.
+
+| Rows | Engine | Input | Fit seconds | Predict seconds | Total seconds | Output rows |
+| ---: | --- | --- | ---: | ---: | ---: | ---: |
+| 500 | `cartoboost.Prophet` | Polars | 0.0170 | 0.0052 | 0.0222 | 30 |
+| 500 | `prophet.Prophet` | Polars → pandas | 0.0538 | 0.0037 | 0.0575 | 30 |
+| 100,000 | `cartoboost.Prophet` | Polars | 0.2359 | 0.0098 | 0.2457 | 30 |
+| 100,000 | `prophet.Prophet` | Polars → pandas | 1.8920 | 0.0040 | 1.8960 | 30 |
+
+CartoBoost is 2.6× faster on the 500-row run and 7.7× faster on the
+100,000-row run under this single-series protocol. The optimized path avoids
+serializing historical component rows when the requested forecast is
+future-only; the native Rust forecast and component calls remain sub-10 ms on
+the 100,000-row case. These are synthetic
+performance results, not a quality claim; the functionality claim is covered
+by the pandas/Polars compatibility test and Prophet-shaped output contract.
+
+Reproduce the rows independently in the two environments:
+
+```bash
+uv run --group dev python scripts/prophet_surface_benchmark.py --engine cartoboost --rows 500 --input polars
+uv run --group dev python scripts/prophet_surface_benchmark.py --engine cartoboost --rows 100000 --input polars
+/tmp/prophet-venv/bin/python scripts/prophet_surface_benchmark.py --engine prophet --rows 500 --input polars
+/tmp/prophet-venv/bin/python scripts/prophet_surface_benchmark.py --engine prophet --rows 100000 --input polars
+```
+
+The public-method audit compares the 33-method Prophet 1.2.2 surface against
+the CartoBoost façade and reports missing methods and signatures as JSON:
+
+```bash
+/tmp/prophet-venv/bin/python scripts/prophet_parity_audit.py --engine prophet > /tmp/prophet-audit-upstream.json
+uv run --group dev python scripts/prophet_parity_audit.py --engine cartoboost > /tmp/prophet-audit-cartoboost.json
+```
+
+Both engines report all 33 audited methods present. Numerical Stan posterior
+parity and MCMC backend parity remain outside this Rust-native deterministic
+surface; those modes are rejected explicitly by CartoBoost.
+
 ## Intermittent Demand Checks
 
 The intermittent-demand suite exercises the fixed Croston, SBA, and TSB

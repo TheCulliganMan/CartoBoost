@@ -110,6 +110,9 @@ compare it against strong baselines on the same split.
 - `cartoboost.neural.*`
 - `cartoboost.deep.*`
 - `cartoboost.plotting`
+- `cartoboost.Prophet` (Prophet-compatible `ds`/`y` forecasting over the Rust core; accepts pandas and Polars)
+- Prophet parity audit: `scripts/prophet_parity_audit.py`
+- Prophet speed benchmark: `scripts/prophet_surface_benchmark.py`
 
 ## Model Lists
 
