@@ -1,6 +1,6 @@
 {
   "name": "cartoboost-docs",
-  "version": "0.2.43",
+  "version": "0.2.44",
   "private": true,
   "description": "CartoBoost documentation site.",
   "scripts": {

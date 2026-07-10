@@ -351,10 +351,12 @@ and exposes `fit`, `predict`, `make_future_dataframe`, `add_seasonality`,
 CartoBoost component and interval diagnostics.
 
 The audited Prophet 1.2.2 public method surface contains 33 methods; the
-CartoBoost façade exposes all 33 names, including growth initialization,
-Fourier, holiday, plotting, component, uncertainty, and validation helpers.
-Run `scripts/prophet_parity_audit.py` in both environments to compare the
-machine-readable method and signature inventories.
+CartoBoost façade exposes all 33 names, including deterministic growth
+initialization, Fourier, holiday-window, plotting, component, uncertainty,
+preprocessing, and validation helpers. Run
+`scripts/prophet_parity_audit.py` in both environments to compare the
+machine-readable method and signature inventories. Stan/MCMC methods remain
+intentionally unsupported; CartoBoost uses the Rust-native deterministic path.
 
 Core schema:
 

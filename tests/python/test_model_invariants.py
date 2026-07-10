@@ -97,6 +97,56 @@ def test_prophet_compatibility_surface_matches_prophet_changepoint_spacing():
     ]
 
 
+def test_prophet_compatibility_surface_implements_deterministic_helper_contracts():
+    pd = pytest.importorskip("pandas")
+    dates = pd.Series(pd.date_range("2026-01-01", periods=30, freq="D"))
+    holidays = pd.DataFrame(
+        {
+            "holiday": ["launch"],
+            "ds": [pd.Timestamp("2026-01-10")],
+            "lower_window": [-1],
+            "upper_window": [1],
+            "prior_scale": [4.0],
+        }
+    )
+    frame = pd.DataFrame({"ds": dates, "y": np.linspace(10.0, 20.0, len(dates))})
+    model = Prophet(
+        holidays=holidays,
+        yearly_seasonality="auto",
+        weekly_seasonality="auto",
+        daily_seasonality="auto",
+        uncertainty_samples=0,
+    )
+    features, priors, component_cols, modes = model.make_all_seasonality_features(frame)
+    assert list(features.columns) == [
+        "weekly_delim_1",
+        "weekly_delim_2",
+        "weekly_delim_3",
+        "weekly_delim_4",
+        "weekly_delim_5",
+        "weekly_delim_6",
+        "launch_delim_+0",
+        "launch_delim_+1",
+        "launch_delim_-1",
+    ]
+    assert priors[-3:] == [4.0, 4.0, 4.0]
+    assert {"additive_terms", "multiplicative_terms"}.issubset(component_cols.columns)
+    assert "launch" in modes["additive"]
+    assert (
+        model.add_group_component(
+            pd.DataFrame({"col": [0, 1], "component": ["weekly", "launch"]}),
+            "all_terms",
+            ["weekly", "launch"],
+        ).shape[0]
+        == 4
+    )
+    prepared = model.setup_dataframe(frame, initialize_scales=True)
+    assert {"t", "y_scaled", "floor"}.issubset(prepared.columns)
+    model.preprocess(frame)
+    params = model.calculate_initial_params(features.shape[1])
+    assert params.beta.shape == (features.shape[1],)
+
+
 def test_piecewise_linear_seasonal_python_wrapper_uses_native_features():
     pd = pytest.importorskip("pandas")
     try:

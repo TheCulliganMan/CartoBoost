@@ -90,9 +90,10 @@ forecast columns and model attributes (`history`, `seasonalities`,
 `extra_regressors`, `component_modes`, `changepoints`, `params["delta"]`, and
 `predict_seasonal_components`).
 
-This is plotting parity only. CartoBoost does not expose a reusable `prophet`
-model alias; the local interpretable component model remains
-`PiecewiseLinearSeasonalForecaster`.
+The plotting helpers can be used directly or through the reusable
+`cartoboost.Prophet` façade. The façade delegates fitting and prediction to the
+Rust-native `PiecewiseLinearSeasonalForecaster` while preserving Prophet's
+`ds`/`y` dataframe ergonomics.
 
 The forecast plot follows the installed `prophet.plot.plot` behavior:
 
