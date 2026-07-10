@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -403,7 +404,11 @@ class DelayAwareGraphTransformer:
 
     def _save_load_parity(self) -> bool:
         before = self.predict(self.horizon)
-        path = Path("/tmp/cartoboost_delay_aware_graph_transformer.json")
+        handle = tempfile.NamedTemporaryFile(
+            prefix="cartoboost_delay_aware_graph_transformer_", suffix=".json", delete=False
+        )
+        handle.close()
+        path = Path(handle.name)
         self.save(path)
         try:
             after = self.load(path).predict(self.horizon)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 from pathlib import Path
 from typing import Any, cast
 
@@ -241,7 +242,11 @@ class RegimeMoEForecaster:
 
     def _save_load_parity(self, x: np.ndarray, router: np.ndarray) -> bool:
         before = self.predict_components(x, time_features=router[:, :1])["combined_prediction"]
-        path = Path("/tmp/cartoboost_regime_moe.json")
+        handle = tempfile.NamedTemporaryFile(
+            prefix="cartoboost_regime_moe_", suffix=".json", delete=False
+        )
+        handle.close()
+        path = Path(handle.name)
         self.save(path)
         try:
             after = self.load(path).predict_components(x, time_features=router[:, :1])[

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,12 @@ from typing import Any
 import numpy as np
 
 ARTIFACT_VERSION = 1
+
+
+def _parity_path(prefix: str) -> Path:
+    handle = tempfile.NamedTemporaryFile(prefix=prefix, suffix=".json", delete=False)
+    handle.close()
+    return Path(handle.name)
 
 
 @dataclass(frozen=True)
@@ -375,7 +382,7 @@ class PairEmbedding:
         sources = ["A", "B", "__new_source__"]
         targets = ["B", "A", "__new_target__"]
         before = self.transform(sources, targets)
-        payload_path = Path("/tmp/cartoboost_pair_embedding_parity.json")
+        payload_path = _parity_path("cartoboost_pair_embedding_parity_")
         self.save(payload_path)
         try:
             after = self.load(payload_path).transform(sources, targets)
@@ -577,7 +584,7 @@ class SpatioTemporalAdaptiveEmbedding:
         before = self.transform(probe, time_features=time, context_features=context)[
             "adaptive_embedding"
         ]
-        payload_path = Path("/tmp/cartoboost_spatiotemporal_adaptive_parity.json")
+        payload_path = _parity_path("cartoboost_spatiotemporal_adaptive_parity_")
         self.save(payload_path)
         try:
             after = self.load(payload_path).transform(
@@ -763,7 +770,7 @@ class RegimeRouter:
         probe = [*ids[: min(3, len(ids))], "__new_entity__"]
         context = np.zeros((len(probe), self.context_dim_), dtype=float)
         before = self.predict_proba(probe, context_features=context)
-        payload_path = Path("/tmp/cartoboost_regime_router_parity.json")
+        payload_path = _parity_path("cartoboost_regime_router_parity_")
         self.save(payload_path)
         try:
             after = self.load(payload_path).predict_proba(probe, context_features=context)
@@ -1019,7 +1026,7 @@ class HistoricalAnalogRetriever:
 
     def _save_load_parity(self) -> bool:
         before = self.query(self.key_mean_.reshape(1, -1), k=min(3, len(self.analog_ids_)))
-        payload_path = Path("/tmp/cartoboost_historical_analog_parity.json")
+        payload_path = _parity_path("cartoboost_historical_analog_parity_")
         self.save(payload_path)
         try:
             after = self.load(payload_path).query(
@@ -1544,7 +1551,7 @@ class SelfSupervisedPretrainer:
     def _save_load_parity(self, ids: list[str]) -> bool:
         probe = [*ids[: min(3, len(ids))], "__new_entity__"]
         before = self.transform(probe)
-        payload_path = Path("/tmp/cartoboost_self_supervised_pretrainer_parity.json")
+        payload_path = _parity_path("cartoboost_self_supervised_pretrainer_parity_")
         self.save(payload_path)
         try:
             after = self.load(payload_path).transform(probe)
@@ -1804,7 +1811,7 @@ class MultiViewSpatialAttention:
 
     def _save_load_parity(self, views: dict[str, Any]) -> bool:
         before = self.transform(views)["embedding"]
-        path = Path("/tmp/cartoboost_multi_view_spatial_attention_parity.json")
+        path = _parity_path("cartoboost_multi_view_spatial_attention_parity_")
         self.save(path)
         try:
             after = self.load(path).transform(views)["embedding"]

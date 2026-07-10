@@ -248,8 +248,10 @@ impl Forecaster for AutoForecastModel {
                 hard_winner_relative_gain: Some(self.config.hard_winner_relative_gain),
                 weight_bounds: Some((self.config.min_blend_weight, self.config.max_blend_weight)),
                 baseline,
-                baseline_displacement_gain: Some(self.config.baseline_displacement_gain)
-                    .filter(|_| scores.iter().any(|score| score.expert == LAG_EXPERT)),
+                baseline_displacement_gain: scores
+                    .iter()
+                    .any(|score| score.expert == LAG_EXPERT)
+                    .then_some(self.config.baseline_displacement_gain),
                 ..RuleBasedGatingGuardrails::default()
             },
         )?;

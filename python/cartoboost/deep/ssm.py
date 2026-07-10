@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -225,7 +226,11 @@ class TemporalSSMForecaster:
 
     def _save_load_parity(self) -> bool:
         before = self.predict(self.horizon)
-        path = Path("/tmp/cartoboost_temporal_ssm_parity.json")
+        handle = tempfile.NamedTemporaryFile(
+            prefix="cartoboost_temporal_ssm_parity_", suffix=".json", delete=False
+        )
+        handle.close()
+        path = Path(handle.name)
         self.save(path)
         try:
             after = self.load(path).predict(self.horizon)

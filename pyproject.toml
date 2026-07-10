@@ -27,7 +27,8 @@ classifiers = [
 ]
 keywords = ["boosting", "gradient-boosting", "machine-learning", "python", "rust"]
 dependencies = [
-    "numpy>=1.23",
+    "numpy>=1.23; python_version < '3.13'",
+    "numpy>=2.1; python_version >= '3.13'",
 ]
 
 [project.optional-dependencies]
