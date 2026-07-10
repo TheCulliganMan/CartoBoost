@@ -247,8 +247,6 @@ class Prophet:
         pd = require_pandas()
         if int(periods) < 0:
             raise ValueError("periods must be nonnegative")
-        if freq == "D" and self._freq != "D":
-            freq = self._freq
         future = pd.date_range(
             start=self.history["ds"].iloc[-1], periods=int(periods) + 1, freq=freq
         )[1:]
@@ -310,7 +308,10 @@ class Prophet:
         future = frame.loc[frame["ds"] > self.history["ds"].max()]
         if not len(future):
             forecast = self.predict(frame)
-            return {"yhat": forecast["yhat"].to_numpy()[:, None]}
+            return {
+                "yhat": forecast["yhat"].to_numpy()[:, None],
+                "trend": forecast["trend"].to_numpy()[:, None],
+            }
         future_regressors = {
             name: future[name].to_numpy(dtype=float).tolist() for name in self.extra_regressors
         }
@@ -318,7 +319,10 @@ class Prophet:
         sample_count = int(samples.get("sample_count", 0))
         if sample_count == 0:
             forecast = self.predict(frame)
-            return {"yhat": forecast["yhat"].to_numpy()[:, None]}
+            return {
+                "yhat": forecast["yhat"].to_numpy()[:, None],
+                "trend": forecast["trend"].to_numpy()[:, None],
+            }
         values = np.full((len(frame), sample_count), np.nan, dtype=float)
         for row in samples["records"]:
             horizon = int(row["horizon"]) - 1
@@ -327,7 +331,8 @@ class Prophet:
         history_prediction = self.predict(frame.loc[~frame["ds"].gt(self.history["ds"].max())])
         history_values = history_prediction["yhat"].to_numpy()
         values[: len(history_values), :] = history_values[:, None]
-        return {"yhat": values}
+        trend = self.predict(frame)["trend"].to_numpy()[:, None]
+        return {"yhat": values, "trend": np.repeat(trend, sample_count, axis=1)}
 
     def setup_dataframe(self, df: Any, initialize_scales: bool = False) -> Any:
         pd = require_pandas()
@@ -469,9 +474,11 @@ class Prophet:
         if not initialize_scales:
             return None
         frame = _to_pandas(df)
-        self.y_scale = _prophet_y_scale(frame["y"], self.scaling)
+        self.y_min = 0.0 if self.scaling == "absmax" else float(frame["y"].min())
+        self.y_scale = _prophet_y_scale(frame["y"] - self.y_min, self.scaling)
         self.start = frame["ds"].min()
         self.t_scale = frame["ds"].max() - self.start
+        self.logistic_floor = "floor" in frame
         return None
 
     def calculate_initial_params(self, num_total_regressors: int) -> Any:
@@ -703,11 +710,17 @@ class Prophet:
         return result
 
     def predict_trend(self, df: Any) -> Any:
-        return self.predict(df)[["ds", "trend"]]
+        return self.predict(df)["trend"].to_numpy()
 
     def predict_seasonal_components(self, df: Any) -> Any:
         forecast = self.predict(df)
-        return forecast[[column for column in forecast.columns if column not in {"ds", "yhat"}]]
+        return forecast[
+            [
+                column
+                for column in forecast.columns
+                if column not in {"ds", "yhat", "yhat_lower", "yhat_upper", "trend"}
+            ]
+        ]
 
     def predict_uncertainty(self, df: Any, vectorized: bool = True) -> Any:
         forecast = self.predict(df)
