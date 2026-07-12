@@ -5,7 +5,7 @@
 The maintained JSON records a bounded real-data run on 2024 NYC TLC yellow taxi
 data. It compares one primary `cartoboost` row with XGBoost, LightGBM, CatBoost,
 and scikit-learn HistGradientBoosting under fixed settings. This current 50,000-
-row, 8-tree qualification run includes random, spatial-holdout, and temporal
+row, 24-tree qualification run includes random, spatial-holdout, and temporal
 holdouts for duration and fare. Lane-demand evidence is reported separately in
 the maintained forecasting artifact; neither artifact claims an AutoGeo selector
 result because that selector is not shipped.
@@ -43,7 +43,7 @@ PYTHONPATH=python uv run --group dev --group bench python \
   --output-dir docs/assets/nyc_taxi_benchmarks \
   --models cartoboost,lightgbm,xgboost,catboost,hist_gradient_boosting \
   --n-estimators 24 \
-  --cartoboost-n-estimators 8 \
+  --cartoboost-n-estimators 24 \
   --tasks duration,fare \
   --model-workers 1
 ```

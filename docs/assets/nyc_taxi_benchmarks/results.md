@@ -45,12 +45,12 @@ settings.
 - task rows: {'duration': 50000, 'fare': 50000}
 - models requested: cartoboost, lightgbm, xgboost, catboost, hist_gradient_boosting
 - baseline estimators: 24
-- CartoBoost candidate estimators: 8
+- CartoBoost candidate estimators: 24
 - baseline max depth: 4
 - CartoBoost candidate max depth: 5
 - model workers: 1
 - zone treatment: target_mean
-- command arguments: `scripts/run_nyc_taxi_quality_benchmarks.py --no-plots --sample-size 50000 --months 1,2,3,4 --output-dir docs/assets/nyc_taxi_benchmarks --models cartoboost,lightgbm,xgboost,catboost,hist_gradient_boosting --n-estimators 24 --cartoboost-n-estimators 8 --tasks duration,fare --model-workers 1`
+- command arguments: `scripts/run_nyc_taxi_quality_benchmarks.py --no-plots --sample-size 50000 --months 1,2,3,4 --output-dir docs/assets/nyc_taxi_benchmarks --models cartoboost,lightgbm,xgboost,catboost,hist_gradient_boosting --n-estimators 24 --cartoboost-n-estimators 24 --tasks duration,fare --model-workers 1`
 
 ## Split Manifests
 
@@ -87,9 +87,9 @@ settings.
 
 | Artifact | Size bytes |
 | --- | ---: |
-| `results.json` | 198599 |
-| `results.jsonl` | 32104 |
-| `results.md` | 11461 |
+| `results.json` | 198602 |
+| `results.jsonl` | 32079 |
+| `results.md` | 11462 |
 
 ## Comparability Audit
 
@@ -127,31 +127,31 @@ Predict log trip duration from zone, trip, passenger, and time features.
 
 | model | status | RMSE | MAE | R2 | WAPE | train sec | predict sec | predict rows/sec | note |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| cartoboost | ok | 0.457439 | 0.360177 | 0.571030 | 0.054552 | 18.663864 | 0.008735 | 1144776.05 | n_estimators=8 |
-| lightgbm | ok | 0.345548 | 0.266818 | 0.755219 | 0.040412 | 0.093518 | 0.001286 | 7778572.06 | n_estimators=24 |
-| xgboost | ok | 0.345685 | 0.267435 | 0.755026 | 0.040506 | 0.047513 | 0.000531 | 18830937.54 | n_estimators=24 |
-| catboost | ok | 0.361323 | 0.279924 | 0.732360 | 0.042397 | 0.121106 | 0.000664 | 15053620.88 |  |
-| hist_gradient_boosting | ok | 0.341885 | 0.263563 | 0.760381 | 0.039919 | 0.153957 | 0.001714 | 5834874.23 | n_estimators=24 |
+| cartoboost | ok | 0.325729 | 0.249551 | 0.782493 | 0.037797 | 78.430027 | 0.031028 | 322288.67 | n_estimators=24 |
+| lightgbm | ok | 0.345548 | 0.266818 | 0.755219 | 0.040412 | 0.116989 | 0.001451 | 6890018.12 | n_estimators=24 |
+| xgboost | ok | 0.345685 | 0.267435 | 0.755026 | 0.040506 | 0.068901 | 0.000643 | 15564202.27 | n_estimators=24 |
+| catboost | ok | 0.361323 | 0.279924 | 0.732360 | 0.042397 | 0.429706 | 0.007824 | 1278111.75 |  |
+| hist_gradient_boosting | ok | 0.341885 | 0.263563 | 0.760381 | 0.039919 | 5.471722 | 0.076583 | 130577.50 | n_estimators=24 |
 
 ### spatial_holdout
 
 | model | status | RMSE | MAE | R2 | WAPE | train sec | predict sec | predict rows/sec | note |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| cartoboost | ok | 0.524654 | 0.418250 | 0.579188 | 0.061638 | 16.921427 | 0.006318 | 1460550.19 | n_estimators=8 |
-| lightgbm | ok | 0.361332 | 0.279944 | 0.800402 | 0.041256 | 0.068215 | 0.001087 | 8492998.97 | n_estimators=24 |
-| xgboost | ok | 0.355842 | 0.274782 | 0.806422 | 0.040495 | 0.045317 | 0.000479 | 19281922.04 | n_estimators=24 |
-| catboost | ok | 0.394509 | 0.307854 | 0.762066 | 0.045369 | 0.039848 | 0.000682 | 13522523.66 |  |
-| hist_gradient_boosting | ok | 0.352826 | 0.271578 | 0.809689 | 0.040023 | 0.114401 | 0.001267 | 7282627.99 | n_estimators=24 |
+| cartoboost | ok | 0.328395 | 0.250132 | 0.835133 | 0.036862 | 85.535593 | 0.156089 | 59119.99 | n_estimators=24 |
+| lightgbm | ok | 0.361332 | 0.279944 | 0.800402 | 0.041256 | 0.112302 | 0.002641 | 3494627.22 | n_estimators=24 |
+| xgboost | ok | 0.355842 | 0.274782 | 0.806422 | 0.040495 | 0.096038 | 0.001031 | 8951983.54 | n_estimators=24 |
+| catboost | ok | 0.394509 | 0.307854 | 0.762066 | 0.045369 | 0.328346 | 0.007525 | 1226373.41 |  |
+| hist_gradient_boosting | ok | 0.352826 | 0.271578 | 0.809689 | 0.040023 | 0.513714 | 0.005017 | 1839407.09 | n_estimators=24 |
 
 ### out_of_time
 
 | model | status | RMSE | MAE | R2 | WAPE | train sec | predict sec | predict rows/sec | note |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| cartoboost | ok | 0.465097 | 0.367378 | 0.565770 | 0.055405 | 17.391089 | 0.014717 | 679501.73 | n_estimators=8 |
-| lightgbm | ok | 0.349625 | 0.271534 | 0.754621 | 0.040950 | 0.084931 | 0.001194 | 8376373.91 | n_estimators=24 |
-| xgboost | ok | 0.349224 | 0.271213 | 0.755184 | 0.040902 | 0.058870 | 0.000605 | 16526658.38 | n_estimators=24 |
-| catboost | ok | 0.366737 | 0.285436 | 0.730013 | 0.043047 | 0.042033 | 0.000658 | 15208154.06 |  |
-| hist_gradient_boosting | ok | 0.345772 | 0.267922 | 0.760000 | 0.040406 | 0.108944 | 0.002592 | 3857838.64 | n_estimators=24 |
+| cartoboost | ok | 0.330825 | 0.255646 | 0.780301 | 0.038554 | 73.030903 | 0.026602 | 375911.59 | n_estimators=24 |
+| lightgbm | ok | 0.349625 | 0.271534 | 0.754621 | 0.040950 | 0.095843 | 0.001717 | 5825665.79 | n_estimators=24 |
+| xgboost | ok | 0.349224 | 0.271213 | 0.755184 | 0.040902 | 0.049413 | 0.000551 | 18139207.42 | n_estimators=24 |
+| catboost | ok | 0.366737 | 0.285436 | 0.730013 | 0.043047 | 0.049258 | 0.000781 | 12800000.05 |  |
+| hist_gradient_boosting | ok | 0.345772 | 0.267922 | 0.760000 | 0.040406 | 0.242663 | 0.004724 | 2117074.20 | n_estimators=24 |
 
 ## Fare amount
 
@@ -161,29 +161,29 @@ Predict log total amount from zone, trip, passenger, and time features.
 
 | model | status | RMSE | MAE | R2 | WAPE | train sec | predict sec | predict rows/sec | note |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| cartoboost | ok | 0.300779 | 0.232149 | 0.658512 | 0.072942 | 17.169359 | 0.007688 | 1300650.92 | n_estimators=8 |
-| lightgbm | ok | 0.181542 | 0.139575 | 0.875595 | 0.043855 | 0.081103 | 0.001374 | 7278020.38 | n_estimators=24 |
-| xgboost | ok | 0.181585 | 0.139417 | 0.875536 | 0.043805 | 0.041553 | 0.000491 | 20368341.00 | n_estimators=24 |
-| catboost | ok | 0.192591 | 0.148521 | 0.859992 | 0.046666 | 0.036841 | 0.000582 | 17193208.97 |  |
-| hist_gradient_boosting | ok | 0.179155 | 0.136731 | 0.878846 | 0.042961 | 0.116824 | 0.002613 | 3826346.61 | n_estimators=24 |
+| cartoboost | ok | 0.172949 | 0.131650 | 0.887095 | 0.041365 | 84.188425 | 0.034870 | 286783.23 | n_estimators=24 |
+| lightgbm | ok | 0.181542 | 0.139575 | 0.875595 | 0.043855 | 0.117026 | 0.002057 | 4860366.54 | n_estimators=24 |
+| xgboost | ok | 0.181585 | 0.139417 | 0.875536 | 0.043805 | 0.067698 | 0.000736 | 13590815.74 | n_estimators=24 |
+| catboost | ok | 0.192591 | 0.148521 | 0.859992 | 0.046666 | 0.055805 | 0.000830 | 12045783.64 |  |
+| hist_gradient_boosting | ok | 0.179155 | 0.136731 | 0.878846 | 0.042961 | 0.271184 | 0.005650 | 1769806.88 | n_estimators=24 |
 
 ### spatial_holdout
 
 | model | status | RMSE | MAE | R2 | WAPE | train sec | predict sec | predict rows/sec | note |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| cartoboost | ok | 0.459559 | 0.333773 | 0.535384 | 0.098828 | 23.878652 | 0.008414 | 1096743.52 | n_estimators=8 |
-| lightgbm | ok | 0.260210 | 0.193420 | 0.851044 | 0.057270 | 0.095848 | 0.001340 | 6886777.90 | n_estimators=24 |
-| xgboost | ok | 0.260712 | 0.194004 | 0.850468 | 0.057443 | 0.073861 | 0.001016 | 9079701.23 | n_estimators=24 |
-| catboost | ok | 0.245934 | 0.187600 | 0.866940 | 0.055547 | 0.137234 | 0.001549 | 5957711.08 |  |
-| hist_gradient_boosting | ok | 0.241167 | 0.181555 | 0.872048 | 0.053757 | 1.470009 | 0.011213 | 822948.90 | n_estimators=24 |
+| cartoboost | ok | 0.274082 | 0.198329 | 0.834738 | 0.058724 | 109.662485 | 0.040003 | 230683.42 | n_estimators=24 |
+| lightgbm | ok | 0.260210 | 0.193420 | 0.851044 | 0.057270 | 0.133054 | 0.002075 | 4447051.03 | n_estimators=24 |
+| xgboost | ok | 0.260712 | 0.194004 | 0.850468 | 0.057443 | 0.073545 | 0.000759 | 12160105.63 | n_estimators=24 |
+| catboost | ok | 0.245934 | 0.187600 | 0.866940 | 0.055547 | 0.055604 | 0.001007 | 9164608.45 |  |
+| hist_gradient_boosting | ok | 0.241167 | 0.181555 | 0.872048 | 0.053757 | 0.274354 | 0.004519 | 2042214.17 | n_estimators=24 |
 
 ### out_of_time
 
 | model | status | RMSE | MAE | R2 | WAPE | train sec | predict sec | predict rows/sec | note |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| cartoboost | ok | 0.307494 | 0.236401 | 0.651936 | 0.073948 | 23.971488 | 0.009548 | 1047298.63 | n_estimators=8 |
-| lightgbm | ok | 0.188298 | 0.143095 | 0.869480 | 0.044761 | 0.093430 | 0.001754 | 5700035.63 | n_estimators=24 |
-| xgboost | ok | 0.188598 | 0.143324 | 0.869064 | 0.044833 | 0.054218 | 0.000498 | 20071937.86 | n_estimators=24 |
-| catboost | ok | 0.199495 | 0.152893 | 0.853496 | 0.047826 | 0.036966 | 0.000592 | 16880001.86 |  |
-| hist_gradient_boosting | ok | 0.186056 | 0.140766 | 0.872569 | 0.044033 | 0.215904 | 0.003507 | 2851778.26 | n_estimators=24 |
+| cartoboost | ok | 0.179687 | 0.135522 | 0.881144 | 0.042392 | 78.614428 | 0.035962 | 278071.94 | n_estimators=24 |
+| lightgbm | ok | 0.188298 | 0.143095 | 0.869480 | 0.044761 | 0.123748 | 0.002047 | 4884601.32 | n_estimators=24 |
+| xgboost | ok | 0.188598 | 0.143324 | 0.869064 | 0.044833 | 0.071033 | 0.000818 | 12229932.44 | n_estimators=24 |
+| catboost | ok | 0.199495 | 0.152893 | 0.853496 | 0.047826 | 0.057545 | 0.000911 | 10981975.33 |  |
+| hist_gradient_boosting | ok | 0.186056 | 0.140766 | 0.872569 | 0.044033 | 0.393390 | 0.006203 | 1612199.06 | n_estimators=24 |
 
