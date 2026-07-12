@@ -1,9 +1,9 @@
 use cartoboost_core::booster::BoosterConfig;
 use cartoboost_core::forecasting::{
-    ArimaForecaster, AutoARIMAForecaster, CalendarFeature, CartoBoostLagForecaster, ETSForecaster,
-    ForecastFrame, ForecastFrequency, ForecastRow, Forecaster, GlobalForecastTargetMode,
-    KalmanForecaster, KrigingForecaster, LagFeatureConfig, NaiveForecaster,
-    OptimizedThetaForecaster, PiecewiseLinearComponentMode, PiecewiseLinearEvent,
+    ArimaForecaster, AutoARIMAForecaster, AutoETSForecaster, CalendarFeature,
+    CartoBoostLagForecaster, ETSForecaster, ForecastFrame, ForecastFrequency, ForecastRow,
+    Forecaster, GlobalForecastTargetMode, KalmanForecaster, KrigingForecaster, LagFeatureConfig,
+    NaiveForecaster, OptimizedThetaForecaster, PiecewiseLinearComponentMode, PiecewiseLinearEvent,
     PiecewiseLinearFitLoss, PiecewiseLinearSeasonalConfig, PiecewiseLinearSeasonalForecaster,
     PiecewiseLinearSeasonality, SeasonalNaiveForecaster, SeasonalWindowAverageForecaster,
     ThetaForecaster, WeightedEnsembleForecaster, WindowAverageForecaster,
@@ -143,6 +143,33 @@ fn ets_and_arima_reproduce_linear_series_known_answers() {
     assert_eq!(auto_arima.selected_order(), Some((0, 1, 0)));
     assert_eq!(means(&auto_arima, 2), vec![18.0, 20.0]);
     assert_eq!(auto_arima.metadata()["selected_order"]["d"], 1);
+}
+
+#[test]
+fn auto_ets_preserves_declared_seasonality() {
+    let frame = single_frame(&[
+        46.0, 54.0, 46.0, 54.0, 46.0, 54.0, 46.0, 54.0, 46.0, 54.0, 46.0, 54.0,
+    ]);
+    let mut model =
+        AutoETSForecaster::with_grids(vec![0.5], vec![0.0], vec![Some(0.5)], vec![1.0], Some(2))
+            .expect("valid seasonal auto ets");
+
+    model.fit(&frame).expect("fit auto ets");
+    let forecast = model.predict(2).expect("predict auto ets");
+    let means = forecast
+        .predictions()
+        .iter()
+        .map(|prediction| prediction.mean)
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        model.selected_params().expect("selected params").gamma,
+        Some(0.5)
+    );
+    assert!(
+        means[1] > means[0],
+        "seasonal ETS should vary by declared period: {means:?}"
+    );
 }
 
 #[test]

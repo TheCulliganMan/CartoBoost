@@ -181,6 +181,33 @@ fn intermittent_experts_are_deterministic_and_validate_inputs() {
 }
 
 #[test]
+fn intermittent_models_return_constant_expected_demand_and_tsb_tracks_occurrence() {
+    let values = [0.0, 5.0, 0.0, 0.0, 7.0, 0.0, 9.0, 0.0];
+    let forecasts = [
+        croston_forecast(&values, 6, 0.2).expect("croston"),
+        sba_forecast(&values, 6, 0.2).expect("sba"),
+        tsb_forecast(&values, 6, 0.2, 0.3).expect("tsb"),
+        adida_forecast(&values, 6, 2, 0.2).expect("adida"),
+    ];
+
+    // These methods estimate the expected demand rate. They do not extrapolate
+    // a seasonal profile, so each future step must carry the same level.
+    for forecast in forecasts {
+        let first = forecast[0];
+        assert!(forecast.iter().all(|value| (*value - first).abs() < 1e-12));
+    }
+
+    // TSB's occurrence probability reacts to a recent demand event. A trailing
+    // run of zeros must lower the level relative to an otherwise identical
+    // history ending in a non-zero event.
+    let trailing_zeros = tsb_forecast(&[0.0, 5.0, 0.0, 0.0, 7.0, 0.0, 0.0, 0.0], 1, 0.2, 0.3)
+        .expect("tsb trailing zeros")[0];
+    let trailing_event = tsb_forecast(&[0.0, 5.0, 0.0, 0.0, 7.0, 0.0, 0.0, 7.0], 1, 0.2, 0.3)
+        .expect("tsb trailing event")[0];
+    assert!(trailing_event > trailing_zeros);
+}
+
+#[test]
 fn horizon_request_and_output_validate_finite_public_contract() {
     let request = ForecastRequest::with_series_ids(
         3,

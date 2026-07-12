@@ -57,6 +57,43 @@ test('forecast responses must contain finite non-empty records', () => {
       assertForecastResponseRecords(
         {
           metadata: {
+            model: 'ets',
+            input: {
+              n_rows: 12,
+              is_panel: false,
+              series_ids: ['__single__'],
+              frequency: 'hourly',
+            },
+          },
+          forecast: {
+            records: [
+              {
+                series_id: '__single__',
+                timestamp: '2024-01-01T01:00:00',
+                horizon: 1,
+                model: 'ets',
+                prediction: 8,
+              },
+              {
+                series_id: '__single__',
+                timestamp: '2024-01-01T03:00:00',
+                horizon: 3,
+                model: 'ets',
+                prediction: 9,
+              },
+            ],
+          },
+        },
+        'ets',
+      ),
+    /non-contiguous horizons/,
+  );
+
+  assert.throws(
+    () =>
+      assertForecastResponseRecords(
+        {
+          metadata: {
             model: 'cartoboost_lag',
             input: {
               n_rows: 1750,

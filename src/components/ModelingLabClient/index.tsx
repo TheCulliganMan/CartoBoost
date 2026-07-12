@@ -3277,6 +3277,12 @@ function ForecastModelSettings({
 
 function forecastSettingsProfile(selectedModel?: ModelOption) {
   const value = selectedModel?.value ?? '';
+  const levelOnlyModels = new Set([
+    'intermittent_demand',
+    'croston',
+    'sba',
+    'tsb',
+  ]);
   const seasonalModels = new Set([
     'auto_forecast',
     'cartoboost_lag',
@@ -3287,10 +3293,6 @@ function forecastSettingsProfile(selectedModel?: ModelOption) {
     'log1p_cartoboost_lag',
     'classical_expert_bank',
     'autostats_bank',
-    'intermittent_demand',
-    'croston',
-    'sba',
-    'tsb',
     'stl_cartoboost',
     'mstl_cartoboost',
     'seasonal_naive',
@@ -3298,10 +3300,7 @@ function forecastSettingsProfile(selectedModel?: ModelOption) {
     'theta',
     'optimized_theta',
     'auto_ets',
-    'ets',
     'seasonal_ets',
-    'auto_arima',
-    'arima',
     'piecewise_linear_seasonal',
   ]);
   const needsCoordinates = forecastModelNeedsCoordinates(selectedModel);
@@ -3317,6 +3316,20 @@ function forecastSettingsProfile(selectedModel?: ModelOption) {
       needsCoordinates,
       showSeasonality: false,
       notice: 'Spatial kriging uses coordinates and horizon; seasonality is not part of this model setup.',
+    };
+  }
+  if (levelOnlyModels.has(value)) {
+    return {
+      needsCoordinates,
+      showSeasonality: false,
+      notice: 'Intermittent-demand methods estimate a constant expected demand level. They do not model seasonal cycles.',
+    };
+  }
+  if (value === 'ets') {
+    return {
+      needsCoordinates,
+      showSeasonality: false,
+      notice: 'ETS models level and trend only. Select Seasonal ETS or Auto ETS when a seasonal cycle is part of the signal.',
     };
   }
   if (!seasonalModels.has(value)) {
@@ -4123,9 +4136,13 @@ function RegressionPredictionTable({result}: {result: RegressionResponse}) {
 
 function ComparisonChart({actualRows, results}: {actualRows: ActualRecord[]; results: BenchmarkResult[]}) {
   const successfulResults = results.filter((result) => result.response);
+  // Backtest responses are fitted on a truncated training frame.  Select the
+  // same series that supplies the actual trace instead of relying on whatever
+  // series happens to be first in each Rust response.
+  const selectedSeriesId = actualRows[0]?.series_id;
   const forecastSeries = successfulResults.map((result) => ({
       label: benchmarkSeriesLabel(result),
-      records: firstSeriesForecastRows(result.response as ForecastResponse),
+      records: firstSeriesForecastRows(result.response as ForecastResponse, selectedSeriesId),
     }));
   const maxForecastLength = Math.max(0, ...forecastSeries.map((series) => series.records.length));
   const series = buildLineSeries(recentActualRowsForForecastChart(actualRows, maxForecastLength), forecastSeries);
@@ -4183,7 +4200,15 @@ function LineChart({caption, series, showForecastBoundary = true}: {caption: str
   const max = Math.max(...values);
   const span = max - min || 1;
   const actualSeries = drawable[0]?.points ?? [];
-  const actualMaxIndex = !showForecastBoundary || actualSeries.length === 0 ? null : Math.max(...actualSeries.map((point) => point.index));
+  const forecastStarts = drawable
+    .slice(1)
+    .map((item) => item.forecastStartIndex)
+    .filter((index): index is number => index !== undefined && Number.isFinite(index));
+  const actualMaxIndex = !showForecastBoundary || actualSeries.length === 0
+    ? null
+    : forecastStarts.length > 0
+      ? Math.min(...forecastStarts) - 1
+      : Math.max(...actualSeries.map((point) => point.index));
   const plotSeries = drawable.map((item, seriesIndex) => ({
     ...item,
     color: chartColor(seriesIndex),
@@ -7744,6 +7769,8 @@ type ActualRecord = {
 type ChartSeries = {
   label: string;
   points: {index: number; value: unknown}[];
+  /** Index at which forecast values begin, before the optional anchor point. */
+  forecastStartIndex?: number;
 };
 
 function actualRowsForFirstSeries(
@@ -7755,21 +7782,28 @@ function actualRowsForFirstSeries(
   if (!table || !table.columns.includes(timestampCol) || !table.columns.includes(targetCol)) {
     return [];
   }
-  const firstSeries = seriesCol ? table.rows[0]?.[seriesCol] : '__single__';
-  return table.rows
+  const firstSeries = seriesCol ? table.rows.find((row) => row[seriesCol] !== undefined)?.[seriesCol] : undefined;
+  const rows = table.rows
     .filter((row) => !seriesCol || row[seriesCol] === firstSeries)
     .map((row, index) => ({
-      series_id: seriesCol ? row[seriesCol] : '__single__',
+      // The WASM frame uses an empty id when no series column was supplied.
+      // Keep the browser-side id canonical so comparison traces can align.
+      series_id: seriesCol ? row[seriesCol] ?? '' : '',
       timestamp: row[timestampCol],
       index,
       value: Number(row[targetCol]),
     }))
     .filter((row) => Number.isFinite(row.value));
+  return rows
+    .sort((left, right) => left.timestamp.localeCompare(right.timestamp))
+    .map((row, index) => ({...row, index}));
 }
 
-function firstSeriesForecastRows(response: ForecastResponse) {
-  const firstSeries = response.forecast.records[0]?.series_id;
-  return response.forecast.records.filter((row) => row.series_id === firstSeries);
+function firstSeriesForecastRows(response: ForecastResponse, seriesId?: string) {
+  const firstSeries = seriesId ?? response.forecast.records[0]?.series_id;
+  return response.forecast.records
+    .filter((row) => firstSeries !== undefined && row.series_id === firstSeries && Number.isFinite(row.prediction))
+    .sort((left, right) => left.horizon - right.horizon || left.timestamp.localeCompare(right.timestamp));
 }
 
 function firstSeriesComponentRows(response: ForecastResponse) {
@@ -7809,21 +7843,42 @@ function buildLineSeries(
 ): ChartSeries[] {
   const actualLength = actualRows.length;
   const lastActual = actualRows[actualRows.length - 1];
+  const actualIndexByTimestamp = new Map(
+    actualRows.map((row) => [normalizeTimestamp(row.timestamp), row.index]),
+  );
   return [
     {
       label: 'Actual',
       points: actualRows.map((row) => ({index: row.index, value: row.value})),
     },
-    ...forecastSeries.map((series) => ({
-      label: series.label,
-      points: [
-        ...(lastActual ? [{index: actualLength - 1, value: lastActual.value}] : []),
-        ...series.records.map((row) => ({
-          index: actualLength + row.horizon - 1,
-          value: row.prediction,
-        })),
-      ],
-    })),
+    ...forecastSeries.map((series) => {
+      const records = [...series.records]
+        .filter((row) => Number.isFinite(row.prediction))
+        .sort((left, right) => left.horizon - right.horizon || left.timestamp.localeCompare(right.timestamp));
+      const firstMatchedIndex = records.length > 0
+        ? actualIndexByTimestamp.get(normalizeTimestamp(records[0].timestamp))
+        : undefined;
+      const forecastStartIndex = firstMatchedIndex ?? actualLength;
+      const anchor = records.length > 0
+        ? actualRows.find((row) => row.index === forecastStartIndex - 1) ?? (
+            firstMatchedIndex === undefined ? lastActual : undefined
+          )
+        : undefined;
+      return {
+        label: series.label,
+        forecastStartIndex,
+        points: [
+          ...(anchor ? [{index: anchor.index, value: anchor.value}] : []),
+          ...records.map((row, index) => ({
+            // Holdout forecasts share timestamps with the actual trace; a
+            // regular future forecast starts immediately after its last point.
+            index: actualIndexByTimestamp.get(normalizeTimestamp(row.timestamp))
+              ?? (firstMatchedIndex === undefined ? actualLength + index : forecastStartIndex + index),
+            value: row.prediction,
+          })),
+        ],
+      };
+    }),
   ];
 }
 
