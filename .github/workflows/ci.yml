@@ -95,7 +95,7 @@ jobs:
       - name: Audit Python dependency resolution
         run: |
           uv sync --group dev
-          uv run python -m pip check
+          uv pip check
 
   nightly-fuzz:
     name: Timed fuzz smoke
