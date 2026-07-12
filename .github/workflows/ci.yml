@@ -105,17 +105,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Rust and cargo-fuzz
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install nightly Rust and cargo-fuzz
+        uses: dtolnay/rust-toolchain@nightly
 
       - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz --locked
+        run: cargo +nightly install cargo-fuzz --locked
 
       - name: Run timed fuzz targets
         working-directory: fuzz
         run: |
-          cargo fuzz run train_small_dataset -- -max_total_time=60
-          cargo fuzz run predict_one -- -max_total_time=60
+          cargo +nightly fuzz run train_small_dataset -- -max_total_time=60
+          cargo +nightly fuzz run predict_one -- -max_total_time=60
 
   python:
     name: Python (${{ matrix.os }}, py${{ matrix.python-version }})
@@ -348,6 +348,7 @@ jobs:
           "$SMOKE_PYTHON" -m pip install --no-deps "$WHEEL"
           "$SMOKE_PYTHON" - <<'PY'
           import numpy as np
+          import os
           import tempfile
           from importlib.metadata import entry_points, metadata
           import cartoboost
@@ -368,8 +369,9 @@ jobs:
           model = CartoBoostRegressor(n_estimators=4, max_depth=2, min_samples_leaf=1)
           model.fit(x, y)
           assert model.predict(x).shape == (48,)
-          with tempfile.NamedTemporaryFile(suffix='.json') as artifact:
-              model.save(artifact.name)
-              restored = CartoBoostRegressor.load(artifact.name)
+          with tempfile.TemporaryDirectory() as temp_dir:
+              artifact = os.path.join(temp_dir, 'model.json')
+              model.save(artifact)
+              restored = CartoBoostRegressor.load(artifact)
               np.testing.assert_allclose(model.predict(x), restored.predict(x), atol=1e-12, rtol=0.0)
           PY

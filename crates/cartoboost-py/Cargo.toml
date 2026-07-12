@@ -19,7 +19,7 @@ cartoboost-neural = { path = "../cartoboost-neural" }
 cartoboost-prob = { path = "../cartoboost-prob" }
 cartoboost-spatial-econ = { path = "../cartoboost-spatial-econ" }
 chrono.workspace = true
-numpy = "0.23"
+numpy = "0.24"
 pyo3.workspace = true
 rayon = "1.11"
 serde_json.workspace = true

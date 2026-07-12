@@ -1,6 +1,11 @@
 [advisories]
 version = 2
-ignore = []
+# PyO3 0.24.2 is the newest release compatible with this binding's stable
+# `allow_threads` API.  CartoBoost does not call `PyCFunction::new_closure`;
+# revisit this exception when the binding migrates to PyO3 0.29+.
+# `paste` is pulled only by the optional Metal preview backend.  The advisory
+# reports no safe upgrade; stable CPU wheels do not enable this dependency.
+ignore = ["RUSTSEC-2026-0177", "RUSTSEC-2024-0436"]
 
 [licenses]
 version = 2

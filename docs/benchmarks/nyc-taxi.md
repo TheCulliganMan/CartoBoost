@@ -11,7 +11,7 @@ the maintained forecasting artifact; neither artifact claims an AutoGeo selector
 result because that selector is not shipped.
 
 This is bounded evidence, not a universal claim: it uses four months, a
-100,000-row sampled trip frame, fixed hyperparameters, and local hardware
+50,000-row sampled trip frame, fixed hyperparameters, and local hardware
 timing.
 
 ## Data

@@ -219,6 +219,8 @@ jobs:
           python -c "import cartoboost; print(cartoboost.__version__)"
           python - <<'PY'
           import numpy as np
+          import os
+          import tempfile
           from importlib.metadata import entry_points
           from cartoboost import CartoBoostRegressor
 
@@ -242,9 +244,10 @@ jobs:
               lag_config=LagConfig(lags=[1, 2]), n_estimators=4,
               max_depth=2, min_samples_leaf=1,
           ).fit(frame)
-          with __import__('tempfile').NamedTemporaryFile(suffix='.json') as artifact:
-              forecast.save(artifact.name)
-              restored = CartoBoostLagForecaster.load(artifact.name)
+          with tempfile.TemporaryDirectory() as temp_dir:
+              artifact = os.path.join(temp_dir, 'forecast.json')
+              forecast.save(artifact)
+              restored = CartoBoostLagForecaster.load(artifact)
               assert forecast.predict(2).predictions() == restored.predict(2).predictions()
           PY
 
