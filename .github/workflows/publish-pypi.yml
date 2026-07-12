@@ -327,7 +327,6 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           gh release create "$RELEASE_TAG" \
-            --verify-tag "$RELEASE_TAG" \
             --target "$GITHUB_SHA" \
             --generate-notes \
             --title "CartoBoost $RELEASE_TAG"
