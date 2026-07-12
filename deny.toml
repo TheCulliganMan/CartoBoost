@@ -5,7 +5,10 @@ version = 2
 # revisit this exception when the binding migrates to PyO3 0.29+.
 # `paste` is pulled only by the optional Metal preview backend.  The advisory
 # reports no safe upgrade; stable CPU wheels do not enable this dependency.
-ignore = ["RUSTSEC-2026-0177", "RUSTSEC-2024-0436"]
+# CartoBoost does not use the PyList/PyTuple iterator or closure APIs covered by
+# the PyO3 advisories; migrating to 0.29 would remove the stable allow_threads
+# API and is not a compatible release-plumbing change.
+ignore = ["RUSTSEC-2026-0176", "RUSTSEC-2026-0177", "RUSTSEC-2024-0436"]
 
 [licenses]
 version = 2
