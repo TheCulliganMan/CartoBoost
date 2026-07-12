@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 from cartoboost.forecasting import ForecastMetricSet
 from cartoboost.forecasting.metrics import pinball_loss
-from cartoboost.metrics import m_competition_metrics
+from cartoboost.metrics import competition_forecast_metrics
 
 
 def test_point_metrics_zero_safe_and_grouped() -> None:
@@ -44,11 +44,11 @@ def test_pinball_coverage_and_interval_width() -> None:
     assert metrics["interval_width"] == pytest.approx(3.0)
 
 
-def test_m_competition_metrics_delegate_to_native(monkeypatch) -> None:
+def test_competition_forecast_metrics_delegate_to_native(monkeypatch) -> None:
     calls: dict[str, object] = {}
 
     class FakeNative:
-        def m_competition_metrics_value(
+        def competition_forecast_metrics_value(
             self,
             training_series,
             actuals,
@@ -73,7 +73,7 @@ def test_m_competition_metrics_delegate_to_native(monkeypatch) -> None:
 
     monkeypatch.setattr(metrics_module, "_native", FakeNative())
 
-    result = m_competition_metrics(
+    result = competition_forecast_metrics(
         [[1.0, 2.0, 3.0]],
         [4.0],
         [3.5],

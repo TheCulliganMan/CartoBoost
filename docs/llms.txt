@@ -11,7 +11,7 @@ Use this directory as the navigation map for the user-facing docs site.
 - [Getting started](./getting-started.md)
 - [Python estimator numeric input and missing-value contract](./user-guide/python-estimator.md)
 - [Choose a model](./user-guide/model-types.md)
-- [Unified model registry and AutoGeoModel](./user-guide/model-types.md)
+- [Stable estimators and preview model registry](./user-guide/model-types.md)
 - [Spatial econometrics models](./user-guide/spatial-econometrics.md)
 - [Scalable GP geostatistics models](./user-guide/geostatistics-models.md)
 - [CartoBoost Boosting Model Guides](./user-guide/boosting-models/index.md)
@@ -36,13 +36,10 @@ Use this directory as the navigation map for the user-facing docs site.
 - Deep claim benchmark JSONL artifact: `./assets/deep_claim_benchmarks/results.jsonl`
 - Deep claim benchmark Markdown artifact: `./assets/deep_claim_benchmarks/results.md`
 - Model capability artifact: `./assets/capabilities/model_capabilities.json`
-- [Shared representation primitives](./user-guide/deep-models.md)
-- [Retrieval-augmented forecasting](./user-guide/deep-models.md)
+- [Source-only retrieval-augmented diagnostics](./user-guide/deep-models.md)
 - [Optional foundation model adapters](./user-guide/deep-models.md)
-- [Multi-view spatial attention](./user-guide/deep-models.md)
-- [Self-supervised representation pretraining](./user-guide/deep-models.md)
+- [Source-only multi-view spatial diagnostics](./user-guide/deep-models.md)
 - [Mixture-of-experts regime modeling](./user-guide/deep-models/cartoboost-regime-moe-forecaster.md)
-- [Selective state-space](./user-guide/deep-models/cartoboost-temporal-ssm-forecaster.md)
 - [Inverted temporal transformer](./user-guide/deep-models/cartoboost-inverted-temporal-transformer.md)
 - [Delay-aware graph transformer](./user-guide/deep-models/cartoboost-propagation-delay-graph-forecaster.md)
 - [Conditional flow uncertainty head](./user-guide/deep-models/cartoboost-conditional-flow-distribution-head.md)
@@ -71,7 +68,7 @@ Use this directory as the navigation map for the user-facing docs site.
 - Docs example audit: `../scripts/check_docs_examples.py`
 - Official geo evidence audit: `../scripts/check_official_geo_evidence.py`
 - Performance threshold audit: `../scripts/check_performance_thresholds.py`
-- AutoGeo benchmark gate: `../scripts/run_autogeo_benchmark_gate.py`
+- AutoGeo is preview-only and excluded from the stable release gate.
 - NYC TLC quality benchmark harness: `../scripts/run_nyc_taxi_quality_benchmarks.py`
 - NYC TLC Path C claim harness: `../scripts/run_nyc_taxi_path_c_claims.py`
 - NYC TLC Path C gate audit: `../scripts/check_nyc_taxi_path_c_gates.py`
@@ -82,28 +79,31 @@ Use this directory as the navigation map for the user-facing docs site.
 
 ## Model Lists
 
-Stable `cartoboost.models.ModelRegistry.defaults()` models:
+Preview `cartoboost.preview.models.ModelRegistry.defaults()` models:
 
 - `models.cartoboost_regressor` / `cartoboost.CartoBoostRegressor`
 - `models.cartoboost_classifier` / `cartoboost.CartoBoostClassifier`
 - `models.cartoboost_ranker` / `cartoboost.CartoBoostRanker`
-- `models.auto_geo_model` / `cartoboost.AutoGeoModel`
-- `models.geo_model_stack` / `cartoboost.GeoModelStack`
 - `forecasting.auto_forecaster` / `cartoboost.forecasting.AutoForecaster`
 - `forecasting.cartoboost_lag` / `cartoboost.forecasting.CartoBoostLagForecaster`
-- `graph.dcrnn` / `cartoboost.forecasting.DCRNNForecaster`
-- `geo.nngp` / `cartoboost.NearestNeighborGPRegressor`
-- `geo.residual_nngp` / `cartoboost.ResidualNNGPRegressor`
-- `geo.spatial_lag` / `cartoboost.SpatialLagRegressor`
-- `geo.spatial_error` / `cartoboost.SpatialErrorRegressor`
-- `geo.spatial_durbin` / `cartoboost.SpatialDurbinRegressor`
-- `causal.synthetic_did` / `cartoboost.SyntheticDIDEstimator`
-- `causal.geo_lift_design` / `cartoboost.GeoExperimentDesigner`
-- `causal.spatial_placebo` / `cartoboost.SpatialPlaceboTester`
-- `prob.conformal_interval` / `cartoboost.prob.ConformalIntervalRegressor`
-- `prob.spatial_conformal` / `cartoboost.prob.SpatialConformalRegressor`
+- `graph.dcrnn` / `cartoboost.preview.forecasting.DCRNNForecaster`
+- `geo.nngp` / `cartoboost.preview.geostats.NearestNeighborGPRegressor`
+- `geo.residual_nngp` / `cartoboost.preview.geostats.ResidualNNGPRegressor`
+- `geo.spatial_lag` / `cartoboost.preview.spatial_econometrics.SpatialLagRegressor`
+- `geo.spatial_error` / `cartoboost.preview.spatial_econometrics.SpatialErrorRegressor`
+- `geo.spatial_durbin` / `cartoboost.preview.spatial_econometrics.SpatialDurbinRegressor`
+- `causal.synthetic_did` / `cartoboost.preview.geo_causal.SyntheticDIDEstimator`
+- `causal.geo_lift_design` / `cartoboost.preview.geo_causal.GeoExperimentDesigner`
+- `causal.spatial_placebo` / `cartoboost.preview.geo_causal.SpatialPlaceboTester`
+- `prob.conformal_interval` / `cartoboost.preview.prob.ConformalIntervalRegressor`
+- `prob.spatial_conformal` / `cartoboost.preview.prob.SpatialConformalRegressor`
 
 Forecasting model ids and classes:
+
+Only `NaiveForecaster`, `SeasonalNaiveForecaster`, `CartoBoostLagForecaster`,
+`AutoForecaster`, and the typed forecast result/config surfaces are stable in
+the v0.3 Python API. Other forecasting classes below are preview/demo entries
+and must be imported from `cartoboost.preview` when available.
 
 - `naive` / `NaiveForecaster`
 - `seasonal_naive` / `SeasonalNaiveForecaster`
@@ -113,7 +113,6 @@ Forecasting model ids and classes:
 - `ets` / `ETSForecaster`
 - `auto_ets` / Auto ETS browser model
 - `seasonal_ets` / Seasonal ETS browser model
-- `arima` / `ArimaForecaster`
 - `auto_arima` / `AutoARIMAForecaster`
 - `autostats_bank` / `AutoStatsBank`
 - `classical_expert_bank` / Classical Expert Bank browser model
@@ -142,8 +141,6 @@ Forecasting model ids and classes:
 - `mstl_cartoboost` / MSTL + ARIMA browser model
 - `window_average` / Window Average browser model
 - `seasonal_window_average` / Seasonal Window Average browser model
-- `kriging` / `KrigingForecaster`
-- `spatial_piecewise_kriging` / `SpatialPiecewiseKrigingForecaster`
 
 Graph and neural model classes:
 
@@ -172,11 +169,6 @@ Deep model classes and aliases:
 - `ServiceTimeResidualModel`
 - `SpatioTemporalGraphForecaster`
 - `ConstrainedDecisionOptimizer`
-- `TemporalSSMForecaster`
-- `SelectiveStateSpaceBlock`
-- `EntityTemporalSSM`
-- `PairTemporalSSM`
-- `GraphTemporalSSM`
 - `TemporalEntityTransformer`
 - `InvertedTemporalTransformer`
 - `InvertedEntityTransformer`
@@ -203,10 +195,6 @@ Deep model classes and aliases:
 
 Representation, foundation, geo, causal, and probabilistic model surfaces:
 
-- `EntityEmbedding`, `PairEmbedding`, `GraphContextEmbedding`, `SpatioTemporalAdaptiveEmbedding`
-- `HistoricalAnalogRetriever`, `KNNContextMemory`, `RetrievalAugmentedForecaster`, `RetrievalAugmentedPairModel`
-- `RegimeRouter`, `SelfSupervisedPretrainer`, `MultiViewSpatialAttention`
-- `LocalGlobalHubAttention`, `SpatialSemanticGraphTransformer`
 - `FoundationForecastFeatures`, `ChronosAdapter`, `TimesFMAdapter`, `MoiraiAdapter`, `TimeGPTAdapter`, `TabPFNAdapter`, `TabPFNFeatureGenerator`, `PriorFittedBaseline`
 - `SpatialLagRegressor`, `SpatialErrorRegressor`, `SpatialDurbinRegressor`, `SpatialTwoStageLeastSquares`
 - `NearestNeighborGPRegressor`, `ResidualNNGPRegressor`, `SpatialGaussianProcessRegressor`
@@ -220,3 +208,4 @@ Representation, foundation, geo, causal, and probabilistic model surfaces:
 - Keep implementation details out of the main guides unless they affect how the
   model is used.
 - Use taxi examples only when they clarify a structured modeling idea.
+- [Migrating to CartoBoost 0.3](./migration-v0.3.md)

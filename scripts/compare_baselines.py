@@ -52,7 +52,7 @@ def collect() -> dict[str, Any]:
         max_depth=2,
         min_samples_leaf=4,
         min_gain=0.0,
-        splitters=["axis"],
+        split_policy="axis_only",
     ).fit(train_x, train_y)
     sklearn_gbr = GradientBoostingRegressor(
         n_estimators=25,

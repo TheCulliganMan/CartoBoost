@@ -6,6 +6,7 @@ pub mod forecasting;
 pub mod geo;
 pub mod graph_regularization;
 pub mod loss;
+pub mod manifest;
 pub mod metrics;
 pub mod objectives;
 pub mod predictors;

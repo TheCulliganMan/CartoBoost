@@ -1,6 +1,14 @@
 import json
 
+import numpy as np
+import pandas as pd
 import pytest
+from cartoboost.forecasting import (
+    AutoForecaster,
+    CartoBoostLagForecaster,
+    ForecastFrame,
+    LagConfig,
+)
 from cartoboost.forecasting.artifacts import (
     ForecastArtifact,
     ForecastArtifactManifest,
@@ -81,3 +89,41 @@ def test_parquet_save_hard_fails_without_optional_pyarrow(monkeypatch, tmp_path)
 
     with pytest.raises(ImportError, match="pyarrow"):
         artifact.save(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("model_cls", "kwargs"),
+    [
+        (
+            CartoBoostLagForecaster,
+            {"lag_config": LagConfig(lags=[1, 2]), "n_estimators": 4, "max_depth": 2},
+        ),
+        (AutoForecaster, {"n_estimators": 4}),
+    ],
+)
+def test_stable_forecaster_v2_artifact_roundtrip(model_cls, kwargs, tmp_path):
+    frame = ForecastFrame.from_pandas(
+        pd.DataFrame(
+            {
+                "timestamp": pd.date_range("2024-01-01", periods=40, freq="D"),
+                "fare": np.arange(40, dtype=float),
+            }
+        ),
+        timestamp_col="timestamp",
+        target_col="fare",
+        freq="D",
+    )
+    model = model_cls(**kwargs).fit(frame)
+    before = model.predict(3).predictions()
+    path = tmp_path / f"{model_cls.__name__}.json"
+    model.save(path)
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["format"] == "cartoboost.model"
+    assert payload["artifact_version"] == 2
+    assert payload["model_type"] in {"auto_forecaster", "cartoboost_lag"}
+    assert {"library_version", "schema_hash", "training_config", "payload"} <= set(payload)
+
+    restored = model_cls.load(path)
+    assert restored.get_params() == model.get_params()
+    assert restored.predict(3).predictions() == before

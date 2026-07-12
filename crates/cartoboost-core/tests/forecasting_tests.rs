@@ -1,5 +1,5 @@
 use cartoboost_core::forecasting::{
-    evaluate_m_competition_metrics, CandidateValidationCutoffSchedule, CrostonForecaster,
+    evaluate_competition_metrics, CandidateValidationCutoffSchedule, CrostonForecaster,
     ForecastActual, ForecastFrame, ForecastFrameMetadata, ForecastFrequency, ForecastRegistry,
     ForecastResult, ForecastRow, ForecastWindow, Forecaster, IntermittentDemandForecaster,
     NaiveForecaster, RollingOriginBacktester, RollingOriginSplitter, SbaForecaster,
@@ -269,7 +269,7 @@ fn fixed_intermittent_forecasters_reject_invalid_inputs() {
 }
 
 #[test]
-fn intermittent_demand_uses_no_holdout_selection_for_single_observation_panels() {
+fn intermittent_demand_requires_real_holdout_for_selection() {
     let frame = ForecastFrame::new(
         vec![
             ForecastRow::new("PULocationID=132", ts(1), 3.0),
@@ -280,15 +280,10 @@ fn intermittent_demand_uses_no_holdout_selection_for_single_observation_panels()
     .expect("valid one-row intermittent panel");
     let mut model = IntermittentDemandForecaster::default();
 
-    model.fit(&frame).expect("fit");
-    let forecast = model.predict(2).expect("forecast");
-
-    assert_eq!(forecast.predictions().len(), 4);
-    assert!(forecast
-        .predictions()
-        .iter()
-        .all(|prediction| { prediction.model == "intermittent_demand" && prediction.mean >= 0.0 }));
-    assert_eq!(model.metadata()["validation_window"].as_u64(), Some(0));
+    let error = model
+        .fit(&frame)
+        .expect_err("one-row selector must not invent validation");
+    assert!(error.to_string().contains("real holdout"));
 }
 
 #[test]
@@ -554,7 +549,7 @@ fn seasonal_naive_repeats_last_season() {
 }
 
 #[test]
-fn seasonal_naive_cycles_available_short_history() {
+fn seasonal_naive_rejects_history_without_a_complete_cycle() {
     let frame = ForecastFrame::new(
         vec![
             ForecastRow::single(ts(1), 1.0),
@@ -564,14 +559,10 @@ fn seasonal_naive_cycles_available_short_history() {
     )
     .expect("valid frame");
     let mut model = SeasonalNaiveForecaster::new(7).expect("valid season");
-    model.fit(&frame).expect("fit short history");
-    let forecast = model.predict(3).expect("forecast");
-    let means = forecast
-        .predictions()
-        .iter()
-        .map(|row| row.mean)
-        .collect::<Vec<_>>();
-    assert_eq!(means, vec![1.0, 2.0, 1.0]);
+    let error = model
+        .fit(&frame)
+        .expect_err("short seasonal history must fail");
+    assert!(error.to_string().contains("one complete requested season"));
 }
 
 #[test]
@@ -675,14 +666,13 @@ fn metrics_reject_unmatched_forecast_rows() {
 }
 
 #[test]
-fn m_competition_metrics_compute_smape_mase_and_owa_ratios() {
+fn competition_metrics_compute_smape_mase_and_owa_ratios() {
     let training_series = vec![vec![10.0, 12.0, 14.0], vec![20.0, 23.0, 26.0]];
     let actuals = vec![16.0, 29.0];
-    let baseline =
-        evaluate_m_competition_metrics(&training_series, &actuals, &[14.0, 26.0], 1, None)
-            .expect("baseline metrics");
+    let baseline = evaluate_competition_metrics(&training_series, &actuals, &[14.0, 26.0], 1, None)
+        .expect("baseline metrics");
 
-    let metrics = evaluate_m_competition_metrics(
+    let metrics = evaluate_competition_metrics(
         &training_series,
         &actuals,
         &[15.0, 30.0],

@@ -466,7 +466,7 @@ fn lag_plus_forecaster_calibrates_residual_corrections() {
 }
 
 #[test]
-fn lag_plus_disables_calibration_when_short_panel_only_supports_base_fit() {
+fn lag_plus_rejects_short_panels_instead_of_disabling_calibration_or_pruning_lags() {
     let frame = ForecastFrame::new(
         vec![
             ForecastRow::new("PU1", ts(1), 20.0),
@@ -502,18 +502,12 @@ fn lag_plus_disables_calibration_when_short_panel_only_supports_base_fit() {
     })
     .expect("forecaster");
 
-    forecaster.fit(&frame).expect("fit");
-    let forecast = forecaster.predict(2).expect("predict");
-    let metadata = forecaster.metadata();
-
-    assert_eq!(forecast.predictions().len(), 4);
-    assert_eq!(metadata["validation_window"], serde_json::json!(0));
-    assert_eq!(metadata["enabled"], serde_json::json!(false));
-    assert_eq!(metadata["corrections"], serde_json::json!({}));
-    assert!(forecast
-        .predictions()
-        .iter()
-        .all(|prediction| prediction.model == "lag_plus" && prediction.mean.is_finite()));
+    let error = forecaster
+        .fit(&frame)
+        .expect_err("LagPlus needs a real holdout and its complete configured lag history");
+    assert!(error
+        .to_string()
+        .contains("requires at least 8 prior observations"));
 }
 
 #[test]

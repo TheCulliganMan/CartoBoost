@@ -191,7 +191,7 @@ def binary_spatial_classification(
         max_depth=3,
         min_samples_leaf=5,
         min_gain=0.0,
-        splitters=["axis", "diagonal_2d", "gaussian_2d", "periodic:24"],
+        split_policy="structured",
     )
     fit_s, pred_s, _ = timed_fit_predict(model, x[train], y[train], x[test])
     proba = model.predict_proba(x[test])[:, list(model.classes_).index(1)]
@@ -243,7 +243,7 @@ def grouped_ranking(args: argparse.Namespace, rng: np.random.Generator) -> dict[
         max_depth=2,
         min_samples_leaf=2,
         min_gain=0.0,
-        splitters=["axis"],
+        split_policy="axis_only",
     )
     start = time.perf_counter()
     ranker.fit(x[:split], relevance[:split], groups=groups[:train_groups])
@@ -297,7 +297,7 @@ def categorical_vs_one_hot(args: argparse.Namespace, rng: np.random.Generator) -
         max_depth=2,
         min_samples_leaf=3,
         min_gain=0.0,
-        splitters=["axis"],
+        split_policy="axis_only",
     )
     one_hot_model = CartoBoostRegressor(
         n_estimators=args.n_estimators,
@@ -305,7 +305,7 @@ def categorical_vs_one_hot(args: argparse.Namespace, rng: np.random.Generator) -
         max_depth=2,
         min_samples_leaf=3,
         min_gain=0.0,
-        splitters=["axis"],
+        split_policy="axis_only",
     )
     native_fit, native_pred_s, native_pred = timed_fit_predict(
         native,
@@ -439,7 +439,7 @@ def best_regression_timing(
             max_depth=3,
             min_samples_leaf=5,
             min_gain=0.0,
-            splitters=["axis"],
+            split_policy="axis_only",
         )
         result = timed_fit_predict(model, x[train], y[train], x[test])
         if best is None or result[0] < best[0]:
@@ -458,7 +458,7 @@ def unsupported_export(args: argparse.Namespace) -> dict[str, Any]:
         max_depth=1,
         min_samples_leaf=1,
         min_gain=0.0,
-        splitters=["axis"],
+        split_policy="axis_only",
     ).fit(x, y, feature_schema=schema)
     categorical_raised = False
     with tempfile.TemporaryDirectory() as tmp:
@@ -530,7 +530,7 @@ def fit_rmse(
         max_depth=3,
         min_samples_leaf=5,
         min_gain=0.0,
-        splitters=["axis", "diagonal_2d", "gaussian_2d"],
+        split_policy="structured",
     )
     model.fit(x[train_idx], y[train_idx])
     return rmse(y[test_idx], model.predict(x[test_idx]))

@@ -21,6 +21,12 @@ export function deepEventOutcomeFit(features: any, labels: Float64Array, backend
 
 export function deepEventOutcomePredict(artifact: any, features: any): any;
 
+/**
+ * Predicts event probabilities with the artifact's hidden layer dispatched on
+ * WebGPU. The export is asynchronous because browser GPU work is asynchronous.
+ */
+export function deepEventOutcomePredictWebgpu(artifact: any, features: any): Promise<any>;
+
 export function deepGraphNeuralOperatorPredict(field_values: any, coordinates: any, edges: any, exogenous_fields: any, smoothing: number, coordinate_scale: number): any;
 
 export function deepNeuralOperatorSyntheticBenchmark(): any;
@@ -31,9 +37,13 @@ export function deepResponseCurveFit(rows: any, response_type: string, monotone?
 
 export function deepResponseCurvePredict(artifact: any, rows: any): any;
 
+export function deepResponseCurvePredictWebgpu(artifact: any, rows: any): Promise<any>;
+
 export function deepServiceResidualFit(rows: any, backend?: string | null): any;
 
 export function deepServiceResidualPredict(artifact: any, rows: any): any;
+
+export function deepServiceResidualPredictWebgpu(artifact: any, rows: any): Promise<any>;
 
 export function deepTemporalEntityFit(y: any, lookback: number, horizon: number): any;
 
@@ -65,48 +75,66 @@ export function runRegressionModel(request: any): any;
 
 export function runSequence(request: any): any;
 
+export function webgpuDenseLayer(features: any, weights: Float32Array, biases: Float32Array): Promise<any>;
+
+/**
+ * Executes a browser WebGPU compute pass and resolves once the mapped output
+ * has been verified. Unlike the synchronous modeling exports, this function
+ * can await browser adapter and buffer-map promises safely.
+ */
+export function webgpuDispatchReport(len: number): Promise<any>;
+
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
-    readonly runForecast: (a: any) => [number, number, number];
-    readonly runGraphForecast: (a: any) => [number, number, number];
-    readonly deepResponseCurveFit: (a: any, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number];
-    readonly deepResponseCurvePredict: (a: any, b: any) => [number, number, number];
-    readonly deepEventOutcomeFit: (a: any, b: number, c: number, d: number, e: number) => [number, number, number];
-    readonly deepEventOutcomePredict: (a: any, b: any) => [number, number, number];
-    readonly deepDirectionalPairPredict: (a: any) => [number, number, number];
-    readonly deepServiceResidualFit: (a: any, b: number, c: number) => [number, number, number];
     readonly availableDeepBackends: () => [number, number, number];
-    readonly deepServiceResidualPredict: (a: any, b: any) => [number, number, number];
-    readonly deepTemporalEntityFit: (a: any, b: number, c: number) => [number, number, number];
-    readonly deepTemporalEntityPredict: (a: any, b: number) => [number, number, number];
+    readonly availableForecastModels: () => [number, number, number];
+    readonly deepChoiceSetTransformerReport: (a: any, b: number, c: number, d: number) => [number, number, number];
     readonly deepConditionalFlowFit: (a: any, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
     readonly deepConditionalFlowPredict: (a: any, b: any, c: number, d: number) => [number, number, number];
+    readonly deepConstrainedDecisionSelect: (a: any, b: number, c: number, d: any, e: number, f: number) => [number, number, number];
     readonly deepDiffusionScenarioGenerate: (a: any, b: any, c: number, d: number, e: number) => [number, number, number];
+    readonly deepDirectionalPairPredict: (a: any) => [number, number, number];
+    readonly deepEventOutcomeFit: (a: any, b: number, c: number, d: number, e: number) => [number, number, number];
+    readonly deepEventOutcomePredict: (a: any, b: any) => [number, number, number];
+    readonly deepEventOutcomePredictWebgpu: (a: any, b: any) => any;
     readonly deepGraphNeuralOperatorPredict: (a: any, b: any, c: any, d: any, e: number, f: number) => [number, number, number];
     readonly deepNeuralOperatorSyntheticBenchmark: () => [number, number, number];
-    readonly deepChoiceSetTransformerReport: (a: any, b: number, c: number, d: number) => [number, number, number];
     readonly deepRegimeMoeReport: (a: any, b: number, c: number) => [number, number, number];
-    readonly deepConstrainedDecisionSelect: (a: any, b: number, c: number, d: any, e: number, f: number) => [number, number, number];
+    readonly deepResponseCurveFit: (a: any, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number];
+    readonly deepResponseCurvePredict: (a: any, b: any) => [number, number, number];
+    readonly deepResponseCurvePredictWebgpu: (a: any, b: any) => any;
+    readonly deepServiceResidualFit: (a: any, b: number, c: number) => [number, number, number];
+    readonly deepServiceResidualPredict: (a: any, b: any) => [number, number, number];
+    readonly deepServiceResidualPredictWebgpu: (a: any, b: any) => any;
+    readonly deepTemporalEntityFit: (a: any, b: number, c: number) => [number, number, number];
+    readonly deepTemporalEntityPredict: (a: any, b: number) => [number, number, number];
     readonly fitPiecewiseLinearSeasonalArtifact: (a: any) => [number, number, number];
+    readonly geoSplitManifestHash: (a: number, b: number) => [number, number, number, number];
     readonly predictPiecewiseLinearSeasonalArtifact: (a: number, b: number, c: number) => [number, number, number];
     readonly predictPiecewiseLinearSeasonalArtifactWithOptions: (a: number, b: number, c: number, d: any) => [number, number, number];
-    readonly runRegressionModel: (a: any) => [number, number, number];
-    readonly runNeuralModel: (a: any) => [number, number, number];
-    readonly runSequence: (a: any) => [number, number, number];
-    readonly runGeotemporalDiagnostics: (a: any) => [number, number, number];
+    readonly runForecast: (a: any) => [number, number, number];
     readonly runGeoCausalExperiment: (a: any) => [number, number, number];
-    readonly runGeostatisticsModel: (a: any) => [number, number, number];
     readonly runGeoFeatureExamples: (a: any) => [number, number, number];
-    readonly availableForecastModels: () => [number, number, number];
-    readonly geoSplitManifestHash: (a: number, b: number) => [number, number, number, number];
+    readonly runGeostatisticsModel: (a: any) => [number, number, number];
+    readonly runGeotemporalDiagnostics: (a: any) => [number, number, number];
+    readonly runGraphForecast: (a: any) => [number, number, number];
+    readonly runNeuralModel: (a: any) => [number, number, number];
+    readonly runRegressionModel: (a: any) => [number, number, number];
+    readonly runSequence: (a: any) => [number, number, number];
+    readonly webgpuDenseLayer: (a: any, b: number, c: number, d: number, e: number) => any;
+    readonly webgpuDispatchReport: (a: number) => any;
+    readonly wasm_bindgen__convert__closures_____invoke__h164c0d2c76578433: (a: number, b: number, c: any) => [number, number];
+    readonly wasm_bindgen__convert__closures_____invoke__h39e1bf8ff3fdbdb9: (a: number, b: number, c: any, d: any) => void;
+    readonly wasm_bindgen__convert__closures_____invoke__h0187be81d5918678: (a: number, b: number, c: any) => void;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_exn_store: (a: number) => void;
     readonly __externref_table_alloc: () => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __wbindgen_free: (a: number, b: number, c: number) => void;
+    readonly __wbindgen_destroy_closure: (a: number, b: number) => void;
     readonly __externref_table_dealloc: (a: number) => void;
     readonly __wbindgen_start: () => void;
 }

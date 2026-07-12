@@ -11,18 +11,18 @@ method on a simple zone sequence, route panel, or coordinate interpolation
 problem.
 
 ```python
-import cartoboost as cb
+import cartoboost.preview as cb
 ```
 
 ## Sequence Reference Utilities
 
-Use `cartoboost.forecasting.sequence` when a row sequence has a known target
+Use `cartoboost.preview.forecasting.sequence` when a row sequence has a known target
 prefix, a target-missing prediction suffix, and an external reference axis such
 as a canonical demand profile. The utilities validate the prefix/suffix
 boundary and reject target leakage in prediction rows.
 
 ```python
-from cartoboost.forecasting.sequence import (
+from cartoboost.preview.forecasting import (
     ReferenceSignal,
     SequenceRow,
     SequenceSeries,
@@ -65,7 +65,7 @@ Example: a location counter reads a stable hourly demand level with small
 noise, and you want a smoothed level plus a short flat forecast.
 
 ```python
-import cartoboost as cb
+import cartoboost.preview as cb
 
 readings = [99.0, 101.0, 100.0, 102.0, 101.0, 103.0]
 
@@ -118,7 +118,7 @@ Visualization example:
 
 ```python
 import matplotlib.pyplot as plt
-import cartoboost as cb
+import cartoboost.preview as cb
 
 readings = [184.0, 187.0, 183.0, 186.0, 185.0, 188.0, 186.0]
 state = cb.local_level_kalman_filter(readings, horizon=3)
@@ -148,7 +148,7 @@ Example: daily pickup demand is increasing by about two trips per day, with
 noise.
 
 ```python
-import cartoboost as cb
+import cartoboost.preview as cb
 
 pickups = [40.0, 42.0, 45.0, 47.0, 50.0, 51.0, 54.0]
 
@@ -201,7 +201,7 @@ Visualization example:
 
 ```python
 import matplotlib.pyplot as plt
-import cartoboost as cb
+import cartoboost.preview as cb
 
 pickups = [40.0, 42.0, 45.0, 47.0, 50.0, 51.0, 54.0]
 state = cb.kalman_filter(pickups, horizon=4)
@@ -230,7 +230,7 @@ Use `KalmanForecaster` when you want the same local-linear model behind the
 forecasting API.
 
 ```python
-from cartoboost.forecasting.local import KalmanForecaster
+from cartoboost.preview.forecasting import KalmanForecaster
 
 model = KalmanForecaster(
     level_process_variance=0.05,
@@ -265,7 +265,7 @@ Example: three locations have observed demand pressure, and you want the
 estimated pressure at a nearby centroid.
 
 ```python
-import cartoboost as cb
+import cartoboost.preview as cb
 
 observations = [
     (0.0, 0.0, 10.0),  # x, y, value
@@ -296,14 +296,22 @@ Parameters:
 | --- | --- |
 | `observations` | Sequence of `(x, y, value)` triples. |
 | `targets` | Sequence of `(x, y)` coordinates to interpolate. |
-| `range` | Distance scale for spatial covariance. Larger values spread influence farther. |
-| `nugget` | Small diagonal variance for numerical stability and measurement noise. |
-| `sill` | Marginal spatial covariance scale. |
+| `range` | Distance scale for bounded semivariograms. For `linear`, it is the denominator of the slope `sill / range`. |
+| `nugget` | Non-negative origin discontinuity representing an uncorrelated or measurement-scale component. |
+| `sill` | Structural semivariance contribution for bounded models; for `linear`, the contribution at distance `range`. |
 | `variogram_model` | `exponential`, `gaussian`, `spherical`, or `linear`. |
 | `drift` | `ordinary` for constant mean or `linear` for universal kriging with x/y drift. |
 | `anisotropy_angle_degrees`, `anisotropy_scaling` | Rotate and stretch the spatial distance metric. |
 | `max_neighbors`, `min_neighbors`, `max_distance` | Optional target-local neighbor selection. All-neighbor predictions cache the kriging system once for faster many-target scoring. |
 | `detailed` | When true, include kriging variance and selected neighbor indices. |
+
+For positive distance `d`, the exponential and Gaussian models use
+`nugget + sill * (1 - exp(-d / range))` and
+`nugget + sill * (1 - exp(-(d / range)^2))`. The spherical model rises as
+`nugget + sill * (1.5r - 0.5r^3)` for `r = d / range < 1` and then stays at
+`nugget + sill`. The linear model uses the unbounded semivariogram
+`nugget + (sill / range) * d`; its `range` is a scale parameter, not a cutoff.
+The kriging system itself uses a zero diagonal.
 
 Return shape:
 
@@ -339,7 +347,7 @@ a fixed coordinate. The wrapper forecasts each series by kriging the latest
 known panel values at that series coordinate.
 
 ```python
-from cartoboost.forecasting.local import KrigingForecaster
+from cartoboost.preview.forecasting import KrigingForecaster
 
 coordinates = {
     "location_142": (0.0, 0.0),
@@ -381,7 +389,7 @@ Example: a low-volume lane has several zero-demand days and occasional
 orders.
 
 ```python
-import cartoboost as cb
+import cartoboost.preview as cb
 
 demand = [0.0, 0.0, 4.0, 0.0, 0.0, 2.0, 0.0, 5.0, 0.0]
 
@@ -411,7 +419,7 @@ The same local models used by forecasting wrappers can be called on plain
 numeric sequences:
 
 ```python
-import cartoboost as cb
+import cartoboost.preview as cb
 
 values = [20.0, 21.0, 19.0, 22.0, 23.0, 24.0, 26.0]
 

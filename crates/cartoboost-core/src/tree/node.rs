@@ -177,7 +177,6 @@ struct AxisStump {
 struct FlatAxisNode {
     feature: usize,
     threshold: f64,
-    missing_goes_left: bool,
     left: usize,
     right: usize,
     value: f64,
@@ -379,10 +378,7 @@ impl Model {
                 );
             }
         }
-        Ok((0..rows)
-            .into_par_iter()
-            .map(|row| self.predict_flat_row(cols, values, sparse_offsets, sparse_ids, row))
-            .collect())
+        Ok(self.predict_flat_tree_major(rows, cols, values, sparse_offsets, sparse_ids))
     }
 
     pub fn try_predict_additive_flat(
@@ -498,6 +494,37 @@ impl Model {
         self.trees.iter().map(Tree::flat_axis_tree).collect()
     }
 
+    /// Predict generic (including sparse and structured) trees tree-major.
+    ///
+    /// The row-major implementation repeatedly walks the full forest inside
+    /// each row task.  That creates a large amount of Rayon scheduling and
+    /// bounds-check overhead for million-row batches.  Accumulating one tree
+    /// at a time keeps the hot loop contiguous over the output buffer while
+    /// preserving the exact tree order and prediction semantics.
+    fn predict_flat_tree_major(
+        &self,
+        rows: usize,
+        cols: usize,
+        values: &[f64],
+        sparse_offsets: &[Vec<usize>],
+        sparse_ids: &[Vec<u64>],
+    ) -> Vec<f64> {
+        let mut predictions = vec![self.init_prediction; rows];
+        for tree in &self.trees {
+            predictions
+                .par_iter_mut()
+                .enumerate()
+                .for_each(|(row, prediction)| {
+                    *prediction += self.learning_rate
+                        * tree.predict_flat_row(cols, values, sparse_offsets, sparse_ids, row);
+                });
+        }
+        predictions
+            .into_par_iter()
+            .map(|prediction| self.transform_prediction(prediction))
+            .collect()
+    }
+
     pub fn flat_axis_predictor(&self) -> Option<FlatAxisPredictor> {
         if self.requires_sparse_sets() {
             return None;
@@ -577,6 +604,9 @@ impl FlatAxisPredictor {
     }
 
     pub fn predict_flat(&self, rows: usize, cols: usize, values: &[f64]) -> Vec<f64> {
+        if rows >= 10_000 && self.trees.len() >= 32 {
+            return self.predict_flat_tree_major(rows, cols, values);
+        }
         (0..rows)
             .into_par_iter()
             .map(|row| {
@@ -590,30 +620,30 @@ impl FlatAxisPredictor {
             })
             .collect()
     }
+
+    fn predict_flat_tree_major(&self, rows: usize, cols: usize, values: &[f64]) -> Vec<f64> {
+        let mut predictions = vec![self.init_prediction; rows];
+        const BLOCK_ROWS: usize = 16384;
+        predictions.par_chunks_mut(BLOCK_ROWS).enumerate().for_each(
+            |(block, block_predictions)| {
+                let start = block * BLOCK_ROWS;
+                for (offset, prediction) in block_predictions.iter_mut().enumerate() {
+                    let row_offset = (start + offset) * cols;
+                    for tree in &self.trees {
+                        *prediction +=
+                            self.learning_rate * predict_flat_axis_tree(tree, values, row_offset);
+                    }
+                }
+            },
+        );
+        predictions
+            .into_par_iter()
+            .map(|prediction| self.prediction_transform.apply(prediction))
+            .collect()
+    }
 }
 
 impl Model {
-    fn predict_flat_row(
-        &self,
-        cols: usize,
-        values: &[f64],
-        sparse_offsets: &[Vec<usize>],
-        sparse_ids: &[Vec<u64>],
-        row: usize,
-    ) -> f64 {
-        self.transform_prediction(
-            self.init_prediction
-                + self
-                    .trees
-                    .iter()
-                    .map(|tree| {
-                        self.learning_rate
-                            * tree.predict_flat_row(cols, values, sparse_offsets, sparse_ids, row)
-                    })
-                    .sum::<f64>(),
-        )
-    }
-
     pub fn requires_sparse_sets(&self) -> bool {
         self.trees.iter().any(Tree::contains_sparse_list_split)
     }
@@ -738,7 +768,6 @@ impl Node {
         nodes.push(FlatAxisNode {
             feature: 0,
             threshold: 0.0,
-            missing_goes_left: true,
             left: 0,
             right: 0,
             value: 0.0,
@@ -752,9 +781,7 @@ impl Node {
                 split, left, right, ..
             } => {
                 let Split::Axis {
-                    feature,
-                    threshold,
-                    missing_goes_left,
+                    feature, threshold, ..
                 } = split
                 else {
                     return None;
@@ -764,7 +791,6 @@ impl Node {
                 nodes[index] = FlatAxisNode {
                     feature: *feature,
                     threshold: *threshold,
-                    missing_goes_left: *missing_goes_left,
                     left: left_index,
                     right: right_index,
                     value: 0.0,
@@ -862,14 +888,11 @@ fn predict_flat_axis_tree(nodes: &[FlatAxisNode], values: &[f64], row_offset: us
         if node.is_leaf {
             return node.value;
         }
+        // `Model::try_predict_flat` validates the complete contiguous input
+        // before selecting this hot path, so avoid repeating an `is_finite`
+        // branch at every tree node.
         let value = values[row_offset + node.feature];
-        index = if value.is_finite() {
-            if value <= node.threshold {
-                node.left
-            } else {
-                node.right
-            }
-        } else if node.missing_goes_left {
+        index = if value <= node.threshold {
             node.left
         } else {
             node.right

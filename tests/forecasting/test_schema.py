@@ -5,7 +5,7 @@ import pytest
 
 pd = pytest.importorskip("pandas")
 
-from cartoboost.forecasting import (  # noqa: E402
+from cartoboost.preview.forecasting import (  # noqa: E402
     BaseForecaster,
     ForecastFrame,
     ForecastResult,
@@ -186,6 +186,28 @@ def test_forecast_frame_builds_native_irregular_frame_with_frequency_hint(instal
     assert frame._native_frame.freq == "D"
     assert frame._native_frame.kwargs["allow_irregular"] is True
     assert native.frame_class is frame._native_frame.__class__
+
+
+def test_forecast_frame_rejects_native_boundary_signature_mismatch(
+    install_fake_native,
+    monkeypatch,
+):
+    install_fake_native("NaiveForecaster")
+    import cartoboost
+
+    def reject_legacy_boundary(*args, **kwargs):
+        del args, kwargs
+        raise TypeError("legacy ForecastFrame signature")
+
+    monkeypatch.setattr(cartoboost._native, "ForecastFrame", reject_legacy_boundary)
+    raw = pd.DataFrame(
+        {
+            "pickup_hour": pd.date_range("2025-01-01", periods=3, freq="D"),
+            "fare": [10.0, 11.0, 12.0],
+        }
+    )
+    with pytest.raises(RuntimeError, match="typed ForecastFrame payload"):
+        ForecastFrame.from_pandas(raw, timestamp_col="pickup_hour", target_col="fare", freq="D")
 
 
 def test_forecast_frame_allows_missing_targets_only_when_explicit(install_fake_native):

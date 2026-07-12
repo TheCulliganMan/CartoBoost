@@ -9,7 +9,7 @@ features and residuals from the upstream model.
 ## Public Contract
 
 ```python
-from cartoboost.deep import ConditionalFlowDistributionHead
+from cartoboost.preview.deep import ConditionalFlowDistributionHead
 
 head = ConditionalFlowDistributionHead(
     quantiles=(0.05, 0.5, 0.95),

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from typing import Any
 
 import numpy as np
@@ -28,8 +29,15 @@ class ForecastMetricSet:
         upper: Any | None = None,
     ) -> dict[str, Any]:
         truth, pred = _paired(y_true, y_pred, "y_true", "y_pred")
-        result = _point_metrics(truth, pred)
-        result["mase"] = _mase(truth, pred, y_train, self.seasonal_period)
+        result = _native_point_metrics(
+            truth,
+            pred,
+            horizon=horizon,
+            series_id=series_id,
+            y_train=y_train,
+            seasonal_period=self.seasonal_period,
+        )
+        result["mape"] = _point_metrics(truth, pred)["mape"]
 
         if horizon is not None:
             result["per_horizon"] = _grouped_metrics(truth, pred, horizon)
@@ -52,12 +60,14 @@ class ForecastMetricSet:
                 raise ValueError("lower and upper interval bounds must be provided together")
             _, lower_arr = _paired(truth, lower, "y_true", "lower")
             _, upper_arr = _paired(truth, upper, "y_true", "upper")
-            widths = upper_arr - lower_arr
-            if np.any(widths < 0):
+            if np.any(upper_arr < lower_arr):
                 raise ValueError("lower bounds must be less than or equal to upper bounds")
-            covered = (truth >= lower_arr) & (truth <= upper_arr)
-            result["coverage"] = float(np.mean(covered))
-            result["interval_width"] = float(np.mean(widths))
+            result["coverage"] = _native_probability_metric(
+                "prob_interval_coverage_value", truth, lower_arr, upper_arr
+            )
+            result["interval_width"] = _native_probability_metric(
+                "prob_mean_interval_width_value", lower_arr, upper_arr
+            )
 
         return result
 
@@ -107,8 +117,117 @@ def pinball_loss(y_true: Any, y_pred: Any, quantile: float) -> float:
     if not 0.0 < quantile < 1.0:
         raise ValueError("quantile must be between 0 and 1")
     truth, pred = _paired(y_true, y_pred, "y_true", "y_pred")
-    residual = truth - pred
-    return float(np.mean(np.maximum(quantile * residual, (quantile - 1.0) * residual)))
+    return _native_probability_metric(
+        "prob_pinball_loss_value", truth, pred, scalar=float(quantile)
+    )
+
+
+def _native_probability_metric(name: str, *values: Any, scalar: float | None = None) -> float:
+    try:
+        from cartoboost import _native
+    except ImportError as exc:  # pragma: no cover - source-only installs
+        raise RuntimeError(
+            "cartoboost._native is required for forecasting probability metrics"
+        ) from exc
+    function = getattr(_native, name, None)
+    if function is None:
+        raise RuntimeError(f"installed CartoBoost native extension lacks {name}")
+    arrays = [_vector(value, f"metric_{index}").tolist() for index, value in enumerate(values)]
+    if scalar is not None:
+        arrays.append(float(scalar))
+    return float(function(*arrays))
+
+
+def _native_point_metrics(
+    truth: np.ndarray,
+    pred: np.ndarray,
+    *,
+    horizon: Any | None,
+    series_id: Any | None,
+    y_train: Any | None,
+    seasonal_period: int,
+) -> dict[str, float]:
+    """Evaluate scalar forecast metrics through the Rust forecasting core."""
+
+    try:
+        from cartoboost import _native
+    except ImportError as exc:  # pragma: no cover - source-only installs
+        raise RuntimeError(
+            "cartoboost._native is required for ForecastMetricSet; rebuild the native extension"
+        ) from exc
+    result_class = getattr(_native, "ForecastResult", None)
+    evaluator = getattr(_native, "forecast_evaluate_metrics", None)
+    if result_class is None or evaluator is None:
+        raise RuntimeError(
+            "installed CartoBoost native extension lacks Rust forecast metric bindings"
+        )
+
+    rows = len(truth)
+    series = _metric_series(series_id, rows)
+    horizons = _metric_horizons(horizon, rows)
+    timestamps = [
+        (datetime(2000, 1, 1) + timedelta(seconds=index)).strftime("%Y-%m-%dT%H:%M:%S")
+        for index in range(rows)
+    ]
+    predictions = [
+        (series[index], timestamps[index], horizons[index], "metric_set", float(pred[index]))
+        for index in range(rows)
+    ]
+    actuals = [
+        (series[index], timestamps[index], horizons[index], float(truth[index]))
+        for index in range(rows)
+    ]
+    training_actuals = None
+    if y_train is not None:
+        train = _vector(y_train, "y_train")
+        training_timestamps = [
+            (datetime(1990, 1, 1) + timedelta(seconds=index)).strftime("%Y-%m-%dT%H:%M:%S")
+            for index in range(len(train))
+        ]
+        training_actuals = [
+            ("__single__", training_timestamps[index], index + 1, float(value))
+            for index, value in enumerate(train)
+        ]
+    native_result = evaluator(
+        result_class(predictions),
+        actuals,
+        training_actuals,
+        int(seasonal_period) if y_train is not None else None,
+    )
+    mase = native_result.mase
+    return {
+        "mae": float(native_result.mae),
+        "rmse": float(native_result.rmse),
+        "normalized_rmse": float(native_result.normalized_rmse),
+        "wape": float(native_result.wape),
+        "smape": float(native_result.smape),
+        "bias": float(native_result.bias),
+        "mase": float(mase) if mase is not None else float("nan"),
+    }
+
+
+def _metric_series(values: Any | None, rows: int) -> list[str]:
+    if values is None:
+        return ["__single__"] * rows
+    array = np.asarray(values)
+    if array.ndim != 1 or len(array) != rows:
+        raise ValueError("series_id must be one-dimensional and match y_true")
+    return [str(value) for value in array.tolist()]
+
+
+def _metric_horizons(values: Any | None, rows: int) -> list[int]:
+    if values is None:
+        return list(range(1, rows + 1))
+    array = np.asarray(values)
+    if array.ndim != 1 or len(array) != rows:
+        raise ValueError("horizon must be one-dimensional and match y_true")
+    result = []
+    for value in array.tolist():
+        numeric = float(value)
+        if not numeric.is_integer() or numeric <= 0:
+            raise ValueError("horizon values must be positive integers")
+        result.append(int(numeric))
+    return result
 
 
 def _point_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:

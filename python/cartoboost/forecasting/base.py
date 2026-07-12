@@ -39,7 +39,13 @@ class BaseForecaster:
         except ImportError as exc:  # pragma: no cover
             raise ImportError("forecast score requires numpy") from exc
         actual = np.asarray(values, dtype=float).reshape(-1)
-        prediction = np.asarray(self.predict(int(horizon or actual.size)), dtype=float).reshape(-1)
+        raw_prediction = self.predict(int(horizon or actual.size))
+        if hasattr(raw_prediction, "predictions"):
+            rows = raw_prediction.predictions
+            rows = rows() if callable(rows) else rows
+            prediction = np.asarray([row[-1] for row in rows], dtype=float).reshape(-1)
+        else:
+            prediction = np.asarray(raw_prediction, dtype=float).reshape(-1)
         if prediction.shape[0] != actual.shape[0]:
             raise ValueError("prediction and values must have the same length")
         return float(np.sqrt(np.mean((actual - prediction) ** 2)))

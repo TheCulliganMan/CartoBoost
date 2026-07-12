@@ -83,6 +83,20 @@ impl ConformalCalibrator {
             "calibration_actual",
             "calibration_prediction",
         )?;
+        let expected_calibration_len = split_order
+            .calibration_end_exclusive
+            .checked_sub(split_order.calibration_start)
+            .ok_or_else(|| {
+                CartoBoostError::InvalidInput(
+                    "calibration split bounds must be ordered".to_string(),
+                )
+            })?;
+        if calibration_actual.len() != expected_calibration_len {
+            return Err(CartoBoostError::InvalidInput(format!(
+                "calibration arrays contain {} rows but the declared calibration split contains {expected_calibration_len}",
+                calibration_actual.len()
+            )));
+        }
         let mut scores = calibration_actual
             .iter()
             .zip(calibration_prediction)
@@ -90,7 +104,15 @@ impl ConformalCalibrator {
             .collect::<Vec<_>>();
         scores.sort_by(f64::total_cmp);
         let rank = (((scores.len() + 1) as f64) * (1.0 - self.alpha)).ceil() as usize;
-        let index = rank.saturating_sub(1).min(scores.len() - 1);
+        if rank > scores.len() {
+            return Err(CartoBoostError::InvalidInput(format!(
+                "{} calibration residuals are insufficient for a finite split-conformal interval at alpha {}; require alpha >= {}",
+                scores.len(),
+                self.alpha,
+                1.0 / (scores.len() + 1) as f64
+            )));
+        }
+        let index = rank.saturating_sub(1);
         self.residual_quantile = Some(scores[index]);
         self.split_order = Some(split_order);
         Ok(())
@@ -246,5 +268,26 @@ mod tests {
                 .unwrap(),
             interval
         );
+    }
+
+    #[test]
+    fn calibration_arrays_must_match_the_declared_split() {
+        let mut calibrator = ConformalCalibrator::new(0.2).expect("calibrator");
+        let error = calibrator
+            .fit_with_strict_ordering(&[1.0, 2.0], &[1.0, 2.0], 5, 5, 8, 8)
+            .expect_err("declared three-row calibration split must reject two rows");
+
+        assert!(error.to_string().contains("declared calibration split"));
+    }
+
+    #[test]
+    fn finite_sample_rank_must_exist_for_the_requested_alpha() {
+        let mut calibrator = ConformalCalibrator::new(0.1).expect("calibrator");
+        let error = calibrator
+            .fit_with_strict_ordering(&[1.0, 2.0, 3.0, 4.0], &[1.0, 2.0, 3.0, 4.0], 4, 4, 8, 8)
+            .expect_err("four residuals cannot support a finite 90% split-conformal interval");
+
+        assert!(error.to_string().contains("insufficient"));
+        assert!(calibrator.residual_quantile().is_none());
     }
 }

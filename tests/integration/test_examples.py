@@ -39,6 +39,17 @@ def test_taxi_od_graph_example_runs() -> None:
     assert np.isfinite(payload["graph_augmented"]["rmse"])
 
 
+def test_dependency_free_quickstart_runs() -> None:
+    payload = run_example("examples/quickstart.py")
+
+    assert payload["rows"] == 240
+    assert payload["train_rows"] == 192
+    assert payload["validation_rows"] == 48
+    assert np.isfinite(float(payload["baseline_rmse"]))
+    assert np.isfinite(float(payload["structured_rmse"]))
+    assert float(payload["roundtrip_max_abs_diff"]) < 1e-12
+
+
 def test_taxi_pickup_zone_graph_example_runs_and_improves_spatial_holdout() -> None:
     payload = run_example("examples/04_taxi_pickup_zone_graph.py")
 

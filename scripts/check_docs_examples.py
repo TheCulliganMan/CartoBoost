@@ -47,8 +47,7 @@ def check_docs_reference_contract() -> dict[str, Any]:
     required = {
         "model_choice": [
             "ModelRegistry.defaults()",
-            "AutoGeoModel",
-            "GeoModelStack",
+            "Automatic geo model selection is intentionally not shipped",
             "scripts/check_docs_examples.py",
         ],
         "geo_evaluation": [
@@ -73,7 +72,8 @@ def check_docs_reference_contract() -> dict[str, Any]:
 
 
 def run_model_choice_example() -> dict[str, Any]:
-    from cartoboost.models import AutoGeoModel, ModelRegistry, model_card
+    from cartoboost import CartoBoostRegressor
+    from cartoboost.models import ModelRegistry, model_card
 
     rng = np.random.default_rng(42)
     coords = rng.uniform(0.0, 1.0, size=(48, 2))
@@ -85,29 +85,21 @@ def run_model_choice_example() -> dict[str, Any]:
         ]
     )
     y = 2.0 * coords[:, 0] - 0.4 * coords[:, 1] + 0.15 * rng.normal(size=48)
-    validation = {"train": np.arange(0, 36), "holdout": np.arange(36, 48)}
-
     registry = ModelRegistry.defaults()
     names = registry.names(namespace="geo")
-    model = AutoGeoModel(max_escalation_level=1, random_state=7)
-    model.fit(
-        X,
-        y,
-        coords=coords,
-        validation=validation,
-        validation_strategy="spatial_holdout",
-    )
-    pred = model.predict(X[36:], coords=coords[36:])
+    model = CartoBoostRegressor(n_estimators=12, max_depth=2, random_state=7)
+    model.fit(X[:36], y[:36])
+    pred = model.predict(X[36:])
     with tempfile.TemporaryDirectory() as tmp:
-        artifact = Path(tmp) / "autogeo.json"
+        artifact = Path(tmp) / "cartoboost-regressor.json"
         model.save(artifact)
-        loaded = AutoGeoModel.load(artifact)
-        loaded_pred = loaded.predict(X[36:], coords=coords[36:])
+        loaded = CartoBoostRegressor.load(artifact)
+        loaded_pred = loaded.predict(X[36:])
     card = model_card(model)
     return {
         "passed": bool(names) and np.allclose(pred, loaded_pred),
         "geo_registry_entries": names,
-        "selected_family": model.selected_family_,
+        "selected_family": "models.cartoboost_regressor",
         "prediction_rows": int(pred.shape[0]),
         "model_card_keys": sorted(card),
     }
@@ -142,7 +134,7 @@ def run_geo_evaluation_example() -> dict[str, Any]:
 
 def run_probabilistic_conformal_example() -> dict[str, Any]:
     from cartoboost import CartoBoostRegressor
-    from cartoboost.forecasting import (
+    from cartoboost.preview.forecasting import (
         ConformalIntervalRegressor,
         SpatialConformalRegressor,
         interval_coverage,

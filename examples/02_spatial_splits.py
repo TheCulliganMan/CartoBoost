@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Train CartoBoost spatial splitters on deterministic synthetic datasets."""
+"""Train CartoBoost structured spatial candidates on deterministic datasets."""
 
 from __future__ import annotations
 
 import math
 
 from cartoboost import CartoBoostRegressor
+from cartoboost.schema import FeatureSchema, NumericSpec, SpatialPairSpec
 
 
 def diagonal_dataset() -> tuple[list[list[float]], list[float]]:
@@ -31,7 +32,6 @@ def radial_dataset() -> tuple[list[list[float]], list[float]]:
 
 def fit_and_report(
     name: str,
-    splitters: list[str],
     data: tuple[list[list[float]], list[float]],
 ) -> None:
     x, y = data
@@ -40,17 +40,20 @@ def fit_and_report(
         learning_rate=1.0,
         max_depth=1,
         min_samples_leaf=1,
-        splitters=splitters,
+        split_policy="structured",
     )
-    model.fit(x, y)
+    schema = FeatureSchema.from_specs(
+        [SpatialPairSpec("x", "y"), NumericSpec("y")]
+    )
+    model.fit(x, y, feature_schema=schema)
     pred = model.predict(x)
     mae = sum(abs(actual - prediction) for actual, prediction in zip(y, pred, strict=True)) / len(y)
     print(f"{name}: mae={mae:.6f}")
 
 
 def main() -> None:
-    fit_and_report("diagonal_2d", ["diagonal_2d"], diagonal_dataset())
-    fit_and_report("gaussian_2d", ["gaussian_2d"], radial_dataset())
+    fit_and_report("diagonal_2d", diagonal_dataset())
+    fit_and_report("gaussian_2d", radial_dataset())
 
 
 if __name__ == "__main__":

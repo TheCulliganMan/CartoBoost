@@ -6,7 +6,8 @@ CartoBoost exposes Kalman forecasters for both level-only and local-linear-trend
 state-space models. Use `LocalLevelKalmanForecaster` when the series has a
 noisy stable level, `KalmanForecaster` when the latent level also has a slowly
 changing trend, and the `Auto*` variants when you want a deterministic
-variance-grid search before refitting on all training rows.
+variance-grid search based on held-out predictive likelihood before refitting
+on all training rows.
 
 ## Interactive Example
 
@@ -48,7 +49,7 @@ settings match the series.
 ## Example
 
 ```python
-from cartoboost.forecasting import AutoKalmanForecaster
+from cartoboost.preview.forecasting import AutoKalmanForecaster
 
 airport_pickups = [72, 75, 79, 82, 80, 86, 91, 96, 94, 99, 103, 108]
 
@@ -73,15 +74,15 @@ full panel.
 | Example | Use | Why |
 | --- | --- | --- |
 | A single location sensor is noisy but the true demand level is stable. | `LocalLevelKalmanForecaster` or `cartoboost.local_level_kalman_filter` | One latent level is enough; there is no explicit slope. |
-| Airport pickup demand is drifting upward through the evening rush. | `KalmanForecaster` or `cartoboost.kalman_filter` | The local-linear model estimates both a level and a trend. |
-| You want the model to choose variance settings from a small grid. | `AutoLocalLevelKalmanForecaster` or `AutoKalmanForecaster` | Candidate settings are scored on a time-ordered tail window and the winner is refit. |
+| Airport pickup demand is drifting upward through the evening rush. | `KalmanForecaster` or `cartoboost.preview.utilities.kalman_filter` | The local-linear model estimates both a level and a trend. |
+| You want the model to choose variance settings from a small grid. | `AutoLocalLevelKalmanForecaster` or `AutoKalmanForecaster` | Candidate settings are scored by predictive negative log likelihood on a time-ordered tail window and the winner is refit. |
 | You need a normal forecast band for a dashboard. | `forecast_distribution` from either utility | It returns mean, variance, lower, and upper for each horizon. |
 | You need to explain why a point looked unusual. | Per-step estimates and `diagnostics` | Innovations, standardized innovations, gains, and log likelihood show how surprising the observation was. |
 
 Local-level example:
 
 ```python
-import cartoboost as cb
+import cartoboost.preview as cb
 
 zone_236_readings = [184.0, 187.0, 183.0, 186.0, 185.0, 188.0, 186.0]
 
@@ -99,7 +100,7 @@ print(state["forecast_distribution"])
 Local-linear example:
 
 ```python
-import cartoboost as cb
+import cartoboost.preview as cb
 
 jfk_evening_pickups = [74.0, 76.0, 79.0, 78.0, 83.0, 86.0, 84.0, 90.0, 92.0]
 
@@ -118,7 +119,7 @@ print(state["diagnostics"]["rmse"], state["diagnostics"]["mae"])
 ## ForecastFrame Example
 
 ```python
-from cartoboost.forecasting import AutoKalmanForecaster, ForecastFrame
+from cartoboost.preview.forecasting import AutoKalmanForecaster, ForecastFrame
 
 frame = ForecastFrame.from_pandas(
     hourly_zone_demand.query("series_id == '132'"),
@@ -149,13 +150,13 @@ print(model.metadata_["selected_params"])
 
 Larger process variance lets the latent level or trend move faster. Larger
 observation variance makes the model trust noisy observations less. Auto
-variants report `selected_params` and per-candidate `validation_scores` in
-`metadata_`.
+variants report `selected_params` and per-candidate `mse` and
+`negative_log_likelihood` values under `validation_scores` in `metadata_`.
 
 ## Self-Tuning Pattern
 
 ```python
-from cartoboost.forecasting import AutoLocalLevelKalmanForecaster
+from cartoboost.preview.forecasting import AutoLocalLevelKalmanForecaster
 
 model = AutoLocalLevelKalmanForecaster(
     level_process_variance_grid=[0.005, 0.02, 0.08],
@@ -166,9 +167,21 @@ model.fit(zone_236_readings)
 print(model.metadata_["validation_scores"])
 ```
 
-The auto forecasters use a deterministic time-ordered tail validation window,
-choose the lowest-MSE candidate with deterministic tie-breaking, then refit the
-selected model on all training rows.
+The auto forecasters use a deterministic time-ordered tail validation window.
+They choose the lowest mean predictive negative log likelihood, use MSE and the
+parameter values as deterministic tie-breakers, then refit the selected model
+on all training rows. Predictive likelihood scores both the forecast error and
+the variance assigned to that error, so grids that differ only by a common
+variance scale remain distinguishable.
+
+Every series must contain a real holdout: `AutoKalmanForecaster` requires at
+least two fitting rows plus one held-out row, while
+`AutoLocalLevelKalmanForecaster` requires at least one fitting row plus one
+held-out row. An explicit `validation_window` must leave that minimum fitting
+history for every series; an oversized window is rejected instead of shortened.
+When the window is omitted, CartoBoost uses a deterministic tail window based on
+one fifth of the series length, bounded to 1--12 rows and by the available
+fitting history.
 
 ## Validation Notes
 
@@ -182,7 +195,7 @@ Use the plain utility when you need state diagnostics instead of only a
 forecasting API result:
 
 ```python
-import cartoboost as cb
+import cartoboost.preview as cb
 
 state = cb.kalman_filter(
     airport_pickups,
@@ -231,7 +244,7 @@ The core plotting pattern is:
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-import cartoboost as cb
+import cartoboost.preview as cb
 
 pickup_hours = list(range(18))
 pickups = [
@@ -299,11 +312,14 @@ Interpretation:
 
 ## Tuning With An Example Grid
 
-For a real workflow, score a small grid on a rolling split before choosing
-parameters. Keep the split fixed across candidates.
+For a real workflow, score a small grid on a fixed time-ordered split before
+choosing parameters. The example below mirrors the auto forecaster's primary
+predictive-likelihood score and MSE tie-breaker.
 
 ```python
-import cartoboost as cb
+import math
+
+import cartoboost.preview as cb
 
 train = [74.0, 76.0, 79.0, 78.0, 83.0, 86.0, 84.0, 90.0, 92.0, 91.0, 97.0, 101.0]
 validation = [99.0, 104.0, 108.0]
@@ -317,11 +333,21 @@ candidates = [
 scores = []
 for params in candidates:
     state = cb.kalman_filter(train, horizon=len(validation), **params)
-    errors = [forecast - actual for forecast, actual in zip(state["forecast"], validation)]
+    distribution = state["forecast_distribution"]
+    errors = [point["mean"] - actual for point, actual in zip(distribution, validation)]
     rmse = (sum(error * error for error in errors) / len(errors)) ** 0.5
-    scores.append((rmse, params))
+    mse = rmse * rmse
+    mean_nll = sum(
+        0.5
+        * (
+            math.log(2.0 * math.pi * point["variance"])
+            + error * error / point["variance"]
+        )
+        for point, error in zip(distribution, errors)
+    ) / len(errors)
+    scores.append((mean_nll, mse, params))
 
-print(sorted(scores, key=lambda item: item[0])[0])
+print(min(scores, key=lambda item: (item[0], item[1])))
 ```
 
 Use the diagnostic plots after picking the best validation candidate; do not

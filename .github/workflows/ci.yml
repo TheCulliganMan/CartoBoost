@@ -5,6 +5,9 @@ on:
     branches: ["main"]
   pull_request:
     branches: ["main"]
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * *"
 
 permissions:
   contents: read
@@ -26,7 +29,89 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Test
-        run: cargo test --workspace
+        run: PYO3_PYTHON=python3 cargo test --workspace
+
+  rust-compatibility:
+    name: Rust compatibility (${{ matrix.toolchain }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: ["1.85.0", "stable"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ matrix.toolchain }}
+
+      - name: Test workspace
+        run: PYO3_PYTHON=python3 cargo test --workspace
+
+  quality-controls:
+    name: UI, fuzz, and dependency audits
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install UI dependencies
+        run: npm ci
+
+      - name: Typecheck UI
+        run: npm run typecheck
+
+      - name: Run UI tests
+        run: npm run test:ui
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Compile fuzz targets
+        run: cargo check --manifest-path fuzz/Cargo.toml --all-targets
+
+      - name: Audit Rust dependencies and licenses
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Audit Python dependency resolution
+        run: |
+          uv sync --group dev
+          uv run python -m pip check
+
+  nightly-fuzz:
+    name: Timed fuzz smoke
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust and cargo-fuzz
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Run timed fuzz targets
+        working-directory: fuzz
+        run: |
+          cargo fuzz run train_small_dataset -- -max_total_time=60
+          cargo fuzz run predict_one -- -max_total_time=60
 
   python:
     name: Python (${{ matrix.os }}, py${{ matrix.python-version }})
@@ -82,7 +167,7 @@ jobs:
 
       - name: Lint and format
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
-        run: uv run pre-commit run --all-files
+        run: uv run --group dev pre-commit run --all-files
 
       - name: Install native extension
         run: uv run maturin develop
@@ -111,16 +196,41 @@ jobs:
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
         run: uv run python scripts/check_performance_thresholds.py
 
-      - name: AutoGeo benchmark gate
+      - name: Import performance audit
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
-        run: >-
-          PYTHONPATH=python uv run python scripts/run_autogeo_benchmark_gate.py
-          --output-dir target/autogeo-gate
-          --sample-size 90
-          --n-splits 5
+        run: uv run python scripts/check_import_performance.py
+
+      - name: Benchmark provenance freshness audit
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
+        run: |
+          uv run python scripts/run_scale_performance_gate.py \
+            --rows 10000 \
+            --threads 2 \
+            --estimators 4 \
+            --output target/scale-performance.json
+          uv run python scripts/check_scale_performance_gate.py \
+            target/scale-performance.json \
+            --minimum-rows 10000 \
+            --minimum-predict-rows-per-second 0 \
+            --minimum-thread-speedup 0 \
+            --allow-missing-thread-speedup
+          uv run python scripts/run_model_benchmark_suite.py \
+            --output-dir target/benchmark-freshness \
+            --datasets normal \
+            --models mean,cartoboost \
+            --n-rows 120 \
+            --n-estimators 4 \
+            --no-plots
+          uv run python scripts/check_benchmark_freshness.py \
+            --artifact target/benchmark-freshness/results.json \
+            --artifact docs/assets/nyc_taxi_benchmarks/forecasting_library_benchmark_real.json
+          uv run python scripts/check_forecasting_quality_gate.py \
+            --artifact docs/assets/nyc_taxi_benchmarks/forecasting_library_benchmark_real.json
+          uv run python scripts/check_nyc_row_quality_gate.py \
+            docs/assets/nyc_taxi_benchmarks/results.json
 
       - name: Test Python
-        run: uv run pytest --ignore=tests/python/test_full_validation_artifacts.py
+        run: uv run pytest tests/forecasting tests/python/test_v03_contract.py tests/python/test_private_shadow_gate.py tests/python/test_model_registry.py tests/python/test_feature_schema.py tests/python/test_benchmark_manifests.py tests/integration -q --cov=python/cartoboost --cov-report=term-missing --cov-fail-under=35
 
   validation:
     name: Validation artifacts
@@ -172,3 +282,88 @@ jobs:
 
       - name: Compile benchmarks
         run: cargo bench --workspace --no-run
+
+  package-smoke:
+    name: Built package smoke (${{ matrix.os }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python-version: "3.10"
+          - os: ubuntu-latest
+            python-version: "3.13"
+          - os: macos-latest
+            python-version: "3.10"
+          - os: macos-latest
+            python-version: "3.13"
+          - os: windows-latest
+            python-version: "3.10"
+          - os: windows-latest
+            python-version: "3.13"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync build environment
+        run: uv sync --group dev --python ${{ matrix.python-version }}
+
+      - name: Build wheel
+        run: uv run maturin build --release --out dist
+
+      - name: Install wheel in clean environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv target/package-smoke-venv
+          if [ -x target/package-smoke-venv/bin/python ]; then
+            SMOKE_PYTHON=target/package-smoke-venv/bin/python
+          else
+            SMOKE_PYTHON=target/package-smoke-venv/Scripts/python.exe
+          fi
+          WHEEL=$(find dist -maxdepth 1 -name '*.whl' -print -quit)
+          test -n "$WHEEL"
+          "$SMOKE_PYTHON" -m pip install --upgrade pip
+          "$SMOKE_PYTHON" -m pip install numpy pandas
+          "$SMOKE_PYTHON" -m pip install --no-deps "$WHEEL"
+          "$SMOKE_PYTHON" - <<'PY'
+          import numpy as np
+          import tempfile
+          from importlib.metadata import entry_points, metadata
+          import cartoboost
+          from cartoboost import CartoBoostRegressor, BoosterConfig
+          from cartoboost.schema import FeatureSchema, NumericSpec
+
+          assert "pandas" in (metadata("cartoboost").get_all("Provides-Extra") or [])
+          assert not any(ep.name == 'cartoboost' for ep in entry_points(group='console_scripts'))
+          assert cartoboost.__version__
+          assert cartoboost.__all__ == [
+              'CartoBoostRegressor', 'CartoBoostClassifier', 'CartoBoostRanker',
+              'BoosterConfig', '__version__'
+          ]
+          assert not hasattr(cartoboost, 'AutoGeoModel')
+          FeatureSchema.from_specs([NumericSpec('distance')]).validate(1, [])
+          x = np.arange(96, dtype=float).reshape(48, 2)
+          y = x[:, 0] * 0.25 - x[:, 1] * 0.1
+          model = CartoBoostRegressor(n_estimators=4, max_depth=2, min_samples_leaf=1)
+          model.fit(x, y)
+          assert model.predict(x).shape == (48,)
+          with tempfile.NamedTemporaryFile(suffix='.json') as artifact:
+              model.save(artifact.name)
+              restored = CartoBoostRegressor.load(artifact.name)
+              np.testing.assert_allclose(model.predict(x), restored.predict(x), atol=1e-12, rtol=0.0)
+          PY

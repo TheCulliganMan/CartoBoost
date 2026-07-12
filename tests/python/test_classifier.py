@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import numpy as np
@@ -34,6 +35,10 @@ def test_binary_classifier_fit_predict_proba_and_roundtrip(tmp_path: Path):
 
     model_path = tmp_path / "classifier.json"
     classifier.save(model_path)
+    artifact = json.loads(model_path.read_text(encoding="utf-8"))
+    assert artifact["format"] == "cartoboost.model"
+    assert artifact["artifact_version"] == 2
+    assert artifact["model_type"] == "classifier"
     loaded = CartoBoostClassifier.load(model_path)
 
     assert loaded.classes_.tolist() == classifier.classes_.tolist()

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON_SOURCE = ROOT / "python"
@@ -17,6 +18,7 @@ for path in (ROOT, PYTHON_SOURCE):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
+from cartoboost.forecasting import ForecastFrame, LagConfig  # noqa: E402
 from cartoboost.models import ModelRegistry  # noqa: E402
 
 from scripts.check_public_api_contract import (  # noqa: E402
@@ -51,13 +53,20 @@ def check_case(registry: ModelRegistry, key: str) -> dict[str, Any]:
     with tempfile.TemporaryDirectory() as temp_dir:
         path = Path(temp_dir) / f"{key.replace('.', '-')}.json"
         mutated_path = Path(temp_dir) / f"{key.replace('.', '-')}-mutated.json"
-        model, X, kwargs = fit_registry_roundtrip_case(spec)
-        before = _predict_array(model, X, kwargs)
+        if key in {"forecasting.auto_forecaster", "forecasting.cartoboost_lag"}:
+            model, prediction_input = _fit_forecast_case(spec)
+            before = _forecast_predictions(model)
+        else:
+            model, prediction_input, kwargs = fit_registry_roundtrip_case(spec)
+            before = _predict_array(model, prediction_input, kwargs)
         model.save(path)
         payload = json.loads(path.read_text(encoding="utf-8"))
         markers = collect_version_markers(payload)
         loaded = spec.factory.load(path)
-        after = _predict_array(loaded, X, kwargs)
+        if key in {"forecasting.auto_forecaster", "forecasting.cartoboost_lag"}:
+            after = _forecast_predictions(loaded)
+        else:
+            after = _predict_array(loaded, prediction_input, kwargs)
         drift = float(np.max(np.abs(before - after))) if before.size else 0.0
         mutated = mutate_first_artifact_version(payload)
         mutation_error = ""
@@ -78,6 +87,28 @@ def check_case(registry: ModelRegistry, key: str) -> dict[str, Any]:
             "unsupported_version_error": mutation_error,
             "passed": bool(markers) and mutated and mutation_rejected and drift <= 1e-10,
         }
+
+
+def _fit_forecast_case(spec: Any) -> tuple[Any, ForecastFrame]:
+    frame = ForecastFrame.from_pandas(
+        pd.DataFrame(
+            {
+                "timestamp": pd.date_range("2024-01-01", periods=40, freq="D"),
+                "fare": np.arange(40, dtype=float),
+            }
+        ),
+        timestamp_col="timestamp",
+        target_col="fare",
+        freq="D",
+    )
+    params: dict[str, Any] = {"n_estimators": 4}
+    if spec.key == "forecasting.cartoboost_lag":
+        params.update(max_depth=2, min_samples_leaf=1, lag_config=LagConfig(lags=[1, 2]))
+    return spec.create(**params).fit(frame), frame
+
+
+def _forecast_predictions(model: Any) -> np.ndarray:
+    return np.asarray([row[-1] for row in model.predict(3).predictions()], dtype=float)
 
 
 def collect_version_markers(payload: Any, prefix: str = "$") -> list[dict[str, Any]]:

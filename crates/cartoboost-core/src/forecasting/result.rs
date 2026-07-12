@@ -2,7 +2,7 @@ use crate::{CartoBoostError, Result};
 use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ForecastPrediction {
@@ -79,6 +79,14 @@ impl ForecastResult {
                 .then_with(|| a.horizon.cmp(&b.horizon))
                 .then_with(|| a.model.cmp(&b.model))
         });
+        for pair in predictions.windows(2) {
+            if prediction_key(&pair[0]) == prediction_key(&pair[1]) {
+                return Err(CartoBoostError::InvalidInput(format!(
+                    "duplicate forecast prediction for series {}, timestamp {}, horizon {}, model {}",
+                    pair[1].series_id, pair[1].timestamp, pair[1].horizon, pair[1].model
+                )));
+            }
+        }
         Ok(Self {
             predictions,
             intervals: Vec::new(),
@@ -91,8 +99,20 @@ impl ForecastResult {
         mut intervals: Vec<ForecastIntervalPrediction>,
     ) -> Result<Self> {
         let result = Self::new(predictions)?;
+        let prediction_keys = result
+            .predictions
+            .iter()
+            .map(prediction_key)
+            .collect::<BTreeSet<_>>();
         for interval in &intervals {
             validate_interval_prediction(interval)?;
+            let key = interval_prediction_key(interval);
+            if !prediction_keys.contains(&key) {
+                return Err(CartoBoostError::InvalidInput(format!(
+                    "forecast interval has no matching prediction for series {}, timestamp {}, horizon {}, model {}",
+                    interval.series_id, interval.timestamp, interval.horizon, interval.model
+                )));
+            }
         }
         intervals.sort_by(|a, b| {
             a.series_id
@@ -106,6 +126,20 @@ impl ForecastResult {
                         .expect("interval levels are finite")
                 })
         });
+        for pair in intervals.windows(2) {
+            if interval_prediction_key(&pair[0]) == interval_prediction_key(&pair[1])
+                && (pair[0].level - pair[1].level).abs() < 1.0e-12
+            {
+                return Err(CartoBoostError::InvalidInput(format!(
+                    "duplicate forecast interval level {} for series {}, timestamp {}, horizon {}, model {}",
+                    pair[1].level,
+                    pair[1].series_id,
+                    pair[1].timestamp,
+                    pair[1].horizon,
+                    pair[1].model
+                )));
+            }
+        }
         Ok(Self {
             predictions: result.predictions,
             intervals,
@@ -119,8 +153,20 @@ impl ForecastResult {
         mut details: Vec<ForecastPredictionDetail>,
     ) -> Result<Self> {
         let result = Self::new_with_intervals(predictions, intervals)?;
+        let prediction_keys = result
+            .predictions
+            .iter()
+            .map(prediction_key)
+            .collect::<BTreeSet<_>>();
         for detail in &details {
             validate_prediction_detail(detail)?;
+            let key = detail_key(detail);
+            if !prediction_keys.contains(&key) {
+                return Err(CartoBoostError::InvalidInput(format!(
+                    "forecast detail has no matching prediction for series {}, timestamp {}, horizon {}, model {}",
+                    detail.series_id, detail.timestamp, detail.horizon, detail.model
+                )));
+            }
         }
         details.sort_by(|a, b| {
             a.series_id
@@ -129,6 +175,14 @@ impl ForecastResult {
                 .then_with(|| a.horizon.cmp(&b.horizon))
                 .then_with(|| a.model.cmp(&b.model))
         });
+        for pair in details.windows(2) {
+            if detail_key(&pair[0]) == detail_key(&pair[1]) {
+                return Err(CartoBoostError::InvalidInput(format!(
+                    "duplicate forecast detail for series {}, timestamp {}, horizon {}, model {}",
+                    pair[1].series_id, pair[1].timestamp, pair[1].horizon, pair[1].model
+                )));
+            }
+        }
         Ok(Self {
             predictions: result.predictions,
             intervals: result.intervals,
@@ -204,7 +258,7 @@ impl ForecastResult {
             .map(|prediction| {
                 let mut record = json!({
                     "series_id": prediction.series_id,
-                    "timestamp": prediction.timestamp.format("%Y-%m-%dT%H:%M:%S").to_string(),
+                    "timestamp": format_forecast_timestamp(prediction.timestamp),
                     "horizon": prediction.horizon,
                     "model": prediction.model,
                     "prediction": prediction.mean,
@@ -343,6 +397,11 @@ fn validate_prediction_detail(detail: &ForecastPredictionDetail) -> Result<()> {
             )));
         }
     }
+    if detail.kriging_variance.is_some_and(|value| value < 0.0) {
+        return Err(CartoBoostError::InvalidInput(
+            "forecast detail kriging_variance values must be nonnegative".to_string(),
+        ));
+    }
     Ok(())
 }
 
@@ -350,7 +409,7 @@ fn prediction_key(prediction: &ForecastPrediction) -> String {
     format!(
         "{}\x1f{}\x1f{}\x1f{}",
         prediction.series_id,
-        prediction.timestamp.format("%Y-%m-%dT%H:%M:%S"),
+        format_forecast_timestamp(prediction.timestamp),
         prediction.horizon,
         prediction.model
     )
@@ -360,7 +419,7 @@ fn interval_prediction_key(interval: &ForecastIntervalPrediction) -> String {
     format!(
         "{}\x1f{}\x1f{}\x1f{}",
         interval.series_id,
-        interval.timestamp.format("%Y-%m-%dT%H:%M:%S"),
+        format_forecast_timestamp(interval.timestamp),
         interval.horizon,
         interval.model
     )
@@ -370,10 +429,14 @@ fn detail_key(detail: &ForecastPredictionDetail) -> String {
     format!(
         "{}\x1f{}\x1f{}\x1f{}",
         detail.series_id,
-        detail.timestamp.format("%Y-%m-%dT%H:%M:%S"),
+        format_forecast_timestamp(detail.timestamp),
         detail.horizon,
         detail.model
     )
+}
+
+fn format_forecast_timestamp(timestamp: NaiveDateTime) -> String {
+    timestamp.format("%Y-%m-%dT%H:%M:%S%.f").to_string()
 }
 
 fn interval_suffix(level: f64) -> String {
@@ -536,5 +599,130 @@ mod tests {
 
         assert_eq!(restored.intervals(), result.intervals());
         assert_eq!(restored.to_json_value(), result.to_json_value());
+    }
+
+    fn prediction() -> ForecastPrediction {
+        ForecastPrediction {
+            series_id: "PU1->DO2".to_string(),
+            timestamp: ts(1),
+            horizon: 1,
+            model: "test_model".to_string(),
+            mean: 42.0,
+        }
+    }
+
+    #[test]
+    fn forecast_result_rejects_duplicate_prediction_keys() {
+        let row = prediction();
+        let error = ForecastResult::new(vec![row.clone(), row])
+            .expect_err("duplicate predictions must fail");
+
+        assert!(error.to_string().contains("duplicate forecast prediction"));
+    }
+
+    #[test]
+    fn forecast_result_rejects_orphan_and_duplicate_intervals() {
+        let interval = ForecastIntervalPrediction {
+            series_id: "PU1->DO2".to_string(),
+            timestamp: ts(1),
+            horizon: 1,
+            model: "other_model".to_string(),
+            level: 0.8,
+            lower: 38.0,
+            upper: 46.0,
+        };
+        let error = ForecastResult::new_with_intervals(vec![prediction()], vec![interval])
+            .expect_err("orphan interval must fail");
+        assert!(error.to_string().contains("no matching prediction"));
+
+        let interval = ForecastIntervalPrediction {
+            model: "test_model".to_string(),
+            ..ForecastIntervalPrediction {
+                series_id: "PU1->DO2".to_string(),
+                timestamp: ts(1),
+                horizon: 1,
+                model: String::new(),
+                level: 0.8,
+                lower: 38.0,
+                upper: 46.0,
+            }
+        };
+        let error = ForecastResult::new_with_intervals(
+            vec![prediction()],
+            vec![interval.clone(), interval],
+        )
+        .expect_err("duplicate interval must fail");
+        assert!(error.to_string().contains("duplicate forecast interval"));
+    }
+
+    #[test]
+    fn forecast_result_rejects_orphan_duplicate_and_negative_variance_details() {
+        let detail = ForecastPredictionDetail {
+            series_id: "PU1->DO2".to_string(),
+            timestamp: ts(1),
+            horizon: 1,
+            model: "other_model".to_string(),
+            base_mean: Some(40.0),
+            spatial_correction: Some(2.0),
+            kriging_variance: Some(1.0),
+            selected_neighbors: Vec::new(),
+            component_decomposition: None,
+            metadata: None,
+        };
+        let error = ForecastResult::new_with_intervals_and_details(
+            vec![prediction()],
+            Vec::new(),
+            vec![detail],
+        )
+        .expect_err("orphan detail must fail");
+        assert!(error.to_string().contains("no matching prediction"));
+
+        let detail = ForecastPredictionDetail {
+            model: "test_model".to_string(),
+            kriging_variance: Some(1.0),
+            ..ForecastPredictionDetail {
+                series_id: "PU1->DO2".to_string(),
+                timestamp: ts(1),
+                horizon: 1,
+                model: String::new(),
+                base_mean: Some(40.0),
+                spatial_correction: Some(2.0),
+                kriging_variance: None,
+                selected_neighbors: Vec::new(),
+                component_decomposition: None,
+                metadata: None,
+            }
+        };
+        let error = ForecastResult::new_with_intervals_and_details(
+            vec![prediction()],
+            Vec::new(),
+            vec![detail.clone(), detail],
+        )
+        .expect_err("duplicate detail must fail");
+        assert!(error.to_string().contains("duplicate forecast detail"));
+
+        let detail = ForecastPredictionDetail {
+            model: "test_model".to_string(),
+            kriging_variance: Some(-1.0),
+            ..ForecastPredictionDetail {
+                series_id: "PU1->DO2".to_string(),
+                timestamp: ts(1),
+                horizon: 1,
+                model: String::new(),
+                base_mean: Some(40.0),
+                spatial_correction: Some(2.0),
+                kriging_variance: None,
+                selected_neighbors: Vec::new(),
+                component_decomposition: None,
+                metadata: None,
+            }
+        };
+        let error = ForecastResult::new_with_intervals_and_details(
+            vec![prediction()],
+            Vec::new(),
+            vec![detail],
+        )
+        .expect_err("negative kriging variance must fail");
+        assert!(error.to_string().contains("must be nonnegative"));
     }
 }

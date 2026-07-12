@@ -870,7 +870,7 @@ def cartoboost_model(args: argparse.Namespace) -> Any:
         max_depth=args.max_depth,
         min_samples_leaf=min_samples_leaf,
         min_gain=0.0,
-        splitters=QUALITATIVE_CARTOBOOST_SPLITTERS,
+        split_policy="structured",
         random_state=args.seed,
         n_threads=args.n_threads or None,
     )
@@ -906,7 +906,7 @@ def run_neural(
 ) -> tuple[np.ndarray, dict[str, float], dict[str, Any]]:
     if workload.embedding_ids is None:
         raise ValueError("neural benchmark requires embedding ids")
-    from cartoboost import NeuralEmbeddingRegressor
+    from cartoboost.preview import NeuralEmbeddingRegressor
 
     def build_neural_model() -> NeuralEmbeddingRegressor:
         return NeuralEmbeddingRegressor(
@@ -1149,7 +1149,7 @@ def run_standalone_neural(
 ) -> tuple[np.ndarray, dict[str, float], dict[str, Any]]:
     if workload.embedding_ids is None:
         raise ValueError("standalone neural benchmark requires embedding ids")
-    from cartoboost import NeuralEmbeddingStandaloneRegressor
+    from cartoboost.preview.standalone import NeuralEmbeddingStandaloneRegressor
 
     model = NeuralEmbeddingStandaloneRegressor(
         dim=args.neural_dim,
@@ -2104,6 +2104,7 @@ def run_suite(workloads: list[Workload], args: argparse.Namespace) -> dict[str, 
 
     payload: dict[str, Any] = {
         "artifact_version": 1,
+        "git_commit": read_git_commit(),
         "command_argv": list(sys.argv),
         "seed": int(args.seed),
         "datasets_requested": requested_datasets(args),
@@ -2184,6 +2185,23 @@ def run_suite(workloads: list[Workload], args: argparse.Namespace) -> dict[str, 
     payload["model_status_summary"] = model_status_summary(payload)
     payload["comparability_audit"] = comparability_audit(payload)
     return payload
+
+
+def read_git_commit() -> str | None:
+    """Record the exact source revision used for this benchmark run."""
+
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    commit = completed.stdout.strip()
+    return commit or None
 
 
 def external_baseline_comparison(payload: dict[str, Any]) -> list[dict[str, Any]]:

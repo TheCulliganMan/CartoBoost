@@ -3,7 +3,7 @@ use cartoboost_core::forecasting::{
     TemporalAggregation, TemporalHierarchy,
 };
 use cartoboost_core::metrics::{
-    m5_equal_level_wrmsse, ordered_nonnegative_weights, wrmsse, WrmsseSeries,
+    aggregate_equal_level_wrmsse, ordered_nonnegative_weights, wrmsse, WrmsseSeries,
 };
 
 fn taxi_hierarchy() -> HierarchySpec {
@@ -199,8 +199,8 @@ fn wrmsse_matches_manual_m5_style_reference() {
 }
 
 #[test]
-fn m5_equal_level_wrmsse_aggregates_hierarchy_levels() {
-    let score = m5_equal_level_wrmsse(&[
+fn aggregate_equal_level_wrmsse_aggregates_hierarchy_levels() {
+    let score = aggregate_equal_level_wrmsse(&[
         ("total".to_string(), 0.6),
         ("state".to_string(), 0.9),
         ("item_store".to_string(), 1.2),
@@ -249,10 +249,27 @@ fn proportional_total_reconciliation_blends_toward_target_total() {
 
     assert_eq!(reconciled, vec![3.0, 4.5, 7.5]);
 
-    let unchanged = proportional_total_reconciliation(&[0.0, 0.0], 10.0, 0.5).expect("zero sum");
-    assert_eq!(unchanged, vec![0.0, 0.0]);
+    let error = proportional_total_reconciliation(&[0.0, 0.0], 10.0, 0.5)
+        .expect_err("zero allocation basis must fail");
+    assert!(error.to_string().contains("sums to zero"));
 
     let stable =
         proportional_total_reconciliation(&[-99.0, 100.0], 100.0, 0.5).expect("signed base");
     assert_eq!(stable, vec![-49.5, 100.0]);
+}
+
+#[test]
+fn top_down_reconciliation_rejects_undefined_allocation_proportions() {
+    let hierarchy = taxi_hierarchy();
+    let mut base = vec![vec![100.0]; hierarchy.node_count()];
+    for (node_idx, values) in base.iter_mut().enumerate() {
+        if hierarchy.bottom_position_for_node(node_idx).is_some() {
+            values[0] = 0.0;
+        }
+    }
+
+    let error = Reconciler::new(hierarchy, ReconciliationMethod::TopDown)
+        .reconcile(&base)
+        .expect_err("zero bottom allocation basis must fail");
+    assert!(error.to_string().contains("positive finite sum"));
 }

@@ -1,5 +1,8 @@
 # CartoBoost Neural Embedding Models And Features
 
+> Preview API: neural embedding models and feature generators are imported
+> from `cartoboost.preview.neural` in CartoBoost 0.3.
+
 This is the contract page for learned ID embeddings. Use the
 [neural model guides](user-guide/neural-models/index.md) for examples and model
 selection. Use this page when you need the artifact, fallback, and feature
@@ -38,7 +41,7 @@ dense row features. It trains and scores as a standalone model and supports
 
 ```python
 import numpy as np
-from cartoboost.neural import NeuralEmbeddingStandaloneRegressor
+from cartoboost.preview.neural import NeuralEmbeddingStandaloneRegressor
 
 pickup_zone = np.array([132, 161, 132, 236, 161, 236], dtype=np.uint64)
 dense = np.array(
@@ -123,7 +126,7 @@ is useful. `use_residual=False` trains embeddings on the raw target directly.
 
 ```python
 import numpy as np
-from cartoboost import NeuralEmbeddingRegressor
+from cartoboost.preview import NeuralEmbeddingRegressor
 
 rng = np.random.default_rng(0)
 ids = rng.integers(1, 200, size=1000, dtype=np.uint64)

@@ -10,8 +10,8 @@ CartoBoost forecasting is organized around two docs surfaces:
   lag, NeuralPanel, AutoForecaster, or fixed weighted ensembles.
 
 The Python forecasting package gives users dataframe ergonomics, explicit
-configuration, CLI entry points, and artifact handling. Model behavior is
-shared across Python, CLI, and interactive examples: fitting, prediction,
+configuration, source-checkout script entry points, and artifact handling.
+Model behavior is shared across Python, source-checkout scripts, and interactive examples: fitting, prediction,
 backtesting, metric evaluation, leakage checks, feature generation, intervals,
 reconciliation, and serialization contracts follow the same rules. Python does
 not provide fallback forecasting algorithms.
@@ -138,17 +138,27 @@ Use rolling-origin validation for forecasting claims. A fold trains on rows
 strictly before the origin and scores the next horizon only. Random row splits
 leak future demand and should not be used for forecast claims.
 
-```python
-from cartoboost.forecasting import RollingOriginBacktester, SeasonalNaiveForecaster
+An infeasible splitter configuration is an error: the splitter does not return
+an empty fold list when the history cannot satisfy `min_train_size` and the
+requested horizon. Training frames created for each fold retain the original
+`ForecastFrame` metadata, including covariate roles and irregular/missing-value
+policies.
 
-backtester = RollingOriginBacktester(
-    horizon=24,
-    origin_count=3,
-    step=24,
+```python
+from cartoboost.forecasting import (
+    RollingOriginBacktester,
+    RollingOriginSplitter,
+    SeasonalNaiveForecaster,
 )
-result = backtester.run(
-    SeasonalNaiveForecaster(season_length=24),
-    frame,
+
+splitter = RollingOriginSplitter(
+    horizon=24,
+    n_splits=3,
+    step=24,
+    min_train_size=72,
+)
+result = RollingOriginBacktester(splitter=splitter).evaluate(
+    SeasonalNaiveForecaster(season_length=24), frame
 )
 ```
 
@@ -255,7 +265,7 @@ docs pages:
 | Behavior | Where it belongs |
 | --- | --- |
 | Direct and rectified-recursive supervised strategies | Internal candidates for [AutoForecaster](user-guide/forecasting-models/auto-forecaster.md) and shared lag forecasting. |
-| STL/MSTL decomposition hybrids | Model roster entries described from the model guide index when exposed, with benchmark claims kept in [Forecasting Benchmarks](benchmarks/forecasting.md). |
+| STL/MSTL decomposition hybrids | `stl_cartoboost` uses cycle-subseries LOESS, STL low-pass filtering, and a model of the seasonally adjusted target; `mstl_cartoboost` iteratively re-estimates each configured seasonal component before fitting the adjusted-target model. Both require at least two complete cycles of every configured period and repeat the final fitted seasonal cycle when reseasoning forecasts. Benchmark claims stay in [Forecasting Benchmarks](benchmarks/forecasting.md). |
 | Hierarchical reconciliation | Forecast artifact metadata and benchmark orchestration when pickup, dropoff, lane, or total demand must be coherent. |
 | Quantiles and conformal intervals | `QuantileLoss`, `HuberQuantileLoss`, `CompositeQuantileLoss`, `QuantileRegressorSet`, non-crossing repair, interval coverage, interval width, crossing-rate diagnostics, and serializable conformal calibration. |
 | Temporal residual correction | `KalmanResidualCorrector`, `StateFilter`, and `StateCorrectedBooster` apply predict-before-update residual states by origin, destination, corridor, segment, entity family, target family, or time bucket. |

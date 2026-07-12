@@ -1,7 +1,7 @@
 use crate::booster::{Booster, BoosterConfig};
 use crate::data::{Dataset, FeatureKind, FeatureSchema};
 use crate::forecasting::lag_features::{
-    history_by_series, lag_config_supported_by_history, LagFeatureBuilder, LagFeatureConfig,
+    history_by_series, validate_lag_config_supported_by_prior, LagFeatureBuilder, LagFeatureConfig,
 };
 use crate::forecasting::{
     ForecastFrame, ForecastPrediction, ForecastResult, ForecastRow, Forecaster,
@@ -11,10 +11,6 @@ use crate::{CartoBoostError, Result};
 use rayon::prelude::*;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
-
-const RECURSIVE_FORECAST_RANGE_MARGIN_MULTIPLIER: f64 = 3.0;
-const RECURSIVE_FORECAST_SCALE_MARGIN_FRACTION: f64 = 0.25;
-const RECURSIVE_FORECAST_ABSOLUTE_MARGIN_FLOOR: f64 = 1.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum GlobalForecastTargetMode {
@@ -119,7 +115,6 @@ impl CartoBoostLagForecaster {
             .into_par_iter()
             .map(|(series_id, fitted_history)| {
                 let mut history = fitted_history.clone();
-                let value_bounds = forecast_value_bounds(fitted_history)?;
                 let last = history
                     .last()
                     .ok_or_else(|| {
@@ -160,7 +155,7 @@ impl CartoBoostLagForecaster {
                             seasonal + raw_prediction
                         }
                     };
-                    let mean = clamp_forecast_value(mean, &value_bounds);
+                    let mean = validate_forecast_value(mean, series_id, timestamp)?;
                     predictions.push(ForecastPrediction {
                         series_id: series_id.clone(),
                         timestamp,
@@ -192,18 +187,40 @@ impl CartoBoostLagForecaster {
 impl Forecaster for CartoBoostLagForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
         frame.require_regular_for_model(self.model_name())?;
-        let effective_lag_config =
-            lag_config_supported_by_history(self.lag_builder.config(), frame);
-        self.lag_builder = LagFeatureBuilder::new(effective_lag_config)?;
+        let minimum_history = history_by_series(frame.rows())
+            .values()
+            .map(Vec::len)
+            .min()
+            .unwrap_or(0);
+        validate_lag_config_supported_by_prior(
+            self.lag_builder.config(),
+            minimum_history.saturating_sub(1),
+            self.model_name(),
+        )?;
         let feature_rows = self.lag_builder.transform_frame(frame)?;
         if feature_rows.is_empty() {
             return Err(CartoBoostError::InvalidInput(
                 "not enough history to build lag training rows".to_string(),
             ));
         }
+        let history_by_series = history_by_series(frame.rows());
+        let mut training_rows = Vec::with_capacity(feature_rows.len());
+        let mut y = Vec::with_capacity(feature_rows.len());
+        for row in feature_rows {
+            if let Some(target) = target_for_mode(&self.target_mode, &history_by_series, &row)? {
+                training_rows.push(row);
+                y.push(target);
+            }
+        }
+        if training_rows.is_empty() {
+            return Err(CartoBoostError::InvalidInput(
+                "not enough target history to build lag training rows for the configured target mode"
+                    .to_string(),
+            ));
+        }
         let feature_count = self.lag_builder.feature_names().len();
         let x = Dataset::from_rows(
-            feature_rows
+            training_rows
                 .iter()
                 .map(|row| row.features.clone())
                 .collect::<Vec<_>>(),
@@ -212,13 +229,8 @@ impl Forecaster for CartoBoostLagForecaster {
             names: self.lag_builder.feature_names().to_vec(),
             kinds: vec![FeatureKind::Numeric; feature_count],
         })?;
-        let history_by_series = history_by_series(frame.rows());
-        let y = feature_rows
-            .iter()
-            .map(|row| target_for_mode(&self.target_mode, &history_by_series, row))
-            .collect::<Result<Vec<_>>>()?;
         let sample_weights = sample_weights_for_feature_rows(
-            &feature_rows,
+            &training_rows,
             &history_by_series,
             self.sample_weight_mode,
         )?;
@@ -228,7 +240,7 @@ impl Forecaster for CartoBoostLagForecaster {
             frame: frame.clone(),
             history_by_series,
             model,
-            training_rows: feature_rows.len(),
+            training_rows: training_rows.len(),
         });
         Ok(())
     }
@@ -243,7 +255,6 @@ impl Forecaster for CartoBoostLagForecaster {
             .into_par_iter()
             .map(|(series_id, fitted_history)| {
                 let mut history = fitted_history.clone();
-                let value_bounds = forecast_value_bounds(fitted_history)?;
                 let last = history
                     .last()
                     .ok_or_else(|| {
@@ -277,7 +288,7 @@ impl Forecaster for CartoBoostLagForecaster {
                             seasonal + raw_prediction
                         }
                     };
-                    let mean = clamp_forecast_value(mean, &value_bounds);
+                    let mean = validate_forecast_value(mean, series_id, timestamp)?;
                     predictions.push(ForecastPrediction {
                         series_id: series_id.clone(),
                         timestamp,
@@ -336,49 +347,17 @@ fn validate_horizon(horizon: usize) -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy)]
-struct ForecastValueBounds {
-    lower: f64,
-    upper: f64,
-}
-
-fn forecast_value_bounds(history: &[ForecastRow]) -> Result<ForecastValueBounds> {
-    if history.is_empty() {
-        return Err(CartoBoostError::InvalidInput(
-            "forecast bounds require non-empty history".to_string(),
-        ));
+fn validate_forecast_value(
+    value: f64,
+    series_id: &str,
+    timestamp: chrono::NaiveDateTime,
+) -> Result<f64> {
+    if !value.is_finite() {
+        return Err(CartoBoostError::InvalidInput(format!(
+            "cartoboost_lag produced a non-finite forecast for series {series_id} at {timestamp}"
+        )));
     }
-    let mut min_value = f64::INFINITY;
-    let mut max_value = f64::NEG_INFINITY;
-    let mut max_abs = 0.0_f64;
-    for row in history {
-        if !row.target.is_finite() {
-            return Err(CartoBoostError::InvalidInput(
-                "forecast bounds require finite history targets".to_string(),
-            ));
-        }
-        min_value = min_value.min(row.target);
-        max_value = max_value.max(row.target);
-        max_abs = max_abs.max(row.target.abs());
-    }
-    let range = max_value - min_value;
-    let margin = (range * RECURSIVE_FORECAST_RANGE_MARGIN_MULTIPLIER)
-        .max(max_abs * RECURSIVE_FORECAST_SCALE_MARGIN_FRACTION)
-        .max(RECURSIVE_FORECAST_ABSOLUTE_MARGIN_FLOOR);
-    Ok(ForecastValueBounds {
-        lower: min_value - margin,
-        upper: max_value + margin,
-    })
-}
-
-fn clamp_forecast_value(value: f64, bounds: &ForecastValueBounds) -> f64 {
-    if value.is_finite() {
-        value.clamp(bounds.lower, bounds.upper)
-    } else if value.is_sign_negative() {
-        bounds.lower
-    } else {
-        bounds.upper
-    }
+    Ok(value)
 }
 
 fn validate_target_mode(target_mode: GlobalForecastTargetMode) -> Result<()> {
@@ -465,9 +444,9 @@ fn target_for_mode(
     target_mode: &GlobalForecastTargetMode,
     history_by_series: &BTreeMap<String, Vec<ForecastRow>>,
     row: &crate::forecasting::LagFeatureRow,
-) -> Result<f64> {
+) -> Result<Option<f64>> {
     match target_mode {
-        GlobalForecastTargetMode::Level => Ok(row.target),
+        GlobalForecastTargetMode::Level => Ok(Some(row.target)),
         GlobalForecastTargetMode::DeltaFromLast => {
             let history = history_by_series.get(&row.series_id).ok_or_else(|| {
                 CartoBoostError::InvalidInput(format!(
@@ -475,13 +454,8 @@ fn target_for_mode(
                     row.series_id
                 ))
             })?;
-            let prior_target = prior_target_before(history, row.timestamp).ok_or_else(|| {
-                CartoBoostError::InvalidInput(format!(
-                    "missing prior target for series {} at {}",
-                    row.series_id, row.timestamp
-                ))
-            })?;
-            Ok(row.target - prior_target)
+            Ok(prior_target_before(history, row.timestamp)
+                .map(|prior_target| row.target - prior_target))
         }
         GlobalForecastTargetMode::SeasonalDelta { season_length } => {
             let history = history_by_series.get(&row.series_id).ok_or_else(|| {
@@ -490,15 +464,10 @@ fn target_for_mode(
                     row.series_id
                 ))
             })?;
-            let seasonal_target =
+            Ok(
                 seasonal_target_before_timestamp(history, row.timestamp, *season_length)
-                    .ok_or_else(|| {
-                        CartoBoostError::InvalidInput(format!(
-                            "missing seasonal target for series {} at {}",
-                            row.series_id, row.timestamp
-                        ))
-                    })?;
-            Ok(row.target - seasonal_target)
+                    .map(|seasonal_target| row.target - seasonal_target),
+            )
         }
     }
 }
@@ -567,27 +536,14 @@ mod tests {
     }
 
     #[test]
-    fn recursive_forecast_value_bounds_limit_unstable_extrapolation() {
-        let history = vec![
-            ForecastRow::new("series", ts(1), 10.0),
-            ForecastRow::new("series", ts(2), 20.0),
-            ForecastRow::new("series", ts(3), 30.0),
-        ];
-        let bounds = forecast_value_bounds(&history).expect("bounds");
-
-        assert_eq!(clamp_forecast_value(25.0, &bounds), 25.0);
-        assert_eq!(clamp_forecast_value(1_000_000.0, &bounds), bounds.upper);
-        assert_eq!(clamp_forecast_value(f64::INFINITY, &bounds), bounds.upper);
-        assert_eq!(
-            clamp_forecast_value(f64::NEG_INFINITY, &bounds),
-            bounds.lower
-        );
-        assert!(bounds.upper < 100.0);
-        assert!(bounds.lower < 10.0);
+    fn recursive_forecast_rejects_non_finite_values_instead_of_substituting_bounds() {
+        let error = validate_forecast_value(f64::INFINITY, "series", ts(2))
+            .expect_err("non-finite forecasts must fail");
+        assert!(error.to_string().contains("non-finite forecast"));
     }
 
     #[test]
-    fn lag_forecaster_prunes_unsupported_lag_features_for_short_panels() {
+    fn lag_forecaster_rejects_unsupported_lag_features_for_short_panels() {
         let frame = ForecastFrame::new(
             ["PU1->DO2", "PU9->DO8"]
                 .into_iter()
@@ -629,18 +585,11 @@ mod tests {
         )
         .expect("model");
 
-        model.fit(&frame).expect("fit lag model");
-        let metadata = model.metadata();
-        assert_eq!(metadata["lag_config"]["lags"], serde_json::json!([1]));
-        assert_eq!(
-            metadata["lag_config"]["rolling_mean_windows"],
-            serde_json::json!([])
-        );
-        let forecast = model.predict(3).expect("forecast");
-        assert_eq!(forecast.predictions().len(), 6);
-        assert!(forecast
-            .predictions()
-            .iter()
-            .all(|row| row.mean.is_finite()));
+        let error = model
+            .fit(&frame)
+            .expect_err("explicit lag features must not be silently removed");
+        assert!(error
+            .to_string()
+            .contains("requires at least 25 prior observations"));
     }
 }

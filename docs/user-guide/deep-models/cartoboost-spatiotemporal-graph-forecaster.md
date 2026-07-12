@@ -10,8 +10,8 @@ generic deep-model facade for graph sequence forecasting.
 
 ```python
 import numpy as np
-from cartoboost.deep import SpatioTemporalGraphForecaster
-from cartoboost.forecasting import GraphTemporalFrame
+from cartoboost.preview.deep import SpatioTemporalGraphForecaster
+from cartoboost.preview.forecasting import GraphTemporalFrame
 
 target = np.array(
     [

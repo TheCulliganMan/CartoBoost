@@ -1,5 +1,6 @@
 use crate::forecasting::{
-    ForecastFrame, ForecastPrediction, ForecastResult, Forecaster, RuleBasedGating,
+    ForecastFrame, ForecastIntervalPrediction, ForecastPrediction, ForecastPredictionDetail,
+    ForecastResult, Forecaster, RuleBasedGating,
 };
 use crate::{CartoBoostError, Result};
 use rayon::prelude::*;
@@ -53,6 +54,14 @@ impl PartialOrd for ForecastKey {
 
 impl Eq for ForecastKey {}
 
+#[derive(Debug, Clone, PartialEq)]
+struct ForecastIntervalKey {
+    forecast: ForecastKey,
+    level: f64,
+}
+
+impl Eq for ForecastIntervalKey {}
+
 impl WeightedEnsembleForecaster {
     pub fn new(members: Vec<(String, Box<dyn Forecaster>, f64)>) -> Result<Self> {
         if members.is_empty() {
@@ -60,7 +69,6 @@ impl WeightedEnsembleForecaster {
                 "weighted ensemble requires at least one member".to_string(),
             ));
         }
-        let mut total = 0.0;
         let mut cleaned = Vec::with_capacity(members.len());
         for (name, forecaster, weight) in members {
             if name.trim().is_empty() {
@@ -81,20 +89,34 @@ impl WeightedEnsembleForecaster {
                     "weighted ensemble weights must be finite and non-negative".to_string(),
                 ));
             }
-            total += weight;
             cleaned.push(WeightedMember {
                 name,
                 weight,
                 forecaster,
             });
         }
-        if total <= 0.0 {
+        let max_weight = cleaned
+            .iter()
+            .map(|member| member.weight)
+            .fold(0.0_f64, f64::max);
+        if max_weight <= 0.0 {
             return Err(CartoBoostError::InvalidInput(
                 "weighted ensemble requires at least one positive weight".to_string(),
             ));
         }
+        // Scale before summing so valid weights near f64::MAX cannot overflow
+        // the normalization denominator.
+        let scaled_total = cleaned
+            .iter()
+            .map(|member| member.weight / max_weight)
+            .sum::<f64>();
+        if !scaled_total.is_finite() || scaled_total <= 0.0 {
+            return Err(CartoBoostError::InvalidInput(
+                "weighted ensemble weights could not be normalized".to_string(),
+            ));
+        }
         for member in &mut cleaned {
-            member.weight /= total;
+            member.weight = (member.weight / max_weight) / scaled_total;
         }
         Ok(Self { members: cleaned })
     }
@@ -155,14 +177,6 @@ impl GatedEnsembleForecaster {
                 "forecast horizon must be positive".to_string(),
             ));
         }
-        for member in &self.members {
-            if !weights.contains_key(&member.name) {
-                return Err(CartoBoostError::InvalidInput(format!(
-                    "gating weights missing ensemble member '{}'",
-                    member.name
-                )));
-            }
-        }
         for expert in weights.keys() {
             if !self.members.iter().any(|member| &member.name == expert) {
                 return Err(CartoBoostError::InvalidInput(format!(
@@ -170,48 +184,27 @@ impl GatedEnsembleForecaster {
                 )));
             }
         }
-
-        let member_results = self
+        validate_normalized_weights(weights, "gating")?;
+        let active_members = self
             .members
-            .par_iter()
-            .map(|member| member.forecaster.predict(horizon))
-            .collect::<Result<Vec<_>>>()?;
-        let mut weighted: BTreeMap<ForecastKey, f64> = BTreeMap::new();
-        let mut expected_keys: Option<Vec<ForecastKey>> = None;
-        for (member, result) in self.members.iter().zip(member_results) {
-            let weight = weights[&member.name];
-            let mut current_keys = Vec::with_capacity(result.predictions().len());
-            for prediction in result.predictions() {
-                let key = ForecastKey {
-                    series_id: prediction.series_id.clone(),
-                    timestamp: prediction.timestamp,
-                    horizon: prediction.horizon,
-                };
-                current_keys.push(key.clone());
-                *weighted.entry(key).or_insert(0.0) += weight * prediction.mean;
-            }
-            if let Some(expected) = &expected_keys {
-                if expected != &current_keys {
-                    return Err(CartoBoostError::InvalidInput(format!(
-                        "ensemble member '{}' produced a mismatched forecast index",
-                        member.name
-                    )));
-                }
-            } else {
-                expected_keys = Some(current_keys);
-            }
-        }
-        let predictions = weighted
-            .into_iter()
-            .map(|(key, mean)| ForecastPrediction {
-                series_id: key.series_id,
-                timestamp: key.timestamp,
-                horizon: key.horizon,
-                model: self.model_name().to_string(),
-                mean,
+            .iter()
+            .filter_map(|member| {
+                let weight = weights.get(&member.name).copied().unwrap_or(0.0);
+                (weight > 0.0).then_some((member, weight))
             })
-            .collect();
-        ForecastResult::new(predictions)
+            .collect::<Vec<_>>();
+        let member_results = active_members
+            .par_iter()
+            .map(|(member, _)| member.forecaster.predict(horizon))
+            .collect::<Result<Vec<_>>>()?;
+        aggregate_member_results(
+            active_members
+                .into_iter()
+                .zip(member_results)
+                .map(|((member, weight), result)| (member.name.as_str(), weight, result))
+                .collect(),
+            self.model_name(),
+        )
     }
 }
 
@@ -219,6 +212,7 @@ impl Forecaster for WeightedEnsembleForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
         self.members
             .par_iter_mut()
+            .filter(|member| member.weight > 0.0)
             .map(|member| member.forecaster.fit(frame))
             .collect()
     }
@@ -229,46 +223,23 @@ impl Forecaster for WeightedEnsembleForecaster {
                 "forecast horizon must be positive".to_string(),
             ));
         }
-        let mut weighted: BTreeMap<ForecastKey, f64> = BTreeMap::new();
-        let mut expected_keys: Option<Vec<ForecastKey>> = None;
-        let member_results = self
+        let active_members = self
             .members
+            .iter()
+            .filter(|member| member.weight > 0.0)
+            .collect::<Vec<_>>();
+        let member_results = active_members
             .par_iter()
             .map(|member| member.forecaster.predict(horizon))
             .collect::<Result<Vec<_>>>()?;
-        for (member, result) in self.members.iter().zip(member_results) {
-            let mut current_keys = Vec::with_capacity(result.predictions().len());
-            for prediction in result.predictions() {
-                let key = ForecastKey {
-                    series_id: prediction.series_id.clone(),
-                    timestamp: prediction.timestamp,
-                    horizon: prediction.horizon,
-                };
-                current_keys.push(key.clone());
-                *weighted.entry(key).or_insert(0.0) += member.weight * prediction.mean;
-            }
-            if let Some(expected) = &expected_keys {
-                if expected != &current_keys {
-                    return Err(CartoBoostError::InvalidInput(format!(
-                        "ensemble member '{}' produced a mismatched forecast index",
-                        member.name
-                    )));
-                }
-            } else {
-                expected_keys = Some(current_keys);
-            }
-        }
-        let predictions = weighted
-            .into_iter()
-            .map(|(key, mean)| ForecastPrediction {
-                series_id: key.series_id,
-                timestamp: key.timestamp,
-                horizon: key.horizon,
-                model: self.model_name().to_string(),
-                mean,
-            })
-            .collect();
-        ForecastResult::new(predictions)
+        aggregate_member_results(
+            active_members
+                .into_iter()
+                .zip(member_results)
+                .map(|(member, result)| (member.name.as_str(), member.weight, result))
+                .collect(),
+            self.model_name(),
+        )
     }
 
     fn model_name(&self) -> &'static str {
@@ -289,7 +260,16 @@ impl Forecaster for GatedEnsembleForecaster {
             .par_iter_mut()
             .map(|member| member.forecaster.fit(frame))
             .collect::<Result<Vec<_>>>()?;
-        self.weights = Some(self.gating.weights_for_frame(frame)?);
+        let weights = self.gating.weights_for_frame(frame)?;
+        for expert in weights.keys() {
+            if !self.members.iter().any(|member| &member.name == expert) {
+                return Err(CartoBoostError::InvalidInput(format!(
+                    "gating weights reference unknown ensemble member '{expert}'"
+                )));
+            }
+        }
+        validate_normalized_weights(&weights, "gating")?;
+        self.weights = Some(weights);
         Ok(())
     }
 
@@ -313,11 +293,209 @@ impl Forecaster for GatedEnsembleForecaster {
     }
 }
 
+fn validate_normalized_weights(weights: &BTreeMap<String, f64>, source: &str) -> Result<()> {
+    if weights.is_empty() {
+        return Err(CartoBoostError::InvalidInput(format!(
+            "{source} produced no ensemble weights"
+        )));
+    }
+    let mut total = 0.0;
+    for (name, weight) in weights {
+        if name.trim().is_empty() || !weight.is_finite() || *weight < 0.0 {
+            return Err(CartoBoostError::InvalidInput(format!(
+                "{source} ensemble weights must have non-empty names and finite non-negative values"
+            )));
+        }
+        total += weight;
+    }
+    if !total.is_finite() || (total - 1.0).abs() > 1.0e-9 {
+        return Err(CartoBoostError::InvalidInput(format!(
+            "{source} ensemble weights must sum to one; received {total}"
+        )));
+    }
+    Ok(())
+}
+
+fn forecast_key(prediction: &ForecastPrediction) -> ForecastKey {
+    ForecastKey {
+        series_id: prediction.series_id.clone(),
+        timestamp: prediction.timestamp,
+        horizon: prediction.horizon,
+    }
+}
+
+fn detail_forecast_key(detail: &ForecastPredictionDetail) -> ForecastKey {
+    ForecastKey {
+        series_id: detail.series_id.clone(),
+        timestamp: detail.timestamp,
+        horizon: detail.horizon,
+    }
+}
+
+fn interval_key(interval: &ForecastIntervalPrediction) -> ForecastIntervalKey {
+    ForecastIntervalKey {
+        forecast: ForecastKey {
+            series_id: interval.series_id.clone(),
+            timestamp: interval.timestamp,
+            horizon: interval.horizon,
+        },
+        level: interval.level,
+    }
+}
+
+fn aggregate_member_results(
+    member_results: Vec<(&str, f64, ForecastResult)>,
+    model_name: &str,
+) -> Result<ForecastResult> {
+    if member_results.is_empty() {
+        return Err(CartoBoostError::InvalidInput(
+            "ensemble requires at least one positive-weight member".to_string(),
+        ));
+    }
+
+    let mut weighted: BTreeMap<ForecastKey, f64> = BTreeMap::new();
+    let mut contributions: BTreeMap<ForecastKey, Vec<Value>> = BTreeMap::new();
+    let mut expected_keys: Option<Vec<ForecastKey>> = None;
+    let mut expected_interval_keys: Option<Vec<ForecastIntervalKey>> = None;
+    let mut weighted_intervals: Vec<(ForecastIntervalKey, f64, f64)> = Vec::new();
+    let mut has_member_details = false;
+
+    for (member_name, weight, result) in member_results {
+        if !weight.is_finite() || weight <= 0.0 {
+            return Err(CartoBoostError::InvalidInput(format!(
+                "ensemble member '{member_name}' must have a finite positive aggregation weight"
+            )));
+        }
+        let current_keys = result
+            .predictions()
+            .iter()
+            .map(forecast_key)
+            .collect::<Vec<_>>();
+        if current_keys.windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err(CartoBoostError::InvalidInput(format!(
+                "ensemble member '{member_name}' produced duplicate forecast index values"
+            )));
+        }
+        if let Some(expected) = &expected_keys {
+            if expected != &current_keys {
+                return Err(CartoBoostError::InvalidInput(format!(
+                    "ensemble member '{member_name}' produced a mismatched forecast index"
+                )));
+            }
+        } else {
+            expected_keys = Some(current_keys);
+        }
+
+        let details = result
+            .details()
+            .iter()
+            .map(|detail| {
+                Ok((
+                    detail_forecast_key(detail),
+                    serde_json::to_value(detail).map_err(CartoBoostError::from)?,
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        has_member_details |= !details.is_empty();
+        for prediction in result.predictions() {
+            let key = forecast_key(prediction);
+            let weighted_mean = weight * prediction.mean;
+            *weighted.entry(key.clone()).or_insert(0.0) += weighted_mean;
+            contributions.entry(key.clone()).or_default().push(json!({
+                "member": member_name,
+                "weight": weight,
+                "mean": prediction.mean,
+                "weighted_mean": weighted_mean,
+                "detail": details.get(&key),
+            }));
+        }
+
+        let current_interval_keys = result
+            .intervals()
+            .iter()
+            .map(interval_key)
+            .collect::<Vec<_>>();
+        if let Some(expected) = &expected_interval_keys {
+            if expected != &current_interval_keys {
+                return Err(CartoBoostError::InvalidInput(format!(
+                    "ensemble member '{member_name}' produced mismatched interval levels or indices"
+                )));
+            }
+            for (aggregate, interval) in weighted_intervals.iter_mut().zip(result.intervals()) {
+                aggregate.1 += weight * interval.lower;
+                aggregate.2 += weight * interval.upper;
+            }
+        } else {
+            weighted_intervals = result
+                .intervals()
+                .iter()
+                .map(|interval| {
+                    (
+                        interval_key(interval),
+                        weight * interval.lower,
+                        weight * interval.upper,
+                    )
+                })
+                .collect();
+            expected_interval_keys = Some(current_interval_keys);
+        }
+    }
+
+    let predictions = weighted
+        .into_iter()
+        .map(|(key, mean)| ForecastPrediction {
+            series_id: key.series_id,
+            timestamp: key.timestamp,
+            horizon: key.horizon,
+            model: model_name.to_string(),
+            mean,
+        })
+        .collect::<Vec<_>>();
+    let intervals = weighted_intervals
+        .into_iter()
+        .map(|(key, lower, upper)| ForecastIntervalPrediction {
+            series_id: key.forecast.series_id,
+            timestamp: key.forecast.timestamp,
+            horizon: key.forecast.horizon,
+            model: model_name.to_string(),
+            level: key.level,
+            lower,
+            upper,
+        })
+        .collect::<Vec<_>>();
+    let details = if has_member_details {
+        contributions
+            .into_iter()
+            .map(|(key, members)| ForecastPredictionDetail {
+                series_id: key.series_id,
+                timestamp: key.timestamp,
+                horizon: key.horizon,
+                model: model_name.to_string(),
+                base_mean: None,
+                spatial_correction: None,
+                kriging_variance: None,
+                selected_neighbors: Vec::new(),
+                component_decomposition: Some(json!({
+                    "aggregation": "weighted_member_contributions",
+                    "members": members,
+                })),
+                metadata: Some(json!({
+                    "interval_aggregation": "weighted_quantile_average",
+                })),
+            })
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    ForecastResult::new_with_intervals_and_details(predictions, intervals, details)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::forecasting::{
-        ForecastFrequency, ForecastRow, NaiveForecaster, SeasonalNaiveForecaster,
+        ExpertScore, ForecastFrequency, ForecastRow, NaiveForecaster, SeasonalNaiveForecaster,
+        ValidationScoreTable,
     };
     use chrono::NaiveDate;
     use serde_json::Value;
@@ -334,6 +512,29 @@ mod tests {
 
         fn predict(&self, _horizon: usize) -> Result<ForecastResult> {
             ForecastResult::new(self.predictions.clone())
+        }
+
+        fn model_name(&self) -> &'static str {
+            self.name
+        }
+
+        fn metadata(&self) -> Value {
+            json!({"model": self.name})
+        }
+    }
+
+    struct RichFixedForecaster {
+        result: ForecastResult,
+        name: &'static str,
+    }
+
+    impl Forecaster for RichFixedForecaster {
+        fn fit(&mut self, _frame: &ForecastFrame) -> Result<()> {
+            Ok(())
+        }
+
+        fn predict(&self, _horizon: usize) -> Result<ForecastResult> {
+            Ok(self.result.clone())
         }
 
         fn model_name(&self) -> &'static str {
@@ -470,6 +671,189 @@ mod tests {
         assert_eq!(metadata["model"], "weighted_ensemble");
         assert_eq!(metadata["weights"]["last"], 0.25);
         assert_eq!(metadata["weights"]["seasonal"], 0.75);
+    }
+
+    #[test]
+    fn weighted_ensemble_normalizes_extreme_finite_weights_without_overflow() {
+        let ensemble = WeightedEnsembleForecaster::new(vec![
+            (
+                "first".to_string(),
+                Box::new(NaiveForecaster::new()),
+                f64::MAX,
+            ),
+            (
+                "second".to_string(),
+                Box::new(NaiveForecaster::new()),
+                f64::MAX,
+            ),
+        ])
+        .expect("finite weights are normalizable");
+
+        assert_eq!(ensemble.weights()["first"], 0.5);
+        assert_eq!(ensemble.weights()["second"], 0.5);
+    }
+
+    #[test]
+    fn weighted_ensemble_aggregates_intervals_and_preserves_member_details() {
+        let first = rich_result("first", 10.0, 8.0, 12.0, 9.0, 1.0);
+        let second = rich_result("second", 20.0, 16.0, 24.0, 18.0, 2.0);
+        let ensemble = WeightedEnsembleForecaster::new(vec![
+            (
+                "first".to_string(),
+                Box::new(RichFixedForecaster {
+                    result: first,
+                    name: "first",
+                }),
+                1.0,
+            ),
+            (
+                "second".to_string(),
+                Box::new(RichFixedForecaster {
+                    result: second,
+                    name: "second",
+                }),
+                3.0,
+            ),
+        ])
+        .expect("ensemble");
+
+        let result = ensemble.predict(1).expect("predict");
+
+        assert_eq!(result.predictions()[0].mean, 17.5);
+        assert_eq!(result.intervals().len(), 1);
+        assert_eq!(result.intervals()[0].lower, 14.0);
+        assert_eq!(result.intervals()[0].upper, 21.0);
+        let decomposition = result.details()[0]
+            .component_decomposition
+            .as_ref()
+            .expect("member contributions");
+        assert_eq!(
+            decomposition["aggregation"],
+            "weighted_member_contributions"
+        );
+        let members = decomposition["members"].as_array().expect("members");
+        assert_eq!(members.len(), 2);
+        assert_eq!(members[0]["detail"]["base_mean"], 9.0);
+        assert_eq!(members[1]["detail"]["spatial_correction"], 2.0);
+    }
+
+    #[test]
+    fn weighted_ensemble_rejects_partial_interval_coverage() {
+        let rich = rich_result("first", 10.0, 8.0, 12.0, 9.0, 1.0);
+        let plain =
+            ForecastResult::new(vec![prediction("PU1->DO2", 4, 1, 20.0)]).expect("plain result");
+        let ensemble = WeightedEnsembleForecaster::new(vec![
+            (
+                "first".to_string(),
+                Box::new(RichFixedForecaster {
+                    result: rich,
+                    name: "first",
+                }),
+                1.0,
+            ),
+            (
+                "second".to_string(),
+                Box::new(RichFixedForecaster {
+                    result: plain,
+                    name: "second",
+                }),
+                1.0,
+            ),
+        ])
+        .expect("ensemble");
+
+        let error = ensemble
+            .predict(1)
+            .expect_err("partial interval grids must not be silently discarded");
+        assert!(error
+            .to_string()
+            .contains("mismatched interval levels or indices"));
+    }
+
+    #[test]
+    fn gated_ensemble_top_k_can_select_a_strict_member_subset() {
+        let table = ValidationScoreTable::new(vec![
+            ExpertScore::global("first", "rmse", 1.0),
+            ExpertScore::global("second", "rmse", 2.0),
+        ])
+        .expect("score table");
+        let gating = RuleBasedGating::with_options("rmse", table, 1.0e-9, Some(1)).expect("gating");
+        let mut ensemble = GatedEnsembleForecaster::new(
+            vec![
+                (
+                    "first".to_string(),
+                    Box::new(FixedForecaster {
+                        predictions: vec![prediction("PU1->DO2", 4, 1, 10.0)],
+                        name: "first",
+                    }) as Box<dyn Forecaster>,
+                ),
+                (
+                    "second".to_string(),
+                    Box::new(FixedForecaster {
+                        predictions: vec![prediction("PU1->DO2", 4, 1, 20.0)],
+                        name: "second",
+                    }) as Box<dyn Forecaster>,
+                ),
+            ],
+            gating,
+        )
+        .expect("ensemble");
+        let frame = ForecastFrame::new(
+            vec![
+                ForecastRow::single(ts(1), 1.0),
+                ForecastRow::single(ts(2), 2.0),
+            ],
+            ForecastFrequency::Daily,
+        )
+        .expect("frame");
+
+        ensemble.fit(&frame).expect("fit");
+        let result = ensemble.predict(1).expect("predict");
+
+        assert_eq!(
+            ensemble.weights().unwrap(),
+            &BTreeMap::from([("first".to_string(), 1.0)])
+        );
+        assert_eq!(result.predictions()[0].mean, 10.0);
+    }
+
+    fn rich_result(
+        model: &str,
+        mean: f64,
+        lower: f64,
+        upper: f64,
+        base_mean: f64,
+        spatial_correction: f64,
+    ) -> ForecastResult {
+        let prediction = ForecastPrediction {
+            model: model.to_string(),
+            ..prediction("PU1->DO2", 4, 1, mean)
+        };
+        ForecastResult::new_with_intervals_and_details(
+            vec![prediction],
+            vec![ForecastIntervalPrediction {
+                series_id: "PU1->DO2".to_string(),
+                timestamp: ts(4),
+                horizon: 1,
+                model: model.to_string(),
+                level: 0.8,
+                lower,
+                upper,
+            }],
+            vec![ForecastPredictionDetail {
+                series_id: "PU1->DO2".to_string(),
+                timestamp: ts(4),
+                horizon: 1,
+                model: model.to_string(),
+                base_mean: Some(base_mean),
+                spatial_correction: Some(spatial_correction),
+                kriging_variance: Some(4.0),
+                selected_neighbors: vec![format!("{model}_neighbor")],
+                component_decomposition: Some(json!({"trend": base_mean})),
+                metadata: Some(json!({"source": model})),
+            }],
+        )
+        .expect("rich forecast result")
     }
 
     fn prediction(series_id: &str, day: u32, horizon: usize, mean: f64) -> ForecastPrediction {

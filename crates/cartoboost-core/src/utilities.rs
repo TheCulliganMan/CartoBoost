@@ -186,8 +186,14 @@ pub struct KrigingLooDiagnostics {
 pub struct OrdinaryKrigingSystem {
     observations: Vec<KrigingObservation>,
     config: OrdinaryKrigingConfig,
-    inverse: Vec<Vec<f64>>,
+    factorization: LinearSystemFactorization,
     drift_terms: usize,
+}
+
+#[derive(Debug, Clone)]
+struct LinearSystemFactorization {
+    lu: Vec<Vec<f64>>,
+    permutation: Vec<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -210,37 +216,41 @@ impl LocalLinearKalmanConfig {
         trend_process_variance: f64,
         observation_variance: f64,
     ) -> Result<Self> {
-        validate_positive_finite(level_process_variance, "level_process_variance")?;
-        validate_positive_finite(trend_process_variance, "trend_process_variance")?;
-        validate_positive_finite(observation_variance, "observation_variance")?;
-        Ok(Self {
+        Self {
             level_process_variance,
             trend_process_variance,
             observation_variance,
-        })
+        }
+        .validate()
+    }
+
+    pub fn validate(self) -> Result<Self> {
+        validate_positive_finite(self.level_process_variance, "level_process_variance")?;
+        validate_positive_finite(self.trend_process_variance, "trend_process_variance")?;
+        validate_positive_finite(self.observation_variance, "observation_variance")?;
+        Ok(self)
     }
 }
 
 impl LocalLevelKalmanConfig {
     pub fn new(level_process_variance: f64, observation_variance: f64) -> Result<Self> {
-        validate_positive_finite(level_process_variance, "level_process_variance")?;
-        validate_positive_finite(observation_variance, "observation_variance")?;
-        Ok(Self {
+        Self {
             level_process_variance,
             observation_variance,
-        })
+        }
+        .validate()
+    }
+
+    pub fn validate(self) -> Result<Self> {
+        validate_positive_finite(self.level_process_variance, "level_process_variance")?;
+        validate_positive_finite(self.observation_variance, "observation_variance")?;
+        Ok(self)
     }
 }
 
 impl OrdinaryKrigingConfig {
     pub fn new(range: f64, nugget: f64) -> Result<Self> {
-        validate_positive_finite(range, "range")?;
-        if !nugget.is_finite() || nugget < 0.0 {
-            return Err(CartoBoostError::InvalidInput(
-                "nugget must be finite and non-negative".to_string(),
-            ));
-        }
-        Ok(Self {
+        Self {
             range,
             nugget,
             sill: 1.0,
@@ -251,13 +261,57 @@ impl OrdinaryKrigingConfig {
             max_neighbors: None,
             min_neighbors: 1,
             max_distance: None,
-        })
+        }
+        .validate()
+    }
+
+    pub fn validate(self) -> Result<Self> {
+        validate_positive_finite(self.range, "range")?;
+        if !self.nugget.is_finite() || self.nugget < 0.0 {
+            return Err(CartoBoostError::InvalidInput(
+                "nugget must be finite and non-negative".to_string(),
+            ));
+        }
+        validate_positive_finite(self.sill, "sill")?;
+        if !self.anisotropy_angle_degrees.is_finite() {
+            return Err(CartoBoostError::InvalidInput(
+                "anisotropy_angle_degrees must be finite".to_string(),
+            ));
+        }
+        validate_positive_finite(self.anisotropy_scaling, "anisotropy_scaling")?;
+        if self.min_neighbors == 0 {
+            return Err(CartoBoostError::InvalidInput(
+                "min_neighbors must be positive".to_string(),
+            ));
+        }
+        if let Some(max_neighbors) = self.max_neighbors {
+            if max_neighbors == 0 {
+                return Err(CartoBoostError::InvalidInput(
+                    "max_neighbors must be positive when provided".to_string(),
+                ));
+            }
+            if self.min_neighbors > max_neighbors {
+                return Err(CartoBoostError::InvalidInput(
+                    "min_neighbors must be <= max_neighbors".to_string(),
+                ));
+            }
+            let drift_terms = drift_term_count(self.drift);
+            if max_neighbors < drift_terms {
+                return Err(CartoBoostError::InvalidInput(format!(
+                    "max_neighbors must be at least {drift_terms} for {:?} kriging drift",
+                    self.drift
+                )));
+            }
+        }
+        if let Some(max_distance) = self.max_distance {
+            validate_positive_finite(max_distance, "max_distance")?;
+        }
+        Ok(self)
     }
 
     pub fn with_sill(mut self, sill: f64) -> Result<Self> {
-        validate_positive_finite(sill, "sill")?;
         self.sill = sill;
-        Ok(self)
+        self.validate()
     }
 
     pub fn with_variogram_model(mut self, variogram_model: KrigingVariogramModel) -> Self {
@@ -279,7 +333,7 @@ impl OrdinaryKrigingConfig {
         validate_positive_finite(scaling, "anisotropy_scaling")?;
         self.anisotropy_angle_degrees = angle_degrees;
         self.anisotropy_scaling = scaling;
-        Ok(self)
+        self.validate()
     }
 
     pub fn with_neighbor_limits(
@@ -288,37 +342,16 @@ impl OrdinaryKrigingConfig {
         min_neighbors: usize,
         max_distance: Option<f64>,
     ) -> Result<Self> {
-        if let Some(max_neighbors) = max_neighbors {
-            if max_neighbors == 0 {
-                return Err(CartoBoostError::InvalidInput(
-                    "max_neighbors must be positive when provided".to_string(),
-                ));
-            }
-        }
-        if min_neighbors == 0 {
-            return Err(CartoBoostError::InvalidInput(
-                "min_neighbors must be positive".to_string(),
-            ));
-        }
-        if let Some(max_distance) = max_distance {
-            validate_positive_finite(max_distance, "max_distance")?;
-        }
-        if let Some(max_neighbors) = max_neighbors {
-            if min_neighbors > max_neighbors {
-                return Err(CartoBoostError::InvalidInput(
-                    "min_neighbors must be <= max_neighbors".to_string(),
-                ));
-            }
-        }
         self.max_neighbors = max_neighbors;
         self.min_neighbors = min_neighbors;
         self.max_distance = max_distance;
-        Ok(self)
+        self.validate()
     }
 }
 
 impl OrdinaryKrigingSystem {
     pub fn new(observations: &[KrigingObservation], config: OrdinaryKrigingConfig) -> Result<Self> {
+        let config = config.validate()?;
         validate_kriging_observations(observations)?;
         if uses_local_neighbors(config) {
             return Err(CartoBoostError::InvalidInput(
@@ -341,15 +374,15 @@ impl OrdinaryKrigingSystem {
             )));
         }
         let matrix = build_kriging_system_matrix(observations, config);
-        let inverse = invert_linear_system(matrix).ok_or_else(|| {
+        let factorization = LinearSystemFactorization::factor(matrix).ok_or_else(|| {
             CartoBoostError::InvalidInput(
-                "kriging system is singular; adjust coordinates or nugget".to_string(),
+                "kriging system is singular or numerically ill-conditioned; adjust coordinates, variogram scale, or nugget".to_string(),
             )
         })?;
         Ok(Self {
             observations: observations.to_vec(),
             config,
-            inverse,
+            factorization,
             drift_terms,
         })
     }
@@ -357,7 +390,9 @@ impl OrdinaryKrigingSystem {
     pub fn predict(&self, target: (f64, f64)) -> Result<KrigingPrediction> {
         validate_kriging_target(target)?;
         let rhs = build_kriging_rhs(&self.observations, target, self.config);
-        let solution = mat_vec_mul(&self.inverse, &rhs);
+        let solution = self.factorization.solve(&rhs).ok_or_else(|| {
+            CartoBoostError::InvalidInput("kriging solve produced a non-finite result".to_string())
+        })?;
         kriging_prediction_from_solution(
             &self.observations,
             target,
@@ -393,6 +428,7 @@ pub fn fit_local_level_kalman(
     values: &[f64],
     config: LocalLevelKalmanConfig,
 ) -> Result<LocalLevelKalmanResult> {
+    let config = config.validate()?;
     if values.is_empty() {
         return Err(CartoBoostError::InvalidInput(
             "local level kalman filter requires at least one observation".to_string(),
@@ -422,7 +458,8 @@ pub fn fit_local_level_kalman(
         let gain = prior_variance / innovation_variance;
         let log_likelihood = gaussian_log_likelihood(innovation, innovation_variance);
         level = prior_level + gain * innovation;
-        variance = (1.0 - gain) * prior_variance;
+        variance =
+            (1.0 - gain).powi(2) * prior_variance + gain.powi(2) * config.observation_variance;
         total_log_likelihood += log_likelihood;
         estimates.push(LocalLevelKalmanEstimate {
             step: idx,
@@ -442,7 +479,7 @@ pub fn fit_local_level_kalman(
             variance,
         });
     }
-    let smoothed_states = smooth_local_level_states(&filtered_states, &estimates);
+    let smoothed_states = smooth_local_level_states(&filtered_states, &estimates)?;
     let residual_summary =
         kalman_residual_summary(values.len(), &estimates, total_log_likelihood, 2);
     Ok(LocalLevelKalmanResult {
@@ -473,6 +510,7 @@ pub fn fit_local_linear_kalman(
     values: &[f64],
     config: LocalLinearKalmanConfig,
 ) -> Result<LocalLinearKalmanResult> {
+    let config = config.validate()?;
     if values.len() < 2 {
         return Err(CartoBoostError::InvalidInput(
             "local linear kalman filter requires at least two observations".to_string(),
@@ -480,7 +518,10 @@ pub fn fit_local_linear_kalman(
     }
     validate_numeric_series(values, "kalman observation")?;
     let mut level = values[0];
-    let mut trend = values[1] - values[0];
+    // The first observation conditions the initial level. The trend remains an
+    // unobserved zero-mean state until later observations update it; deriving
+    // it from values[1] and then filtering values[1] double-counts that value.
+    let mut trend = 0.0;
     let mut p00 = config.observation_variance;
     let mut p01 = 0.0;
     let mut p10 = 0.0;
@@ -514,10 +555,15 @@ pub fn fit_local_linear_kalman(
         let log_likelihood = gaussian_log_likelihood(innovation, innovation_variance);
         level = prior_level + k0 * innovation;
         trend = prior_trend + k1 * innovation;
-        p00 = (1.0 - k0) * pp00;
-        p01 = (1.0 - k0) * pp01;
-        p10 = pp10 - k1 * pp00;
-        p11 = pp11 - k1 * pp01;
+        let posterior_covariance = kalman_joseph_covariance_update(
+            [[pp00, pp01], [pp10, pp11]],
+            [k0, k1],
+            config.observation_variance,
+        )?;
+        p00 = posterior_covariance[0][0];
+        p01 = posterior_covariance[0][1];
+        p10 = posterior_covariance[1][0];
+        p11 = posterior_covariance[1][1];
         total_log_likelihood += log_likelihood;
         estimates.push(LocalLinearKalmanEstimate {
             step: idx,
@@ -545,7 +591,7 @@ pub fn fit_local_linear_kalman(
             covariance: [[p00, p01], [p10, p11]],
         });
     }
-    let smoothed_states = smooth_local_linear_states(&filtered_states, &estimates);
+    let smoothed_states = smooth_local_linear_states(&filtered_states, &estimates)?;
     let residual_summary =
         kalman_residual_summary(values.len(), &estimates, total_log_likelihood, 3);
     Ok(LocalLinearKalmanResult {
@@ -611,6 +657,11 @@ pub fn local_linear_kalman_forecast(
             "kalman forecast horizon must be positive".to_string(),
         ));
     }
+    if !state.level.is_finite() || !state.trend.is_finite() {
+        return Err(CartoBoostError::InvalidInput(
+            "kalman forecast state must be finite".to_string(),
+        ));
+    }
     Ok((1..=horizon)
         .map(|step| state.level + step as f64 * state.trend)
         .collect())
@@ -623,6 +674,7 @@ pub fn local_level_kalman_forecast_distribution(
     horizon: usize,
     interval_z: f64,
 ) -> Result<Vec<KalmanForecastPoint>> {
+    let config = config.validate()?;
     validate_kalman_forecast_inputs(horizon, interval_z)?;
     if !final_level.is_finite() || !final_variance.is_finite() || final_variance < 0.0 {
         return Err(CartoBoostError::InvalidInput(
@@ -646,36 +698,121 @@ pub fn local_linear_kalman_forecast_distribution(
     horizon: usize,
     interval_z: f64,
 ) -> Result<Vec<KalmanForecastPoint>> {
+    let config = config.validate()?;
     validate_kalman_forecast_inputs(horizon, interval_z)?;
     if !state.level.is_finite() || !state.trend.is_finite() {
         return Err(CartoBoostError::InvalidInput(
             "kalman final state must be finite".to_string(),
         ));
     }
-    if covariance.iter().flatten().any(|value| !value.is_finite()) {
-        return Err(CartoBoostError::InvalidInput(
-            "kalman final covariance must be finite".to_string(),
-        ));
-    }
-    Ok((1..=horizon)
+    let covariance = validate_covariance_2x2(covariance, "kalman final covariance")?;
+    (1..=horizon)
         .map(|step| {
             let h = step as f64;
             let mean = state.level + h * state.trend;
+            let trend_noise_multiplier = if step <= 1 {
+                0.0
+            } else {
+                (h - 1.0) * h * (2.0 * h - 1.0) / 6.0
+            };
             let state_variance = covariance[0][0]
                 + h * (covariance[0][1] + covariance[1][0])
                 + h * h * covariance[1][1]
                 + h * config.level_process_variance
-                + h * h * config.trend_process_variance;
-            let variance = state_variance.max(0.0) + config.observation_variance;
-            forecast_point(step, mean, variance, interval_z)
+                + trend_noise_multiplier * config.trend_process_variance;
+            let state_variance = checked_non_negative_variance(
+                state_variance,
+                covariance_scale(covariance)
+                    + h * config.level_process_variance
+                    + trend_noise_multiplier * config.trend_process_variance,
+                "kalman forecast state variance",
+            )?;
+            let variance = state_variance + config.observation_variance;
+            Ok(forecast_point(step, mean, variance, interval_z))
         })
-        .collect())
+        .collect()
 }
 
 fn gaussian_log_likelihood(innovation: f64, innovation_variance: f64) -> f64 {
     -0.5 * ((2.0 * std::f64::consts::PI).ln()
         + innovation_variance.ln()
         + innovation * innovation / innovation_variance)
+}
+
+fn kalman_joseph_covariance_update(
+    prior: [[f64; 2]; 2],
+    gain: [f64; 2],
+    observation_variance: f64,
+) -> Result<[[f64; 2]; 2]> {
+    let update = [[1.0 - gain[0], 0.0], [-gain[1], 1.0]];
+    let measurement = [
+        [
+            gain[0] * observation_variance * gain[0],
+            gain[0] * observation_variance * gain[1],
+        ],
+        [
+            gain[1] * observation_variance * gain[0],
+            gain[1] * observation_variance * gain[1],
+        ],
+    ];
+    let posterior = mat2_add(
+        mat2_mul(mat2_mul(update, prior), mat2_transpose(update)),
+        measurement,
+    );
+    validate_covariance_2x2(posterior, "kalman posterior covariance")
+}
+
+fn covariance_scale(matrix: [[f64; 2]; 2]) -> f64 {
+    matrix
+        .iter()
+        .flatten()
+        .map(|value| value.abs())
+        .fold(0.0, f64::max)
+}
+
+fn checked_non_negative_variance(value: f64, scale: f64, label: &str) -> Result<f64> {
+    if !value.is_finite() {
+        return Err(CartoBoostError::InvalidInput(format!(
+            "{label} must be finite"
+        )));
+    }
+    let tolerance = 128.0 * f64::EPSILON * scale.max(f64::MIN_POSITIVE);
+    if value < -tolerance {
+        return Err(CartoBoostError::InvalidInput(format!(
+            "{label} is negative ({value:e}); covariance inputs are invalid or numerically unstable"
+        )));
+    }
+    Ok(value.max(0.0))
+}
+
+fn validate_covariance_2x2(matrix: [[f64; 2]; 2], label: &str) -> Result<[[f64; 2]; 2]> {
+    if matrix.iter().flatten().any(|value| !value.is_finite()) {
+        return Err(CartoBoostError::InvalidInput(format!(
+            "{label} must be finite"
+        )));
+    }
+    let scale = covariance_scale(matrix);
+    let tolerance = 128.0 * f64::EPSILON * scale.max(f64::MIN_POSITIVE);
+    if (matrix[0][1] - matrix[1][0]).abs() > tolerance {
+        return Err(CartoBoostError::InvalidInput(format!(
+            "{label} must be symmetric"
+        )));
+    }
+    let p00 = checked_non_negative_variance(matrix[0][0], scale, label)?;
+    let p11 = checked_non_negative_variance(matrix[1][1], scale, label)?;
+    let mut off_diagonal = 0.5 * (matrix[0][1] + matrix[1][0]);
+    let determinant = p00 * p11 - off_diagonal * off_diagonal;
+    let determinant_tolerance = 256.0 * f64::EPSILON * scale.max(f64::MIN_POSITIVE).powi(2);
+    if determinant < -determinant_tolerance {
+        return Err(CartoBoostError::InvalidInput(format!(
+            "{label} must be positive semidefinite"
+        )));
+    }
+    if determinant < 0.0 {
+        let bound = (p00 * p11).sqrt();
+        off_diagonal = off_diagonal.clamp(-bound, bound);
+    }
+    Ok([[p00, off_diagonal], [off_diagonal, p11]])
 }
 
 fn validate_kalman_forecast_inputs(horizon: usize, interval_z: f64) -> Result<()> {
@@ -693,7 +830,8 @@ fn validate_kalman_forecast_inputs(horizon: usize, interval_z: f64) -> Result<()
 }
 
 fn forecast_point(step: usize, mean: f64, variance: f64, interval_z: f64) -> KalmanForecastPoint {
-    let standard_error = variance.max(0.0).sqrt();
+    debug_assert!(variance >= 0.0 && variance.is_finite());
+    let standard_error = variance.sqrt();
     KalmanForecastPoint {
         step,
         mean,
@@ -780,49 +918,63 @@ fn kalman_residual_summary<T: KalmanInnovation>(
 fn smooth_local_level_states(
     filtered_states: &[LocalLevelKalmanSmoothedState],
     estimates: &[LocalLevelKalmanEstimate],
-) -> Vec<LocalLevelKalmanSmoothedState> {
+) -> Result<Vec<LocalLevelKalmanSmoothedState>> {
     if filtered_states.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let mut smoothed = filtered_states.to_vec();
     for idx in (0..filtered_states.len().saturating_sub(1)).rev() {
         let next_estimate = &estimates[idx];
         let filtered = filtered_states[idx];
         let next_smoothed = smoothed[idx + 1];
-        let smoother_gain = if next_estimate.prior_variance > 0.0 {
-            filtered.variance / next_estimate.prior_variance
-        } else {
-            0.0
-        };
+        if !next_estimate.prior_variance.is_finite() || next_estimate.prior_variance <= 0.0 {
+            return Err(CartoBoostError::InvalidInput(
+                "local level kalman smoother prior variance must be positive and finite"
+                    .to_string(),
+            ));
+        }
+        let smoother_gain = filtered.variance / next_estimate.prior_variance;
         let level =
             filtered.level + smoother_gain * (next_smoothed.level - next_estimate.prior_level);
         let variance = filtered.variance
             + smoother_gain
                 * smoother_gain
                 * (next_smoothed.variance - next_estimate.prior_variance);
+        let variance = checked_non_negative_variance(
+            variance,
+            filtered
+                .variance
+                .abs()
+                .max(next_estimate.prior_variance.abs())
+                .max(next_smoothed.variance.abs()),
+            "local level kalman smoothed variance",
+        )?;
         smoothed[idx] = LocalLevelKalmanSmoothedState {
             step: filtered.step,
             level,
-            variance: variance.max(0.0),
+            variance,
         };
     }
-    smoothed
+    Ok(smoothed)
 }
 
 fn smooth_local_linear_states(
     filtered_states: &[LocalLinearKalmanSmoothedState],
     estimates: &[LocalLinearKalmanEstimate],
-) -> Vec<LocalLinearKalmanSmoothedState> {
+) -> Result<Vec<LocalLinearKalmanSmoothedState>> {
     if filtered_states.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let mut smoothed = filtered_states.to_vec();
     for idx in (0..filtered_states.len().saturating_sub(1)).rev() {
         let filtered = filtered_states[idx];
         let next_estimate = &estimates[idx];
-        let Some(predicted_inverse) = invert_2x2(next_estimate.prior_covariance) else {
-            continue;
-        };
+        let predicted_inverse = invert_2x2(next_estimate.prior_covariance).ok_or_else(|| {
+            CartoBoostError::InvalidInput(
+                "kalman smoother prior covariance is singular or numerically ill-conditioned"
+                    .to_string(),
+            )
+        })?;
         let gain = mat2_mul(
             mat2_mul(filtered.covariance, [[1.0, 0.0], [1.0, 1.0]]),
             predicted_inverse,
@@ -843,15 +995,22 @@ fn smooth_local_linear_states(
             step: filtered.step,
             level: filtered.level + correction[0],
             trend: filtered.trend + correction[1],
-            covariance: symmetrize_covariance(covariance),
+            covariance: validate_covariance_2x2(covariance, "kalman smoothed covariance")?,
         };
     }
-    smoothed
+    Ok(smoothed)
 }
 
 fn invert_2x2(matrix: [[f64; 2]; 2]) -> Option<[[f64; 2]; 2]> {
+    if matrix.iter().flatten().any(|value| !value.is_finite()) {
+        return None;
+    }
+    let scale = covariance_scale(matrix);
+    if scale == 0.0 {
+        return None;
+    }
     let determinant = matrix[0][0] * matrix[1][1] - matrix[0][1] * matrix[1][0];
-    if !determinant.is_finite() || determinant.abs() <= 1.0e-12 {
+    if !determinant.is_finite() || determinant.abs() <= 128.0 * f64::EPSILON * scale.powi(2) {
         return None;
     }
     Some([
@@ -898,19 +1057,12 @@ fn mat2_transpose(matrix: [[f64; 2]; 2]) -> [[f64; 2]; 2] {
     [[matrix[0][0], matrix[1][0]], [matrix[0][1], matrix[1][1]]]
 }
 
-fn symmetrize_covariance(matrix: [[f64; 2]; 2]) -> [[f64; 2]; 2] {
-    let off_diagonal = 0.5 * (matrix[0][1] + matrix[1][0]);
-    [
-        [matrix[0][0].max(0.0), off_diagonal],
-        [off_diagonal, matrix[1][1].max(0.0)],
-    ]
-}
-
 pub fn ordinary_kriging_predict_many(
     observations: &[KrigingObservation],
     targets: &[(f64, f64)],
     config: OrdinaryKrigingConfig,
 ) -> Result<Vec<KrigingPrediction>> {
+    let config = config.validate()?;
     validate_kriging_observations(observations)?;
     if targets.is_empty() {
         return Err(CartoBoostError::InvalidInput(
@@ -931,6 +1083,7 @@ pub fn ordinary_kriging_predict(
     target: (f64, f64),
     config: OrdinaryKrigingConfig,
 ) -> Result<KrigingPrediction> {
+    let config = config.validate()?;
     validate_kriging_observations(observations)?;
     if !target.0.is_finite() || !target.1.is_finite() {
         return Err(CartoBoostError::InvalidInput(
@@ -968,10 +1121,13 @@ fn ordinary_kriging_predict_unchecked(
         .collect::<Vec<_>>();
     let matrix = build_kriging_system_matrix(&selected_observations, config);
     let rhs = build_kriging_rhs(&selected_observations, target, config);
-    let solution = solve_linear_system(matrix, rhs.clone()).ok_or_else(|| {
+    let factorization = LinearSystemFactorization::factor(matrix).ok_or_else(|| {
         CartoBoostError::InvalidInput(
-            "kriging system is singular; adjust coordinates or nugget".to_string(),
+            "kriging system is singular or numerically ill-conditioned; adjust coordinates, variogram scale, or nugget".to_string(),
         )
+    })?;
+    let solution = factorization.solve(&rhs).ok_or_else(|| {
+        CartoBoostError::InvalidInput("kriging solve produced a non-finite result".to_string())
     })?;
     kriging_prediction_from_solution(
         &selected_observations,
@@ -987,6 +1143,7 @@ pub fn ordinary_kriging_leave_one_out(
     observations: &[KrigingObservation],
     config: OrdinaryKrigingConfig,
 ) -> Result<Vec<KrigingPrediction>> {
+    let config = config.validate()?;
     validate_kriging_observations(observations)?;
     if observations.len() < 2 {
         return Err(CartoBoostError::InvalidInput(
@@ -997,12 +1154,24 @@ pub fn ordinary_kriging_leave_one_out(
         .par_iter()
         .enumerate()
         .map(|(held_out_idx, held_out)| {
-            let training = observations
+            let training_rows = observations
                 .iter()
                 .enumerate()
-                .filter_map(|(idx, observation)| (idx != held_out_idx).then_some(*observation))
+                .filter(|(idx, _)| *idx != held_out_idx)
+                .map(|(idx, observation)| (idx, *observation))
                 .collect::<Vec<_>>();
-            ordinary_kriging_predict_unchecked(&training, (held_out.x, held_out.y), config)
+            let training = training_rows
+                .iter()
+                .map(|(_, observation)| *observation)
+                .collect::<Vec<_>>();
+            let mut prediction =
+                ordinary_kriging_predict_unchecked(&training, (held_out.x, held_out.y), config)?;
+            prediction.neighbor_indices = prediction
+                .neighbor_indices
+                .iter()
+                .map(|local_idx| training_rows[*local_idx].0)
+                .collect();
+            Ok(prediction)
         })
         .collect()
 }
@@ -1266,10 +1435,9 @@ fn variogram_pairs(
                 let right = observations[right_idx];
                 let distance =
                     transformed_distance((left.x, left.y), (right.x, right.y), distance_config);
-                if distance <= 0.0
-                    || max_distance
-                        .map(|max_distance| distance > max_distance)
-                        .unwrap_or(false)
+                if max_distance
+                    .map(|max_distance| distance > max_distance)
+                    .unwrap_or(false)
                 {
                     return None;
                 }
@@ -1353,19 +1521,23 @@ fn variogram_weighted_sse(bins: &[EmpiricalVariogramBin], config: OrdinaryKrigin
 
 fn theoretical_semivariogram(distance: f64, config: OrdinaryKrigingConfig) -> f64 {
     let ratio = distance / config.range;
-    let correlation = match config.variogram_model {
-        KrigingVariogramModel::Exponential => (-ratio).exp(),
-        KrigingVariogramModel::Gaussian => (-(ratio * ratio)).exp(),
-        KrigingVariogramModel::Spherical => {
-            if ratio >= 1.0 {
-                0.0
-            } else {
-                1.0 - 1.5 * ratio + 0.5 * ratio.powi(3)
-            }
+    match config.variogram_model {
+        KrigingVariogramModel::Exponential => config.nugget + config.sill * (1.0 - (-ratio).exp()),
+        KrigingVariogramModel::Gaussian => {
+            config.nugget + config.sill * (1.0 - (-(ratio * ratio)).exp())
         }
-        KrigingVariogramModel::Linear => (1.0 - ratio).max(0.0),
-    };
-    config.nugget + config.sill * (1.0 - correlation)
+        KrigingVariogramModel::Spherical => {
+            let structural = if ratio >= 1.0 {
+                1.0
+            } else {
+                1.5 * ratio - 0.5 * ratio.powi(3)
+            };
+            config.nugget + config.sill * structural
+        }
+        // A linear variogram has no bounded covariance counterpart. `sill`
+        // is its structural contribution at `range`, so sill/range is slope.
+        KrigingVariogramModel::Linear => config.nugget + config.sill * ratio,
+    }
 }
 
 fn build_kriging_system_matrix(
@@ -1382,10 +1554,14 @@ fn build_kriging_system_matrix(
             if row_idx < n {
                 let left = observations[row_idx];
                 for (col_idx, right) in observations.iter().enumerate() {
-                    row[col_idx] = kriging_covariance((left.x, left.y), (right.x, right.y), config);
-                    if row_idx == col_idx {
-                        row[col_idx] += config.nugget;
-                    }
+                    row[col_idx] = if row_idx == col_idx {
+                        0.0
+                    } else {
+                        theoretical_semivariogram(
+                            transformed_distance((left.x, left.y), (right.x, right.y), config),
+                            config,
+                        )
+                    };
                 }
                 let basis = drift_basis((left.x, left.y), config.drift);
                 for (basis_idx, basis_value) in basis.iter().enumerate() {
@@ -1413,7 +1589,12 @@ fn build_kriging_rhs(
     let drift_terms = drift_term_count(config.drift);
     let mut rhs = observations
         .par_iter()
-        .map(|observation| kriging_covariance((observation.x, observation.y), target, config))
+        .map(|observation| {
+            theoretical_semivariogram(
+                transformed_distance((observation.x, observation.y), target, config),
+                config,
+            )
+        })
         .collect::<Vec<_>>();
     rhs.extend(
         drift_basis(target, config.drift)
@@ -1433,6 +1614,12 @@ fn kriging_prediction_from_solution(
 ) -> Result<KrigingPrediction> {
     let n = observations.len();
     let weights = solution.iter().copied().take(n).collect::<Vec<_>>();
+    if weights.iter().any(|weight| !weight.is_finite()) {
+        return Err(CartoBoostError::InvalidInput(
+            "kriging weights are not finite".to_string(),
+        ));
+    }
+    validate_kriging_drift_constraints(observations, target, config.drift, &weights)?;
     let mean = observations
         .iter()
         .enumerate()
@@ -1443,13 +1630,19 @@ fn kriging_prediction_from_solution(
             "kriging estimate is not finite".to_string(),
         ));
     }
-    let covariance_target = kriging_covariance(target, target, config) + config.nugget;
-    let adjustment = solution
+    let raw_variance = solution
         .iter()
         .zip(rhs.iter())
         .map(|(left, right)| left * right)
         .sum::<f64>();
-    let variance = (covariance_target - adjustment).max(0.0);
+    let variance_scale = solution
+        .iter()
+        .zip(rhs.iter())
+        .map(|(left, right)| (left * right).abs())
+        .sum::<f64>()
+        .max(config.sill + config.nugget);
+    let variance =
+        checked_non_negative_variance(raw_variance, variance_scale, "kriging prediction variance")?;
     Ok(KrigingPrediction {
         x: target.0,
         y: target.1,
@@ -1592,24 +1785,6 @@ fn select_kriging_neighbors(
         .collect())
 }
 
-fn kriging_covariance(left: (f64, f64), right: (f64, f64), config: OrdinaryKrigingConfig) -> f64 {
-    let distance = transformed_distance(left, right, config);
-    let ratio = distance / config.range;
-    let correlation = match config.variogram_model {
-        KrigingVariogramModel::Exponential => (-ratio).exp(),
-        KrigingVariogramModel::Gaussian => (-(ratio * ratio)).exp(),
-        KrigingVariogramModel::Spherical => {
-            if ratio >= 1.0 {
-                0.0
-            } else {
-                1.0 - 1.5 * ratio + 0.5 * ratio.powi(3)
-            }
-        }
-        KrigingVariogramModel::Linear => (1.0 - ratio).max(0.0),
-    };
-    config.sill * correlation
-}
-
 fn transformed_distance(left: (f64, f64), right: (f64, f64), config: OrdinaryKrigingConfig) -> f64 {
     let dx = left.0 - right.0;
     let dy = left.1 - right.1;
@@ -1640,102 +1815,110 @@ fn drift_basis(point: (f64, f64), drift: KrigingDrift) -> Vec<f64> {
     }
 }
 
-fn invert_linear_system(mut matrix: Vec<Vec<f64>>) -> Option<Vec<Vec<f64>>> {
-    let n = matrix.len();
-    if matrix.iter().any(|row| row.len() != n) {
-        return None;
-    }
-    let mut inverse = vec![vec![0.0; n]; n];
-    for (idx, row) in inverse.iter_mut().enumerate() {
-        row[idx] = 1.0;
-    }
-    for pivot in 0..n {
-        let mut best = pivot;
-        for row in (pivot + 1)..n {
-            if matrix[row][pivot].abs() > matrix[best][pivot].abs() {
-                best = row;
-            }
+fn validate_kriging_drift_constraints(
+    observations: &[KrigingObservation],
+    target: (f64, f64),
+    drift: KrigingDrift,
+    weights: &[f64],
+) -> Result<()> {
+    let target_basis = drift_basis(target, drift);
+    for (basis_idx, expected) in target_basis.iter().enumerate() {
+        let mut actual = 0.0;
+        let mut scale = expected.abs().max(1.0);
+        for (observation, weight) in observations.iter().zip(weights) {
+            let basis = drift_basis((observation.x, observation.y), drift)[basis_idx];
+            actual += weight * basis;
+            scale += (weight * basis).abs();
         }
-        if matrix[best][pivot].abs() < 1.0e-12 {
-            return None;
-        }
-        matrix.swap(pivot, best);
-        inverse.swap(pivot, best);
-        let divisor = matrix[pivot][pivot];
-        for value in matrix[pivot].iter_mut() {
-            *value /= divisor;
-        }
-        for value in inverse[pivot].iter_mut() {
-            *value /= divisor;
-        }
-        let pivot_row = matrix[pivot].clone();
-        let pivot_inverse_row = inverse[pivot].clone();
-        for row in 0..n {
-            if row == pivot {
-                continue;
-            }
-            let factor = matrix[row][pivot];
-            if factor == 0.0 {
-                continue;
-            }
-            for (value, pivot_value) in matrix[row].iter_mut().zip(pivot_row.iter()) {
-                *value -= factor * pivot_value;
-            }
-            for (value, pivot_value) in inverse[row].iter_mut().zip(pivot_inverse_row.iter()) {
-                *value -= factor * pivot_value;
-            }
+        if !actual.is_finite() || (actual - expected).abs() > 1.0e-9 * scale {
+            return Err(CartoBoostError::InvalidInput(
+                "kriging solution does not satisfy its unbiasedness constraints; system is numerically unstable"
+                    .to_string(),
+            ));
         }
     }
-    Some(inverse)
+    Ok(())
 }
 
-fn mat_vec_mul(matrix: &[Vec<f64>], vector: &[f64]) -> Vec<f64> {
-    matrix
-        .par_iter()
-        .map(|row| {
-            row.iter()
-                .zip(vector.iter())
-                .map(|(left, right)| left * right)
-                .sum()
+impl LinearSystemFactorization {
+    fn factor(mut matrix: Vec<Vec<f64>>) -> Option<Self> {
+        let n = matrix.len();
+        if n == 0
+            || matrix
+                .iter()
+                .any(|row| row.len() != n || row.iter().any(|value| !value.is_finite()))
+        {
+            return None;
+        }
+        let mut permutation = (0..n).collect::<Vec<_>>();
+        let mut row_scales = matrix
+            .iter()
+            .map(|row| row.iter().map(|value| value.abs()).fold(0.0, f64::max))
+            .collect::<Vec<_>>();
+        if row_scales.contains(&0.0) {
+            return None;
+        }
+        for pivot in 0..n {
+            let best = (pivot..n).max_by(|left, right| {
+                let left_score = matrix[*left][pivot].abs() / row_scales[*left];
+                let right_score = matrix[*right][pivot].abs() / row_scales[*right];
+                left_score.total_cmp(&right_score)
+            })?;
+            let pivot_value = matrix[best][pivot].abs();
+            let tolerance = 128.0 * f64::EPSILON * row_scales[best].max(f64::MIN_POSITIVE);
+            if !pivot_value.is_finite() || pivot_value <= tolerance {
+                return None;
+            }
+            matrix.swap(pivot, best);
+            permutation.swap(pivot, best);
+            row_scales.swap(pivot, best);
+            #[allow(clippy::needless_range_loop)]
+            for row in (pivot + 1)..n {
+                let factor = matrix[row][pivot] / matrix[pivot][pivot];
+                if !factor.is_finite() {
+                    return None;
+                }
+                matrix[row][pivot] = factor;
+                for column in (pivot + 1)..n {
+                    matrix[row][column] -= factor * matrix[pivot][column];
+                    if !matrix[row][column].is_finite() {
+                        return None;
+                    }
+                }
+            }
+        }
+        Some(Self {
+            lu: matrix,
+            permutation,
         })
-        .collect()
-}
+    }
 
-fn solve_linear_system(mut matrix: Vec<Vec<f64>>, mut rhs: Vec<f64>) -> Option<Vec<f64>> {
-    let n = rhs.len();
-    for pivot in 0..n {
-        let mut best = pivot;
-        for row in (pivot + 1)..n {
-            if matrix[row][pivot].abs() > matrix[best][pivot].abs() {
-                best = row;
-            }
-        }
-        if matrix[best][pivot].abs() < 1.0e-12 {
+    fn solve(&self, rhs: &[f64]) -> Option<Vec<f64>> {
+        let n = self.lu.len();
+        if rhs.len() != n || rhs.iter().any(|value| !value.is_finite()) {
             return None;
         }
-        matrix.swap(pivot, best);
-        rhs.swap(pivot, best);
-        let divisor = matrix[pivot][pivot];
-        for value in matrix[pivot].iter_mut().skip(pivot) {
-            *value /= divisor;
-        }
-        rhs[pivot] /= divisor;
-        let pivot_row = matrix[pivot].clone();
+        let mut solution = self
+            .permutation
+            .iter()
+            .map(|index| rhs[*index])
+            .collect::<Vec<_>>();
         for row in 0..n {
-            if row == pivot {
-                continue;
+            for column in 0..row {
+                solution[row] -= self.lu[row][column] * solution[column];
             }
-            let factor = matrix[row][pivot];
-            if factor == 0.0 {
-                continue;
-            }
-            for (value, pivot_value) in matrix[row].iter_mut().zip(pivot_row.iter()).skip(pivot) {
-                *value -= factor * pivot_value;
-            }
-            rhs[row] -= factor * rhs[pivot];
         }
+        for row in (0..n).rev() {
+            for column in (row + 1)..n {
+                solution[row] -= self.lu[row][column] * solution[column];
+            }
+            solution[row] /= self.lu[row][row];
+        }
+        solution
+            .iter()
+            .all(|value| value.is_finite())
+            .then_some(solution)
     }
-    Some(rhs)
 }
 
 #[cfg(test)]
@@ -1787,6 +1970,99 @@ mod tests {
             0
         )
         .is_err());
+        assert!(local_linear_kalman_forecast(
+            LocalLinearKalmanState {
+                level: f64::NAN,
+                trend: 0.0,
+            },
+            1,
+        )
+        .is_err());
+        let invalid_config = LocalLinearKalmanConfig {
+            level_process_variance: -1.0,
+            trend_process_variance: 0.001,
+            observation_variance: 0.1,
+        };
+        assert!(fit_local_linear_kalman(&[1.0, 2.0], invalid_config).is_err());
+        assert!(local_linear_kalman_forecast_distribution(
+            LocalLinearKalmanState {
+                level: 1.0,
+                trend: 0.0,
+            },
+            [[1.0, 0.0], [0.0, 1.0]],
+            invalid_config,
+            1,
+            1.96,
+        )
+        .is_err());
+        assert!(local_linear_kalman_forecast_distribution(
+            LocalLinearKalmanState {
+                level: 1.0,
+                trend: 0.0,
+            },
+            [[1.0, 2.0], [0.0, 1.0]],
+            config,
+            1,
+            1.96,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn local_linear_kalman_filters_second_observation_once() {
+        let config = LocalLinearKalmanConfig::new(1.0, 1.0, 1.0).expect("config");
+
+        let result = fit_local_linear_kalman(&[0.0, 10.0], config).expect("filter");
+        let estimate = result.estimates.first().expect("second observation update");
+
+        assert_eq!(estimate.prior_level, 0.0);
+        assert_eq!(estimate.prior_trend, 0.0);
+        assert_eq!(estimate.innovation, 10.0);
+        assert!((result.final_state.level - 7.5).abs() < 1.0e-12);
+        assert!((result.final_state.trend - 2.5).abs() < 1.0e-12);
+        assert!((result.final_covariance[0][0] - 0.75).abs() < 1.0e-12);
+        assert!((result.final_covariance[0][1] - 0.25).abs() < 1.0e-12);
+        assert!((result.final_covariance[1][1] - 1.75).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn local_linear_kalman_smoothing_is_scale_invariant() {
+        let values = [0.0, 10.0, 0.0, 10.0];
+        let base = fit_local_linear_kalman(
+            &values,
+            LocalLinearKalmanConfig::new(0.1, 0.01, 1.0).expect("base config"),
+        )
+        .expect("base filter");
+        let scaled = fit_local_linear_kalman(
+            &values,
+            LocalLinearKalmanConfig::new(1.0e-7, 1.0e-8, 1.0e-6).expect("scaled config"),
+        )
+        .expect("scaled filter");
+
+        for (base, scaled) in base.smoothed_states.iter().zip(&scaled.smoothed_states) {
+            assert!((base.level - scaled.level).abs() < 1.0e-8);
+            assert!((base.trend - scaled.trend).abs() < 1.0e-8);
+        }
+    }
+
+    #[test]
+    fn local_linear_kalman_forecast_variance_propagates_process_noise_exactly() {
+        let config = LocalLinearKalmanConfig::new(2.0, 3.0, 5.0).expect("config");
+        let distribution = local_linear_kalman_forecast_distribution(
+            LocalLinearKalmanState {
+                level: 0.0,
+                trend: 0.0,
+            },
+            [[0.0, 0.0], [0.0, 0.0]],
+            config,
+            3,
+            1.96,
+        )
+        .expect("forecast distribution");
+
+        assert_eq!(distribution[0].variance, 7.0);
+        assert_eq!(distribution[1].variance, 12.0);
+        assert_eq!(distribution[2].variance, 26.0);
     }
 
     #[test]
@@ -1882,6 +2158,112 @@ mod tests {
 
         assert!((prediction.mean - 12.0).abs() < 1.0e-4);
         assert_eq!(prediction.weights.len(), 2);
+    }
+
+    #[test]
+    fn bounded_ordinary_kriging_matches_reference_equations() {
+        let observations = vec![
+            KrigingObservation {
+                x: 0.0,
+                y: 0.0,
+                value: 1.0,
+            },
+            KrigingObservation {
+                x: 1.0,
+                y: 0.0,
+                value: 3.0,
+            },
+            KrigingObservation {
+                x: 0.0,
+                y: 1.0,
+                value: 2.0,
+            },
+            KrigingObservation {
+                x: 2.0,
+                y: 1.0,
+                value: 5.0,
+            },
+        ];
+        let cases = [
+            (
+                KrigingVariogramModel::Exponential,
+                2.058_716_343_389_453_8,
+                0.916_622_073_252_181_6,
+                [
+                    0.406_016_481_098_025_74,
+                    0.305_494_690_594_402_15,
+                    0.235_409_450_343_212_84,
+                    0.053_079_377_964_359_19,
+                ],
+            ),
+            (
+                KrigingVariogramModel::Gaussian,
+                1.771_379_181_116_378_6,
+                0.405_754_171_709_639_1,
+                [
+                    0.433_091_393_303_780_1,
+                    0.374_703_977_216_747_64,
+                    0.248_949_097_078_335_18,
+                    -0.056_744_467_598_862_924,
+                ],
+            ),
+            (
+                KrigingVariogramModel::Spherical,
+                2.085_389_982_235_605,
+                1.517_206_693_789_695_7,
+                [
+                    0.437_944_953_865_678_67,
+                    0.290_440_969_324_087,
+                    0.193_982_754_551_168_7,
+                    0.077_631_322_259_065_66,
+                ],
+            ),
+        ];
+
+        for (model, expected_mean, expected_variance, expected_weights) in cases {
+            let config = OrdinaryKrigingConfig::new(1.2, 0.15)
+                .expect("config")
+                .with_sill(1.7)
+                .expect("sill")
+                .with_variogram_model(model);
+            let prediction = ordinary_kriging_predict(&observations, (0.4, 0.3), config)
+                .expect("reference prediction");
+
+            assert!((prediction.mean - expected_mean).abs() < 1.0e-12);
+            assert!((prediction.variance - expected_variance).abs() < 1.0e-12);
+            for (actual, expected) in prediction.weights.iter().zip(expected_weights) {
+                assert!((actual - expected).abs() < 1.0e-12);
+            }
+        }
+    }
+
+    #[test]
+    fn linear_variogram_is_unbounded_and_has_known_midpoint_solution() {
+        let observations = vec![
+            KrigingObservation {
+                x: 0.0,
+                y: 0.0,
+                value: 0.0,
+            },
+            KrigingObservation {
+                x: 2.0,
+                y: 0.0,
+                value: 2.0,
+            },
+        ];
+        let config = OrdinaryKrigingConfig::new(2.0, 0.0)
+            .expect("config")
+            .with_sill(4.0)
+            .expect("sill")
+            .with_variogram_model(KrigingVariogramModel::Linear);
+
+        assert_eq!(theoretical_semivariogram(3.0, config), 6.0);
+        let prediction =
+            ordinary_kriging_predict(&observations, (1.0, 0.0), config).expect("prediction");
+        assert!((prediction.mean - 1.0).abs() < 1.0e-12);
+        assert!((prediction.variance - 2.0).abs() < 1.0e-12);
+        assert!((prediction.weights[0] - 0.5).abs() < 1.0e-12);
+        assert!((prediction.weights[1] - 0.5).abs() < 1.0e-12);
     }
 
     #[test]
@@ -2011,6 +2393,37 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_kriging_leave_one_out_reports_original_neighbor_indices() {
+        let observations = vec![
+            KrigingObservation {
+                x: 0.0,
+                y: 0.0,
+                value: 0.0,
+            },
+            KrigingObservation {
+                x: 2.0,
+                y: 0.0,
+                value: 2.0,
+            },
+            KrigingObservation {
+                x: 4.0,
+                y: 0.0,
+                value: 4.0,
+            },
+        ];
+        let config = OrdinaryKrigingConfig::new(2.0, 1.0e-6)
+            .expect("config")
+            .with_neighbor_limits(Some(1), 1, None)
+            .expect("neighbors");
+
+        let predictions = ordinary_kriging_leave_one_out(&observations, config).expect("LOO");
+
+        assert_eq!(predictions[0].neighbor_indices, vec![1]);
+        assert_eq!(predictions[1].neighbor_indices, vec![0]);
+        assert_eq!(predictions[2].neighbor_indices, vec![1]);
+    }
+
+    #[test]
     fn empirical_variogram_bins_coordinate_pairs() {
         let observations = vec![
             KrigingObservation {
@@ -2035,6 +2448,35 @@ mod tests {
         assert!(!bins.is_empty());
         assert_eq!(bins.iter().map(|bin| bin.pair_count).sum::<usize>(), 3);
         assert!(bins.iter().all(|bin| bin.semivariance >= 0.0));
+    }
+
+    #[test]
+    fn empirical_variogram_keeps_collocated_pairs_for_nugget_evidence() {
+        let observations = vec![
+            KrigingObservation {
+                x: 0.0,
+                y: 0.0,
+                value: 0.0,
+            },
+            KrigingObservation {
+                x: 0.0,
+                y: 0.0,
+                value: 2.0,
+            },
+            KrigingObservation {
+                x: 1.0,
+                y: 0.0,
+                value: 1.0,
+            },
+        ];
+
+        let bins = empirical_variogram(&observations, 2, None, 0.0, 1.0)
+            .expect("variogram with collocated observations");
+
+        assert_eq!(bins.iter().map(|bin| bin.pair_count).sum::<usize>(), 3);
+        assert!(bins
+            .iter()
+            .any(|bin| bin.lag_min == 0.0 && bin.semivariance >= 2.0));
     }
 
     #[test]
@@ -2148,6 +2590,34 @@ mod tests {
         assert!(ordinary_kriging_predict(&[], (0.0, 0.0), config).is_err());
         assert!(OrdinaryKrigingConfig::new(0.0, 1.0e-6).is_err());
         assert!(OrdinaryKrigingConfig::new(1.0, -1.0).is_err());
+        let invalid_public_config = OrdinaryKrigingConfig {
+            range: 1.0,
+            nugget: 0.0,
+            sill: f64::NAN,
+            variogram_model: KrigingVariogramModel::Exponential,
+            drift: KrigingDrift::Ordinary,
+            anisotropy_angle_degrees: 0.0,
+            anisotropy_scaling: 1.0,
+            max_neighbors: None,
+            min_neighbors: 1,
+            max_distance: None,
+        };
+        assert!(ordinary_kriging_predict(
+            &[KrigingObservation {
+                x: 0.0,
+                y: 0.0,
+                value: 1.0,
+            }],
+            (0.0, 0.0),
+            invalid_public_config,
+        )
+        .is_err());
+        let impossible_linear_neighbors = OrdinaryKrigingConfig::new(1.0, 0.0)
+            .expect("config")
+            .with_neighbor_limits(Some(2), 1, None)
+            .expect("ordinary neighbor config")
+            .with_drift(KrigingDrift::Linear);
+        assert!(impossible_linear_neighbors.validate().is_err());
         assert!(ordinary_kriging_predict(
             &[KrigingObservation {
                 x: 0.0,

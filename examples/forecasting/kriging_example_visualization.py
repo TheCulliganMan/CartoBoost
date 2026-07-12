@@ -6,7 +6,7 @@ import math
 from pathlib import Path
 from typing import Any
 
-import cartoboost as cb
+import cartoboost.preview as cb
 import matplotlib
 
 matplotlib.use("Agg")
@@ -191,12 +191,12 @@ def theoretical_semivariogram(
     distance: float, *, range_: float, nugget: float, sill: float, variogram_model: str
 ) -> float:
     ratio = distance / range_
+    if variogram_model == "linear":
+        return nugget + sill * ratio
     if variogram_model == "gaussian":
         correlation = math.exp(-(ratio * ratio))
     elif variogram_model == "spherical":
         correlation = 0.0 if ratio >= 1.0 else 1.0 - 1.5 * ratio + 0.5 * ratio**3
-    elif variogram_model == "linear":
-        correlation = max(1.0 - ratio, 0.0)
     else:
         correlation = math.exp(-ratio)
     return nugget + sill * (1.0 - correlation)

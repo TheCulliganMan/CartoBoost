@@ -391,7 +391,7 @@ fn kalman_tracks_linear_signal_and_preserves_panel_indexing() {
 }
 
 #[test]
-fn kriging_interpolates_observed_coordinates_and_reports_configuration() {
+fn kriging_holds_out_each_target_series_and_reports_configuration() {
     let frame = ForecastFrame::new(
         vec![
             ForecastRow::new("PULocationID=142", ts(1), 10.0),
@@ -412,10 +412,11 @@ fn kriging_interpolates_observed_coordinates_and_reports_configuration() {
     let forecast = model.predict(1).expect("predict");
     let predictions = forecast.predictions();
 
-    assert_close(predictions[0].mean, 12.0);
-    assert_close(predictions[1].mean, 42.0);
+    assert_close(predictions[0].mean, 42.0);
+    assert_close(predictions[1].mean, 12.0);
     assert_eq!(model.metadata()["series_count"], 2);
     assert_eq!(model.metadata()["model"], "kriging");
+    assert_eq!(model.metadata()["target_policy"], "leave_one_series_out");
 }
 
 #[test]

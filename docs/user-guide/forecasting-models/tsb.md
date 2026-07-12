@@ -13,7 +13,7 @@ which makes it useful when the chance of a non-zero event changes over time.
 ## Python Example
 
 ```python
-from cartoboost.forecasting import TsbForecaster
+from cartoboost.preview.forecasting import TsbForecaster
 
 demand = [0, 0, 4, 0, 0, 7, 0, 3, 0, 0, 0, 5]
 

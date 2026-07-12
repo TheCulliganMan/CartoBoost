@@ -122,6 +122,12 @@ for the model-specific use cases:
 - [Graph Spatiotemporal Forecasting](graph-spatiotemporal.md)
 - [Spatial Piecewise Kriging](spatial-piecewise-kriging.md)
 
+The browser roster also exposes `stl_cartoboost` and `mstl_cartoboost`. These
+models use LOESS-based STL decomposition, fit their downstream model to the
+seasonally adjusted target, and repeat the final fitted seasonal cycle when
+reseasoning. STL needs two complete cycles of its configured period; MSTL needs
+two complete cycles of every configured period.
+
 Keep benchmark-specific candidate names and scoring labels in benchmark
 harnesses and reports.
 

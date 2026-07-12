@@ -1,6 +1,6 @@
 [package]
 name = "cartoboost-py"
-version = "0.2.45"
+version = "0.3.0"
 edition.workspace = true
 license.workspace = true
 description = "PyO3 bindings for the CartoBoost Python package"
@@ -14,8 +14,8 @@ cartoboost-core = { path = "../cartoboost-core" }
 cartoboost-geo-causal = { path = "../cartoboost-geo-causal" }
 cartoboost-geo-core = { path = "../cartoboost-geo-core" }
 cartoboost-geostats = { path = "../cartoboost-geostats" }
-cartoboost-geo-st = { path = "../cartoboost-geo-st", features = ["cuda", "rocm"] }
-cartoboost-neural = { path = "../cartoboost-neural", features = ["cuda", "rocm"] }
+cartoboost-geo-st = { path = "../cartoboost-geo-st" }
+cartoboost-neural = { path = "../cartoboost-neural" }
 cartoboost-prob = { path = "../cartoboost-prob" }
 cartoboost-spatial-econ = { path = "../cartoboost-spatial-econ" }
 chrono.workspace = true
@@ -24,6 +24,11 @@ pyo3.workspace = true
 rayon = "1.11"
 serde_json.workspace = true
 
-[target.'cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos", target_os = "visionos"))'.dependencies]
-cartoboost-geo-st = { path = "../cartoboost-geo-st", features = ["metal"] }
-cartoboost-neural = { path = "../cartoboost-neural", features = ["metal"] }
+[features]
+# The published extension is CPU-only.  Accelerator implementations remain
+# explicit preview builds and must never be pulled into the stable wheel by
+# target detection or an unconditional dependency feature.
+preview-cuda = ["cartoboost-geo-st/cuda", "cartoboost-neural/cuda"]
+preview-rocm = ["cartoboost-geo-st/rocm", "cartoboost-neural/rocm"]
+preview-metal = ["cartoboost-geo-st/metal", "cartoboost-neural/metal"]
+preview-webgpu = ["cartoboost-geo-st/webgpu", "cartoboost-neural/webgpu"]

@@ -18,6 +18,14 @@ def test_normalize_frequency_uses_pandas_canonical_form():
     assert normalize_frequency("W-SUN") == "W"
 
 
+def test_native_hour_alias_roundtrips_through_current_pandas():
+    timestamps = pd.date_range("2025-01-01", periods=3, freq="h")
+
+    assert normalize_frequency("H") == "H"
+    assert validate_regular_frequency(timestamps, "H") == "H"
+    assert next_timestamps(timestamps[-1], 1, "H") == [pd.Timestamp("2025-01-01 03:00")]
+
+
 def test_infer_frequency_accepts_unsorted_regular_timestamps():
     timestamps = pd.to_datetime(["2025-01-03", "2025-01-01", "2025-01-02"])
 

@@ -59,7 +59,10 @@ pub fn proportional_total_reconciliation(
     };
     let base_total = allocation_values.iter().sum::<f64>();
     if base_total.abs() <= 1.0e-12 {
-        return Ok(base_values.to_vec());
+        return Err(CartoBoostError::InvalidInput(
+            "proportional reconciliation cannot allocate a target total when the allocation basis sums to zero"
+                .to_string(),
+        ));
     }
     let scale = target_total / base_total;
     Ok(base_values
@@ -154,7 +157,7 @@ impl Reconciler {
         let mut out = vec![vec![0.0; horizon]; self.hierarchy.node_count()];
         for h in 0..horizon {
             let bottom_base = self.bottom_base_for_horizon(base_forecasts, h);
-            let proportions = normalized_positive_proportions(&bottom_base);
+            let proportions = normalized_positive_proportions(&bottom_base)?;
             let top = base_forecasts[root_idx][h];
             let bottom = proportions
                 .iter()
@@ -190,7 +193,7 @@ impl Reconciler {
                     .iter()
                     .map(|bottom_idx| base[*bottom_idx])
                     .collect::<Vec<_>>();
-                let proportions = normalized_positive_proportions(&local_base);
+                let proportions = normalized_positive_proportions(&local_base)?;
                 for (offset, bottom_idx) in descendants.iter().enumerate() {
                     bottom[*bottom_idx] = base_forecasts[*middle_idx][h] * proportions[offset];
                 }
@@ -354,17 +357,27 @@ fn validate_panel(values: &[Vec<f64>], expected_rows: usize) -> Result<()> {
     Ok(())
 }
 
-fn normalized_positive_proportions(values: &[f64]) -> Vec<f64> {
-    let positives = values
-        .iter()
-        .map(|value| if *value > 0.0 { *value } else { 0.0 })
-        .collect::<Vec<_>>();
-    let total = positives.iter().sum::<f64>();
-    if total > 0.0 {
-        positives.iter().map(|value| value / total).collect()
-    } else {
-        vec![1.0 / values.len() as f64; values.len()]
+fn normalized_positive_proportions(values: &[f64]) -> Result<Vec<f64>> {
+    if values.is_empty() {
+        return Err(CartoBoostError::InvalidInput(
+            "reconciliation proportions require at least one value".to_string(),
+        ));
     }
+    if values
+        .iter()
+        .any(|value| !value.is_finite() || *value < 0.0)
+    {
+        return Err(CartoBoostError::InvalidInput(
+            "top-down and middle-out allocation bases must be finite and nonnegative".to_string(),
+        ));
+    }
+    let total = values.iter().sum::<f64>();
+    if !total.is_finite() || total <= 0.0 {
+        return Err(CartoBoostError::InvalidInput(
+            "top-down and middle-out allocation bases must have a positive finite sum".to_string(),
+        ));
+    }
+    Ok(values.iter().map(|value| value / total).collect())
 }
 
 fn shrink_precision(
@@ -407,13 +420,12 @@ fn shrink_precision(
     for row in 0..expected_rows {
         for col in 0..expected_rows {
             let target = if row == col {
-                covariance[row][row].max(1e-12)
+                covariance[row][row]
             } else {
                 0.0
             };
             shrunk[row][col] = (1.0 - shrinkage) * covariance[row][col] + shrinkage * target;
         }
-        shrunk[row][row] = shrunk[row][row].max(1e-12);
     }
     invert_matrix(shrunk)
 }

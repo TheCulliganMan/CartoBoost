@@ -104,8 +104,8 @@ pub use local::{
     ThetaSeasonality, WindowAverageForecaster,
 };
 pub use metrics::{
-    evaluate_forecast, evaluate_forecast_with_training, evaluate_m_competition_metrics,
-    m_competition_mase_scale, ForecastActual, ForecastMetricSet, MCompetitionMetricSet,
+    competition_mase_scale, evaluate_competition_metrics, evaluate_forecast,
+    evaluate_forecast_with_training, CompetitionMetricSet, ForecastActual, ForecastMetricSet,
 };
 pub use mstl::MSTLDecomposition;
 pub use objective::ForecastObjective;

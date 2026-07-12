@@ -10,7 +10,7 @@ claim can be checked.
 ## Public Contract
 
 ```python
-from cartoboost.deep import EntityPanelFrame, InvertedTemporalTransformer
+from cartoboost.preview.deep import EntityPanelFrame, InvertedTemporalTransformer
 
 frame = EntityPanelFrame(
     entity_ids=["PULocationID:161", "PULocationID:236", "PULocationID:132"],

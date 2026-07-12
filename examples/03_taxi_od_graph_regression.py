@@ -19,7 +19,7 @@ from typing import Any
 
 import numpy as np
 from cartoboost import CartoBoostRegressor
-from cartoboost.graph import (
+from cartoboost.preview.graph import (
     DirectionalFeature,
     DirectionalityConfig,
     GraphEmbeddingsConfig,
@@ -192,7 +192,7 @@ def fit_predict(
         learning_rate=0.08,
         max_depth=4,
         min_samples_leaf=2,
-        splitters=QUALITATIVE_SPLITTERS,
+        split_policy="structured",
     )
     model.fit(x[train_idx], y[train_idx])
     return model.predict(x[test_idx])

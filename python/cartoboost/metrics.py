@@ -24,8 +24,8 @@ __all__ = [
     "mean_average_precision",
     "mean_interval_width",
     "mean_reciprocal_rank",
-    "m_competition_metrics",
-    "m5_equal_level_wrmsse",
+    "competition_forecast_metrics",
+    "aggregate_equal_level_wrmsse",
     "ndcg_at_k",
     "pinball_loss",
     "pr_auc",
@@ -418,8 +418,7 @@ def wrmsse(
 
     Inputs are shaped ``(n_series, n_time)`` for training history and
     ``(n_series, horizon)`` for actual and predicted forecast windows. Weights
-    are non-negative value weights, such as M5 dollar-sales weights; they are
-    normalized inside the metric.
+    are non-negative value weights and are normalized inside the metric.
 
     Example:
         >>> round(wrmsse([[1, 2, 3]], [[4]], [[3]], [1.0]), 6)
@@ -468,15 +467,15 @@ def wrmsse(
     return result
 
 
-def m5_equal_level_wrmsse(
+def aggregate_equal_level_wrmsse(
     level_scores: Iterable[dict[str, object] | tuple[object, object]],
     *,
     return_breakdown: bool = False,
 ) -> float | dict[str, object]:
-    """Aggregate the 12 M5 hierarchy-level WRMSSE values with equal level weight.
+    """Aggregate hierarchy-level WRMSSE values with equal level weight.
 
     Example:
-        >>> m5_equal_level_wrmsse([("state", 1.0), ("store", 3.0)])
+        >>> aggregate_equal_level_wrmsse([("state", 1.0), ("store", 3.0)])
         2.0
     """
 
@@ -490,14 +489,14 @@ def m5_equal_level_wrmsse(
             level = str(level)
             score = float(score)
         rows.append((level, score))
-    result = json.loads(_native.m5_equal_level_wrmsse_value(rows))
+    result = json.loads(_native.aggregate_equal_level_wrmsse_value(rows))
     score = float(result["wrmsse"])
     if not return_breakdown:
         return score
     return result
 
 
-def m_competition_metrics(
+def competition_forecast_metrics(
     training_series: object,
     y_true: object,
     y_pred: object,
@@ -506,10 +505,10 @@ def m_competition_metrics(
     baseline_smape: float | None = None,
     baseline_mase: float | None = None,
 ) -> dict[str, float | None]:
-    """Return M/M1-M3-M4 style sMAPE, MASE, and optional OWA metrics.
+    """Return generic sMAPE, MASE, and optional baseline-relative metrics.
 
     Example:
-        >>> result = m_competition_metrics([[1, 2, 3]], [4, 5], [4, 6], seasonality=1)
+        >>> result = competition_forecast_metrics([[1, 2, 3]], [4, 5], [4, 6], seasonality=1)
         >>> sorted(result)
         ['mase', 'owa', 'smape']
     """
@@ -521,7 +520,7 @@ def m_competition_metrics(
         for row in np.asarray(training_series, dtype=object)
     ]
     truth, pred = _paired_vectors(y_true, y_pred, "y_true", "y_pred")
-    payload = _native.m_competition_metrics_value(
+    payload = _native.competition_forecast_metrics_value(
         train_rows,
         truth.tolist(),
         pred.tolist(),

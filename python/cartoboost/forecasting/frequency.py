@@ -24,9 +24,21 @@ def normalize_frequency(freq: str | None) -> str | None:
         return None
     if not isinstance(freq, str) or not freq.strip():
         raise ValueError("frequency must be a non-empty string")
+    # Pandas 3 rejects several legacy uppercase aliases (notably ``H``), while
+    # the native boundary intentionally uses stable uppercase aliases.  Handle
+    # those aliases before asking pandas to parse the value so saved artifacts
+    # remain reloadable across pandas versions.
+    normalized = freq.strip()
+    lower = normalized.lower()
+    if lower in {"h", "1h", "hour", "hourly"}:
+        return "H"
+    if lower in {"d", "1d", "day", "daily"}:
+        return "D"
+    if lower in {"w", "1w"} or lower.startswith("w-"):
+        return "W"
     pd = require_pandas()
     try:
-        return _native_frequency_alias(pd.tseries.frequencies.to_offset(freq).freqstr)
+        return _native_frequency_alias(pd.tseries.frequencies.to_offset(normalized).freqstr)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"invalid frequency {freq!r}") from exc
 
@@ -41,6 +53,12 @@ def _native_frequency_alias(freq: str) -> str:
     if lower == "w" or lower == "1w" or lower.startswith("w-"):
         return "W"
     return normalized
+
+
+def _pandas_frequency_alias(freq: str) -> str:
+    """Map native stable aliases to spellings accepted by current pandas."""
+
+    return "h" if freq == "H" else freq
 
 
 def infer_frequency(timestamps: Any) -> str | None:
@@ -80,8 +98,14 @@ def validate_regular_frequency(
         raise ValueError("timestamps must be parseable and non-null")
     if len(values) <= 1:
         return normalized
-    expected = pd.date_range(start=values[0], periods=len(values), freq=normalized)
-    if not values.equals(expected):
+    pandas_freq = _pandas_frequency_alias(normalized)
+    expected = pd.date_range(start=values[0], periods=len(values), freq=pandas_freq)
+    # Pandas 3 may preserve microsecond-resolution input while constructing a
+    # nanosecond-resolution expected range.  Compare on one explicit unit so a
+    # valid regular panel is not rejected solely because of dtype metadata.
+    actual_ns = values.astype("datetime64[ns]")
+    expected_ns = expected.astype("datetime64[ns]")
+    if not actual_ns.equals(expected_ns):
         raise ValueError(f"{label} timestamps are irregular for frequency {normalized!r}")
     return normalized
 
@@ -93,8 +117,9 @@ def next_timestamps(last_timestamp: Any, horizon: int, freq: str) -> list[Any]:
     pd = require_pandas()
     normalized = normalize_frequency(freq)
     assert normalized is not None
-    start = pd.Timestamp(last_timestamp) + pd.tseries.frequencies.to_offset(normalized)
-    return list(pd.date_range(start=start, periods=horizon, freq=normalized))
+    pandas_freq = _pandas_frequency_alias(normalized)
+    start = pd.Timestamp(last_timestamp) + pd.tseries.frequencies.to_offset(pandas_freq)
+    return list(pd.date_range(start=start, periods=horizon, freq=pandas_freq))
 
 
 def validate_horizon(horizon: int) -> int:

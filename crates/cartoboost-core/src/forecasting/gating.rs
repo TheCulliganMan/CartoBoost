@@ -158,33 +158,54 @@ pub fn calendar_profile_candidate_prediction(
 
 pub fn validation_ensemble_weights(
     candidate_scores: &BTreeMap<String, f64>,
-) -> BTreeMap<String, f64> {
-    let mut finite_scores = candidate_scores
+) -> Result<BTreeMap<String, f64>> {
+    if candidate_scores.is_empty() {
+        return Err(CartoBoostError::InvalidInput(
+            "validation ensemble requires at least one candidate score".to_string(),
+        ));
+    }
+    for (name, score) in candidate_scores {
+        if name.trim().is_empty() {
+            return Err(CartoBoostError::InvalidInput(
+                "validation ensemble candidate names must be non-empty".to_string(),
+            ));
+        }
+        if !score.is_finite() || *score < 0.0 {
+            return Err(CartoBoostError::InvalidInput(format!(
+                "validation ensemble score for '{name}' must be finite and non-negative"
+            )));
+        }
+    }
+    let mut scores = candidate_scores
         .iter()
-        .filter(|(_, score)| score.is_finite() && **score > 0.0)
         .map(|(name, score)| (name.clone(), *score))
         .collect::<Vec<_>>();
-    if finite_scores.is_empty() {
-        return BTreeMap::from([("cartoboost_raw".to_string(), 1.0)]);
-    }
-    finite_scores.sort_by(|left, right| {
+    scores.sort_by(|left, right| {
         left.1
             .total_cmp(&right.1)
             .then_with(|| left.0.cmp(&right.0))
     });
-    finite_scores.truncate(4);
-    let inverse = finite_scores
-        .iter()
-        .map(|(name, score)| (name.clone(), 1.0 / score.powi(2).max(1.0e-12)))
-        .collect::<Vec<_>>();
-    let total = inverse.iter().map(|(_, weight)| weight).sum::<f64>();
-    if !total.is_finite() || total <= 0.0 {
-        return BTreeMap::from([(finite_scores[0].0.clone(), 1.0)]);
+    scores.truncate(4);
+
+    let zero_count = scores.iter().take_while(|(_, score)| *score == 0.0).count();
+    if zero_count > 0 {
+        let weight = 1.0 / zero_count as f64;
+        return Ok(scores
+            .into_iter()
+            .take(zero_count)
+            .map(|(name, _)| (name, weight))
+            .collect());
     }
-    inverse
-        .into_iter()
-        .map(|(name, weight)| (name, weight / total))
-        .collect()
+
+    // Ratio to the best score before squaring. This is algebraically
+    // equivalent to inverse-square weighting but avoids overflow for large
+    // losses and overflow in 1 / score^2 for very small losses.
+    let best_score = scores[0].1;
+    let raw = scores
+        .iter()
+        .map(|(name, score)| (name.clone(), (best_score / score).powi(2)))
+        .collect::<BTreeMap<_, _>>();
+    normalize(raw)
 }
 
 pub fn forecast_magnitude_guard_allows(
@@ -1056,15 +1077,34 @@ impl RuleBasedGating {
 }
 
 fn normalize(raw: BTreeMap<String, f64>) -> Result<BTreeMap<String, f64>> {
-    let total: f64 = raw.values().sum();
-    if !total.is_finite() || total <= 0.0 {
+    if raw.is_empty() {
         return Err(CartoBoostError::InvalidInput(
             "gating produced no positive expert weights".to_string(),
         ));
     }
+    for (expert, weight) in &raw {
+        if expert.trim().is_empty() || !weight.is_finite() || *weight < 0.0 {
+            return Err(CartoBoostError::InvalidInput(
+                "gating weights must have non-empty expert names and finite non-negative values"
+                    .to_string(),
+            ));
+        }
+    }
+    let max_weight = raw.values().copied().fold(0.0_f64, f64::max);
+    if max_weight <= 0.0 {
+        return Err(CartoBoostError::InvalidInput(
+            "gating produced no positive expert weights".to_string(),
+        ));
+    }
+    let scaled_total = raw.values().map(|weight| weight / max_weight).sum::<f64>();
+    if !scaled_total.is_finite() || scaled_total <= 0.0 {
+        return Err(CartoBoostError::InvalidInput(
+            "gating weights could not be normalized".to_string(),
+        ));
+    }
     Ok(raw
         .into_iter()
-        .map(|(expert, weight)| (expert, weight / total))
+        .map(|(expert, weight)| (expert, (weight / max_weight) / scaled_total))
         .collect())
 }
 
@@ -1121,10 +1161,60 @@ fn normalize_with_bounds(
             "gating weight bounds cannot satisfy the number of selected experts".to_string(),
         ));
     }
-    for weight in weights.values_mut() {
-        *weight = weight.clamp(min_weight, max_weight);
+    // Euclidean projection onto the bounded probability simplex. Clamping and
+    // then renormalizing is incorrect: the renormalization can move weights
+    // outside the requested bounds.
+    let mut lower_shift = weights
+        .values()
+        .map(|weight| weight - max_weight)
+        .fold(f64::INFINITY, f64::min);
+    let mut upper_shift = weights
+        .values()
+        .map(|weight| weight - min_weight)
+        .fold(f64::NEG_INFINITY, f64::max);
+    for _ in 0..100 {
+        let shift = 0.5 * (lower_shift + upper_shift);
+        let total = weights
+            .values()
+            .map(|weight| (weight - shift).clamp(min_weight, max_weight))
+            .sum::<f64>();
+        if total > 1.0 {
+            lower_shift = shift;
+        } else {
+            upper_shift = shift;
+        }
     }
-    normalize(weights)
+    let shift = 0.5 * (lower_shift + upper_shift);
+    for weight in weights.values_mut() {
+        *weight = (*weight - shift).clamp(min_weight, max_weight);
+    }
+    let mut residual = 1.0 - weights.values().sum::<f64>();
+    if residual > 0.0 {
+        for weight in weights.values_mut() {
+            let adjustment = residual.min(max_weight - *weight);
+            *weight += adjustment;
+            residual -= adjustment;
+            if residual <= 1.0e-15 {
+                break;
+            }
+        }
+    } else if residual < 0.0 {
+        for weight in weights.values_mut() {
+            let adjustment = (-residual).min(*weight - min_weight);
+            *weight -= adjustment;
+            residual += adjustment;
+            if residual >= -1.0e-15 {
+                break;
+            }
+        }
+    }
+    if residual.abs() > 1.0e-12 {
+        return Err(CartoBoostError::InvalidInput(
+            "gating bounded weights could not be projected onto the probability simplex"
+                .to_string(),
+        ));
+    }
+    Ok(weights)
 }
 
 fn single_weight(expert: &str) -> BTreeMap<String, f64> {

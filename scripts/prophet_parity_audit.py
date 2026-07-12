@@ -56,7 +56,7 @@ def main() -> int:
     parser.add_argument("--engine", choices=["cartoboost", "prophet"], required=True)
     args = parser.parse_args()
     if args.engine == "cartoboost":
-        from cartoboost import Prophet
+        from cartoboost.preview import Prophet
     else:
         from prophet import Prophet
 

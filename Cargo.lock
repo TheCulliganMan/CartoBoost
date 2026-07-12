@@ -143,14 +143,14 @@ dependencies = [
 
 [[package]]
 name = "cartoboost-cli"
-version = "0.2.45"
+version = "0.3.0"
 dependencies = [
  "cartoboost-core",
 ]
 
 [[package]]
 name = "cartoboost-core"
-version = "0.2.45"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "criterion",
@@ -164,7 +164,7 @@ dependencies = [
 
 [[package]]
 name = "cartoboost-geo-causal"
-version = "0.2.45"
+version = "0.3.0"
 dependencies = [
  "cartoboost-geo-core",
  "serde",
@@ -174,7 +174,7 @@ dependencies = [
 
 [[package]]
 name = "cartoboost-geo-core"
-version = "0.2.45"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "serde",
@@ -184,7 +184,7 @@ dependencies = [
 
 [[package]]
 name = "cartoboost-geo-st"
-version = "0.2.45"
+version = "0.3.0"
 dependencies = [
  "cartoboost-neural",
  "serde",
@@ -195,7 +195,7 @@ dependencies = [
 
 [[package]]
 name = "cartoboost-geostats"
-version = "0.2.45"
+version = "0.3.0"
 dependencies = [
  "cartoboost-geo-core",
  "criterion",
@@ -205,10 +205,11 @@ dependencies = [
 
 [[package]]
 name = "cartoboost-neural"
-version = "0.2.45"
+version = "0.3.0"
 dependencies = [
  "cartoboost-core",
  "chrono",
+ "futures-channel",
  "libloading",
  "metal",
  "rayon",
@@ -222,7 +223,7 @@ dependencies = [
 
 [[package]]
 name = "cartoboost-prob"
-version = "0.2.45"
+version = "0.3.0"
 dependencies = [
  "cartoboost-core",
  "serde",
@@ -232,7 +233,7 @@ dependencies = [
 
 [[package]]
 name = "cartoboost-py"
-version = "0.2.45"
+version = "0.3.0"
 dependencies = [
  "cartoboost-core",
  "cartoboost-geo-causal",
@@ -250,19 +251,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "cartoboost-representation"
-version = "0.2.45"
-dependencies = [
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "thiserror 1.0.69",
-]
-
-[[package]]
 name = "cartoboost-spatial-econ"
-version = "0.2.45"
+version = "0.3.0"
 dependencies = [
  "cartoboost-geo-core",
  "serde",
@@ -271,19 +261,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "cartoboost-ssm"
-version = "0.2.45"
-dependencies = [
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "thiserror 1.0.69",
-]
-
-[[package]]
 name = "cartoboost-wasm"
-version = "0.2.45"
+version = "0.3.0"
 dependencies = [
  "cartoboost-core",
  "cartoboost-geo-causal",
@@ -299,6 +278,7 @@ dependencies = [
  "serde-wasm-bindgen",
  "serde_json",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "wasm-bindgen-test",
 ]
 
@@ -640,6 +620,15 @@ name = "foreign-types-shared"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aa9a19cbb55df58761df49b23516a86d432839add4af60fc256da840f66ed35b"
+
+[[package]]
+name = "futures-channel"
+version = "0.3.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "07bbe89c50d7a535e539b8c17bc0b49bdb77747034daa8087407d655f3f7cc1d"
+dependencies = [
+ "futures-core",
+]
 
 [[package]]
 name = "futures-core"

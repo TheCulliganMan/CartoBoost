@@ -1,7 +1,17 @@
 import math
 
 import pytest
-from cartoboost import (
+from cartoboost.preview.forecasting import (
+    ReferenceSignal,
+    SequenceRow,
+    SequenceSeries,
+    forward_ekf,
+    generate_group_oof_candidate_rows,
+    reference_path_viterbi,
+    sequence_blend,
+    validate_oof_meta_training,
+)
+from cartoboost.utilities import (
     arima_forecast,
     auto_arima_forecast,
     croston_forecast,
@@ -20,16 +30,6 @@ from cartoboost import (
     series_forecast,
     theta_forecast,
     tsb_forecast,
-)
-from cartoboost.forecasting.sequence import (
-    ReferenceSignal,
-    SequenceRow,
-    SequenceSeries,
-    forward_ekf,
-    generate_group_oof_candidate_rows,
-    reference_path_viterbi,
-    sequence_blend,
-    validate_oof_meta_training,
 )
 
 

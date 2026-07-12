@@ -44,7 +44,7 @@ pub struct WrmsseScore {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct M5LevelWrmsseScore {
+pub struct LevelWrmsseScore {
     pub level: String,
     pub wrmsse: f64,
     pub level_weight: f64,
@@ -52,9 +52,9 @@ pub struct M5LevelWrmsseScore {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct M5AggregateWrmsseScore {
+pub struct AggregateWrmsseScore {
     pub score: f64,
-    pub levels: Vec<M5LevelWrmsseScore>,
+    pub levels: Vec<LevelWrmsseScore>,
 }
 
 pub fn wrmsse(series: &[WrmsseSeries], seasonal_period: usize) -> Result<WrmsseScore> {
@@ -111,10 +111,12 @@ pub fn wrmsse(series: &[WrmsseSeries], seasonal_period: usize) -> Result<WrmsseS
     })
 }
 
-pub fn m5_equal_level_wrmsse(level_scores: &[(String, f64)]) -> Result<M5AggregateWrmsseScore> {
+pub fn aggregate_equal_level_wrmsse(
+    level_scores: &[(String, f64)],
+) -> Result<AggregateWrmsseScore> {
     if level_scores.is_empty() {
         return Err(CartoBoostError::InvalidInput(
-            "M5 aggregate WRMSSE requires at least one hierarchy level".to_string(),
+            "aggregate WRMSSE requires at least one hierarchy level".to_string(),
         ));
     }
     let mut score = 0.0;
@@ -123,24 +125,24 @@ pub fn m5_equal_level_wrmsse(level_scores: &[(String, f64)]) -> Result<M5Aggrega
     for (level, wrmsse) in level_scores {
         if level.is_empty() {
             return Err(CartoBoostError::InvalidInput(
-                "M5 hierarchy level names must be non-empty".to_string(),
+                "hierarchy level names must be non-empty".to_string(),
             ));
         }
         if !wrmsse.is_finite() || *wrmsse < 0.0 {
             return Err(CartoBoostError::InvalidInput(
-                "M5 hierarchy level WRMSSE values must be finite and non-negative".to_string(),
+                "hierarchy level WRMSSE values must be finite and non-negative".to_string(),
             ));
         }
         let contribution = level_weight * wrmsse;
         score += contribution;
-        levels.push(M5LevelWrmsseScore {
+        levels.push(LevelWrmsseScore {
             level: level.clone(),
             wrmsse: *wrmsse,
             level_weight,
             contribution,
         });
     }
-    Ok(M5AggregateWrmsseScore { score, levels })
+    Ok(AggregateWrmsseScore { score, levels })
 }
 
 pub fn ordered_nonnegative_weights(

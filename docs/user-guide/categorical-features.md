@@ -17,7 +17,8 @@ Missing category sentinels such as `None`, `NaN`, `pd.NA`, and `NaT` are
 normalized to one stable missing-category token before encoding.
 
 ```python
-from cartoboost import CartoBoostRegressor, FeatureKind
+from cartoboost import CartoBoostRegressor
+from cartoboost.preview import FeatureKind
 
 schema = {
     "dense": [
@@ -27,7 +28,7 @@ schema = {
     ]
 }
 
-model = CartoBoostRegressor(splitters=["axis"])
+model = CartoBoostRegressor(split_policy="axis_only")
 model.fit(X_train, fare_train, feature_schema=schema)
 ```
 

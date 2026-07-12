@@ -4,7 +4,6 @@ import inspect
 import sys
 
 import cartoboost.deep as deep
-import cartoboost.representation as representation
 from cartoboost.capabilities import capability_table, validate_capability_table
 
 EXCLUDED_EXPORTS = {
@@ -27,7 +26,7 @@ def main() -> int:
     rows = capability_table()
     errors = validate_capability_table()
     present = {str(row["class_name"]) for row in rows}
-    required = exported_classes(deep) | exported_classes(representation)
+    required = exported_classes(deep)
     for class_name in sorted(required - present):
         errors.append(f"{class_name} has no capability status row")
     if errors:

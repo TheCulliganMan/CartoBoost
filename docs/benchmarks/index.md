@@ -28,7 +28,7 @@ runtime, and memory before results can be promoted as benchmark evidence.
 
 | Report | Evidence type | What to inspect first |
 | --- | --- | --- |
-| [Benchmark Methodology](methodology.md) | Evidence contract and v0.2 acceptance gates. | Required fields, split rules, metric roster, and rerun rules. |
+| [Benchmark Methodology](methodology.md) | Evidence contract and v0.3 acceptance gates. | Required fields, split rules, metric roster, and rerun rules. |
 | [NYC Taxi Benchmarks](nyc-taxi.md) | Real TLC fare, duration, and pickup-demand regression. | Current-code CartoBoost versus external baselines, RMSE/MAE/R2/WAPE tables, timing breakdown. |
 | [NYC Taxi Path C Claims](nyc-taxi-path-c.md) | Claim-based real TLC gates for generic geo-temporal behavior. | Directional, temporal, known-future, spatial-transfer, and residual-correction falsifier rows. |
 | [Forecasting Tool Benchmark](forecasting.md) | Real taxi lane demand, synthetic taxi-shaped forecasting, M4 sample, M5 full-roster sample, and M5/M6 full-run protocols. | RMSE/WAPE tables, M5/M6 model rosters, run commands, horizon plot, forecast-line plot. |
@@ -68,17 +68,6 @@ runtime, and memory before results can be promoted as benchmark evidence.
 | Deep claim benchmark JSON | `docs/assets/deep_claim_benchmarks/results.json` |
 | Deep claim benchmark JSONL | `docs/assets/deep_claim_benchmarks/results.jsonl` |
 | Deep claim benchmark report | `docs/assets/deep_claim_benchmarks/results.md` |
-
-## v0.2 Release Gate Harness
-
-The v0.2 modeling smoke benchmark runner is
-`scripts/run_v02_modeling_benchmarks.py`. It produces synthetic taxi-shaped
-checks for binary spatial classification, grouped ranking, native categorical
-versus one-hot preprocessing, random versus buffered spatial CV, regression
-fit-speed guardrails, and unsupported regressor/classifier/ranker export
-failure. See
-[Benchmark Methodology](methodology.md) for the exact command and artifact
-contract.
 
 ## Claim Rules
 

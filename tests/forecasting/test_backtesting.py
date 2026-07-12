@@ -3,9 +3,11 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import pytest
-from cartoboost.forecasting import (
+from cartoboost.preview.forecasting import (
     ExpandingWindowSplitter,
+    ForecastFrame,
     ForecastMetricSet,
+    NaiveForecaster,
     RollingOriginBacktester,
 )
 
@@ -48,8 +50,7 @@ def taxi_trips() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def test_backtester_fits_fresh_model_per_fold_and_returns_structured_results() -> None:
-    MeanFareModel.fit_count = 0
+def test_backtester_rejects_python_side_model_execution() -> None:
     splitter = ExpandingWindowSplitter(
         horizon=2,
         step=2,
@@ -63,33 +64,49 @@ def test_backtester_fits_fresh_model_per_fold_and_returns_structured_results() -
         target_col="fare",
         timestamp_col="timestamp",
         series_id_col="series_id",
-        feature_cols=["timestamp", "trip_distance", "series_id"],
     )
 
-    result = backtester.run(MeanFareModel(), taxi_trips())
-
-    assert MeanFareModel.fit_count == len(result.folds)
-    assert result.metrics["mae"] > 0
-    as_json = result.to_json()
-    assert as_json["folds"][0]["fold_id"] == "fold_0000"
-    assert {"actual", "prediction", "series_id", "timestamp", "horizon"} <= set(
-        as_json["folds"][0]["predictions"][0]
-    )
-    assert len(result.to_pandas()) == sum(len(fold.predictions) for fold in result.folds)
+    with pytest.raises(RuntimeError, match="not available for Python-side models"):
+        backtester.run(MeanFareModel(), taxi_trips())
 
 
-def test_backtester_rejects_models_that_do_not_predict_exact_validation_shape() -> None:
+def test_backtester_evaluate_rejects_models_without_native_binding() -> None:
     splitter = ExpandingWindowSplitter(horizon=2, min_train_size=3, timestamp_col="timestamp")
     backtester = RollingOriginBacktester(
         splitter=splitter,
         target_col="fare",
         timestamp_col="timestamp",
         series_id_col="series_id",
-        feature_cols=["timestamp", "trip_distance"],
     )
 
-    with pytest.raises(ValueError, match="exact validation horizon"):
-        backtester.run(BadHorizonModel(), taxi_trips())
+    frame = taxi_trips()
+    frame["timestamp"] = pd.to_datetime(frame["timestamp"], unit="h")
+    forecast_frame = ForecastFrame.from_pandas(
+        frame,
+        timestamp_col="timestamp",
+        target_col="fare",
+        series_id_col="series_id",
+        freq="h",
+    )
+    with pytest.raises(RuntimeError, match="no Rust backtesting model binding"):
+        backtester.evaluate(BadHorizonModel(), forecast_frame)
+
+
+def test_backtester_evaluate_uses_rust_forecaster() -> None:
+    frame = taxi_trips()
+    frame["timestamp"] = pd.to_datetime(frame["timestamp"], unit="h")
+    forecast_frame = ForecastFrame.from_pandas(
+        frame,
+        timestamp_col="timestamp",
+        target_col="fare",
+        series_id_col="series_id",
+        freq="h",
+    )
+    result = RollingOriginBacktester(horizon=2, min_train_size=4).evaluate(
+        NaiveForecaster(), forecast_frame
+    )
+    assert len(result.folds) >= 1
+    assert result.metrics["mae"] >= 0.0
 
 
 def test_backtester_rejects_duplicate_validation_alignment_keys() -> None:
@@ -106,8 +123,7 @@ def test_backtester_rejects_duplicate_validation_alignment_keys() -> None:
         target_col="fare",
         timestamp_col="timestamp",
         series_id_col="series_id",
-        feature_cols=["timestamp", "trip_distance", "series_id"],
     )
 
-    with pytest.raises(ValueError, match="unique by series_id/timestamp/horizon"):
+    with pytest.raises(RuntimeError, match="not available for Python-side models"):
         backtester.run(MeanFareModel(), data)

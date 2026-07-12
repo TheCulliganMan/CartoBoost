@@ -18,7 +18,7 @@ ranker = CartoBoostRanker(
     n_estimators=200,
     learning_rate=0.04,
     max_depth=4,
-    splitters=["axis", "diagonal_2d", "gaussian_2d"],
+    split_policy="structured",
     objective="lambdarank",
 )
 ranker.fit(X_train, relevance_train, groups=query_sizes_train)

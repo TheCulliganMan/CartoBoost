@@ -52,9 +52,13 @@ fn mstl_recomposes_multiple_taxi_seasons() {
 }
 
 #[test]
-fn stl_hybrid_recomposes_remainder_forecast_with_components() {
-    let frame = taxi_hourly_frame(&[10.0, 13.0, 11.0, 14.0, 12.0, 15.0]);
+fn stl_hybrid_forecasts_seasonally_adjusted_target_then_reseasons() {
+    let values = [10.0, 13.0, 11.0, 14.0, 12.0, 15.0];
+    let frame = taxi_hourly_frame(&values);
     let decomposition = STLDecomposition::new(2).expect("valid stl");
+    let fitted_decomposition = decomposition
+        .decompose(&values)
+        .expect("decomposition succeeds");
     let mut model = STLCartoBoostForecaster::with_remainder_forecaster(
         decomposition,
         Box::new(NaiveForecaster::new()),
@@ -69,14 +73,19 @@ fn stl_hybrid_recomposes_remainder_forecast_with_components() {
         .predictions()
         .iter()
         .all(|prediction| prediction.model == "stl_cartoboost"));
-    assert!(forecast
-        .predictions()
-        .iter()
-        .all(|prediction| prediction.mean.is_finite()));
+    let adjusted_last = values[values.len() - 1]
+        - fitted_decomposition.seasonal[fitted_decomposition.seasonal.len() - 1];
+    let expected = [
+        adjusted_last + fitted_decomposition.seasonal[fitted_decomposition.seasonal.len() - 2],
+        adjusted_last + fitted_decomposition.seasonal[fitted_decomposition.seasonal.len() - 1],
+    ];
+    for (prediction, expected) in forecast.predictions().iter().zip(expected) {
+        assert!((prediction.mean - expected).abs() <= 1.0e-10);
+    }
 }
 
 #[test]
-fn mstl_hybrid_accepts_short_deterministic_history() {
+fn mstl_hybrid_rejects_incomplete_seasonal_cycles() {
     let frame = taxi_hourly_frame(&[20.0, 23.0, 21.0]);
     let mut model = MSTLCartoBoostForecaster::with_remainder_forecaster(
         MSTLDecomposition::new(vec![2, 3]).expect("valid mstl"),
@@ -84,18 +93,14 @@ fn mstl_hybrid_accepts_short_deterministic_history() {
     )
     .expect("valid hybrid");
 
-    model.fit(&frame).expect("fit short history");
-    let forecast = model.predict(2).expect("forecast");
-
-    assert_eq!(forecast.predictions().len(), 2);
-    assert!(forecast
-        .predictions()
-        .iter()
-        .all(|prediction| prediction.mean.is_finite()));
+    let error = model
+        .fit(&frame)
+        .expect_err("incomplete seasonal cycles must fail");
+    assert!(error.to_string().contains("two complete seasonal cycles"));
 }
 
 #[test]
-fn classical_bank_uses_short_history_robust_seasonal_expert() {
+fn classical_bank_gates_unsupported_short_history_experts() {
     let frame = taxi_hourly_frame(&[9.0, 10.0, 11.0]);
     let mut bank = ClassicalExpertBank::new(vec![
         ClassicalExpert::SeasonalNaive { season_length: 24 },
@@ -104,10 +109,8 @@ fn classical_bank_uses_short_history_robust_seasonal_expert() {
     .expect("valid bank");
 
     bank.fit(&frame).expect("fit bank");
-    assert_eq!(
-        bank.selected_expert(),
-        Some(&ClassicalExpert::SeasonalNaive { season_length: 24 })
-    );
+    assert_eq!(bank.selected_expert(), Some(&ClassicalExpert::Naive));
+    assert_eq!(bank.validation_scores().len(), 1);
     let forecast = bank.predict(2).expect("forecast");
     assert_eq!(forecast.predictions().len(), 2);
     assert!(forecast

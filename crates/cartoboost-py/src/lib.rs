@@ -1,7 +1,7 @@
 use cartoboost_core::data::{FeatureSchema, SparseSetColumn};
 use cartoboost_core::forecasting::{
     calendar_profile_candidate_prediction as core_calendar_profile_candidate_prediction,
-    candidate_complexity_rank as core_candidate_complexity_rank, evaluate_m_competition_metrics,
+    candidate_complexity_rank as core_candidate_complexity_rank, evaluate_competition_metrics,
     forecast_magnitude_guard_allows,
     include_autostats_candidate as core_include_autostats_candidate,
     lag_origin_consistency_guard as core_lag_origin_consistency_guard,
@@ -64,9 +64,10 @@ use cartoboost_core::geo::{
     validate_equal_row_count, validate_parent_levels, GeoGridKind,
 };
 use cartoboost_core::loss::{HuberLossConfig, LogL2LossConfig, LossConfig, QuantileLossConfig};
+use cartoboost_core::manifest::model_manifest_json as core_model_manifest_json;
 use cartoboost_core::metrics::{
+    aggregate_equal_level_wrmsse as core_aggregate_equal_level_wrmsse,
     calibrated_rank_bucket_probabilities, extreme_portfolio_decisions,
-    m5_equal_level_wrmsse as core_m5_equal_level_wrmsse,
     ordered_nonnegative_weights as core_ordered_nonnegative_weights, portfolio_summary,
     rank_buckets, rank_hit_rates, rank_portfolio_decision_loss, rank_portfolio_summary,
     rank_probability_calibration, rank_scored_assets, rmsse_scale as core_rmsse_scale,
@@ -188,11 +189,12 @@ use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2, PyUntyped
 use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyModule, PyType};
-use rayon::ThreadPoolBuilder;
+use rayon::{ThreadPool, ThreadPoolBuilder};
 use serde_json::{json, Value};
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex, OnceLock};
 
 type StringTypedEdges = Vec<(String, String, String)>;
 type PyWrmsseSeries = (String, Vec<f64>, Vec<f64>, Vec<f64>, f64);
@@ -722,6 +724,13 @@ macro_rules! native_spatial_regressor {
                 Ok(model.coefficients().to_vec())
             }
 
+            fn durbin_coefficients(&self) -> PyResult<Vec<f64>> {
+                let model = self.model.as_ref().ok_or_else(|| {
+                    PyRuntimeError::new_err(format!("{} is not fitted", $py_name))
+                })?;
+                Ok(model.durbin_coefficients().to_vec())
+            }
+
             fn intercept(&self) -> PyResult<f64> {
                 let model = self.model.as_ref().ok_or_else(|| {
                     PyRuntimeError::new_err(format!("{} is not fitted", $py_name))
@@ -742,6 +751,14 @@ macro_rules! native_spatial_regressor {
                 let model = py
                     .allow_threads(|| SpatialRegressionModel::load(path))
                     .map_err(to_py_spatial_error)?;
+                if model.kind() != $kind {
+                    return Err(PyValueError::new_err(format!(
+                        "artifact contains {:?}, but {} requires {:?}",
+                        model.kind(),
+                        $py_name,
+                        $kind
+                    )));
+                }
                 Ok(Self { model: Some(model) })
             }
         }
@@ -1392,6 +1409,15 @@ impl NativeRollingOriginBacktester {
         &self,
         py: Python<'_>,
         model: &NativeAutoARIMAForecaster,
+        frame: &NativeForecastFrame,
+    ) -> PyResult<NativeBacktestResult> {
+        backtest_to_py(py.allow_threads(|| self.backtester.run(model.model.clone(), &frame.frame)))
+    }
+
+    fn run_auto_forecast(
+        &self,
+        py: Python<'_>,
+        model: &NativeAutoForecastModel,
         frame: &NativeForecastFrame,
     ) -> PyResult<NativeBacktestResult> {
         backtest_to_py(py.allow_threads(|| self.backtester.run(model.model.clone(), &frame.frame)))
@@ -4210,6 +4236,7 @@ struct NativeCartoBoostLagForecaster {
 }
 
 #[pyclass(name = "AutoForecastModel", unsendable)]
+#[derive(Clone)]
 struct NativeAutoForecastModel {
     model: CoreAutoForecastModel,
 }
@@ -5304,7 +5331,11 @@ impl NativeCartoBoostRegressor {
         let predictions = py
             .allow_threads(|| {
                 run_with_optional_threads(n_threads, || {
-                    if offsets.is_empty() && ids.is_empty() {
+                    // Sparse inputs may be supplied by a caller even when
+                    // the fitted forest never selected a sparse split.  In
+                    // that case they do not affect routing and should not
+                    // disable the dense flat predictor fast path.
+                    if !model.requires_sparse_sets() {
                         if let Some(predictor) = &self.flat_axis_predictor {
                             model.validate_dense_flat_prediction_inputs(rows, cols, values)?;
                             Ok(predictor.predict_flat(rows, cols, values))
@@ -6730,6 +6761,25 @@ fn categorical_transform(rows: Vec<Vec<String>>, encoder_json: String) -> PyResu
         .map_err(|err| PyValueError::new_err(format!("invalid categorical encoder: {err}")))?;
     let dataset = encoder.transform_rows(&rows).map_err(to_py_value_error)?;
     Ok(dataset_to_rows(&dataset))
+}
+
+/// Validate a serialized feature schema using the Rust core contract.
+///
+/// Python wrappers normalize ergonomic schema declarations, but the final
+/// payload is always checked here before it crosses into dataset/model code.
+/// Keeping this validation at the native boundary prevents custom Python
+/// schema providers from bypassing duplicate-name, length, or periodic-field
+/// checks implemented by `cartoboost-core`.
+#[pyfunction]
+fn validate_feature_schema_json(payload: &str) -> PyResult<()> {
+    let schema: FeatureSchema = serde_json::from_str(payload)
+        .map_err(|err| PyValueError::new_err(format!("invalid feature_schema JSON: {err}")))?;
+    schema.validate().map_err(to_py_value_error)
+}
+
+#[pyfunction]
+fn model_manifest_json() -> &'static str {
+    core_model_manifest_json()
 }
 
 fn dataset_to_rows(dataset: &Dataset) -> Vec<Vec<f64>> {
@@ -8678,12 +8728,12 @@ fn wrmsse_value(
 }
 
 #[pyfunction]
-fn m5_equal_level_wrmsse_value(
+fn aggregate_equal_level_wrmsse_value(
     py: Python<'_>,
     level_scores: Vec<(String, f64)>,
 ) -> PyResult<String> {
     let score = py
-        .allow_threads(|| core_m5_equal_level_wrmsse(&level_scores))
+        .allow_threads(|| core_aggregate_equal_level_wrmsse(&level_scores))
         .map_err(to_py_value_error)?;
     let payload = json!({
         "wrmsse": score.score,
@@ -8716,7 +8766,7 @@ fn ordered_nonnegative_weights_value(
 
 #[pyfunction]
 #[pyo3(signature = (training_series, actuals, forecasts, seasonality, baseline_smape=None, baseline_mase=None))]
-fn m_competition_metrics_value(
+fn competition_forecast_metrics_value(
     py: Python<'_>,
     training_series: Vec<Vec<f64>>,
     actuals: Vec<f64>,
@@ -8736,7 +8786,7 @@ fn m_competition_metrics_value(
     };
     let metrics = py
         .allow_threads(|| {
-            evaluate_m_competition_metrics(
+            evaluate_competition_metrics(
                 &training_series,
                 &actuals,
                 &forecasts,
@@ -8875,7 +8925,8 @@ fn forecast_validation_ensemble_weights_value(
     py: Python<'_>,
     candidate_scores: BTreeMap<String, f64>,
 ) -> PyResult<BTreeMap<String, f64>> {
-    Ok(py.allow_threads(|| core_validation_ensemble_weights(&candidate_scores)))
+    py.allow_threads(|| core_validation_ensemble_weights(&candidate_scores))
+        .map_err(to_py_value_error)
 }
 
 #[pyfunction]
@@ -10128,11 +10179,26 @@ where
     F: FnOnce() -> Result<T, CartoBoostError> + Send,
 {
     if let Some(n_threads) = n_threads {
-        ThreadPoolBuilder::new()
-            .num_threads(n_threads)
-            .build()
-            .map_err(|err| CartoBoostError::InvalidInput(err.to_string()))?
-            .install(f)
+        static THREAD_POOLS: OnceLock<Mutex<HashMap<usize, Arc<ThreadPool>>>> = OnceLock::new();
+        let pools = THREAD_POOLS.get_or_init(|| Mutex::new(HashMap::new()));
+        let pool = {
+            let mut pools = pools
+                .lock()
+                .map_err(|_| CartoBoostError::InvalidInput("thread-pool cache poisoned".into()))?;
+            if let Some(pool) = pools.get(&n_threads) {
+                Arc::clone(pool)
+            } else {
+                let pool = Arc::new(
+                    ThreadPoolBuilder::new()
+                        .num_threads(n_threads)
+                        .build()
+                        .map_err(|err| CartoBoostError::InvalidInput(err.to_string()))?,
+                );
+                pools.insert(n_threads, Arc::clone(&pool));
+                pool
+            }
+        };
+        pool.install(f)
     } else {
         f()
     }
@@ -11348,6 +11414,7 @@ fn parse_neural_panel_global_local_mode(value: &str) -> PyResult<CoreNeuralPanel
 
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(model_manifest_json, m)?)?;
     m.add_class::<NativeCartoBoostRegressor>()?;
     m.add_class::<NativeNearestNeighborGPRegressor>()?;
     m.add_class::<NativeCartoBoostClassifier>()?;
@@ -11364,6 +11431,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<NativeSpatialTwoStageLeastSquares>()?;
     m.add_function(wrap_pyfunction!(categorical_fit_transform, m)?)?;
     m.add_function(wrap_pyfunction!(categorical_transform, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_feature_schema_json, m)?)?;
     m.add_function(wrap_pyfunction!(geo_spatial_block_cv, m)?)?;
     m.add_function(wrap_pyfunction!(geo_buffered_spatial_cv, m)?)?;
     m.add_function(wrap_pyfunction!(geo_group_spatial_cv, m)?)?;
@@ -11445,9 +11513,9 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     m.add_function(wrap_pyfunction!(rmsse_scale_value, m)?)?;
     m.add_function(wrap_pyfunction!(wrmsse_value, m)?)?;
-    m.add_function(wrap_pyfunction!(m5_equal_level_wrmsse_value, m)?)?;
+    m.add_function(wrap_pyfunction!(aggregate_equal_level_wrmsse_value, m)?)?;
     m.add_function(wrap_pyfunction!(ordered_nonnegative_weights_value, m)?)?;
-    m.add_function(wrap_pyfunction!(m_competition_metrics_value, m)?)?;
+    m.add_function(wrap_pyfunction!(competition_forecast_metrics_value, m)?)?;
     m.add_function(wrap_pyfunction!(forecast_candidate_choice_value, m)?)?;
     m.add_function(wrap_pyfunction!(
         forecast_validation_unavailable_candidate_choice_value,

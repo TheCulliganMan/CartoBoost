@@ -21,7 +21,12 @@ except ImportError:  # pragma: no cover - lightweight fallback for core installs
         pass
 
 
-from ._artifacts import require_artifact_payload, versioned_artifact_payload
+from . import _native as _native_module
+from ._artifacts import (
+    decode_stable_model_artifact,
+    library_version,
+    stable_model_artifact_payload,
+)
 from ._native import (
     CartoBoostRegressor as _NativeRegressorModel,
 )
@@ -31,26 +36,26 @@ from ._native import (
 from ._native import (
     categorical_transform as _native_categorical_transform,
 )
-from .config import ExplanationAlgorithm, ExplanationDecomposition, FuzzyKernel, LeafPredictor
+from .config import (
+    ExplanationAlgorithm,
+    ExplanationDecomposition,
+    FuzzyKernel,
+    LeafPredictor,
+    SplitPolicy,
+)
 from .schema import FeatureKind, normalize_feature_kind
 from .tensorboard import write_training_history
 
-_VALID_SPLITTERS = {
-    "auto",
-    "axis",
-    "axis_histogram",
-    "axis_hist",
-    "histogram",
-    "diagonal_2d",
-    "diagonal2d",
-    "gaussian_2d",
-    "gaussian2d",
-    "radial",
-    "periodic_time",
-    "periodic_24",
-    "sparse_set",
-    "sparse",
-}
+
+def _native_validate_feature_schema_json(payload: str) -> None:
+    """Run the Rust schema contract before crossing the model boundary."""
+    validator = getattr(_native_module, "validate_feature_schema_json", None)
+    if validator is None:
+        raise ImportError(
+            "cartoboost._native.validate_feature_schema_json is unavailable; "
+            "rebuild the native extension with `maturin develop`"
+        )
+    validator(payload)
 
 
 class CartoBoostRegressor(RegressorMixin, BaseEstimator):
@@ -68,7 +73,7 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
         huber_delta: float = 1.0,
         log_offset: float = 1.0,
         loss_params: dict[str, Any] | None = None,
-        splitters: list[str] | None = None,
+        split_policy: SplitPolicy = SplitPolicy.AUTO,
         leaf_predictor: LeafPredictor = LeafPredictor.CONSTANT,
         linear_leaf_features: list[str] | None = None,
         fuzzy: bool = False,
@@ -92,7 +97,7 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
         self.huber_delta = huber_delta
         self.log_offset = log_offset
         self.loss_params = loss_params
-        self.splitters = splitters
+        self.split_policy = SplitPolicy(split_policy)
         self.leaf_predictor = leaf_predictor
         self.linear_leaf_features = linear_leaf_features
         self.fuzzy = fuzzy
@@ -120,7 +125,7 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
             "huber_delta": self.huber_delta,
             "log_offset": self.log_offset,
             "loss_params": self.loss_params,
-            "splitters": self.splitters,
+            "split_policy": self.split_policy,
             "leaf_predictor": self.leaf_predictor,
             "linear_leaf_features": self.linear_leaf_features,
             "fuzzy": self.fuzzy,
@@ -220,7 +225,11 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
             quantile_alpha=float(loss_params["quantile_alpha"]),
             huber_delta=float(loss_params["huber_delta"]),
             log_offset=float(loss_params["log_offset"]),
-            splitters=list(self.splitters or ["auto"]),
+            splitters=_resolve_splitters(
+                self.split_policy,
+                feature_schema,
+                n_rows=dense_array.shape[0],
+            ),
             leaf_predictor=str(self.leaf_predictor),
             linear_leaf_features=_resolve_linear_leaf_features(
                 self.linear_leaf_features,
@@ -355,14 +364,16 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
             )
         if not sparse_columns and getattr(self, "requires_sparse_sets_", False):
             raise ValueError("sparse_sets are required for prediction with this sparse-list model")
-        try:
-            return np.asarray(
-                self._model.predict_arrays(dense_array, sparse_offsets, sparse_ids),
-                dtype=float,
+        predict_arrays = getattr(self._model, "predict_arrays", None)
+        if not callable(predict_arrays):
+            raise RuntimeError(
+                "cartoboost._native model is missing the typed predict_arrays binding; "
+                "Python list/JSON prediction fallbacks are not supported"
             )
-        except TypeError:
-            rows = dense_array.tolist()
-            return np.asarray(list(self._model.predict(rows, sparse_columns)), dtype=float)
+        return np.asarray(
+            predict_arrays(dense_array, sparse_offsets, sparse_ids),
+            dtype=float,
+        )
 
     def score(
         self,
@@ -517,19 +528,20 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
             raise RuntimeError("CartoBoostRegressor is not fitted")
         path = Path(path)
         if hasattr(self._model, "save"):
-            if getattr(self, "categorical_encoder_", None):
-                with tempfile.TemporaryDirectory() as temp_dir:
-                    native_path = Path(temp_dir) / "native-regressor.json"
-                    self._model.save(native_path)
-                    native_payload = json.loads(native_path.read_text(encoding="utf-8"))
-                payload = versioned_artifact_payload(
-                    "cartoboost.regressor",
-                    categorical_encoder=getattr(self, "categorical_encoder_", None),
-                    native_model=native_payload,
-                )
-                path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
-                return
-            self._model.save(path)
+            with tempfile.TemporaryDirectory() as temp_dir:
+                native_path = Path(temp_dir) / "native-regressor.json"
+                self._model.save(native_path)
+                native_payload = json.loads(native_path.read_text(encoding="utf-8"))
+            payload = stable_model_artifact_payload(
+                "regressor",
+                library_version=library_version(),
+                training_config=native_payload.get("training_config", {}),
+                payload={
+                    "categorical_encoder": getattr(self, "categorical_encoder_", None),
+                    "native_model": native_payload,
+                },
+            )
+            path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
             return
         raise NotImplementedError("native model does not support save")
 
@@ -565,28 +577,23 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
     def load(cls, path: str | Path) -> CartoBoostRegressor:
         path = Path(path)
         if not path.exists():
-            native_model = _NativeRegressorModel.load(path)
-            return cls._from_native_model(native_model)
+            raise FileNotFoundError(path)
         payload = json.loads(path.read_text(encoding="utf-8"))
-        if payload.get("artifact_type") == "cartoboost.regressor":
-            require_artifact_payload(payload, "cartoboost.regressor")
-            with tempfile.TemporaryDirectory() as temp_dir:
-                native_path = Path(temp_dir) / "native-regressor.json"
-                native_path.write_text(
-                    json.dumps(payload["native_model"], sort_keys=True),
-                    encoding="utf-8",
-                )
-                native_model = _NativeRegressorModel.load(native_path)
-            estimator = cls._from_native_model(native_model)
-            estimator.categorical_encoder_ = payload["categorical_encoder"]
-            if estimator.categorical_encoder_ is not None:
-                estimator.n_features_in_ = int(
-                    estimator.categorical_encoder_["original_feature_count"]
-                )
-            estimator.encoded_n_features_in_ = native_model.feature_count
-            return estimator
-        native_model = _NativeRegressorModel.load(path)
-        return cls._from_native_model(native_model)
+        envelope = decode_stable_model_artifact(payload, "regressor")
+        inner = envelope["payload"]
+        native_payload = inner.get("native_model")
+        if not isinstance(native_payload, dict):
+            raise ValueError("stable regressor artifact payload is missing native_model")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            native_path = Path(temp_dir) / "native-regressor.json"
+            native_path.write_text(json.dumps(native_payload, sort_keys=True), encoding="utf-8")
+            native_model = _NativeRegressorModel.load(native_path)
+        estimator = cls._from_native_model(native_model)
+        estimator.categorical_encoder_ = inner.get("categorical_encoder")
+        if estimator.categorical_encoder_ is not None:
+            estimator.n_features_in_ = int(estimator.categorical_encoder_["original_feature_count"])
+        estimator.encoded_n_features_in_ = native_model.feature_count
+        return estimator
 
     @classmethod
     def load_weights(cls, path: str | Path) -> CartoBoostRegressor:
@@ -606,7 +613,7 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
             quantile_alpha=float(getattr(native_model, "quantile_alpha", 0.5)),
             huber_delta=float(getattr(native_model, "huber_delta", 1.0)),
             log_offset=float(getattr(native_model, "log_offset", 1.0)),
-            splitters=list(getattr(native_model, "splitters", ["axis"])),
+            split_policy=_split_policy_from_native(getattr(native_model, "splitters", ["axis"])),
             leaf_predictor=LeafPredictor(str(getattr(native_model, "leaf_predictor", "constant"))),
             linear_leaf_features=[
                 str(feature) for feature in getattr(native_model, "linear_leaf_features", [])
@@ -737,24 +744,8 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
                 raise ValueError("monotonic constraints require leaf_predictor='constant'")
             if self.fuzzy:
                 raise ValueError("monotonic constraints require fuzzy=False")
-            if not _is_axis_splitters(self.splitters) and not _is_axis_hist_splitters(
-                self.splitters
-            ):
+            if self.split_policy not in {SplitPolicy.AUTO, SplitPolicy.AXIS_ONLY}:
                 raise ValueError("monotonic constraints support only axis splitters")
-        self._validate_splitters()
-
-    def _validate_splitters(self) -> None:
-        if self.splitters is None:
-            return
-        if isinstance(self.splitters, str):
-            raise ValueError("splitters must be a list of splitter names")
-        try:
-            splitters = list(self.splitters)
-        except TypeError as exc:
-            raise ValueError("splitters must be a list of splitter names") from exc
-        unknown = [splitter for splitter in splitters if not _is_valid_splitter_name(splitter)]
-        if unknown:
-            raise ValueError(f"unknown splitter(s): {unknown}")
 
 
 def _shape_2d(values: Any) -> tuple[int, int]:
@@ -1181,19 +1172,69 @@ def _as_sample_weight_array(values: Any | None, expected: int) -> np.ndarray | N
     return np.ascontiguousarray(weights, dtype=np.float64)
 
 
-def _is_axis_splitters(splitters: Any) -> bool:
-    return splitters is None or list(splitters) in (["auto"], ["axis"])
+def _resolve_splitters(
+    policy: SplitPolicy | str,
+    feature_schema: Any | None,
+    *,
+    n_rows: int | None = None,
+) -> list[str]:
+    """Translate the stable split policy into bounded native candidates."""
+    resolved = SplitPolicy(policy)
+    if resolved is SplitPolicy.AXIS_ONLY:
+        return ["axis"]
+    if resolved is SplitPolicy.STRUCTURED:
+        entries: list[Any] = []
+        if feature_schema is not None:
+            schema = (
+                feature_schema.to_dict() if hasattr(feature_schema, "to_dict") else feature_schema
+            )
+            if isinstance(schema, dict):
+                entries = list(schema.get("dense", [])) + list(schema.get("sparse_sets", []))
+            elif isinstance(schema, (list, tuple)):
+                entries = list(schema)
+        kinds: set[str] = set()
+        for entry in entries:
+            if isinstance(entry, dict):
+                kind = entry.get("kind", "")
+            elif isinstance(entry, (tuple, list)) and len(entry) >= 2:
+                kind = entry[1]
+            else:
+                kind = getattr(entry, "kind", "")
+            kind = getattr(kind, "value", kind)
+            kinds.add(str(kind).lower())
+        # Exact axis and all-pair spatial searches scale poorly once the
+        # dataset leaves the interactive regime.  Histogram axis candidates
+        # keep the structured policy bounded while periodic and sparse-set
+        # candidates still use the declared schema kinds below.
+        candidates = ["axis_histogram"]
+        # At very large qualification scale, histogram candidates provide the
+        # bounded native path.  Declared spatial/periodic candidates remain
+        # enabled for interactive and benchmark-sized panels below this limit.
+        if n_rows is not None and n_rows >= 100_000:
+            return candidates
+        if any("periodic" in kind for kind in kinds):
+            candidates.append("periodic_time")
+        if any(
+            kind in {"spatial", "geo", "geometry", "coordinate", "coordinates"} for kind in kinds
+        ):
+            # SpatialPairSpec is the explicit opt-in for the two native spatial
+            # candidates.  Without it, STRUCTURED remains bounded to axis and
+            # declared periodic/sparse features and never searches arbitrary
+            # numeric feature pairs.
+            candidates.extend(("diagonal_2d", "gaussian_2d"))
+        if any("sparse" in kind for kind in kinds):
+            candidates.append("sparse_set")
+        return candidates
+    return ["auto"]
 
 
-def _is_axis_hist_splitters(splitters: Any) -> bool:
-    if splitters is None:
-        return True
-    names = list(splitters)
-    return bool(names) and all(
-        name in {"auto", "axis", "axis_histogram", "axis_hist", "histogram"}
-        or str(name).startswith(("axis_histogram:", "axis_hist:"))
-        for name in names
-    )
+def _split_policy_from_native(splitters: Any) -> SplitPolicy:
+    """Map legacy native metadata into the v0.3 typed policy on load."""
+
+    names = {str(value).lower() for value in (splitters or ())}
+    if not names or names <= {"axis", "axis_histogram", "auto"}:
+        return SplitPolicy.AXIS_ONLY if names == {"axis"} else SplitPolicy.AUTO
+    return SplitPolicy.STRUCTURED
 
 
 def _feature_schema_metadata(feature_schema: Any | None) -> Any | None:
@@ -1418,13 +1459,17 @@ def _rust_feature_schema_payload(
         names = [str(name) for name in payload["names"]]
         kinds = [_rust_feature_kind(kind) for kind in payload["kinds"]]
         _validate_schema_length(names, kinds, dense_width, sparse_names)
-        return {"names": names, "kinds": kinds}
+        normalized = {"names": names, "kinds": kinds}
+        _native_validate_feature_schema_json(json.dumps(normalized))
+        return normalized
 
     if isinstance(feature_schema, dict) and "names" in feature_schema and "kinds" in feature_schema:
         names = [str(name) for name in feature_schema["names"]]
         kinds = [_rust_feature_kind(kind) for kind in feature_schema["kinds"]]
         _validate_schema_length(names, kinds, dense_width, sparse_names)
-        return {"names": names, "kinds": kinds}
+        normalized = {"names": names, "kinds": kinds}
+        _native_validate_feature_schema_json(json.dumps(normalized))
+        return normalized
 
     if isinstance(feature_schema, dict) and (
         "dense" in feature_schema or "sparse_sets" in feature_schema
@@ -1435,12 +1480,23 @@ def _rust_feature_schema_payload(
             _schema_entry_name(entry, idx, "feature") for idx, entry in enumerate(dense_entries)
         ]
         kinds = [_schema_entry_kind(entry, FeatureKind.NUMERIC) for entry in dense_entries]
+        spatial_names = {
+            str(other)
+            for entry in dense_entries
+            if (other := _schema_spatial_pair_other(entry)) is not None
+        }
+        kinds = [
+            FeatureKind.SPATIAL if name in spatial_names else kind
+            for name, kind in zip(names, kinds, strict=True)
+        ]
         names.extend(
             _schema_entry_name(entry, idx, "sparse_set") for idx, entry in enumerate(sparse_entries)
         )
         kinds.extend(_schema_entry_kind(entry, FeatureKind.SPARSE_SET) for entry in sparse_entries)
         _validate_schema_length(names, kinds, dense_width, sparse_names)
-        return {"names": names, "kinds": kinds}
+        normalized = {"names": names, "kinds": kinds}
+        _native_validate_feature_schema_json(json.dumps(normalized))
+        return normalized
 
     if isinstance(feature_schema, dict):
         names = [str(name) for name in feature_schema]
@@ -1451,7 +1507,9 @@ def _rust_feature_schema_payload(
             else:
                 kinds.append(FeatureKind.NUMERIC)
         _validate_schema_length(names, kinds, dense_width, sparse_names)
-        return {"names": names, "kinds": kinds}
+        normalized = {"names": names, "kinds": kinds}
+        _native_validate_feature_schema_json(json.dumps(normalized))
+        return normalized
 
     raise ValueError(
         "feature_schema must be a Rust schema {'names','kinds'} mapping or a "
@@ -1477,6 +1535,15 @@ def _schema_entry_kind(entry: Any, default: FeatureKind) -> Any:
             return FeatureKind.SPARSE_SET
         case _:
             return FeatureKind.NUMERIC
+
+
+def _schema_spatial_pair_other(entry: Any) -> Any | None:
+    if not isinstance(entry, dict):
+        return None
+    kind = entry.get("kind", entry.get("role", ""))
+    if getattr(kind, "value", kind) in {FeatureKind.SPATIAL, "spatial", "geo"}:
+        return entry.get("other")
+    return None
 
 
 def _rust_feature_kind(kind: Any, entry: dict[str, Any] | None = None) -> Any:
@@ -1680,26 +1747,6 @@ def _append_onnx_node(
     attrs["nodes_missing_value_tracks_true"].append(missing_tracks_true)
 
 
-def _is_valid_splitter_name(splitter: Any) -> bool:
-    if not isinstance(splitter, str):
-        return False
-    if splitter in _VALID_SPLITTERS:
-        return True
-    if splitter.startswith("axis_histogram:") or splitter.startswith("axis_hist:"):
-        try:
-            bins = int(splitter.split(":", 1)[1])
-        except ValueError:
-            return False
-        return bins >= 2
-    if not splitter.startswith("periodic:"):
-        return False
-    try:
-        period = float(splitter.removeprefix("periodic:"))
-    except ValueError:
-        return False
-    return math.isfinite(period) and period > 0.0
-
-
 def _fit_native(
     model: Any,
     rows: np.ndarray,
@@ -1710,45 +1757,21 @@ def _fit_native(
     sparse_ids: list[list[int]],
     feature_schema_json: str | None,
 ) -> None:
-    if hasattr(model, "fit_arrays"):
-        try:
-            model.fit_arrays(
-                rows,
-                targets,
-                sample_weight,
-                sparse_offsets,
-                sparse_ids,
-                feature_schema_json,
-            )
-            return
-        except TypeError:
-            pass
-
-    row_list = rows.tolist()
-    target_list = targets.tolist()
-    weight_list = None if sample_weight is None else sample_weight.tolist()
-    try:
-        model.fit(row_list, target_list, weight_list, sparse_sets, feature_schema_json)
-    except TypeError as exc:
-        if sparse_sets or feature_schema_json is not None:
-            raise NotImplementedError(
-                "the native backend does not support sparse_sets or feature_schema in this build"
-            ) from exc
-        if sample_weight is None:
-            try:
-                model.fit(row_list, target_list)
-                return
-            except TypeError:
-                pass
-        else:
-            try:
-                model.fit(row_list, target_list, weight_list)
-                return
-            except TypeError:
-                pass
-        raise NotImplementedError(
-            "the native backend does not support sample_weight in this build"
-        ) from exc
+    del sparse_sets
+    fit_arrays = getattr(model, "fit_arrays", None)
+    if not callable(fit_arrays):
+        raise RuntimeError(
+            "cartoboost._native model is missing the typed fit_arrays binding; "
+            "Python list/JSON training fallbacks are not supported"
+        )
+    fit_arrays(
+        rows,
+        targets,
+        sample_weight,
+        sparse_offsets,
+        sparse_ids,
+        feature_schema_json,
+    )
 
 
 def _resolve_linear_leaf_features(features: list[str] | None, width: int) -> list[int] | None:

@@ -21,7 +21,7 @@ regressor.
 ## Public Contract
 
 ```python
-from cartoboost.neural import NeuralEmbeddingRegressor
+from cartoboost.preview.neural import NeuralEmbeddingRegressor
 
 model = NeuralEmbeddingRegressor(
     dim=8,

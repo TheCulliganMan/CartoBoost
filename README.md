@@ -81,6 +81,11 @@ Install the released package from PyPI:
 uv add cartoboost
 ```
 
+CartoBoost 0.3 keeps the root import surface intentionally small. Read the
+[0.3 migration guide](docs/migration-v0.3.md) when upgrading imports from 0.2;
+forecasting and validation use named modules, while advanced model families
+are explicitly under `cartoboost.preview`.
+
 Optional integrations stay optional:
 
 ```sh
@@ -97,7 +102,16 @@ Verify the install:
 
 ```sh
 python -c "import cartoboost; print(cartoboost.__version__)"
-cartoboost --help
+python examples/quickstart.py
+```
+
+The five-minute [NumPy quickstart](examples/quickstart.py) creates a complete
+place/time dataset, performs an out-of-time split, compares axis-only and
+structured models, and checks save/load prediction parity. The optional
+`pandas` extra enables `ForecastFrame.from_pandas` and other pandas adapters:
+
+```sh
+uv add "cartoboost[pandas]"
 ```
 
 ## Structured Regression Workflow
@@ -122,7 +136,7 @@ model = CartoBoostRegressor(
     learning_rate=0.04,
     max_depth=5,
     min_samples_leaf=30,
-    splitters=["axis", "periodic:24", "diagonal_2d", "gaussian_2d"],
+    split_policy="structured",
 )
 
 model.fit(X_train, y_train)
@@ -153,7 +167,7 @@ model = CartoBoostRegressor(
     learning_rate=0.04,
     max_depth=5,
     min_samples_leaf=30,
-    splitters=["axis", "periodic:24", "sparse_set"],
+    split_policy="structured",
 )
 
 model.fit(
@@ -180,7 +194,7 @@ Use forecasting APIs when the target is future demand, counts, or other regular
 series.
 
 ```python
-from cartoboost.forecasting import ForecastFrame, ThetaForecaster
+from cartoboost.preview.forecasting import ForecastFrame, ThetaForecaster
 
 frame = ForecastFrame.from_pandas(
     lane_demand,
@@ -212,12 +226,12 @@ route ids, carry stable residual signal. Treat these as hypotheses to validate,
 not automatic upgrades.
 
 ```python
-from cartoboost import NeuralEmbeddingRegressor
+from cartoboost.preview import NeuralEmbeddingRegressor
 
 model = NeuralEmbeddingRegressor(
     dim=16,
-    base_model_kwargs={"n_estimators": 80, "splitters": ["axis"]},
-    final_model_kwargs={"n_estimators": 120, "splitters": ["axis", "periodic:24"]},
+    base_model_kwargs={"n_estimators": 80, "split_policy": "axis_only"},
+    final_model_kwargs={"n_estimators": 120, "split_policy": "structured"},
 )
 
 model.fit(X_train, y_train, ids=location_ids_train)
@@ -260,21 +274,17 @@ schema, and training configuration fields. Graph and neural standalone artifacts
 are complete model artifacts. Feature-generation artifacts should be persisted
 with whichever downstream model consumes their generated columns.
 
-## CLI
+## Source-checkout CLI
 
-The CLI supports dense numeric CSV train, predict, eval, and inspect workflows.
-Use the Python API for list-valued sparse features and graph-derived feature
-pipelines.
-
-```sh
-cartoboost train --data train.csv --config configs/regression.toml --model-out model.json
-cartoboost predict --model model.json --input test.csv --predictions-out predictions.csv
-cartoboost eval --model model.json --data test_with_target.csv
-```
+The Rust CLI is a source-checkout tool while the Python wheel remains focused
+on the estimator and forecasting APIs. Run it from this repository with
+`cargo run -p cartoboost-cli -- --help`; it is not installed by `uv add
+cartoboost`.
 
 ## Documentation
 
 - [Documentation Home](docs/index.md)
+- [0.3 Migration Guide](docs/migration-v0.3.md)
 - [Installation](docs/installation.md)
 - [Getting Started](docs/getting-started.md)
 - [Choose A Model](docs/user-guide/model-types.md)

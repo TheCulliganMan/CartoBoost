@@ -7,8 +7,6 @@ from typing import Any, cast
 
 import numpy as np
 
-from cartoboost.representation import RegimeRouter
-
 EXPERT_NAMES = [
     "stable_recurring_pattern",
     "sparse_cold_start",
@@ -53,14 +51,10 @@ class RegimeMoEForecaster:
         self.pair_ids_ = (
             None if pair_ids is None else [str(v) for v in np.asarray(pair_ids).reshape(-1)]
         )
+        # Entity-aware NumPy representation routing was removed in v0.3. Keep
+        # entity IDs as metadata only; all routing inputs must be explicit
+        # numeric columns or native graph/temporal features.
         self.shared_regime_router_ = None
-        if self.entity_ids_ is not None:
-            self.shared_regime_router_ = RegimeRouter(
-                expert_count=self.expert_count,
-                embedding_dim=6,
-                random_seed=17,
-                feature_roles={"entity_id": "regime_router"},
-            ).fit(self.entity_ids_)
         router = self._router_matrix(
             x.shape[0],
             entity_ids=self.entity_ids_,
@@ -183,11 +177,10 @@ class RegimeMoEForecaster:
     def _router_matrix(self, row_count: int, **inputs: Any) -> np.ndarray:
         cols = []
         entity_ids = inputs.get("entity_ids")
-        if entity_ids is not None and getattr(self, "shared_regime_router_", None) is not None:
+        if entity_ids is not None:
             ids = [str(v) for v in np.asarray(entity_ids).reshape(-1)]
             if len(ids) != row_count:
                 raise ValueError("entity_ids row count must match features")
-            cols.append(self.shared_regime_router_.predict_proba(ids))
         for key in [
             "time_features",
             "recent_volatility",

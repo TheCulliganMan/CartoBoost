@@ -330,6 +330,9 @@ impl ReferenceSignal {
     }
 
     pub fn derivative(&self, axis: f64) -> f64 {
+        if axis < self.axis[0] || axis > self.axis[self.axis.len() - 1] {
+            return 0.0;
+        }
         let upper = self.axis.partition_point(|value| *value < axis);
         let upper = upper.clamp(1, self.axis.len() - 1);
         let lower = upper - 1;
@@ -359,6 +362,13 @@ impl SequenceStateSpaceConfig {
         if !self.sigma_point_kappa.is_finite() {
             return Err(CartoBoostError::InvalidInput(
                 "sigma_point_kappa must be finite".to_string(),
+            ));
+        }
+        let sigma_scale = sigma_point_scale(*self);
+        if !sigma_scale.is_finite() || sigma_scale <= 0.0 {
+            return Err(CartoBoostError::InvalidInput(
+                "sigma-point scale alpha^2 * (state_dimension + kappa) must be finite and positive"
+                    .to_string(),
             ));
         }
         Ok(())
@@ -812,11 +822,11 @@ fn run_extended_kalman(
     config: SequenceStateSpaceConfig,
     smooth: bool,
 ) -> Result<SequenceKalmanResult> {
-    let prefix = series.validate()?;
+    series.validate()?;
     reference.validate()?;
     config.validate()?;
-    let first_axis = initial_axis(series, reference, prefix.row_count);
-    let mut state = [first_axis, 0.0];
+    let initial = initial_axis(series, reference);
+    let mut state = [reference.clamp_axis(initial.axis), 0.0];
     let mut covariance = [
         [config.initial_axis_variance, 0.0],
         [0.0, config.initial_rate_variance],
@@ -832,19 +842,21 @@ fn run_extended_kalman(
             let dt = row.position - series.rows[idx - 1].position;
             state = transition(state, dt);
             covariance = predict_covariance(covariance, dt, config);
+            state[0] = reference.clamp_axis(state[0]);
         }
         prior_states.push(state);
         prior_covariances.push(covariance);
         let mut innovation = None;
         let mut innovation_variance = None;
-        if let Some(observed) = row.target {
+        // A target-derived initial axis is already conditioned on row zero.
+        if let Some(observed) = row
+            .target
+            .filter(|_| idx > 0 || !initial.conditioned_on_first_target)
+        {
             let h = reference.interpolate(state[0]);
             let dh = reference.derivative(state[0]);
-            let s = dh * (covariance[0][0] * dh + covariance[0][1])
-                + covariance[1][0] * dh
-                + covariance[1][1] * 0.0
-                + config.signal_observation_variance;
-            let s = s.max(1e-12);
+            let s = dh * covariance[0][0] * dh + config.signal_observation_variance;
+            let s = positive_innovation_variance(s, "signal")?;
             let residual = observed - h;
             let k0 = (covariance[0][0] * dh) / s;
             let k1 = (covariance[1][0] * dh) / s;
@@ -863,7 +875,7 @@ fn run_extended_kalman(
         if let (Some(rate), Some(variance)) = (row.auxiliary_rate, config.rate_observation_variance)
         {
             let residual = rate - state[1];
-            let s = (covariance[1][1] + variance).max(1e-12);
+            let s = positive_innovation_variance(covariance[1][1] + variance, "rate")?;
             let k0 = covariance[0][1] / s;
             let k1 = covariance[1][1] / s;
             state[0] += k0 * residual;
@@ -893,7 +905,7 @@ fn run_extended_kalman(
             &prior_states,
             &prior_covariances,
             config,
-        );
+        )?;
         for (point, (state, covariance)) in points.iter_mut().zip(smoothed) {
             point.predicted_axis = reference.clamp_axis(state[0]);
             point.predicted_rate = state[1];
@@ -912,10 +924,11 @@ fn run_unscented_kalman(
     reference: &ReferenceSignal,
     config: SequenceStateSpaceConfig,
 ) -> Result<SequenceKalmanResult> {
-    let prefix = series.validate()?;
+    series.validate()?;
     reference.validate()?;
     config.validate()?;
-    let mut state = [initial_axis(series, reference, prefix.row_count), 0.0];
+    let initial = initial_axis(series, reference);
+    let mut state = [reference.clamp_axis(initial.axis), 0.0];
     let mut covariance = [
         [config.initial_axis_variance, 0.0],
         [0.0, config.initial_rate_variance],
@@ -927,10 +940,15 @@ fn run_unscented_kalman(
             let dt = row.position - series.rows[idx - 1].position;
             state = transition(state, dt);
             covariance = predict_covariance(covariance, dt, config);
+            state[0] = reference.clamp_axis(state[0]);
         }
         let mut innovation = None;
         let mut innovation_variance = None;
-        if let Some(observed) = row.target {
+        // Keep UKF initialization causal and avoid assimilating row zero twice.
+        if let Some(observed) = row
+            .target
+            .filter(|_| idx > 0 || !initial.conditioned_on_first_target)
+        {
             let sigma = sigma_points(state, covariance, config);
             let weights = sigma_weights(config);
             let z_points = sigma
@@ -951,7 +969,7 @@ fn run_unscented_kalman(
                 cross[1] += wc * (point[1] - state[1]) * dz;
                 let _ = wm;
             }
-            let s = s.max(1e-12);
+            let s = positive_innovation_variance(s, "signal")?;
             let residual = observed - z_mean;
             let gain = [cross[0] / s, cross[1] / s];
             state[0] += gain[0] * residual;
@@ -968,7 +986,7 @@ fn run_unscented_kalman(
         if let (Some(rate), Some(variance)) = (row.auxiliary_rate, config.rate_observation_variance)
         {
             let residual = rate - state[1];
-            let s = (covariance[1][1] + variance).max(1e-12);
+            let s = positive_innovation_variance(covariance[1][1] + variance, "rate")?;
             let gain = [covariance[0][1] / s, covariance[1][1] / s];
             state[0] += gain[0] * residual;
             state[1] += gain[1] * residual;
@@ -993,29 +1011,38 @@ fn run_unscented_kalman(
     })
 }
 
-fn initial_axis(series: &SequenceSeries, reference: &ReferenceSignal, prefix_count: usize) -> f64 {
-    series.rows[..prefix_count]
+#[derive(Debug, Clone, Copy)]
+struct SequenceInitialAxis {
+    axis: f64,
+    conditioned_on_first_target: bool,
+}
+
+fn initial_axis(series: &SequenceSeries, reference: &ReferenceSignal) -> SequenceInitialAxis {
+    let first = &series.rows[0];
+    if let Some(axis) = first.reference_axis {
+        return SequenceInitialAxis {
+            axis,
+            conditioned_on_first_target: false,
+        };
+    }
+    let first_target = first
+        .target
+        .expect("validated sequence starts with a known target");
+    let axis = reference
+        .signal
         .iter()
-        .rev()
-        .find_map(|row| row.reference_axis)
-        .unwrap_or_else(|| {
-            let last_target = series.rows[..prefix_count]
-                .iter()
-                .rev()
-                .find_map(|row| row.target)
-                .unwrap_or(reference.signal[0]);
-            reference
-                .signal
-                .iter()
-                .enumerate()
-                .min_by(|(_, a), (_, b)| {
-                    (*a - last_target)
-                        .abs()
-                        .total_cmp(&(*b - last_target).abs())
-                })
-                .map(|(idx, _)| reference.axis[idx])
-                .unwrap_or(reference.axis[0])
+        .enumerate()
+        .min_by(|(_, a), (_, b)| {
+            (*a - first_target)
+                .abs()
+                .total_cmp(&(*b - first_target).abs())
         })
+        .map(|(idx, _)| reference.axis[idx])
+        .unwrap_or(reference.axis[0]);
+    SequenceInitialAxis {
+        axis,
+        conditioned_on_first_target: true,
+    }
 }
 
 fn transition(state: [f64; 2], dt: f64) -> [f64; 2] {
@@ -1052,6 +1079,8 @@ fn joseph_1d(p: [[f64; 2]; 2], h: [f64; 2], k: [f64; 2], r: f64) -> [[f64; 2]; 2
     ])
 }
 
+type SmoothedState = ([f64; 2], [[f64; 2]; 2]);
+
 fn smooth_states(
     rows: &[SequenceRow],
     filtered_states: &[[f64; 2]],
@@ -1059,7 +1088,7 @@ fn smooth_states(
     prior_states: &[[f64; 2]],
     prior_covariances: &[[[f64; 2]; 2]],
     config: SequenceStateSpaceConfig,
-) -> Vec<([f64; 2], [[f64; 2]; 2])> {
+) -> Result<Vec<SmoothedState>> {
     let n = rows.len();
     let mut states = filtered_states.to_vec();
     let mut covariances = filtered_covariances.to_vec();
@@ -1073,7 +1102,7 @@ fn smooth_states(
         };
         let gain = mat_mul(
             mat_mul(filtered_covariances[idx], transpose(f)),
-            inv2(predicted_covariance),
+            inv2(predicted_covariance)?,
         );
         let predicted_state = prior_states[idx + 1];
         let delta = [
@@ -1090,7 +1119,7 @@ fn smooth_states(
             mat_mul(mat_mul(gain, covariance_delta), transpose(gain)),
         ));
     }
-    states.into_iter().zip(covariances).collect()
+    Ok(states.into_iter().zip(covariances).collect())
 }
 
 fn sigma_points(
@@ -1098,9 +1127,7 @@ fn sigma_points(
     covariance: [[f64; 2]; 2],
     config: SequenceStateSpaceConfig,
 ) -> Vec<[f64; 2]> {
-    let n = 2.0;
-    let lambda = config.sigma_point_alpha.powi(2) * (n + config.sigma_point_kappa) - n;
-    let scale = (n + lambda).max(1e-12);
+    let scale = sigma_point_scale(config);
     let a = (covariance[0][0].max(1e-12) * scale).sqrt();
     let b = covariance[1][0] / covariance[0][0].max(1e-12) * a;
     let c = ((covariance[1][1] * scale - b * b).max(1e-12)).sqrt();
@@ -1115,12 +1142,25 @@ fn sigma_points(
 
 fn sigma_weights(config: SequenceStateSpaceConfig) -> Vec<(f64, f64)> {
     let n = 2.0;
-    let lambda = config.sigma_point_alpha.powi(2) * (n + config.sigma_point_kappa) - n;
-    let scale = (n + lambda).max(1e-12);
+    let scale = sigma_point_scale(config);
+    let lambda = scale - n;
     let wm0 = lambda / scale;
     let wc0 = wm0 + (1.0 - config.sigma_point_alpha.powi(2) + config.sigma_point_beta);
     let wi = 1.0 / (2.0 * scale);
     vec![(wm0, wc0), (wi, wi), (wi, wi), (wi, wi), (wi, wi)]
+}
+
+fn sigma_point_scale(config: SequenceStateSpaceConfig) -> f64 {
+    config.sigma_point_alpha.powi(2) * (2.0 + config.sigma_point_kappa)
+}
+
+fn positive_innovation_variance(value: f64, measurement: &str) -> Result<f64> {
+    if !value.is_finite() || value <= 0.0 {
+        return Err(CartoBoostError::InvalidInput(format!(
+            "{measurement} innovation variance must be finite and positive"
+        )));
+    }
+    Ok(value)
 }
 
 fn emission_cost(observed: Option<f64>, expected: f64, config: ReferencePathConfig) -> f64 {
@@ -1333,12 +1373,48 @@ fn transpose(a: [[f64; 2]; 2]) -> [[f64; 2]; 2] {
     [[a[0][0], a[1][0]], [a[0][1], a[1][1]]]
 }
 
-fn inv2(a: [[f64; 2]; 2]) -> [[f64; 2]; 2] {
-    let det = (a[0][0] * a[1][1] - a[0][1] * a[1][0]).max(1e-12);
-    [
-        [a[1][1] / det, -a[0][1] / det],
-        [-a[1][0] / det, a[0][0] / det],
-    ]
+fn inv2(a: [[f64; 2]; 2]) -> Result<[[f64; 2]; 2]> {
+    if a.iter().flatten().any(|value| !value.is_finite()) {
+        return Err(CartoBoostError::InvalidInput(
+            "RTS predicted covariance must be finite".to_string(),
+        ));
+    }
+    let scale = a
+        .iter()
+        .flatten()
+        .map(|value| value.abs())
+        .fold(0.0_f64, f64::max);
+    if scale == 0.0 || !scale.is_finite() {
+        return Err(CartoBoostError::InvalidInput(
+            "RTS predicted covariance must be invertible".to_string(),
+        ));
+    }
+    let normalized = [
+        [a[0][0] / scale, a[0][1] / scale],
+        [a[1][0] / scale, a[1][1] / scale],
+    ];
+    let symmetry_error = (normalized[0][1] - normalized[1][0]).abs();
+    if normalized[0][0] <= 0.0 || normalized[1][1] <= 0.0 || symmetry_error > 64.0 * f64::EPSILON {
+        return Err(CartoBoostError::InvalidInput(
+            "RTS predicted covariance must be symmetric positive definite".to_string(),
+        ));
+    }
+    let det = normalized[0][0] * normalized[1][1] - normalized[0][1] * normalized[1][0];
+    if !det.is_finite() || det <= f64::EPSILON {
+        return Err(CartoBoostError::InvalidInput(
+            "RTS predicted covariance must be positive definite and well-conditioned".to_string(),
+        ));
+    }
+    Ok([
+        [
+            normalized[1][1] / (det * scale),
+            -normalized[0][1] / (det * scale),
+        ],
+        [
+            -normalized[1][0] / (det * scale),
+            normalized[0][0] / (det * scale),
+        ],
+    ])
 }
 
 fn symmetrize(mut a: [[f64; 2]; 2]) -> [[f64; 2]; 2] {
@@ -1379,6 +1455,13 @@ mod tests {
             reference_signal: None,
             auxiliary_rate: None,
         }
+    }
+
+    fn assert_close(actual: f64, expected: f64) {
+        assert!(
+            (actual - expected).abs() <= 1.0e-10,
+            "expected {expected}, got {actual}"
+        );
     }
 
     #[test]
@@ -1436,6 +1519,124 @@ mod tests {
             .points
             .iter()
             .all(|point| point.predicted_axis.is_finite()));
+    }
+
+    #[test]
+    fn forward_filters_initialize_causally_and_condition_on_the_first_target_once() {
+        let baseline = series();
+        let mut changed_later_prefix = series();
+        changed_later_prefix.rows[1].target = Some(3.0);
+        let config = SequenceStateSpaceConfig::default();
+
+        let baseline_ekf = forward_ekf(&baseline, &reference(), config).unwrap();
+        let changed_ekf = forward_ekf(&changed_later_prefix, &reference(), config).unwrap();
+        let baseline_ukf = ukf_reference(&baseline, &reference(), config).unwrap();
+        let changed_ukf = ukf_reference(&changed_later_prefix, &reference(), config).unwrap();
+
+        assert_eq!(baseline_ekf.points[0], changed_ekf.points[0]);
+        assert_eq!(baseline_ukf.points[0], changed_ukf.points[0]);
+        assert_eq!(baseline_ekf.points[0].predicted_axis, 0.0);
+        assert_eq!(baseline_ukf.points[0].predicted_axis, 0.0);
+        assert!(baseline_ekf.points[0].innovation.is_none());
+        assert!(baseline_ukf.points[0].innovation.is_none());
+    }
+
+    #[test]
+    fn ekf_signal_innovation_variance_is_h_p_h_transpose_plus_r() {
+        let result =
+            forward_ekf(&series(), &reference(), SequenceStateSpaceConfig::default()).unwrap();
+
+        let second = &result.points[1];
+        assert_close(second.innovation.unwrap(), 1.0);
+        // P^-_00 = 1 + 1^2 * 1 + q_axis = 2.001, H = [1, 0], R = 0.01.
+        assert_close(second.innovation_variance.unwrap(), 2.011);
+    }
+
+    #[test]
+    fn reference_derivative_matches_the_clamped_interpolator_at_boundaries() {
+        let reference = reference();
+
+        assert_eq!(reference.derivative(-1.0), 0.0);
+        assert_eq!(reference.derivative(4.0), 0.0);
+        assert_eq!(reference.derivative(0.0), 1.0);
+        assert_eq!(reference.derivative(3.0), 1.0);
+    }
+
+    #[test]
+    fn ekf_clamps_transitioned_axis_before_boundary_measurement_update() {
+        let mut boundary_series = SequenceSeries {
+            series_id: "pickup_zone_1".to_string(),
+            rows: vec![
+                row("r0", 0.0, Some(0.0)),
+                row("r1", 1.0, Some(3.0)),
+                row("r2", 2.0, None),
+            ],
+        };
+        boundary_series.rows[0].auxiliary_rate = Some(10.0);
+        let config = SequenceStateSpaceConfig {
+            rate_observation_variance: Some(1.0e-6),
+            ..SequenceStateSpaceConfig::default()
+        };
+
+        let result = forward_ekf(&boundary_series, &reference(), config).unwrap();
+
+        assert_eq!(result.points[1].predicted_axis, 3.0);
+        assert!(result.points[1].innovation_variance.unwrap() > config.signal_observation_variance);
+    }
+
+    #[test]
+    fn state_space_config_rejects_invalid_sigma_point_scale() {
+        let invalid_kappa = SequenceStateSpaceConfig {
+            sigma_point_kappa: -2.0,
+            ..SequenceStateSpaceConfig::default()
+        };
+        let overflowing_alpha = SequenceStateSpaceConfig {
+            sigma_point_alpha: f64::MAX,
+            ..SequenceStateSpaceConfig::default()
+        };
+
+        assert!(invalid_kappa
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("sigma-point scale"));
+        assert!(overflowing_alpha
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("sigma-point scale"));
+    }
+
+    #[test]
+    fn rts_covariance_inverse_is_scale_aware_and_rejects_invalid_matrices() {
+        let inverse = inv2([[1.0e-18, 0.0], [0.0, 2.0e-18]]).unwrap();
+        assert_close(inverse[0][0] / 1.0e18, 1.0);
+        assert_close(inverse[1][1] / 5.0e17, 1.0);
+        assert!(inv2([[1.0, 1.0], [1.0, 1.0]]).is_err());
+        assert!(inv2([[1.0, 2.0], [2.0, 1.0]]).is_err());
+        assert!(inv2([[-1.0, 0.0], [0.0, -1.0]]).is_err());
+        assert!(inv2([[1.0, 0.5], [0.0, 1.0]]).is_err());
+    }
+
+    #[test]
+    fn rts_smoother_propagates_invalid_predicted_covariance_errors() {
+        let rows = vec![row("r0", 0.0, Some(0.0)), row("r1", 1.0, None)];
+        let states = [[0.0, 0.0], [0.0, 0.0]];
+        let identity = [[1.0, 0.0], [0.0, 1.0]];
+        let filtered_covariances = [identity, identity];
+        let prior_covariances = [identity, [[1.0, 1.0], [1.0, 1.0]]];
+
+        let err = smooth_states(
+            &rows,
+            &states,
+            &filtered_covariances,
+            &states,
+            &prior_covariances,
+            SequenceStateSpaceConfig::default(),
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("RTS predicted covariance"));
     }
 
     #[test]

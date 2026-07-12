@@ -9,8 +9,8 @@ from statistics import mean
 from typing import Any
 
 import pandas as pd
-from cartoboost.forecasting import AutoARIMAForecaster, ForecastFrame
-from cartoboost.forecasting.local import ArimaForecaster
+from cartoboost.preview.forecasting import AutoARIMAForecaster, ForecastFrame
+from cartoboost.preview.forecasting import ArimaForecaster
 
 LANE_TO_PLOT = "PU132->DO138"
 

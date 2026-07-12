@@ -17,7 +17,7 @@ clf = CartoBoostClassifier(
     learning_rate=0.04,
     max_depth=4,
     min_samples_leaf=20,
-    splitters=["axis", "diagonal_2d", "gaussian_2d", "periodic:24"],
+    split_policy="structured",
     class_weight="balanced",
 )
 clf.fit(X_train, binary_label)

@@ -32,7 +32,7 @@ def train_diagonal() -> CartoBoostRegressor:
         learning_rate=1.0,
         max_depth=1,
         min_samples_leaf=2,
-        splitters=["diagonal_2d"],
+        split_policy="structured",
     )
     model.fit(points, target)
     return model
@@ -50,7 +50,7 @@ def train_radial() -> CartoBoostRegressor:
         learning_rate=1.0,
         max_depth=1,
         min_samples_leaf=2,
-        splitters=["gaussian_2d"],
+        split_policy="structured",
     )
     model.fit(points, target)
     return model
@@ -94,7 +94,7 @@ def fit_model(
         max_depth=max_depth,
         min_samples_leaf=min_samples_leaf,
         min_gain=0.0,
-        splitters=splitters,
+        split_policy="structured",
         leaf_predictor=leaf_predictor,
         linear_leaf_features=linear_leaf_features,
         fuzzy=fuzzy,

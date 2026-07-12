@@ -55,6 +55,33 @@ def test_ci_installs_native_extension_before_validation_artifacts():
     assert install_step < validation_step
 
 
+def test_ci_runs_benchmark_provenance_freshness_gate_after_smoke_benchmark():
+    repo_root = Path(__file__).resolve().parents[2]
+    workflow = (repo_root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+
+    benchmark_step = workflow.index("scripts/run_model_benchmark_suite.py")
+    freshness_step = workflow.index("scripts/check_benchmark_freshness.py")
+    assert benchmark_step < freshness_step
+    assert "--output-dir target/benchmark-freshness" in workflow
+    assert "--artifact target/benchmark-freshness/results.json" in workflow
+    assert "scripts/run_scale_performance_gate.py" in workflow
+
+
+def test_release_workflow_requires_ci_ancestry_and_distribution_smoke():
+    repo_root = Path(__file__).resolve().parents[2]
+    workflow = (repo_root / ".github" / "workflows" / "publish-pypi.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "release-checks" in workflow
+    assert "git merge-base --is-ancestor" in workflow
+    assert "workflow_id: 'ci.yml'" in workflow
+    assert "wheels-${{ matrix.platform }}-py${{ matrix.python-version }}" in workflow
+    assert "smoke-sdist" in workflow
+    assert "name: pypi" in workflow
+    assert "password: ${{ secrets.PYPI_API_TOKEN }}" not in workflow
+
+
 def test_model_benchmark_suite_smoke(tmp_path):
     repo_root = Path(__file__).resolve().parents[2]
     output_dir = tmp_path / "model_benchmarks"
@@ -88,6 +115,97 @@ def test_model_benchmark_suite_smoke(tmp_path):
     assert first_row["track"] == "diagnostic"
 
 
+def test_scale_performance_gate_structured_workload_smoke(tmp_path):
+    repo_root = Path(__file__).resolve().parents[2]
+    output = tmp_path / "scale.json"
+    subprocess.run(
+        [
+            sys.executable,
+            str(repo_root / "scripts" / "run_scale_performance_gate.py"),
+            "--rows",
+            "1000",
+            "--threads",
+            "2",
+            "--estimators",
+            "2",
+            "--output",
+            str(output),
+        ],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["artifact_type"] == "cartoboost.scale_performance_gate"
+    assert payload["workload"]["features"] == 20
+    assert payload["workload"]["predict_rows_per_second"] > 0
+
+
+def test_scale_performance_audit_checks_release_budget(tmp_path):
+    repo_root = Path(__file__).resolve().parents[2]
+    artifact = tmp_path / "scale.json"
+    artifact.write_text(
+        json.dumps(
+            {
+                "artifact_type": "cartoboost.scale_performance_gate",
+                "workload": {
+                    "rows": 1_000_000,
+                    "fit_seconds": 120.0,
+                    "peak_rss_mb": 1024.0,
+                    "predict_rows_per_second": 1_500_000.0,
+                    "thread_speedup": 3.2,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(repo_root / "scripts" / "check_scale_performance_gate.py"),
+            str(artifact),
+        ],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert json.loads(result.stdout)["passed"] is True
+
+
+def test_scale_performance_audit_requires_thread_speedup_for_release(tmp_path):
+    repo_root = Path(__file__).resolve().parents[2]
+    artifact = tmp_path / "scale-missing-thread-baseline.json"
+    artifact.write_text(
+        json.dumps(
+            {
+                "artifact_type": "cartoboost.scale_performance_gate",
+                "workload": {
+                    "rows": 1_000_000,
+                    "fit_seconds": 120.0,
+                    "peak_rss_mb": 1024.0,
+                    "predict_rows_per_second": 1_500_000.0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(repo_root / "scripts" / "check_scale_performance_gate.py"),
+            str(artifact),
+        ],
+        cwd=repo_root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert json.loads(result.stdout)["checks"]["thread_speedup"] is False
+
+
 def test_model_benchmark_suite_public_workloads_smoke(tmp_path):
     repo_root = Path(__file__).resolve().parents[2]
     output_dir = tmp_path / "model_public_benchmarks"
@@ -115,6 +233,16 @@ def test_model_benchmark_suite_public_workloads_smoke(tmp_path):
     )
 
     results = json.loads((output_dir / "results.json").read_text(encoding="utf-8"))
+    assert (
+        results["git_commit"]
+        == subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    )
     assert set(results["workloads"]) == {"diabetes", "karate"}
     assert results["workloads"]["diabetes"]["row_count"] == 442
     assert results["workloads"]["karate"]["row_count"] == 78
@@ -3246,11 +3374,11 @@ def test_forecasting_benchmark_docs_match_committed_artifacts():
     taxi_auto = taxi["metrics"]["cartoboost_auto_forecast"]
     taxi_lag = taxi["metrics"]["cartoboost_lag"]
     assert (
-        f"| 1 | `cartoboost_auto_forecast` | {taxi_auto['rmse']:.6f} | "
+        f"| 2 | `cartoboost_auto_forecast` | {taxi_auto['rmse']:.6f} | "
         f"{taxi_auto['mae']:.6f} | {taxi_auto['wape']:.6f} |"
     ) in docs
     assert (
-        f"| 2 | `cartoboost_lag` | {taxi_lag['rmse']:.6f} | "
+        f"| 3 | `cartoboost_lag` | {taxi_lag['rmse']:.6f} | "
         f"{taxi_lag['mae']:.6f} | {taxi_lag['wape']:.6f} |"
     ) in docs
     assert taxi_auto["rmse"] < taxi_lag["rmse"]
@@ -3713,7 +3841,6 @@ def test_forecasting_benchmark_auto_ensemble_weights_are_stable_and_normalized()
         {
             "worse": 4.0,
             "best": 1.0,
-            "nan": float("nan"),
             "second": 2.0,
             "third": 3.0,
             "fourth": 3.5,
@@ -3724,6 +3851,9 @@ def test_forecasting_benchmark_auto_ensemble_weights_are_stable_and_normalized()
     assert list(weights) == ["best", "second", "third", "fourth"]
     assert sum(weights.values()) == pytest.approx(1.0)
     assert weights["best"] > weights["second"] > weights["third"] > weights["fourth"]
+
+    with pytest.raises(ValueError, match="must be finite and non-negative"):
+        benchmark.validation_ensemble_weights({"best": 1.0, "invalid": float("nan")})
 
 
 def test_forecasting_benchmark_loads_m6_assets_file(tmp_path):

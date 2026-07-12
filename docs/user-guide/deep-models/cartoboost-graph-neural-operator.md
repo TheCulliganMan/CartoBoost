@@ -10,7 +10,7 @@ fields.
 ## Public Contract
 
 ```python
-from cartoboost.deep import GraphNeuralOperator
+from cartoboost.preview.deep import GraphNeuralOperator
 
 operator = GraphNeuralOperator(smoothing=0.25, coordinate_scale=0.1)
 prediction = operator.predict(

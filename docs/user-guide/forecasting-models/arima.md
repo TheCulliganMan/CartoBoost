@@ -9,7 +9,8 @@ CartoBoost exposes bounded, non-seasonal ARIMA models:
 - `ArimaForecaster` fits one fixed `(p, d, q)` order.
 - `AutoARIMAForecaster` searches a bounded deterministic grid of `(p, d, q)`
   candidates and refits the selected order.
-- `cartoboost.arima_forecast` and `cartoboost.auto_arima_forecast` provide the
+- `cartoboost.preview.utilities.arima_forecast` and
+  `cartoboost.preview.utilities.auto_arima_forecast` provide the
   same model behavior for quick single-series utility calls.
 
 ## Interactive Example
@@ -58,16 +59,16 @@ Common failure modes are easy to diagnose:
 | Forecast is too flat across a ramp. | Differencing/order choice is not preserving local movement. | Kalman, theta, or `d=1` candidates. |
 | Residuals repeat by hour of day. | Non-seasonal ARIMA is missing a seasonal mechanism. | Seasonal naive, ETS, or lag features with calendar terms. |
 | One lane fits well and another fails. | Local orders do not transfer across lane regimes. | Per-lane validation or a global lag model. |
-| AutoARIMA metadata selects one order but holdout selects another. | Fitted residual scoring is not the deployment objective. | Fixed rolling-origin splits. |
+| AutoARIMA selects an implausibly explosive order. | The configured search is too broad or the history is too short. | Inspect stationarity/invertibility fields and use a longer rolling-origin evaluation. |
 
 ## Model Surface
 
 | Model | Import | Use when |
 | --- | --- | --- |
-| `ArimaForecaster` | `from cartoboost.forecasting.local import ArimaForecaster` | You already know the non-seasonal `(p, d, q)` order. |
-| `AutoARIMAForecaster` | `from cartoboost.forecasting import AutoARIMAForecaster` | You want bounded candidate search over `(p, d, q)`. |
-| `arima_forecast` | `from cartoboost import arima_forecast` | You need a quick one-shot forecast for one numeric series. |
-| `auto_arima_forecast` | `from cartoboost import auto_arima_forecast` | You need one-shot bounded order selection for one numeric series. |
+| `ArimaForecaster` | `from cartoboost.preview.forecasting import ArimaForecaster` | You already know the non-seasonal `(p, d, q)` order. |
+| `AutoARIMAForecaster` | `from cartoboost.preview.forecasting import AutoARIMAForecaster` | You want bounded candidate search over `(p, d, q)`. |
+| `arima_forecast` | `from cartoboost.preview.utilities import arima_forecast` | You need a quick one-shot forecast for one numeric series. |
+| `auto_arima_forecast` | `from cartoboost.preview.utilities import auto_arima_forecast` | You need one-shot bounded order selection for one numeric series. |
 
 ## Pickup-Demand Example
 
@@ -81,7 +82,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 import pandas as pd
-from cartoboost.forecasting import AutoARIMAForecaster, ForecastFrame
+from cartoboost.preview.forecasting import AutoARIMAForecaster, ForecastFrame
 
 
 def example_lane_table(hours: int = 72) -> pd.DataFrame:
@@ -160,16 +161,16 @@ The compact JSON fields are the first values to inspect:
 
 ```json
 {
-  "auto_arima_selected_label": "ARIMA(3,0,0)",
+  "auto_arima_selected_label": "ARIMA(0,1,0)",
   "heldout_winner_by_rmse": "arima_2_1_1",
-  "arima_2_1_1": {"mae": 1.49, "rmse": 1.72, "bias": -0.04},
-  "auto_arima": {"mae": 9.67, "rmse": 10.48, "bias": -9.67}
+  "arima_2_1_1": {"mae": 6.02, "rmse": 7.54, "bias": -1.75},
+  "auto_arima": {"mae": 5.95, "rmse": 7.72, "bias": -2.26}
 }
 ```
 
 Exact values can change if you pass different `--hours`, `--train-hours`, or
 `--horizon` settings. Use `auto_arima_top_candidates` to see whether the
-selected order was a clear fitted-residual winner, and use per-horizon
+selected order was a clear prefix-holdout winner, and use per-horizon
 `residuals` to check whether the held-out miss is directional or grows with
 horizon.
 
@@ -218,7 +219,7 @@ Interpretation:
 | Residuals are mostly positive. | The model is underpredicting the held-out tail. | Check recent trend, event hours, and whether differencing is needed. |
 | Residuals are mostly negative. | The model is overpredicting the held-out tail. | Check whether a temporary pickup spike entered the training window. |
 | Residual magnitude grows with horizon. | Short horizon is acceptable, but uncertainty grows quickly. | Report horizon-specific metrics and consider shorter operational horizons. |
-| AutoARIMA in-sample score selects a different order than held-out RMSE. | Candidate scoring is not a substitute for out-of-sample validation. | Choose by rolling-origin or fixed held-out splits, not metadata alone. |
+| AutoARIMA's internal holdout winner loses on a later test tail. | One validation boundary did not represent the deployment period. | Confirm with multiple rolling origins and keep the final test tail untouched. |
 
 ## Fixed-Order ARIMA
 
@@ -226,7 +227,7 @@ Use fixed order when validation, domain knowledge, or a benchmark has already
 chosen the model shape.
 
 ```python
-from cartoboost.forecasting.local import ArimaForecaster
+from cartoboost.preview.forecasting import ArimaForecaster
 
 hourly_pickups = [42, 38, 35, 31, 44, 67, 91, 105, 98, 86, 73, 69]
 
@@ -274,16 +275,17 @@ print(metadata["selected_order"])
 print(sorted(metadata["validation_scores"], key=lambda score: score["mse"])[:5])
 ```
 
-Those scores are mean squared fitted residuals after each candidate's lag
-warm-up. They explain the deterministic order choice, but final model selection
-should come from held-out or rolling-origin metrics.
+Those scores are mean squared forecasts on a real suffix holdout. Differenced
+candidate forecasts are reconstructed to the original target scale before
+comparison, so orders with different `d` values are scored in the same units.
+The selected candidate is then refit on the complete history.
 
 ## AutoARIMA
 
 AutoARIMA searches all candidates in the bounded grid:
 
 ```python
-from cartoboost.forecasting import AutoARIMAForecaster
+from cartoboost.preview.forecasting import AutoARIMAForecaster
 
 model = AutoARIMAForecaster(
     max_p=3,
@@ -298,14 +300,18 @@ print(metadata["selected_order"])
 print(metadata["validation_scores"][:5])
 ```
 
-Candidate selection is deterministic. Scores are mean squared fitted residuals,
-excluding the warm-up rows required by each candidate's AR/MA lags. If two
-candidates tie, the stable ordering keeps selection reproducible.
+Candidate selection is deterministic. Every candidate is fitted only on the
+prefix before the validation suffix, forecasts the suffix recursively, and is
+scored on the original target scale. Autoregressive coefficients must satisfy
+the stationarity check and moving-average coefficients must satisfy the
+invertibility check. If two valid candidates tie, stable ordering keeps the
+selection reproducible.
 
 Read AutoARIMA metadata as an audit trail, not as a deployment decision. In the
-visualization example, the selected order can have the best fitted residual
-score while losing on the held-out tail. That is expected behavior when the
-candidate score and deployment horizon are asking different questions.
+visualization example, the internal suffix is used for order selection while a
+later untouched tail measures deployment performance. The two boundaries can
+still favor different models, which is why benchmark claims should use fixed
+rolling origins or a separate final test period.
 
 ## ForecastFrame Panel Usage
 
@@ -313,7 +319,7 @@ ARIMA remains a local model family: each panel series is fitted independently.
 That is useful for a small set of important pickup/dropoff lanes.
 
 ```python
-from cartoboost.forecasting import AutoARIMAForecaster, ForecastFrame
+from cartoboost.preview.forecasting import AutoARIMAForecaster, ForecastFrame
 
 frame = ForecastFrame.from_pandas(
     hourly_lane_demand,
@@ -340,7 +346,7 @@ lane and keep the evaluation table keyed by lane, horizon, and timestamp:
 ```python
 from concurrent.futures import ThreadPoolExecutor
 
-from cartoboost import auto_arima_forecast
+from cartoboost.preview.utilities import auto_arima_forecast
 
 
 def forecast_lane(values: list[float]) -> list[float]:
@@ -367,6 +373,10 @@ lanes instead of treating every lane as isolated.
 | --- | --- |
 | `p`, `d`, `q` | Non-negative order values for `ArimaForecaster`; `p <= 8`, `d <= 2`, and `q <= 8`. |
 | `max_p`, `max_d`, `max_q` | Non-negative AutoARIMA search bounds with the same upper limits. |
+
+Fixed and automatic fits reject non-stationary AR recursions and non-invertible
+MA recursions. These checks apply to the modeled series after differencing, not
+only to level models with `d=0`.
 
 ## Validation Notes
 

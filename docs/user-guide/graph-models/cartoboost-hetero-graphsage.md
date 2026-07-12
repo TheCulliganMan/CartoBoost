@@ -23,7 +23,7 @@ homogeneous GraphSAGE and schema-heavy HinSAGE.
 
 ```python
 import numpy as np
-from cartoboost.graph import HeteroGraphSageStandaloneRegressor
+from cartoboost.preview.graph import HeteroGraphSageStandaloneRegressor
 
 typed_edges = [(0, 1, 0), (1, 2, 1), (2, 3, 0), (3, 0, 1), (0, 2, 0)]
 source = np.array([0, 1, 2, 3], dtype=np.uint64)
@@ -61,7 +61,7 @@ pred = model.predict(
 ### Link Predictor
 
 ```python
-from cartoboost.graph import HeteroGraphSageLinkPredictor
+from cartoboost.preview.graph import HeteroGraphSageLinkPredictor
 
 predictor = HeteroGraphSageLinkPredictor(input_dim=2, relation_count=2, hidden_dims=(8,))
 predictor.fit(node_features=node_features, edges=typed_edges)

@@ -22,7 +22,7 @@ place/time effects that should remain visible in the fitted workflow:
   making abrupt left/right split decisions undesirable.
 - Heavy-tailed fare and duration targets may call for robust losses, and
   service-level studies may need conditional quantiles rather than only means.
-- The saved artifact needs to preserve the schema, splitters, sparse-set
+- The saved artifact needs to preserve the schema, split policy, sparse-set
   requirements, loss, fuzzy settings, and additive values used for
   interpretation.
 
@@ -40,7 +40,7 @@ CartoBoost-specific control directly tests a scientific hypothesis.
 | Hub, airport, depot, or CBD proximity | `radial_anchor_distances` or `rbf_anchor_features` | Emits distance or smooth radial-basis columns around explicit anchors. |
 | Corridor-relative position | `local_frame_features` | Emits `along_axis` and `cross_axis` columns in a supplied local coordinate frame. |
 | Latitude/longitude or projected x/y | Dense numeric features with `diagonal_2d` or `gaussian_2d` | Learns spatial boundaries and neighborhoods without only stair-step axis cuts. |
-| Zones, encoded H3 cells | `sparse_sets={...}` with `splitters=["sparse_set"]` | Uses list-valued memberships directly. |
+| Zones, encoded H3 cells | `sparse_sets={...}` with `split_policy="structured"` | Uses schema-declared list-valued memberships directly. |
 | Smooth transitions near a boundary | `fuzzy=True` with `fuzzy_bandwidth` and optional `fuzzy_kernel` | Routes samples fractionally instead of forcing a hard left/right decision. |
 | Local trend inside a region | `leaf_predictor="linear"` | Fits a ridge residual model inside leaves. |
 | Heavy-tailed or asymmetric targets | `loss="mae"`, `loss="huber"`, `loss="log_l2"`, or `loss="quantile"` | Aligns the objective with the estimand. |
@@ -67,7 +67,7 @@ model = CartoBoostRegressor(
     learning_rate=0.04,
     max_depth=5,
     min_samples_leaf=30,
-    splitters=["axis", "diagonal_2d", "gaussian_2d", "periodic:24", "sparse_set"],
+    split_policy="structured",
     fuzzy=True,
     fuzzy_bandwidth=0.05,
     fuzzy_kernel="tricube",
@@ -94,7 +94,7 @@ degrees should be nearly identical, not far apart. CartoBoost exposes Rust-backe
 helpers that return `(east, north)` unit components:
 
 ```python
-from cartoboost import (
+from cartoboost.preview.geo import (
     clockwise_bearing_unit_vector,
     initial_bearing_unit_vector_latlng,
 )
@@ -117,7 +117,7 @@ explicitly rather than silently replacing them.
 Route, radial, and local-frame helpers build on the same Rust geo primitives:
 
 ```python
-from cartoboost import (
+from cartoboost.preview.geo import (
     local_frame_features,
     radial_anchor_distances,
     rbf_anchor_features,
@@ -161,7 +161,7 @@ GeoJSON route geometries use `[longitude, latitude]` coordinate pairs; direct
 Python route sequences use `(latitude, longitude)` pairs.
 
 ```python
-from cartoboost import build_h3_route_sparse_sets
+from cartoboost.preview.h3 import build_h3_route_sparse_sets
 
 route_sparse_sets = build_h3_route_sparse_sets(
     osrm_routes,
@@ -199,7 +199,7 @@ For scientific work, keep the fitted model tied to the data contract that
 produced it:
 
 1. Use a feature schema when dense periodic roles or sparse-set columns matter.
-2. Save the model JSON with `model.save(...)` so splitters, leaf predictor,
+2. Save the model JSON with `model.save(...)` so the split policy, leaf predictor,
    fuzzy settings, loss, schema, and sparse-set requirements are preserved when
    available.
 3. Use `predict_additive_values(X)` or the optional SHAP helpers to inspect

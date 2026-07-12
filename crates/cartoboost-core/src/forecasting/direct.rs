@@ -2,7 +2,8 @@ use crate::booster::{Booster, BoosterConfig};
 use crate::data::{Dataset, FeatureKind, FeatureSchema};
 use crate::forecasting::horizon::validate_horizon;
 use crate::forecasting::lag_features::{
-    history_by_series, lag_config_supported_by_history, LagFeatureBuilder, LagFeatureConfig,
+    history_by_series, minimum_prior_len, validate_lag_config_supported_by_prior,
+    LagFeatureBuilder, LagFeatureConfig,
 };
 use crate::forecasting::{
     CartoBoostLagForecaster, ForecastFrame, ForecastPrediction, ForecastResult, ForecastRow,
@@ -51,6 +52,7 @@ struct FittedRectifiedState {
     history_by_series: BTreeMap<String, Vec<ForecastRow>>,
     corrections: Vec<Model>,
     training_rows_by_horizon: Vec<usize>,
+    validation_window: usize,
 }
 
 impl CartoBoostDirectForecaster {
@@ -83,9 +85,7 @@ impl CartoBoostDirectForecaster {
     pub fn fit_horizon(&mut self, frame: &ForecastFrame, horizon: usize) -> Result<()> {
         frame.require_regular_for_model(self.model_name())?;
         validate_horizon(horizon)?;
-        let effective_lag_config =
-            lag_config_supported_by_history(self.lag_builder.config(), frame);
-        self.lag_builder = LagFeatureBuilder::new(effective_lag_config)?;
+        validate_direct_lag_history(frame, self.lag_builder.config(), horizon, self.model_name())?;
         let mut models = Vec::with_capacity(horizon);
         let mut training_rows_by_horizon = Vec::with_capacity(horizon);
         for step in 1..=horizon {
@@ -189,16 +189,14 @@ impl RectifiedRecursiveForecaster {
     pub fn fit_horizon(&mut self, frame: &ForecastFrame, horizon: usize) -> Result<()> {
         frame.require_regular_for_model(self.model_name())?;
         validate_horizon(horizon)?;
-        let effective_lag_config =
-            lag_config_supported_by_history(self.lag_builder.config(), frame);
-        self.lag_builder = LagFeatureBuilder::new(effective_lag_config.clone())?;
+        validate_direct_lag_history(frame, self.lag_builder.config(), horizon, self.model_name())?;
         self.recursive = CartoBoostLagForecaster::new_with_target_mode(
-            effective_lag_config,
+            self.lag_builder.config().clone(),
             self.booster_config.clone(),
             GlobalForecastTargetMode::Level,
         )?;
         self.recursive.fit(frame)?;
-        let recursive_baselines = recursive_training_predictions(
+        let (recursive_baselines, validation_window) = recursive_training_predictions(
             frame,
             &self.lag_builder,
             &self.booster_config,
@@ -222,6 +220,7 @@ impl RectifiedRecursiveForecaster {
             history_by_series: history_by_series(frame.rows()),
             corrections,
             training_rows_by_horizon,
+            validation_window,
         });
         Ok(())
     }
@@ -295,6 +294,7 @@ impl Forecaster for RectifiedRecursiveForecaster {
         if let Some(fitted) = &self.fitted {
             payload["fitted_horizon"] = json!(fitted.corrections.len());
             payload["training_rows_by_horizon"] = json!(fitted.training_rows_by_horizon);
+            payload["validation_window"] = json!(fitted.validation_window);
         }
         payload
     }
@@ -303,6 +303,24 @@ impl Forecaster for RectifiedRecursiveForecaster {
 struct DirectTraining {
     x: Dataset,
     y: Vec<f64>,
+}
+
+fn validate_direct_lag_history(
+    frame: &ForecastFrame,
+    config: &LagFeatureConfig,
+    horizon: usize,
+    model_name: &str,
+) -> Result<()> {
+    let minimum_history = history_by_series(frame.rows())
+        .values()
+        .map(Vec::len)
+        .min()
+        .unwrap_or(0);
+    validate_lag_config_supported_by_prior(
+        config,
+        minimum_history.saturating_sub(horizon),
+        model_name,
+    )
 }
 
 fn build_direct_training(
@@ -381,12 +399,37 @@ fn recursive_training_predictions(
     lag_builder: &LagFeatureBuilder,
     booster_config: &BoosterConfig,
     horizon: usize,
-) -> Result<Vec<Vec<Option<f64>>>> {
+) -> Result<(Vec<Vec<Option<f64>>>, usize)> {
+    let histories = history_by_series(frame.rows());
+    let minimum_history = histories.values().map(Vec::len).min().unwrap_or(0);
+    let required_training_rows = minimum_prior_len(lag_builder.config()).saturating_add(1);
+    let maximum_validation_window = minimum_history
+        .checked_sub(required_training_rows)
+        .ok_or_else(|| {
+            CartoBoostError::InvalidInput(format!(
+                "rectified recursive cross-validation requires at least {required_training_rows} training rows per series before its holdout"
+            ))
+        })?;
+    let automatic_window = (minimum_history / 5).clamp(1, 28);
+    let validation_window = automatic_window.max(horizon).min(maximum_validation_window);
+    if validation_window < horizon {
+        return Err(CartoBoostError::InvalidInput(format!(
+            "rectified recursive fitting requires a holdout of at least {horizon} rows while retaining {required_training_rows} training rows; shortest series has {minimum_history} rows"
+        )));
+    }
+
     let mut result = vec![Vec::new(); horizon];
-    let training = build_direct_training(frame, lag_builder, 1)?;
-    let one_step = Booster::new(booster_config.clone()).fit(&training.x, &training.y, None)?;
-    for (_series_id, history) in history_by_series(frame.rows()) {
+    let one_step =
+        fit_recursive_prefix_model(frame, lag_builder, booster_config, validation_window)?;
+    for (_series_id, history) in histories {
+        let first_validation_origin = history.len() - validation_window - 1;
         for origin_idx in 0..history.len() {
+            if origin_idx < first_validation_origin {
+                for step_result in &mut result {
+                    step_result.push(None);
+                }
+                continue;
+            }
             let mut recursive_history = history[..=origin_idx].to_vec();
             let mut incomplete_history = false;
             for step in 1..=horizon {
@@ -411,16 +454,71 @@ fn recursive_training_predictions(
                     Err(err) => return Err(err),
                 };
                 let mean = one_step.predict_one(&features);
+                if !mean.is_finite() {
+                    return Err(CartoBoostError::InvalidInput(format!(
+                        "rectified recursive baseline produced a non-finite forecast for series {} at {timestamp}",
+                        history[origin_idx].series_id
+                    )));
+                }
                 result[step - 1].push(Some(mean));
-                recursive_history.push(ForecastRow::new(
+                let covariates = recursive_history
+                    .last()
+                    .map(|row| row.covariates.clone())
+                    .unwrap_or_default();
+                recursive_history.push(ForecastRow::with_covariates(
                     history[origin_idx].series_id.clone(),
                     timestamp,
                     mean,
+                    covariates,
                 ));
             }
         }
     }
-    Ok(result)
+    Ok((result, validation_window))
+}
+
+fn fit_recursive_prefix_model(
+    frame: &ForecastFrame,
+    lag_builder: &LagFeatureBuilder,
+    booster_config: &BoosterConfig,
+    validation_window: usize,
+) -> Result<Model> {
+    let mut prefix_rows = Vec::new();
+    for (_series_id, history) in history_by_series(frame.rows()) {
+        let train_len = history
+            .len()
+            .checked_sub(validation_window)
+            .ok_or_else(|| {
+                CartoBoostError::InvalidInput(
+                    "rectified recursive validation window exceeds a series history".to_string(),
+                )
+            })?;
+        prefix_rows.extend(history[..train_len].iter().cloned());
+    }
+    let prefix =
+        ForecastFrame::with_metadata(prefix_rows, frame.frequency(), frame.metadata().clone())?;
+    let feature_rows = lag_builder.transform_frame(&prefix)?;
+    if feature_rows.is_empty() {
+        return Err(CartoBoostError::InvalidInput(
+            "rectified recursive training prefix produced no lag-feature rows".to_string(),
+        ));
+    }
+    let feature_count = lag_builder.feature_names().len();
+    let x = Dataset::from_rows(
+        feature_rows
+            .iter()
+            .map(|row| row.features.clone())
+            .collect(),
+    )?
+    .with_schema(FeatureSchema {
+        names: lag_builder.feature_names().to_vec(),
+        kinds: vec![FeatureKind::Numeric; feature_count],
+    })?;
+    let y = feature_rows
+        .iter()
+        .map(|row| row.target)
+        .collect::<Vec<_>>();
+    Booster::new(booster_config.clone()).fit(&x, &y, None)
 }
 
 fn dataset_from_lag_rows(
@@ -499,7 +597,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_models_prune_unsupported_lag_features_for_short_panels() {
+    fn direct_models_reject_unsupported_lag_features_for_short_panels() {
         let frame = short_panel_frame();
         let booster = BoosterConfig {
             n_estimators: 3,
@@ -510,38 +608,65 @@ mod tests {
 
         let mut direct = CartoBoostDirectForecaster::new(oversized_lag_config(), booster.clone())
             .expect("direct");
-        direct.fit_horizon(&frame, 3).expect("fit direct");
-        let direct_metadata = direct.metadata();
-        assert_eq!(
-            direct_metadata["lag_config"]["lags"],
-            serde_json::json!([1])
-        );
-        assert_eq!(
-            direct_metadata["lag_config"]["rolling_mean_windows"],
-            serde_json::json!([])
-        );
-        let direct_forecast = direct.predict(3).expect("direct forecast");
-        assert_eq!(direct_forecast.predictions().len(), 6);
-        assert!(direct_forecast
-            .predictions()
-            .iter()
-            .all(|row| row.mean.is_finite()));
+        let error = direct
+            .fit_horizon(&frame, 3)
+            .expect_err("explicit direct lag features must not be silently removed");
+        assert!(error
+            .to_string()
+            .contains("requires at least 25 prior observations"));
 
         let mut rectified =
             RectifiedRecursiveForecaster::new(oversized_lag_config(), booster).expect("rectified");
-        rectified
+        let error = rectified
             .fit_horizon(&frame, 3)
-            .expect("fit rectified recursive");
-        let rectified_metadata = rectified.metadata();
-        assert_eq!(
-            rectified_metadata["lag_config"]["lags"],
-            serde_json::json!([1])
-        );
-        let rectified_forecast = rectified.predict(3).expect("rectified forecast");
-        assert_eq!(rectified_forecast.predictions().len(), 6);
-        assert!(rectified_forecast
-            .predictions()
-            .iter()
-            .all(|row| row.mean.is_finite()));
+            .expect_err("explicit rectified lag features must not be silently removed");
+        assert!(error
+            .to_string()
+            .contains("requires at least 25 prior observations"));
+    }
+
+    #[test]
+    fn rectified_recursive_validation_baselines_are_causal() {
+        let original = ForecastFrame::new(
+            (1..=10)
+                .map(|day| ForecastRow::single(ts(day), f64::from(day)))
+                .collect(),
+            ForecastFrequency::Daily,
+        )
+        .expect("frame");
+        let changed_future = ForecastFrame::new(
+            (1..=10)
+                .map(|day| {
+                    ForecastRow::single(
+                        ts(day),
+                        if day <= 8 {
+                            f64::from(day)
+                        } else {
+                            10_000.0 + f64::from(day)
+                        },
+                    )
+                })
+                .collect(),
+            ForecastFrequency::Daily,
+        )
+        .expect("frame");
+        let builder = LagFeatureBuilder::new(LagFeatureConfig::default()).expect("builder");
+        let booster = BoosterConfig {
+            n_estimators: 3,
+            max_depth: 2,
+            min_samples_leaf: 1,
+            ..BoosterConfig::default()
+        };
+
+        let (original_baselines, original_window) =
+            recursive_training_predictions(&original, &builder, &booster, 1).expect("baselines");
+        let (changed_baselines, changed_window) =
+            recursive_training_predictions(&changed_future, &builder, &booster, 1)
+                .expect("baselines");
+
+        assert_eq!(original_window, 2);
+        assert_eq!(changed_window, original_window);
+        assert_eq!(original_baselines[0][7], changed_baselines[0][7]);
+        assert!(original_baselines[0][7].is_some());
     }
 }

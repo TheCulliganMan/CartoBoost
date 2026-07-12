@@ -27,6 +27,8 @@ from scripts.run_nyc_taxi_quality_benchmarks import (  # noqa: E402
     pickup_zone_diagnostics,
     required_benchmark_dependencies,
     sample_tlc_frame,
+    split_indices,
+    split_modes_for_task,
     validate_requested_benchmark_dependencies,
 )
 from scripts.run_nyc_taxi_quality_benchmarks import (  # noqa: E402
@@ -73,13 +75,25 @@ def test_nyc_taxi_quality_benchmark_synthetic_smoke(tmp_path: Path):
     assert results["source_file_hashes"] == {}
     assert results["git_commit"] is None or len(results["git_commit"]) == 40
     assert results["benchmark_integrity"]["hpo"] == "fixed_settings_no_hpo"
-    assert results["benchmark_integrity"]["split_modes"] == ["random", "spatial_holdout"]
+    assert results["benchmark_integrity"]["split_modes"] == [
+        "random",
+        "spatial_holdout",
+        "out_of_time",
+    ]
+    assert results["benchmark_integrity"]["split_modes_by_task"]["pickup_demand"] == [
+        "random",
+        "spatial_holdout",
+    ]
     selection = results["benchmark_integrity"]["selection_policy"]
     assert "test labels" in selection["global_hyperparameters"]
     assert "training split only" in selection["graph_feature_gate"]
     assert "excluded from fitting" in selection["segment_diagnostics"]
     assert results["feature_access_policy"]["baseline_feature_access"]
-    assert set(results["split_definitions"]) == {"random", "spatial_holdout"}
+    assert set(results["split_definitions"]) == {
+        "random",
+        "spatial_holdout",
+        "out_of_time",
+    }
     assert results["model_roster"] == ["mean"]
     assert results["model_status_summary"]["completed_external_baselines"] == ["mean"]
     assert results["comparability_audit"]["same_outer_splits"] is True
@@ -120,9 +134,13 @@ def test_nyc_taxi_quality_benchmark_synthetic_smoke(tmp_path: Path):
     }
     assert ("spatial", "duration", "random", "mean", "rmse") in aggregate_keys
     assert ("spatial", "duration", "spatial_holdout", "mean", "rmse") in aggregate_keys
+    assert ("temporal", "duration", "out_of_time", "mean", "rmse") in aggregate_keys
 
-    for task in results["tasks"].values():
-        assert set(task["splits"]) == {"random", "spatial_holdout"}
+    for task_name, task in results["tasks"].items():
+        expected_splits = {"random", "spatial_holdout"}
+        if task_name in {"duration", "fare"}:
+            expected_splits.add("out_of_time")
+        assert set(task["splits"]) == expected_splits
         for split in task["splits"].values():
             model = split["models"]["mean"]
             assert model["status"] == "ok"
@@ -151,6 +169,12 @@ def test_nyc_taxi_quality_benchmark_synthetic_smoke(tmp_path: Path):
             assert model["timing"]["fit_predict_seconds"] >= 0.0
             assert model["timing"]["prediction_rows"] > 0.0
             assert model["timing"]["predict_rows_per_second"] > 0.0
+        if "out_of_time" in task["splits"]:
+            manifest = task["splits"]["out_of_time"]["split_manifest"]
+            assert manifest["split_kind"] == "chronological_timestamp_holdout"
+            assert manifest["leakage_safe"] is True
+            assert manifest["timestamp_tie_policy"] == ("grouped_at_boundary_no_timestamp_overlap")
+            assert manifest["train_timestamp_max"] < manifest["test_timestamp_min"]
 
     markdown = (output_dir / "results.md").read_text(encoding="utf-8")
     assert "NYC Taxi Model Quality Benchmarks" in markdown
@@ -174,12 +198,12 @@ def test_nyc_taxi_quality_benchmark_synthetic_smoke(tmp_path: Path):
     assert float(np.std(throughput[..., :3])) > 0.01
 
 
-def test_nyc_taxi_quality_benchmark_runs_autogeo_selector(tmp_path: Path):
+def test_nyc_taxi_quality_benchmark_rejects_removed_autogeo_selector(tmp_path: Path):
     repo_root = Path(__file__).resolve().parents[2]
     output_dir = tmp_path / "nyc_taxi_autogeo"
     script = repo_root / "scripts" / "run_nyc_taxi_quality_benchmarks.py"
 
-    subprocess.run(
+    result = subprocess.run(
         [
             sys.executable,
             str(script),
@@ -192,21 +216,13 @@ def test_nyc_taxi_quality_benchmark_runs_autogeo_selector(tmp_path: Path):
             str(output_dir),
             "--no-plots",
         ],
-        check=True,
+        check=False,
         cwd=repo_root,
+        capture_output=True,
+        text=True,
     )
-
-    results = json.loads((output_dir / "results.json").read_text(encoding="utf-8"))
-    assert results["model_roster"] == ["autogeo"]
-    task = results["tasks"]["duration"]
-    for split in task["splits"].values():
-        model = split["models"]["autogeo"]
-        assert model["status"] == "ok"
-        assert np.isfinite(model["metrics"]["rmse"])
-        config = model["config"]
-        assert config["selected_family"]
-        assert config["candidate_evaluations"]
-        assert config["inner_validation"]["uses_benchmark_holdout"] is False
+    assert result.returncode != 0
+    assert "unknown models: autogeo" in (result.stderr + result.stdout)
 
 
 def test_nyc_taxi_quality_benchmark_requires_requested_baseline_dependencies(monkeypatch):
@@ -280,12 +296,11 @@ def test_nyc_taxi_maintained_artifacts_are_complete():
         for line in (artifact_dir / "results.jsonl").read_text(encoding="utf-8").splitlines()
         if line
     ]
-    assert len(results["external_baseline_comparison"]) == 5
+    assert len(results["external_baseline_comparison"]) == 7
     assert results["comparability_audit"]["same_outer_splits"] is True
     assert results["comparability_audit"]["selection_uses_outer_test_labels"] is False
     assert results["comparability_audit"]["same_feature_access_policy"] is True
     assert results["comparability_audit"]["completed_external_baselines"]
-    assert "mean" in results["comparability_audit"]["completed_external_baselines"]
     assert results["model_status_summary"]["completed_external_baselines"]
     assert results["output_artifacts"]["results.jsonl"]["size_bytes"] == len(
         (artifact_dir / "results.jsonl").read_bytes().replace(b"\r\n", b"\n")
@@ -295,7 +310,7 @@ def test_nyc_taxi_maintained_artifacts_are_complete():
         for row in rows
     } >= {
         ("spatial", "duration", "random", "cartoboost", "rmse"),
-        ("spatial", "fare", "spatial_holdout", "ridge", "wape"),
+        ("spatial", "fare", "spatial_holdout", "hist_gradient_boosting", "wape"),
         ("spatial", "pickup_demand", "random", "hist_gradient_boosting", "r2"),
     }
 
@@ -607,6 +622,11 @@ def test_real_pickup_demand_aggregates_full_cleaned_frame_when_rows_are_sampled(
     duration = next(task for task in tasks if task.name == "duration")
     demand = next(task for task in tasks if task.name == "pickup_demand")
     assert len(duration.target) == 2
+    assert duration.timestamp_column == "tpep_pickup_datetime"
+    assert duration.timestamps is not None
+    assert duration.timestamps.dtype == np.dtype("datetime64[ns]")
+    assert len(duration.timestamps) == len(duration.target)
+    assert demand.timestamps is None
     demand_by_zone = {
         int(features[0]): float(target)
         for features, target in zip(demand.features, demand.target, strict=True)
@@ -791,3 +811,52 @@ def test_pickup_demand_cold_zone_fraction_detects_spatial_holdout():
         )
         == 0.0
     )
+
+
+def test_out_of_time_split_keeps_equal_timestamps_on_one_side():
+    timestamps = np.asarray(
+        [
+            "2024-01-01T00:00:00",
+            "2024-01-01T00:00:00",
+            "2024-01-02T00:00:00",
+            "2024-01-03T00:00:00",
+            "2024-01-04T00:00:00",
+        ],
+        dtype="datetime64[ns]",
+    )
+    task = BenchmarkTask(
+        name="duration",
+        display_name="Trip duration",
+        description="fixture",
+        features=np.arange(5.0).reshape(-1, 1),
+        target=np.arange(5.0),
+        pickup_zones=np.ones(5, dtype=int),
+        feature_names=["value"],
+        sparse_sets={},
+        timestamps=timestamps,
+        timestamp_column="tpep_pickup_datetime",
+    )
+
+    train, test = split_indices(task, mode="out_of_time", seed=42)
+
+    assert train.tolist() == [0, 1, 2, 3]
+    assert test.tolist() == [4]
+    assert np.intersect1d(timestamps[train], timestamps[test]).size == 0
+    assert timestamps[train].max() < timestamps[test].min()
+
+
+def test_out_of_time_split_requires_timestamps_and_excludes_demand_tasks():
+    task = BenchmarkTask(
+        name="pickup_demand",
+        display_name="Pickup demand",
+        description="fixture",
+        features=np.ones((3, 1)),
+        target=np.ones(3),
+        pickup_zones=np.ones(3, dtype=int),
+        feature_names=["value"],
+        sparse_sets={},
+    )
+
+    assert split_modes_for_task(task) == ["random", "spatial_holdout"]
+    with pytest.raises(ValueError, match="requires source row timestamps"):
+        split_indices(task, mode="out_of_time", seed=42)

@@ -37,7 +37,7 @@ model = CartoBoostRegressor(
     learning_rate=0.04,
     max_depth=5,
     min_samples_leaf=20,
-    splitters=["axis", "diagonal_2d", "gaussian_2d", "periodic:24", "sparse_set"],
+    split_policy="structured",
     fuzzy=True,
     fuzzy_bandwidth=0.05,
     fuzzy_kernel="gaussian",
@@ -73,7 +73,7 @@ model = CartoBoostRegressor(
     learning_rate=0.05,
     max_depth=4,
     min_samples_leaf=20,
-    splitters=["axis"],
+    split_policy="axis_only",
 )
 
 model.fit(X_train, y_train)
@@ -101,7 +101,7 @@ from cartoboost import CartoBoostRegressor
 
 trips = duckdb.sql("select trip_distance, hour, log_fare from taxi_training")
 
-model = CartoBoostRegressor(splitters=["axis", "periodic:24"])
+model = CartoBoostRegressor(split_policy="structured")
 model.fit(
     trips.select("trip_distance, hour"),
     trips.select("log_fare"),
@@ -121,7 +121,7 @@ model = CartoBoostRegressor(
     learning_rate=0.5,
     max_depth=1,
     min_samples_leaf=1,
-    splitters=["sparse_set"],
+    split_policy="structured",
 )
 model.fit(X_dense, y, sparse_sets={"zone_memberships": zone_memberships})
 predictions = model.predict(X_dense, sparse_sets={"zone_memberships": zone_memberships})
@@ -217,7 +217,7 @@ best_model = CartoBoostRegressor(**study.best_params).fit(X_train, y_train)
 ```
 
 Keep each trial self-contained: create the estimator inside the objective and
-fit it only on that trial's data split. Tune specialized splitters, fuzzy
+fit it only on that trial's data split. Tune the typed split policy, fuzzy
 routing, losses, or linear leaves only after the validation design is fixed.
 
 ## Additive Values And SHAP
@@ -247,7 +247,7 @@ model.save_weights("model.weights.json")
 weights_loaded = CartoBoostRegressor.load_weights("model.weights.json")
 ```
 
-JSON artifacts preserve training metadata when available, including splitters,
+JSON artifacts preserve training metadata when available, including the split policy,
 leaf predictor, fuzzy settings, loss, schema, and sparse-set requirements.
 Save artifacts when later interpretation, audit, or rerun comparisons depend on
 the exact modeling contract.
@@ -258,5 +258,5 @@ the exact modeling contract.
 | --- | --- |
 | `ImportError` | The package import failed or the installed package is incomplete. |
 | `NotImplementedError` | The installed package does not support a requested feature. |
-| `ValueError` | Invalid parameters, unknown splitters, mismatched row counts, or incompatible sparse/schema inputs. |
+| `ValueError` | Invalid parameters, mismatched row counts, or incompatible sparse/schema inputs. |
 | `RuntimeError` | Prediction or save was called before fit. |

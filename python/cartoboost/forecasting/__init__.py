@@ -1,203 +1,32 @@
-"""Forecasting API for CartoBoost."""
+"""Stable Rust-backed forecasting API for CartoBoost 0.3.
 
-from .artifacts import ForecastArtifact, ForecastArtifactManifest
-from .auto import AutoForecaster
+Advanced local, neural, graph, spatial, probabilistic, and compatibility
+forecasters remain available through the lazy ``cartoboost.preview.forecasting``
+namespace. They are intentionally absent from this module's stable surface.
+"""
+
+from .auto import AutoForecastConfig, AutoForecaster
 from .backtesting import BacktestFoldResult, BacktestResult, RollingOriginBacktester
-from .base import BaseForecaster, PanelForecasterMixin, SingleSeriesForecasterMixin
-from .config import ForecastingConfig
-from .ensemble import WeightedEnsembleForecaster
-from .frequency import (
-    infer_frequency,
-    next_timestamps,
-    normalize_frequency,
-    validate_horizon,
-    validate_regular_frequency,
-)
 from .global_models import CartoBoostLagForecaster
-from .graph_st import (
-    DCRNNForecaster,
-    GraphTemporalFrame,
-    GraphWaveNetForecaster,
-    STAEformerForecaster,
-    available_graph_st_backends,
-)
-from .lag_features import (
-    CalendarFeatureConfig,
-    LagFeatureBuilder,
-    LagFeatureConfig,
-    RollingFeatureConfig,
-)
-from .local import (
-    AutoARIMAForecaster,
-    AutoKalmanForecaster,
-    AutoLocalLevelKalmanForecaster,
-    AutoStatsBank,
-    CrostonForecaster,
-    ETSForecaster,
-    KalmanForecaster,
-    KrigingForecaster,
-    LocalLevelKalmanForecaster,
-    NaiveForecaster,
-    OptimizedThetaForecaster,
-    PiecewiseLinearSeasonalForecaster,
-    SbaForecaster,
-    SeasonalNaiveForecaster,
-    SpatialPiecewiseKrigingForecaster,
-    ThetaForecaster,
-    TsbForecaster,
-)
+from .lag_features import LagConfig
+from .local import NaiveForecaster, SeasonalNaiveForecaster
 from .metrics import ForecastMetricSet
-from .neural import (
-    LaneNeuralPanelForecaster,
-    NBEATSForecaster,
-    NBeatsForecaster,
-    NeuralPanelForecaster,
-    NHITSForecaster,
-    NHiTSForecaster,
-)
-from .probabilistic import (
-    ConformalCalibrator,
-    ConformalInterval,
-    ConformalIntervalRegressor,
-    DistributionalForecastResult,
-    ForecastConformalCalibrator,
-    QuantileCartoBoostRegressor,
-    QuantileForecast,
-    SpatialConformalRegressor,
-    benchmark_calibration_report_fields,
-    crps_approximation,
-    group_conformal_residual_quantiles,
-    interval_coverage,
-    mean_interval_width,
-    nearest_conformal_residual_quantiles,
-    pinball_loss,
-    pit_bins,
-    rank_probability_score,
-    repair_non_crossing_quantiles,
-    weighted_conformal_residual_quantile,
-    weighted_interval_score,
-)
-from .registry import ForecastModelSpec, ForecastRegistry
-from .schema import ForecastFrame, ForecastResult, PredictionInterval
-from .sequence import (
-    ReferencePathConfig,
-    ReferenceSignal,
-    SequenceRow,
-    SequenceSeries,
-    SequenceStateSpaceConfig,
-    forward_ekf,
-    generate_group_oof_candidate_rows,
-    missing_target_continuation,
-    per_group_error_summary,
-    reference_path_posterior_mean,
-    reference_path_viterbi,
-    rts_smoother,
-    sequence_blend,
-    ukf_reference,
-    validate_oof_meta_training,
-    validate_sequence_frame,
-)
-from .splitters import (
-    ExpandingWindowSplitter,
-    ForecastFold,
-    RollingOriginSplitter,
-    SlidingWindowSplitter,
-)
+from .schema import ForecastFrame, ForecastResult
+from .splitters import ForecastFold, RollingOriginSplitter
 
 __all__ = [
-    "AutoARIMAForecaster",
+    "AutoForecastConfig",
     "AutoForecaster",
-    "AutoKalmanForecaster",
-    "AutoLocalLevelKalmanForecaster",
-    "AutoStatsBank",
     "BacktestFoldResult",
     "BacktestResult",
-    "BaseForecaster",
-    "CalendarFeatureConfig",
     "CartoBoostLagForecaster",
-    "CrostonForecaster",
-    "DCRNNForecaster",
-    "ETSForecaster",
-    "ExpandingWindowSplitter",
-    "ForecastArtifact",
-    "ForecastArtifactManifest",
     "ForecastFold",
     "ForecastFrame",
     "ForecastMetricSet",
-    "ForecastModelSpec",
-    "ForecastRegistry",
     "ForecastResult",
-    "ForecastingConfig",
-    "GraphWaveNetForecaster",
-    "GraphTemporalFrame",
-    "available_graph_st_backends",
-    "ConformalCalibrator",
-    "ConformalInterval",
-    "ConformalIntervalRegressor",
-    "DistributionalForecastResult",
-    "ForecastConformalCalibrator",
-    "infer_frequency",
-    "KalmanForecaster",
-    "LocalLevelKalmanForecaster",
-    "KrigingForecaster",
-    "LagFeatureBuilder",
-    "LagFeatureConfig",
-    "LaneNeuralPanelForecaster",
+    "LagConfig",
     "NaiveForecaster",
-    "NBEATSForecaster",
-    "NBeatsForecaster",
-    "NeuralPanelForecaster",
-    "NHITSForecaster",
-    "NHiTSForecaster",
-    "next_timestamps",
-    "normalize_frequency",
-    "OptimizedThetaForecaster",
-    "PanelForecasterMixin",
-    "PiecewiseLinearSeasonalForecaster",
-    "PredictionInterval",
-    "QuantileCartoBoostRegressor",
-    "QuantileForecast",
-    "ReferencePathConfig",
-    "ReferenceSignal",
-    "RollingFeatureConfig",
     "RollingOriginBacktester",
     "RollingOriginSplitter",
-    "SbaForecaster",
     "SeasonalNaiveForecaster",
-    "SequenceRow",
-    "SequenceSeries",
-    "SequenceStateSpaceConfig",
-    "SingleSeriesForecasterMixin",
-    "SlidingWindowSplitter",
-    "SpatialPiecewiseKrigingForecaster",
-    "STAEformerForecaster",
-    "SpatialConformalRegressor",
-    "ThetaForecaster",
-    "TsbForecaster",
-    "forward_ekf",
-    "generate_group_oof_candidate_rows",
-    "missing_target_continuation",
-    "per_group_error_summary",
-    "reference_path_posterior_mean",
-    "reference_path_viterbi",
-    "rts_smoother",
-    "sequence_blend",
-    "ukf_reference",
-    "validate_oof_meta_training",
-    "validate_horizon",
-    "validate_regular_frequency",
-    "validate_sequence_frame",
-    "WeightedEnsembleForecaster",
-    "benchmark_calibration_report_fields",
-    "crps_approximation",
-    "group_conformal_residual_quantiles",
-    "interval_coverage",
-    "mean_interval_width",
-    "nearest_conformal_residual_quantiles",
-    "pinball_loss",
-    "pit_bins",
-    "rank_probability_score",
-    "repair_non_crossing_quantiles",
-    "weighted_conformal_residual_quantile",
-    "weighted_interval_score",
 ]

@@ -12,10 +12,10 @@ question:
 
 | Scientific question | Controls to consider |
 | --- | --- |
-| Is a dense tabular baseline enough for fare, duration, demand, or residual prediction? | `splitters=None`, `["auto"]`, `["axis"]`, or `["axis_histogram:<bins>"]` |
-| Are pickup/dropoff coordinates or projected x/y values defining spatial boundaries? | `diagonal_2d`, `gaussian_2d` |
-| Does hour-of-day, weekday, or season wrap around? | `periodic:<period>` |
-| Are rare memberships, routes, cells, or service-area memberships part of the signal? | `sparse_set` plus `sparse_sets=` |
+| Is a dense tabular baseline enough for fare, duration, demand, or residual prediction? | `split_policy=SplitPolicy.AXIS_ONLY` |
+| Are pickup/dropoff coordinates or projected x/y values defining spatial boundaries? | `SplitPolicy.STRUCTURED` plus declared spatial-pair schema entries |
+| Does hour-of-day, weekday, or season wrap around? | `SplitPolicy.STRUCTURED` plus declared periodic schema entries |
+| Are rare memberships, routes, cells, or service-area memberships part of the signal? | `SplitPolicy.STRUCTURED` plus declared sparse-set schema entries |
 | Should nearby observations blend across an uncertain boundary? | `fuzzy=True`, `fuzzy_bandwidth`, `fuzzy_kernel` |
 | Is the target about median-like behavior, outlier resistance, or asymmetric service risk? | `loss="mae"`, `loss="huber"`, `loss="log_l2"`, or `loss="quantile"` |
 | Is a local trend still visible after the tree finds a region or time bucket? | `leaf_predictor="linear"`, `linear_leaf_features` |
@@ -38,7 +38,7 @@ ordinary bias/variance tuning after the validation split is fixed.
 | `min_samples_leaf` | `20` | Minimum weighted row count per leaf candidate. |
 | `min_gain` | `1e-8` | Minimum gain required to split. |
 | `random_state` | `None` | Reserved for deterministic APIs; current training paths are deterministic. |
-| `n_threads` | `None` | Public parameter retained for compatibility; threaded training control is not currently exposed. |
+| `n_threads` | `None` | Number of native CPU threads; use it for reproducible scale measurements. |
 
 ## Loss
 
@@ -56,35 +56,27 @@ dispatch exceptions, and localized service-level questions.
 `l1`, `huber`, `log_l2`, and quantile loss currently require
 `leaf_predictor="constant"`.
 
-## Splitters
+## Split policy
 
-The splitter list is the main CartoBoost modeling choice. By default,
-`splitters=None` uses `auto`: exact `axis` on small or constrained fits, and a
-fast histogram-axis search for larger dense L2 fits. Use `axis` explicitly when
-you need exact threshold search, then add the splitters that match the
-scientific structure in the rows.
+`SplitPolicy` is the main CartoBoost structural modeling choice. `AUTO` lets
+Rust choose the bounded dense path, `AXIS_ONLY` keeps the baseline exact, and
+`STRUCTURED` derives candidates only from declared schema roles.
 
-| Name | Purpose |
+| Policy | Purpose |
 | --- | --- |
-| `auto` | Default policy that chooses exact axis or histogram-axis training from the fit shape and objective. |
-| `axis` | Standard one-feature threshold splits. |
-| `axis_histogram`, `axis_hist`, `histogram`, `axis_histogram:<bins>` | Fast axis-threshold search for dense numeric features. |
-| `diagonal_2d`, `diagonal2d` | Oblique 2D boundaries for coordinates or projected x/y features. |
-| `gaussian_2d`, `gaussian2d`, `radial` | Radial neighborhoods around local hotspots, depots, zones, or corridors. |
-| `periodic_time`, `periodic_24`, `periodic:<period>` | Wraparound time features such as hour-of-day, weekday, or seasonal phase. |
-| `sparse_set`, `sparse` | List-valued zone, grid, or encoded H3 memberships. |
+| `SplitPolicy.AUTO` | Bounded native dense search selected from fit shape and objective. |
+| `SplitPolicy.AXIS_ONLY` | Standard one-feature threshold baseline. |
+| `SplitPolicy.STRUCTURED` | Native candidates derived only from periodic, spatial-pair, and sparse-set schema roles. |
 
-Unknown splitter names raise `ValueError`.
+Common temporal-spatial policies:
 
-Common temporal-spatial combinations:
-
-| Problem shape | Suggested splitters |
+| Problem shape | Suggested policy |
 | --- | --- |
-| General tabular baseline | `None` or `["auto"]` |
-| Exact axis baseline | `["axis"]` |
-| Dense location and time | `["axis", "diagonal_2d", "gaussian_2d", "periodic:24"]` |
-| Route or cell membership | `["axis", "periodic:24", "sparse_set"]` |
-| Location plus sparse memberships | `["axis", "diagonal_2d", "gaussian_2d", "periodic:24", "sparse_set"]` |
+| General tabular baseline | `SplitPolicy.AUTO` |
+| Exact axis baseline | `SplitPolicy.AXIS_ONLY` |
+| Dense location and time | `SplitPolicy.STRUCTURED` with declared roles |
+| Route or cell membership | `SplitPolicy.STRUCTURED` with periodic and sparse roles |
+| Location plus sparse memberships | `SplitPolicy.STRUCTURED` with spatial-pair and sparse roles |
 
 ## Leaves
 
@@ -129,6 +121,6 @@ dense feature:
 - `0` leaves the feature unconstrained.
 
 Current constraints require constant leaves, non-fuzzy training, and axis-style
-splitters. Use them when the scientific design requires directional behavior,
+split policy. Use `SplitPolicy.STRUCTURED` when the scientific design requires directional behavior,
 such as non-decreasing fare with distance after accounting for the rest of the
 feature set, and document that constraint in the model artifact or report.

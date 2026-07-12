@@ -8,7 +8,7 @@ from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 
-from cartoboost.forecasting import LaneNeuralPanelForecaster, NeuralPanelForecaster
+from cartoboost.preview.forecasting import LaneNeuralPanelForecaster, NeuralPanelForecaster
 
 
 def test_neural_panel_wrapper_uses_native_forecaster_syntax(install_fake_native):

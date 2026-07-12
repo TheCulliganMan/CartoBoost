@@ -25,7 +25,7 @@ they match the question:
 
 - [Python Estimator](../python-estimator.md) for fit, predict, save, and load
   behavior.
-- [Parameters](../parameters.md) for splitters, losses, fuzzy routing, and
+- [Parameters](../parameters.md) for split policies, losses, fuzzy routing, and
   leaves.
 - [Categorical Features](../categorical-features.md) for native categorical
   and ordinal columns.

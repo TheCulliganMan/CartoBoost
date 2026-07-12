@@ -3,18 +3,6 @@ import sys
 from pathlib import Path
 
 import pytest
-from cartoboost.forecasting import AutoKalmanForecaster as PublicAutoKalmanForecaster
-from cartoboost.forecasting import (
-    AutoLocalLevelKalmanForecaster as PublicAutoLocalLevelKalmanForecaster,
-)
-from cartoboost.forecasting import KalmanForecaster as PublicKalmanForecaster
-from cartoboost.forecasting import KrigingForecaster as PublicKrigingForecaster
-from cartoboost.forecasting import (
-    LocalLevelKalmanForecaster as PublicLocalLevelKalmanForecaster,
-)
-from cartoboost.forecasting import (
-    SpatialPiecewiseKrigingForecaster as PublicSpatialPiecewiseKrigingForecaster,
-)
 from cartoboost.forecasting.local import (
     AutoKalmanForecaster,
     AutoLocalLevelKalmanForecaster,
@@ -22,6 +10,18 @@ from cartoboost.forecasting.local import (
     KrigingForecaster,
     LocalLevelKalmanForecaster,
     SpatialPiecewiseKrigingForecaster,
+)
+from cartoboost.preview.forecasting import AutoKalmanForecaster as PublicAutoKalmanForecaster
+from cartoboost.preview.forecasting import (
+    AutoLocalLevelKalmanForecaster as PublicAutoLocalLevelKalmanForecaster,
+)
+from cartoboost.preview.forecasting import KalmanForecaster as PublicKalmanForecaster
+from cartoboost.preview.forecasting import KrigingForecaster as PublicKrigingForecaster
+from cartoboost.preview.forecasting import (
+    LocalLevelKalmanForecaster as PublicLocalLevelKalmanForecaster,
+)
+from cartoboost.preview.forecasting import (
+    SpatialPiecewiseKrigingForecaster as PublicSpatialPiecewiseKrigingForecaster,
 )
 
 
@@ -212,7 +212,9 @@ def test_kriging_fit_predict_uses_rust_binding():
     predictions = result.predictions()
     assert [row[3] for row in predictions] == ["kriging", "kriging"]
     assert [row[2] for row in predictions] == [1, 1]
-    assert abs(predictions[0][-1] - 12.0) < 1.0e-4
+    assert abs(predictions[0][-1] - 42.0) < 1.0e-4
+    assert abs(predictions[1][-1] - 12.0) < 1.0e-4
+    assert model.get_metadata()["target_policy"] == "leave_one_series_out"
 
 
 def test_kriging_accepts_coordinate_triples(install_fake_native):

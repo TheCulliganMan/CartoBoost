@@ -21,9 +21,7 @@ from cartoboost.deep import (
     InvertedTemporalTransformer,
     PropagationDelayGraphForecaster,
     RegimeMoEForecaster,
-    TemporalSSMForecaster,
 )
-from cartoboost.representation import RetrievalAugmentedForecaster
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = ROOT / "docs" / "assets" / "deep_claim_benchmarks" / "results.json"
@@ -164,56 +162,6 @@ def pair_embedding_claim() -> dict[str, Any]:
         leakage_policy="deterministic synthetic directional pairs; grouped mechanism check",
         experimental_status="native_deep",
         extra={"save_load_protocol": "native wrapper has no public save/load surface"},
-    )
-
-
-def ssm_claim() -> dict[str, Any]:
-    seed = 13
-    time_index = np.arange(160, dtype=float)
-    y0 = np.zeros_like(time_index)
-    y1 = np.zeros_like(time_index)
-    for idx in range(12, len(time_index)):
-        y0[idx] = 0.75 * y0[idx - 9] - 0.35 * y0[idx - 5] + np.sin(idx / 13.0)
-        y1[idx] = 0.65 * y1[idx - 7] + 0.25 * y0[idx - 11] + np.cos(idx / 17.0)
-    y = np.column_stack([y0, y1])
-    frame = EntityPanelFrame(y=y, timestamps=list(range(len(y))), entity_ids=["a", "b"])
-    model, fit_seconds, fit_mem = timed(
-        lambda: TemporalSSMForecaster(lookback=48, horizon=4, state_dim=8, seed=seed).fit(frame)
-    )
-    pred, predict_seconds, predict_mem = timed(lambda: model.predict())
-    decoder = model.metadata_["decoder"]
-    baseline = max(
-        float(decoder["trend_extrapolation_rmse"]),
-        float(decoder["temporal_conv_baseline_rmse"]),
-    )
-    with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / "ssm.json"
-        model.save(path)
-        loaded = TemporalSSMForecaster.load(path)
-        drift = float(np.max(np.abs(loaded.predict() - pred)))
-    return row(
-        claim_id="selective_ssm_lite_long_memory_panel",
-        architecture="selective_ssm_lite",
-        capability_tier="shallow_neural",
-        implementation_backend="python_numpy_decoder",
-        falsifier_baseline="trend_extrapolation_and_temporal_conv",
-        dataset_payload=y.round(12).tolist(),
-        split_payload={"protocol": "rolling_origin", "train_rows": len(y), "random_split": False},
-        seed=seed,
-        primary_metric="rolling_origin_rmse",
-        model_metric=float(decoder["ssm_decoder_rmse"]),
-        baseline_metric=baseline,
-        improvement_threshold=1.0,
-        fit_seconds=fit_seconds,
-        predict_seconds=predict_seconds,
-        peak_memory_mb=max(fit_mem, predict_mem),
-        save_load_max_abs_diff=drift,
-        leakage_policy="rolling-origin temporal windows; random split forbidden",
-        experimental_status="shallow_neural",
-        extra={
-            "trend_extrapolation_rmse": float(decoder["trend_extrapolation_rmse"]),
-            "temporal_conv_baseline_rmse": float(decoder["temporal_conv_baseline_rmse"]),
-        },
     )
 
 
@@ -411,51 +359,6 @@ def regime_moe_claim() -> dict[str, Any]:
     )
 
 
-def retrieval_claim() -> dict[str, Any]:
-    seed = 0
-    contexts = []
-    targets = []
-    ids = []
-    for idx in range(60):
-        rare = 1.0 if idx % 17 == 0 else 0.0
-        hour = float(idx % 24) / 23.0
-        contexts.append([rare, hour])
-        targets.append(10.0 + 8.0 * rare + np.sin(idx / 3.0))
-        ids.append(f"a{idx}")
-    query = np.asarray([[1.0, 0.0], [1.0, 1.0]], dtype=float)
-    actual = np.asarray([18.0, 18.0], dtype=float)
-    model, fit_seconds, fit_mem = timed(
-        lambda: RetrievalAugmentedForecaster(k=3).fit(ids, contexts, targets)
-    )
-    pred, predict_seconds, predict_mem = timed(lambda: model.predict(query))
-    report = model.rare_pattern_benchmark(query, actual)
-    with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / "retrieval.json"
-        model.save(path)
-        loaded = RetrievalAugmentedForecaster.load(path)
-        drift = float(np.max(np.abs(loaded.predict(query) - pred)))
-    return row(
-        claim_id="retrieval_augmented_forecaster_rare_pattern",
-        architecture="retrieval_augmented_forecaster",
-        capability_tier="deterministic_python",
-        implementation_backend="deterministic_python_numpy",
-        falsifier_baseline="global_mean_no_retrieval",
-        dataset_payload={"contexts": contexts, "targets": targets, "query": query.tolist()},
-        split_payload={"protocol": "rare_pattern_query_holdout", "query_rows": len(query)},
-        seed=seed,
-        primary_metric="rmse",
-        model_metric=float(report["retrieval_rmse"]),
-        baseline_metric=float(report["global_mean_rmse"]),
-        improvement_threshold=1.0,
-        fit_seconds=fit_seconds,
-        predict_seconds=predict_seconds,
-        peak_memory_mb=max(fit_mem, predict_mem),
-        save_load_max_abs_diff=drift,
-        leakage_policy="query rows excluded from memory; exact KNN over historical analogs",
-        experimental_status="deterministic_python",
-    )
-
-
 def flow_claim() -> dict[str, Any]:
     seed = 0
     steps = 32
@@ -625,11 +528,9 @@ def main() -> None:
     )
     rows = [
         pair_embedding_claim(),
-        ssm_claim(),
         inverted_transformer_claim(),
         delay_graph_claim(),
         regime_moe_claim(),
-        retrieval_claim(),
         flow_claim(),
         choice_claim(),
     ]

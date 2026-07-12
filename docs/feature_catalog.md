@@ -86,7 +86,7 @@ Splitters tell the model what geometry or data shape is meaningful.
 
 | Splitter | Public names | Modeling use |
 | --- | --- | --- |
-| Automatic | `auto` or `splitters=None` | Conservative default search. |
+| Automatic | `split_policy="auto"` | Conservative default search. |
 | Axis | `axis` | Standard one-feature thresholds. |
 | Histogram axis | `axis_histogram`, `axis_hist`, `histogram`, `axis_histogram:<bins>` | Faster dense numeric threshold search. |
 | Diagonal 2D | `diagonal_2d`, `diagonal2d` | Oblique route or coordinate boundaries. |
@@ -188,15 +188,16 @@ shock propagation for market-belief adjustments.
 See [General Utilities](general_utilities.md), [Forecasting](forecasting.md),
 and the [forecasting model guides](user-guide/forecasting-models/index.md).
 
-## CartoBoost Command Line Interfaces
+## Source-checkout Command Line Interfaces
 
 | Command group | Public surface | Notes |
 | --- | --- | --- |
-| Regression CLI | `cartoboost train`, `predict`, `eval`, `inspect` | Dense numeric CSV workflows. |
-| Forecasting CLI | `cartoboost forecast fit`, `predict`, `backtest`, `compare` | Forecasting command scaffold and strict CSV validation. |
+| Regression CLI | `cargo run -p cartoboost-cli -- train|predict|eval|inspect` | Dense numeric CSV workflows from a source checkout. |
+| Forecasting scripts | `python scripts/forecast.py ...` | Forecasting workflows from a source checkout. |
 
-Use Python for sparse-set, graph-derived, neural embedding, and custom
-forecasting workflows that need richer in-memory objects.
+The Python wheel is the supported distribution path. Use Python for sparse-set,
+graph-derived, and custom forecasting workflows that need richer in-memory
+objects.
 
 See [CLI Reference](reference/cli.md) and [Forecasting](forecasting.md).
 

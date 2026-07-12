@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import numpy as np
@@ -36,6 +37,10 @@ def test_ranker_fit_predict_metrics_and_roundtrip(tmp_path: Path):
 
     model_path = tmp_path / "ranker.json"
     ranker.save(model_path)
+    artifact = json.loads(model_path.read_text(encoding="utf-8"))
+    assert artifact["format"] == "cartoboost.model"
+    assert artifact["artifact_version"] == 2
+    assert artifact["model_type"] == "ranker"
     loaded = CartoBoostRanker.load(model_path)
 
     assert loaded.predict(X) == pytest.approx(scores)

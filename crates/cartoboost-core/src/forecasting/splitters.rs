@@ -168,7 +168,12 @@ impl RollingOriginSplitter {
     pub fn split(&self, frame: &ForecastFrame) -> Result<Vec<ForecastFold>> {
         let timestamps = unique_timestamps(frame.rows());
         if timestamps.len() <= self.horizon {
-            return Ok(Vec::new());
+            return Err(CartoBoostError::InvalidInput(format!(
+                "rolling-origin split requires more than {} distinct timestamps for horizon {}, got {}",
+                self.horizon,
+                self.horizon,
+                timestamps.len()
+            )));
         }
         let mut candidates = Vec::new();
         let last_origin = timestamps.len() - self.horizon;
@@ -229,6 +234,12 @@ impl RollingOriginSplitter {
             let keep_from = candidates.len().saturating_sub(n_splits);
             candidates = candidates.split_off(keep_from);
         }
+        if candidates.is_empty() {
+            return Err(CartoBoostError::InvalidInput(format!(
+                "rolling-origin split produced no folds: {} timestamps cannot satisfy min_train_size {} and horizon {}",
+                timestamps.len(), self.min_train_size, self.horizon
+            )));
+        }
         for (index, fold) in candidates.iter_mut().enumerate() {
             fold.fold_id = format!("fold_{index:04}");
             fold.metadata.train_size = fold.train_indices.len();
@@ -246,7 +257,7 @@ pub(crate) fn frame_from_indices(
         .iter()
         .map(|index| frame.rows()[*index].clone())
         .collect::<Vec<_>>();
-    ForecastFrame::new(rows, frame.frequency())
+    ForecastFrame::with_metadata(rows, frame.frequency(), frame.metadata().clone())
 }
 
 fn unique_timestamps(rows: &[ForecastRow]) -> Vec<NaiveDateTime> {
@@ -263,4 +274,58 @@ fn indices_for_timestamps(rows: &[ForecastRow], timestamps: &[NaiveDateTime]) ->
         .enumerate()
         .filter_map(|(index, row)| timestamp_set.contains(&row.timestamp).then_some(index))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::forecasting::{ForecastFrameMetadata, ForecastFrequency};
+    use chrono::NaiveDate;
+
+    fn ts(day: u32) -> NaiveDateTime {
+        NaiveDate::from_ymd_opt(2026, 1, day)
+            .and_then(|date| date.and_hms_opt(0, 0, 0))
+            .expect("timestamp")
+    }
+
+    #[test]
+    fn infeasible_split_is_an_error_instead_of_an_empty_protocol() {
+        let frame = ForecastFrame::new(
+            vec![
+                ForecastRow::single(ts(1), 1.0),
+                ForecastRow::single(ts(2), 2.0),
+            ],
+            ForecastFrequency::Daily,
+        )
+        .expect("frame");
+        let splitter = RollingOriginSplitter::expanding(2, 1).expect("splitter");
+
+        let error = splitter
+            .split(&frame)
+            .expect_err("infeasible split must fail");
+        assert!(error.to_string().contains("requires more than"));
+    }
+
+    #[test]
+    fn split_frames_preserve_forecast_metadata() {
+        let metadata = ForecastFrameMetadata {
+            timestamp_col: Some("pickup_hour".to_string()),
+            target_col: Some("trip_count".to_string()),
+            known_future_covariates: vec!["is_airport_hour".to_string()],
+            ..ForecastFrameMetadata::default()
+        };
+        let frame = ForecastFrame::with_metadata(
+            vec![
+                ForecastRow::single(ts(1), 1.0),
+                ForecastRow::single(ts(2), 2.0),
+                ForecastRow::single(ts(3), 3.0),
+            ],
+            ForecastFrequency::Daily,
+            metadata.clone(),
+        )
+        .expect("frame");
+
+        let split = frame_from_indices(&frame, &[0, 1]).expect("split frame");
+        assert_eq!(split.metadata(), &metadata);
+    }
 }

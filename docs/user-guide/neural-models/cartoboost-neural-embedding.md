@@ -16,7 +16,7 @@ IDs, route pairs, account buckets, item IDs, or recurring operational groups.
 ## Public Contract
 
 ```python
-from cartoboost.neural import NeuralEmbeddingStandaloneRegressor
+from cartoboost.preview.neural import NeuralEmbeddingStandaloneRegressor
 import numpy as np
 
 entity_id = np.array([132, 161, 132, 236, 161, 236], dtype=np.uint64)

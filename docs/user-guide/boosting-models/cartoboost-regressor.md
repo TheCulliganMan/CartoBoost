@@ -16,7 +16,7 @@ model = CartoBoostRegressor(
     learning_rate=0.04,
     max_depth=5,
     min_samples_leaf=20,
-    splitters=["axis", "diagonal_2d", "gaussian_2d", "periodic:24"],
+    split_policy="structured",
 )
 model.fit(X_train, y_train)
 pred = model.predict(X_test)
@@ -39,10 +39,9 @@ pred = model.predict(X_test)
 
 | Scientific need | Parameter family |
 | --- | --- |
-| Dense tabular baseline | `splitters=None`, `["auto"]`, `["axis"]`, or `["axis_histogram:<bins>"]` |
-| Spatial boundaries in coordinates | `["axis", "diagonal_2d", "gaussian_2d"]` |
-| Wraparound time effects | `["axis", "periodic:24"]` or another `periodic:<period>` |
-| Sparse zones, routes, cells, or areas | `["axis", "sparse_set"]` plus `sparse_sets=` |
+| Dense tabular baseline | `split_policy="auto"` or `"axis_only"` |
+| Declared spatial/periodic/sparse structure | `split_policy="structured"` plus `feature_schema=` |
+| Sparse zones, routes, cells, or areas | `split_policy="structured"` plus `sparse_sets=` |
 | Native categorical labels or ordered tiers | `FeatureKind.CATEGORICAL` or `FeatureKind.ORDINAL` in `feature_schema=` |
 | Smooth changes near boundaries | `fuzzy=True`, `fuzzy_bandwidth=...`, `fuzzy_kernel=...` |
 | Outlier-resistant regression | `loss="mae"`, `loss="huber"`, or `loss="log_l2"` |

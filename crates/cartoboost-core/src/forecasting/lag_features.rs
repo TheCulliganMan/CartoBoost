@@ -774,16 +774,47 @@ impl LagFeatureBuilder {
     }
 }
 
-pub fn lag_config_supported_by_history(
+pub(crate) fn validate_lag_config_supported_by_prior(
     config: &LagFeatureConfig,
-    frame: &ForecastFrame,
-) -> LagFeatureConfig {
-    let min_history_len = history_by_series(frame.rows())
-        .values()
-        .map(Vec::len)
-        .min()
-        .unwrap_or(0);
-    lag_config_supported_by_prior(config, min_history_len.saturating_sub(1))
+    max_prior_len: usize,
+    model_name: &str,
+) -> Result<()> {
+    let required_prior_len = minimum_prior_len(config);
+    if required_prior_len > max_prior_len {
+        return Err(CartoBoostError::InvalidInput(format!(
+            "{model_name} lag configuration requires at least {required_prior_len} prior observations per training row, but the shortest series can provide at most {max_prior_len}"
+        )));
+    }
+    Ok(())
+}
+
+pub(crate) fn minimum_prior_len(config: &LagFeatureConfig) -> usize {
+    config
+        .lags
+        .iter()
+        .chain(&config.rolling_mean_windows)
+        .chain(&config.rolling_std_windows)
+        .chain(&config.rolling_min_windows)
+        .chain(&config.rolling_max_windows)
+        .chain(&config.rolling_trend_windows)
+        .copied()
+        .chain(
+            config
+                .difference_lags
+                .iter()
+                .map(|lag| lag.saturating_add(1)),
+        )
+        .max()
+        .unwrap_or(0)
+        .max(
+            if config.partial_rolling_mean_windows.is_empty()
+                && config.ewm_alpha_percents.is_empty()
+            {
+                0
+            } else {
+                1
+            },
+        )
 }
 
 pub(crate) fn lag_config_supported_by_prior(

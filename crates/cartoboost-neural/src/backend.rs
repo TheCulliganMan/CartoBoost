@@ -5,17 +5,17 @@ use serde::{Deserialize, Serialize};
     all(feature = "rocm", target_os = "linux")
 ))]
 use std::ffi::{c_char, c_void, CString};
-#[cfg(feature = "webgpu")]
+#[cfg(all(feature = "webgpu", not(target_arch = "wasm32")))]
 use std::future::Future;
-#[cfg(feature = "webgpu")]
+#[cfg(all(feature = "webgpu", not(target_arch = "wasm32")))]
 use std::sync::mpsc;
 #[cfg(any(
-    feature = "webgpu",
+    all(feature = "webgpu", not(target_arch = "wasm32")),
     all(feature = "cuda", any(target_os = "linux", target_os = "windows")),
     all(feature = "rocm", target_os = "linux")
 ))]
 use std::sync::OnceLock;
-#[cfg(feature = "webgpu")]
+#[cfg(all(feature = "webgpu", not(target_arch = "wasm32")))]
 use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 use std::time::Instant;
 
@@ -38,8 +38,9 @@ impl ComputeBackend {
             "cuda" => Ok(Self::Cuda),
             "rocm" => Ok(Self::Rocm),
             "metal" => Ok(Self::Metal),
+            "webgpu" => Ok(Self::Webgpu),
             other => Err(NeuralError::InvalidArgument(format!(
-                "unknown compute backend {other:?}; expected auto, cpu, cuda, rocm, or metal"
+                "unknown compute backend {other:?}; expected auto, cpu, cuda, rocm, metal, or webgpu"
             ))),
         }
     }
@@ -112,7 +113,7 @@ pub fn select_backend(requested: Option<&str>) -> Result<BackendSelection> {
     })
 }
 
-#[cfg(feature = "webgpu")]
+#[cfg(all(feature = "webgpu", not(target_arch = "wasm32")))]
 static WEBGPU_AVAILABLE: OnceLock<bool> = OnceLock::new();
 
 #[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
@@ -121,9 +122,16 @@ static CUDA_AVAILABLE: OnceLock<bool> = OnceLock::new();
 #[cfg(all(feature = "rocm", target_os = "linux"))]
 static ROCM_AVAILABLE: OnceLock<bool> = OnceLock::new();
 
-#[cfg(feature = "webgpu")]
+#[cfg(all(feature = "webgpu", not(target_arch = "wasm32")))]
 fn webgpu_available() -> bool {
     *WEBGPU_AVAILABLE.get_or_init(|| webgpu_request_device().is_ok())
+}
+
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+fn webgpu_available() -> bool {
+    // Browser adapter discovery is asynchronous.  Synchronous model APIs must
+    // not spin-wait on a JavaScript promise; use the async Wasm exports below.
+    false
 }
 
 #[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
@@ -156,6 +164,10 @@ pub fn available_backends() -> Vec<String> {
     #[cfg(all(feature = "rocm", target_os = "linux"))]
     if rocm_available() {
         backends.push("rocm".to_string());
+    }
+    #[cfg(feature = "webgpu")]
+    if webgpu_available() {
+        backends.push("webgpu".to_string());
     }
     backends
 }
@@ -2709,7 +2721,7 @@ fn rocm_pair_sigmoid_scores_f32(
     ))
 }
 
-#[cfg(feature = "webgpu")]
+#[cfg(all(feature = "webgpu", not(target_arch = "wasm32")))]
 fn dummy_waker() -> Waker {
     fn clone(_: *const ()) -> RawWaker {
         RawWaker::new(std::ptr::null(), &VTABLE)
@@ -2725,7 +2737,7 @@ fn dummy_waker() -> Waker {
     unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) }
 }
 
-#[cfg(feature = "webgpu")]
+#[cfg(all(feature = "webgpu", not(target_arch = "wasm32")))]
 fn block_on<F>(future: F) -> F::Output
 where
     F: Future,
@@ -2747,22 +2759,32 @@ fn bytes_of<T>(slice: &[T]) -> &[u8] {
 }
 
 #[cfg(feature = "webgpu")]
-fn webgpu_request_device() -> Result<(wgpu::Device, wgpu::Queue)> {
+async fn webgpu_request_device_async() -> Result<(wgpu::Device, wgpu::Queue)> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-    let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::HighPerformance,
-        compatible_surface: None,
-        force_fallback_adapter: false,
-    }))
-    .map_err(|err| {
-        NeuralError::InvalidArgument(format!("failed to request a WebGPU adapter: {err}"))
-    })?;
-    block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).map_err(|err| {
-        NeuralError::InvalidArgument(format!("failed to request a WebGPU device: {err}"))
-    })
+    let adapter = instance
+        .request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            compatible_surface: None,
+            force_fallback_adapter: false,
+        })
+        .await
+        .map_err(|err| {
+            NeuralError::InvalidArgument(format!("failed to request a WebGPU adapter: {err}"))
+        })?;
+    adapter
+        .request_device(&wgpu::DeviceDescriptor::default())
+        .await
+        .map_err(|err| {
+            NeuralError::InvalidArgument(format!("failed to request a WebGPU device: {err}"))
+        })
 }
 
-#[cfg(feature = "webgpu")]
+#[cfg(all(feature = "webgpu", not(target_arch = "wasm32")))]
+fn webgpu_request_device() -> Result<(wgpu::Device, wgpu::Queue)> {
+    block_on(webgpu_request_device_async())
+}
+
+#[cfg(all(feature = "webgpu", not(target_arch = "wasm32")))]
 fn webgpu_readback_f32(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -2815,7 +2837,337 @@ fn webgpu_readback_f32(
     Ok(values)
 }
 
-#[cfg(feature = "webgpu")]
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+async fn webgpu_readback_f32_async(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    output_buffer: &wgpu::Buffer,
+    byte_len: u64,
+) -> Result<Vec<f32>> {
+    let staging = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("webgpu-readback"),
+        size: byte_len,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("webgpu-readback-encoder"),
+    });
+    encoder.copy_buffer_to_buffer(output_buffer, 0, &staging, 0, byte_len);
+    queue.submit(Some(encoder.finish()));
+    let slice = staging.slice(..);
+    let (tx, rx) = futures_channel::oneshot::channel();
+    slice.map_async(wgpu::MapMode::Read, move |result| {
+        let _ = tx.send(result);
+    });
+    rx.await
+        .map_err(|_| {
+            NeuralError::InvalidArgument("WebGPU readback channel disconnected".to_string())
+        })?
+        .map_err(|err| {
+            NeuralError::InvalidArgument(format!("failed to map WebGPU readback buffer: {err}"))
+        })?;
+    let data = slice.get_mapped_range();
+    let values = unsafe {
+        std::slice::from_raw_parts(data.as_ptr().cast::<f32>(), byte_len as usize / 4).to_vec()
+    };
+    drop(data);
+    staging.unmap();
+    Ok(values)
+}
+
+/// Runs the WebGPU verification kernel without blocking the browser event loop.
+/// This is intentionally an async-only API: browser adapter and buffer mapping
+/// callbacks are delivered through JavaScript promises.
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+pub async fn webgpu_dispatch_report_async(len: usize) -> Result<BackendDispatchReport> {
+    const SOURCE: &str = r#"
+        struct Params { len: u32, };
+        @group(0) @binding(0) var<storage, read> left: array<f32>;
+        @group(0) @binding(1) var<storage, read> right: array<f32>;
+        @group(0) @binding(2) var<storage, read_write> output: array<f32>;
+        @group(0) @binding(3) var<storage, read> params: Params;
+        @compute @workgroup_size(64)
+        fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+            if (id.x >= params.len) { return; }
+            output[id.x] = left[id.x] + right[id.x];
+        }
+    "#;
+
+    let len = len.max(1);
+    let left = (0..len).map(|idx| idx as f32 * 0.5).collect::<Vec<_>>();
+    let right = (0..len).map(|idx| idx as f32 * 1.5).collect::<Vec<_>>();
+    let params = [len as u32];
+    let expected_checksum = (0..len).map(|idx| idx as f64 * 2.0).sum::<f64>();
+    let (device, queue) = webgpu_request_device_async().await?;
+    let storage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST;
+    let left_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("webgpu-vector-left"),
+        size: std::mem::size_of_val(left.as_slice()) as u64,
+        usage: storage,
+        mapped_at_creation: false,
+    });
+    let right_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("webgpu-vector-right"),
+        size: std::mem::size_of_val(right.as_slice()) as u64,
+        usage: storage,
+        mapped_at_creation: false,
+    });
+    let output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("webgpu-vector-output"),
+        size: (len * std::mem::size_of::<f32>()) as u64,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+        mapped_at_creation: false,
+    });
+    let params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("webgpu-vector-params"),
+        size: std::mem::size_of_val(&params) as u64,
+        usage: storage,
+        mapped_at_creation: false,
+    });
+    queue.write_buffer(&left_buffer, 0, bytes_of(&left));
+    queue.write_buffer(&right_buffer, 0, bytes_of(&right));
+    queue.write_buffer(&params_buffer, 0, bytes_of(&params));
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("webgpu-vector-add"),
+        source: wgpu::ShaderSource::Wgsl(SOURCE.into()),
+    });
+    let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("webgpu-vector-layout"),
+        entries: &[
+            storage_layout_entry(0, true),
+            storage_layout_entry(1, true),
+            storage_layout_entry(2, false),
+            storage_layout_entry(3, true),
+        ],
+    });
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("webgpu-vector-pipeline-layout"),
+        bind_group_layouts: &[Some(&layout)],
+        immediate_size: 0,
+    });
+    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("webgpu-vector-pipeline"),
+        layout: Some(&pipeline_layout),
+        module: &shader,
+        entry_point: Some("main"),
+        compilation_options: wgpu::PipelineCompilationOptions::default(),
+        cache: None,
+    });
+    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("webgpu-vector-bind-group"),
+        layout: &layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: left_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: right_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: output_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: params_buffer.as_entire_binding(),
+            },
+        ],
+    });
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("webgpu-vector-encoder"),
+    });
+    {
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("webgpu-vector-pass"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(&pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.dispatch_workgroups((len as u32).div_ceil(64), 1, 1);
+    }
+    queue.submit(Some(encoder.finish()));
+    let output =
+        webgpu_readback_f32_async(&device, &queue, &output_buffer, (len * 4) as u64).await?;
+    Ok(BackendDispatchReport {
+        requested: "webgpu".to_string(),
+        selected: "webgpu".to_string(),
+        operation: "vector_add".to_string(),
+        len,
+        checksum: output.into_iter().map(f64::from).sum(),
+        expected_checksum,
+        // `std::time::Instant` is unavailable on wasm32-unknown-unknown.
+        // Browser callers can time the returned Promise with `performance.now()`.
+        elapsed_ms: 0.0,
+        accelerated: true,
+    })
+}
+
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+fn storage_layout_entry(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    }
+}
+
+/// Executes a dense layer on a browser WebGPU device without blocking the
+/// JavaScript event loop.
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+pub async fn webgpu_dense_layer_f32_async(
+    features: &[Vec<f32>],
+    weights: &[f32],
+    biases: &[f32],
+) -> Result<Vec<Vec<f32>>> {
+    validate_dense_layer_inputs(features, weights, biases)?;
+    const SOURCE: &str = r#"
+        struct Params { rows: u32, cols: u32, out_dim: u32, };
+        @group(0) @binding(0) var<storage, read> features: array<f32>;
+        @group(0) @binding(1) var<storage, read> weights: array<f32>;
+        @group(0) @binding(2) var<storage, read> biases: array<f32>;
+        @group(0) @binding(3) var<storage, read_write> output: array<f32>;
+        @group(0) @binding(4) var<storage, read> params: Params;
+        @compute @workgroup_size(8, 8)
+        fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+            if (id.x >= params.rows || id.y >= params.out_dim) { return; }
+            var value = biases[id.y];
+            var col = 0u;
+            loop {
+                if (col >= params.cols) { break; }
+                value += features[id.x * params.cols + col] * weights[col * params.out_dim + id.y];
+                col += 1u;
+            }
+            output[id.x * params.out_dim + id.y] = value;
+        }
+    "#;
+    let rows = features.len();
+    let cols = features[0].len();
+    let out_dim = biases.len();
+    let flat = features
+        .iter()
+        .flat_map(|row| row.iter().copied())
+        .collect::<Vec<_>>();
+    let params = [rows as u32, cols as u32, out_dim as u32];
+    let (device, queue) = webgpu_request_device_async().await?;
+    let read_storage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST;
+    let buffer = |label, size, usage| {
+        device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size,
+            usage,
+            mapped_at_creation: false,
+        })
+    };
+    let features_buffer = buffer(
+        "webgpu-dense-features",
+        std::mem::size_of_val(flat.as_slice()) as u64,
+        read_storage,
+    );
+    let weights_buffer = buffer(
+        "webgpu-dense-weights",
+        std::mem::size_of_val(weights) as u64,
+        read_storage,
+    );
+    let biases_buffer = buffer(
+        "webgpu-dense-biases",
+        std::mem::size_of_val(biases) as u64,
+        read_storage,
+    );
+    let output_buffer = buffer(
+        "webgpu-dense-output",
+        (rows * out_dim * 4) as u64,
+        wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+    );
+    let params_buffer = buffer(
+        "webgpu-dense-params",
+        std::mem::size_of_val(&params) as u64,
+        read_storage,
+    );
+    queue.write_buffer(&features_buffer, 0, bytes_of(&flat));
+    queue.write_buffer(&weights_buffer, 0, bytes_of(weights));
+    queue.write_buffer(&biases_buffer, 0, bytes_of(biases));
+    queue.write_buffer(&params_buffer, 0, bytes_of(&params));
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("webgpu-dense"),
+        source: wgpu::ShaderSource::Wgsl(SOURCE.into()),
+    });
+    let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("webgpu-dense-layout"),
+        entries: &[
+            storage_layout_entry(0, true),
+            storage_layout_entry(1, true),
+            storage_layout_entry(2, true),
+            storage_layout_entry(3, false),
+            storage_layout_entry(4, true),
+        ],
+    });
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("webgpu-dense-pipeline-layout"),
+        bind_group_layouts: &[Some(&layout)],
+        immediate_size: 0,
+    });
+    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("webgpu-dense-pipeline"),
+        layout: Some(&pipeline_layout),
+        module: &shader,
+        entry_point: Some("main"),
+        compilation_options: wgpu::PipelineCompilationOptions::default(),
+        cache: None,
+    });
+    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("webgpu-dense-bind-group"),
+        layout: &layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: features_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: weights_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: biases_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: output_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: params_buffer.as_entire_binding(),
+            },
+        ],
+    });
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("webgpu-dense-encoder"),
+    });
+    {
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("webgpu-dense-pass"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(&pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.dispatch_workgroups(rows.div_ceil(8) as u32, out_dim.div_ceil(8) as u32, 1);
+    }
+    queue.submit(Some(encoder.finish()));
+    let values =
+        webgpu_readback_f32_async(&device, &queue, &output_buffer, (rows * out_dim * 4) as u64)
+            .await?;
+    Ok(values.chunks(out_dim).map(|row| row.to_vec()).collect())
+}
+
+#[cfg(all(feature = "webgpu", not(target_arch = "wasm32")))]
 fn webgpu_vector_add_report(
     selection: BackendSelection,
     len: usize,
@@ -2984,7 +3336,7 @@ fn webgpu_vector_add_report(
     })
 }
 
-#[cfg(feature = "webgpu")]
+#[cfg(all(feature = "webgpu", not(target_arch = "wasm32")))]
 fn webgpu_affine_scores(
     features: &[Vec<f64>],
     means: &[f64],
@@ -3211,7 +3563,7 @@ fn webgpu_affine_scores(
     Ok(output.into_iter().map(f64::from).collect())
 }
 
-#[cfg(feature = "webgpu")]
+#[cfg(all(feature = "webgpu", not(target_arch = "wasm32")))]
 fn webgpu_dense_layer_f32(
     features: &[Vec<f32>],
     weights: &[f32],
@@ -3409,7 +3761,7 @@ fn webgpu_dense_layer_f32(
     Ok(output.chunks(out_dim).map(|row| row.to_vec()).collect())
 }
 
-#[cfg(feature = "webgpu")]
+#[cfg(all(feature = "webgpu", not(target_arch = "wasm32")))]
 fn webgpu_pair_sigmoid_scores_f32(
     embeddings: &[Vec<f32>],
     pairs: &[(usize, usize)],
@@ -3591,7 +3943,7 @@ fn webgpu_pair_sigmoid_scores_f32(
     Ok(output.into_iter().map(f64::from).collect())
 }
 
-#[cfg(not(feature = "webgpu"))]
+#[cfg(any(not(feature = "webgpu"), target_arch = "wasm32"))]
 fn webgpu_vector_add_report(
     _selection: BackendSelection,
     _len: usize,
@@ -3601,7 +3953,7 @@ fn webgpu_vector_add_report(
     ))
 }
 
-#[cfg(not(feature = "webgpu"))]
+#[cfg(any(not(feature = "webgpu"), target_arch = "wasm32"))]
 fn webgpu_affine_scores(
     _features: &[Vec<f64>],
     _means: &[f64],
@@ -3613,7 +3965,7 @@ fn webgpu_affine_scores(
     ))
 }
 
-#[cfg(not(feature = "webgpu"))]
+#[cfg(any(not(feature = "webgpu"), target_arch = "wasm32"))]
 fn webgpu_dense_layer_f32(
     _features: &[Vec<f32>],
     _weights: &[f32],
@@ -3624,7 +3976,7 @@ fn webgpu_dense_layer_f32(
     ))
 }
 
-#[cfg(not(feature = "webgpu"))]
+#[cfg(any(not(feature = "webgpu"), target_arch = "wasm32"))]
 fn webgpu_pair_sigmoid_scores_f32(
     _embeddings: &[Vec<f32>],
     _pairs: &[(usize, usize)],
@@ -3649,12 +4001,32 @@ mod tests {
         assert_eq!(default_selection.selected, "cpu");
     }
 
+    #[cfg(not(feature = "webgpu"))]
     #[test]
-    fn webgpu_backend_is_not_selectable() {
+    fn webgpu_backend_requires_a_compiled_and_available_adapter() {
         let err = select_backend(Some("webgpu")).unwrap_err();
         assert!(err
             .to_string()
-            .contains("expected auto, cpu, cuda, rocm, or metal"));
+            .contains("requested compute backend \"webgpu\" is not available"));
+    }
+
+    #[cfg(feature = "webgpu")]
+    #[test]
+    fn webgpu_backend_is_selectable_exactly_when_an_adapter_is_available() {
+        let available = available_backends()
+            .iter()
+            .any(|backend| backend == "webgpu");
+        match select_backend(Some("webgpu")) {
+            Ok(selection) => {
+                assert!(available);
+                assert_eq!(selection.requested, "webgpu");
+                assert_eq!(selection.selected, "webgpu");
+            }
+            Err(error) => {
+                assert!(!available);
+                assert!(error.to_string().contains("not available"));
+            }
+        }
     }
 
     #[test]

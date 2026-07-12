@@ -1,6 +1,6 @@
 #![no_main]
 
-use cartoboost_core::tree::{Node, Tree, MODEL_ARTIFACT_VERSION};
+use cartoboost_core::tree::{Node, PredictionTransform, Tree, MODEL_ARTIFACT_VERSION};
 use cartoboost_core::Model;
 use libfuzzer_sys::fuzz_target;
 
@@ -27,6 +27,8 @@ fuzz_target!(|data: &[u8]| {
         feature_schema: None,
         target_name: None,
         training_config: None,
+        training_history: Vec::new(),
+        prediction_transform: PredictionTransform::Identity,
         trees: vec![Tree {
             root: Node::Leaf {
                 value: 1.0,

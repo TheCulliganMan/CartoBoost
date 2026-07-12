@@ -70,20 +70,46 @@ def fit_model(
     fuzzy: bool = False,
     fuzzy_bandwidth: float = 0.0,
 ) -> CartoBoostRegressor:
+    requested = {str(value).split(":", 1)[0].lower() for value in splitters}
+    feature_schema: dict[str, list[dict[str, object]]] | None = None
+    sparse_sets: dict[str, list[list[int]]] | None = None
+    if "diagonal_2d" in requested or "gaussian_2d" in requested:
+        if x.shape[1] < 2:
+            raise ValueError("spatial acceptance fixtures require two dense columns")
+        feature_schema = {
+            "dense": [
+                {"name": "x0", "kind": "spatial", "other": "x1"},
+                {"name": "x1", "kind": "spatial", "other": "x0"},
+            ],
+            "sparse_sets": [],
+        }
+    elif "periodic_time" in requested:
+        feature_schema = {
+            "dense": [{"name": "hour", "kind": "periodic", "period": 24}],
+            "sparse_sets": [],
+        }
+    elif "sparse_set" in requested:
+        sparse_sets = {"acceptance_ids": [[int(value)] for value in x[:, 0]]}
+        feature_schema = {
+            "dense": [{"name": "id", "kind": "numeric"}],
+            "sparse_sets": [{"name": "acceptance_ids", "kind": "sparse_set"}],
+        }
+    policy = "axis_only" if requested <= {"axis"} else "structured"
     model = CartoBoostRegressor(
         n_estimators=n_estimators,
         learning_rate=learning_rate,
         max_depth=max_depth,
         min_samples_leaf=min_samples_leaf,
         min_gain=0.0,
-        splitters=splitters,
+        split_policy=policy,
         leaf_predictor=leaf_predictor,
         linear_leaf_features=linear_leaf_features,
         fuzzy=fuzzy,
         fuzzy_bandwidth=fuzzy_bandwidth,
         l2_regularization=0.0,
     )
-    model.fit(x, y)
+    model.fit(x, y, feature_schema=feature_schema, sparse_sets=sparse_sets)
+    model._acceptance_sparse_sets = sparse_sets
     return model
 
 
@@ -382,9 +408,12 @@ def fuzzy_periodic_metrics() -> dict[str, Any]:
     probes = np.linspace(20.0, 24.0, 161).reshape(-1, 1)
     hard_pred = hard.predict(probes)
     fuzzy_pred = fuzzy.predict(probes)
-    hard_jump = abs(float(hard.predict([[21.99]])[0] - hard.predict([[22.01]])[0]))
-    fuzzy_jump = abs(float(fuzzy.predict([[21.99]])[0] - fuzzy.predict([[22.01]])[0]))
-    jump_ratio = fuzzy_jump / hard_jump
+    hard_diffs = np.abs(np.diff(hard_pred))
+    fuzzy_diffs = np.abs(np.diff(fuzzy_pred))
+    boundary_index = int(np.argmax(hard_diffs))
+    hard_jump = float(hard_diffs[boundary_index])
+    fuzzy_jump = float(fuzzy_diffs[boundary_index])
+    jump_ratio = fuzzy_jump / hard_jump if hard_jump > 0.0 else 0.0
     return {
         "models": {
             "hard_periodic": {"probe_total_variation": total_variation(hard_pred)},
@@ -509,8 +538,10 @@ def sparse_metrics() -> dict[str, Any]:
     axis = fit_model(x, y, splitters=["axis"], min_samples_leaf=2)
     sparse = fit_model(x, y, splitters=["sparse_set"], min_samples_leaf=2)
     axis_pred = axis.predict(x)
-    sparse_pred = sparse.predict(x)
-    sparse_probe = sparse.predict(probe)
+    sparse_sets = sparse._acceptance_sparse_sets
+    sparse_pred = sparse.predict(x, sparse_sets=sparse_sets)
+    probe_sparse_sets = {"acceptance_ids": [[int(value)] for value in probe[:, 0]]}
+    sparse_probe = sparse.predict(probe, sparse_sets=probe_sparse_sets)
     return {
         "models": {
             "axis": {"train_rmse": rmse(y, axis_pred)},
@@ -520,9 +551,15 @@ def sparse_metrics() -> dict[str, Any]:
             },
         },
         "inspection_metrics": {
-            "toll_cell_prediction": float(sparse.predict([[7.0]])[0]),
-            "cold_cell_prediction": float(sparse.predict([[3.0]])[0]),
-            "unseen_cell_prediction": float(sparse.predict([[11.0]])[0]),
+            "toll_cell_prediction": float(
+                sparse.predict([[7.0]], sparse_sets={"acceptance_ids": [[7]]})[0]
+            ),
+            "cold_cell_prediction": float(
+                sparse.predict([[3.0]], sparse_sets={"acceptance_ids": [[3]]})[0]
+            ),
+            "unseen_cell_prediction": float(
+                sparse.predict([[11.0]], sparse_sets={"acceptance_ids": [[11]]})[0]
+            ),
             "observed_cell_count": float(len(set(x[:, 0]))),
             "dense_one_hot_columns_avoided": float(len(set(x[:, 0])) - x.shape[1]),
         },
@@ -536,8 +573,15 @@ def sparse_metrics() -> dict[str, Any]:
             ),
             gate(
                 "sparse_toll_margin_gt_20",
-                float(sparse.predict([[7.0]])[0] - sparse.predict([[3.0]])[0]) > 20.0,
-                float(sparse.predict([[7.0]])[0] - sparse.predict([[3.0]])[0]),
+                float(
+                    sparse.predict([[7.0]], sparse_sets={"acceptance_ids": [[7]]})[0]
+                    - sparse.predict([[3.0]], sparse_sets={"acceptance_ids": [[3]]})[0]
+                )
+                > 20.0,
+                float(
+                    sparse.predict([[7.0]], sparse_sets={"acceptance_ids": [[7]]})[0]
+                    - sparse.predict([[3.0]], sparse_sets={"acceptance_ids": [[3]]})[0]
+                ),
                 20.0,
                 ">",
             ),

@@ -6,6 +6,10 @@ import {ForecastModelExample} from '@site/src/components/ModelingLabClient';
 intermittent-demand methods for sparse non-negative series. Use them when zero
 values are real demand periods, not missing observations.
 
+The Rust `IntermittentDemandForecaster` is the corresponding selector. It
+compares an explicit zero baseline, Croston, SBA, TSB, and ADIDA when the ADIDA
+bucket is supported by the training prefix.
+
 ## When To Use
 
 - The target is non-negative.
@@ -24,10 +28,20 @@ index first with `ForecastFrame`, then model true zero demand.
 | [`SbaForecaster`](sba.md) | You want Croston-style smoothing with SBA bias adjustment. |
 | [`TsbForecaster`](tsb.md) | Occurrence probability and demand size should be smoothed separately. |
 
+The selector always keeps a real non-empty suffix out of fitting. An explicit
+validation window that consumes the full history is rejected. All-zero series
+use the zero-demand boundary model; they are not replaced by a positive demand
+estimate.
+
+ADIDA aggregates only complete buckets. Buckets are aligned from the most
+recent observation backward, so an incomplete leading fragment is excluded
+instead of being treated as a shorter, incomparable bucket. A history shorter
+than one configured bucket fails explicitly.
+
 ## Public Contract
 
 ```python
-from cartoboost.forecasting import CrostonForecaster, SbaForecaster, TsbForecaster
+from cartoboost.preview.forecasting import CrostonForecaster, SbaForecaster, TsbForecaster
 
 demand = [0, 0, 4, 0, 0, 7, 0, 3, 0, 0, 0, 5]
 
@@ -62,7 +76,7 @@ tsb_forecast = tsb.predict(6)
 ## Panel Fit
 
 ```python
-from cartoboost.forecasting import ForecastFrame, TsbForecaster
+from cartoboost.preview.forecasting import ForecastFrame, TsbForecaster
 
 frame = ForecastFrame.from_pandas(
     sparse_panel,
@@ -81,5 +95,5 @@ forecast = model.predict(14)
 
 Compare intermittent-demand methods against naive, seasonal naive, and any
 selector that includes intermittent candidates. Report zero fraction,
-non-negative target validation, horizon metrics, and whether zeros represent
-true no-demand periods.
+non-negative target validation, internal holdout length, ADIDA bucket size,
+horizon metrics, and whether zeros represent true no-demand periods.

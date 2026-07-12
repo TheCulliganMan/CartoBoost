@@ -7,7 +7,7 @@ import cartoboost.metrics as metrics_module
 import numpy as np
 import pytest
 from cartoboost import _native
-from cartoboost.metrics.wrmsse import m5_equal_level_wrmsse, rmsse_scale, wrmsse
+from cartoboost.metrics.wrmsse import aggregate_equal_level_wrmsse, rmsse_scale, wrmsse
 
 
 def test_wrmsse_matches_manual_m5_style_reference() -> None:
@@ -63,11 +63,11 @@ def test_wrmsse_returns_scalar_by_default() -> None:
     assert score > 0.0
 
 
-def test_m5_equal_level_wrmsse_delegates_aggregation_to_native(monkeypatch) -> None:
+def test_aggregate_equal_level_wrmsse_delegates_to_native(monkeypatch) -> None:
     calls: dict[str, object] = {}
 
     class FakeNative:
-        def m5_equal_level_wrmsse_value(self, level_scores):
+        def aggregate_equal_level_wrmsse_value(self, level_scores):
             calls["level_scores"] = level_scores
             return json.dumps(
                 {
@@ -91,7 +91,7 @@ def test_m5_equal_level_wrmsse_delegates_aggregation_to_native(monkeypatch) -> N
 
     monkeypatch.setattr(metrics_module, "_native", FakeNative())
 
-    result = m5_equal_level_wrmsse(
+    result = aggregate_equal_level_wrmsse(
         [{"level": "total", "wrmsse": 0.6}, ("item_store", 1.2)],
         return_breakdown=True,
     )

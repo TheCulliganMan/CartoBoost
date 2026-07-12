@@ -226,7 +226,7 @@ def _run_model_comparison(
         max_depth=5,
         min_samples_leaf=1,
         min_gain=0.0,
-        splitters=["axis_histogram:256"],
+        split_policy="structured",
     )
 
     start = time.perf_counter()

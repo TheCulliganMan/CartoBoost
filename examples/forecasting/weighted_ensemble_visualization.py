@@ -9,7 +9,7 @@ from statistics import mean
 from typing import Any
 
 import pandas as pd
-from cartoboost.forecasting import (
+from cartoboost.preview.forecasting import (
     ForecastFrame,
     KalmanForecaster,
     SeasonalNaiveForecaster,

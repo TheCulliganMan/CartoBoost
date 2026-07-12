@@ -33,13 +33,12 @@ A first regression table might include:
   and target identifiers;
 - graph context: directed source-to-target flows when source and target roles should remain distinct.
 
-Match splitters to the scientific structure you want to test:
+Declare the split policy and feature schema for the scientific structure you
+want to test:
 
-- use `axis` as the dense baseline splitter;
-- add `periodic:24` for hour-of-day effects;
-- add `diagonal_2d` or `gaussian_2d` when coordinates or projected zone
-  centroids are central to the question;
-- add `sparse_set` when rows carry list-valued zone or route memberships.
+- use `SplitPolicy.AXIS_ONLY` as the dense baseline;
+- use `SplitPolicy.STRUCTURED` with periodic, spatial-pair, and sparse-set
+  schema entries when those structures are part of the question.
 
 ## 3. Install
 
@@ -51,7 +50,13 @@ Verify the install:
 
 ```sh
 python -c "import cartoboost; print(cartoboost.__version__)"
-cartoboost --help
+python examples/quickstart.py
+```
+
+For pandas-backed forecasting examples, install the explicit optional extra:
+
+```sh
+uv add "cartoboost[pandas]"
 ```
 
 Optional packages are installed only when needed. For example, use
@@ -60,28 +65,14 @@ or `cartoboost[onnx]` for the supported ONNX export subset.
 
 ## 4. Fit A Regression Model
 
-The snippet below assumes you have already built `X_train`, `X_validation`,
-`y_train`, and `y_validation` from a leakage-aware split, such as holding out
-the latest dates.
+Run the maintained [NumPy quickstart](../examples/quickstart.py) for a
+complete fit, leakage-aware split, baseline comparison, and artifact
+round-trip. It is the canonical first example used by the README and browser
+documentation.
 
-```python
-from cartoboost import CartoBoostRegressor
-
-model = CartoBoostRegressor(
-    n_estimators=200,
-    learning_rate=0.04,
-    max_depth=5,
-    min_samples_leaf=30,
-    splitters=["axis", "periodic:24", "diagonal_2d", "gaussian_2d"],
-)
-
-model.fit(X_train, y_train)
-predictions = model.predict(X_validation)
-```
-
-Start with a smaller splitter set if the study only needs dense numeric
-features. Add spatial, periodic, sparse, neural, or graph structure only when it
-matches the modeling question and passes the same validation split.
+Start with `SplitPolicy.AXIS_ONLY` if the study only needs dense numeric
+features. Use `SplitPolicy.STRUCTURED` only when the schema declares the
+periodic, spatial, or sparse structure and the same validation split is used.
 
 ## 5. Use Sparse Memberships
 
@@ -106,7 +97,7 @@ model = CartoBoostRegressor(
     learning_rate=0.04,
     max_depth=5,
     min_samples_leaf=30,
-    splitters=["axis", "periodic:24", "sparse_set"],
+    split_policy="structured",
 )
 
 model.fit(
@@ -128,9 +119,9 @@ time-indexed quantity. Panel data should identify the series, such as
 pickup/dropoff lane or pickup zone.
 
 ```python
-import pandas as pd
+from cartoboost.preview.forecasting import ForecastFrame, ThetaForecaster
 
-from cartoboost.forecasting import ForecastFrame, ThetaForecaster
+import pandas as pd
 
 daily_lanes = pd.DataFrame(
     {
@@ -167,12 +158,23 @@ For temporal-spatial problems, hold out the latest rows before trusting model
 quality:
 
 ```python
-from cartoboost import out_of_time_split
+import cartoboost
+from cartoboost.geo import PanelIndex, TimeIndex
+from cartoboost.validation import native_out_of_time_split
 
-train_idx, validation_idx = out_of_time_split(
-    pickup_times,
-    validation_fraction=0.2,
+time = TimeIndex(pickup_times, frequency="h")
+panel = PanelIndex(["nyc_taxi"] * len(pickup_times), time=time)
+manifest = native_out_of_time_split(
+    panel,
+    min_train_size=int(len(pickup_times) * 0.8),
+    horizon=len(pickup_times) - int(len(pickup_times) * 0.8),
+    step=len(pickup_times) - int(len(pickup_times) * 0.8),
+    dataset_fingerprint="sha256:...",
+    coordinate_crs_note="not_applicable",
+    model_version=cartoboost.__version__,
+    dependency_versions={"cartoboost": cartoboost.__version__},
 )
+_, train_idx, validation_idx = manifest.folds()[0]
 
 model.fit(X_all[train_idx], y_all[train_idx])
 predictions = model.predict(X_all[validation_idx])
@@ -187,20 +189,24 @@ forecasting.
 For benchmark claims, document out-of-time, spatial-blocked, grouped, and
 leakage-aware validation details in the benchmark writeup.
 
-## 8. Add Neural Or Graph Structure When Justified
+## 8. Add Advanced Structure When Justified
+
+Graph, neural, causal, and foundation surfaces are preview APIs in the v0.3
+reset. Use them only when their evidence tier and native backend match the
+study requirement; they are intentionally excluded from the core quickstart.
 
 Use learned embeddings when high-cardinality IDs carry stable signal that is not
 captured by dense features alone.
 
 ```python
-from cartoboost import NeuralEmbeddingRegressor
+from cartoboost.preview import NeuralEmbeddingRegressor
 
 neural_model = NeuralEmbeddingRegressor(
     dim=16,
-    base_model_kwargs={"n_estimators": 80, "splitters": ["axis"]},
+    base_model_kwargs={"n_estimators": 80, "split_policy": "axis_only"},
     final_model_kwargs={
         "n_estimators": 120,
-        "splitters": ["axis", "periodic:24"],
+        "split_policy": "structured",
     },
 )
 

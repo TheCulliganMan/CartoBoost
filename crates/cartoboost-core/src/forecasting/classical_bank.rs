@@ -5,7 +5,7 @@ use crate::forecasting::local::{
     OptimizedThetaForecaster, SeasonalNaiveForecaster, SeasonalWindowAverageForecaster,
     ThetaForecaster, ThetaSeasonality, WindowAverageForecaster,
 };
-use crate::forecasting::metrics::m_competition_mase_scale;
+use crate::forecasting::metrics::competition_mase_scale;
 use crate::forecasting::{
     ForecastFrame, ForecastPrediction, ForecastResult, ForecastRow, Forecaster,
 };
@@ -256,6 +256,20 @@ impl ClassicalExpertBank {
                 "smape_mase_average seasonality must be positive".to_string(),
             ));
         }
+        for (idx, expert) in experts.iter().enumerate() {
+            expert.build().map_err(|error| {
+                CartoBoostError::InvalidInput(format!(
+                    "classical expert {} at index {idx} is invalid: {error}",
+                    expert.name()
+                ))
+            })?;
+            if experts[..idx].iter().any(|previous| previous == expert) {
+                return Err(CartoBoostError::InvalidInput(format!(
+                    "classical expert bank contains duplicate expert {} at index {idx}",
+                    expert.name()
+                )));
+            }
+        }
         Ok(Self {
             experts,
             validation_window,
@@ -287,11 +301,23 @@ impl ClassicalExpertBank {
 impl Forecaster for ClassicalExpertBank {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
         frame.require_regular_for_model(self.model_name())?;
-        let validation_window = self.effective_validation_window(frame);
+        let validation_window = self.effective_validation_window(frame)?;
+        let split = split_validation_frame(frame, validation_window)?;
+        let minimum_train_history = history_by_series(split.train.rows())
+            .values()
+            .map(Vec::len)
+            .min()
+            .ok_or_else(|| {
+                CartoBoostError::InvalidInput(
+                    "classical expert bank validation train split is empty".to_string(),
+                )
+            })?;
         let mut scores = Vec::new();
-        if validation_window > 0 {
-            let split = split_validation_frame(frame, validation_window)?;
-            for expert in &self.experts {
+        for expert in &self.experts {
+            if expert_supports_history(expert, minimum_train_history) {
+                // A single unstable ARIMA/ETS candidate must not invalidate an
+                // otherwise usable classical bank. Only candidates that fit
+                // and score on the leakage-safe validation split participate.
                 if let Ok(score) = score_expert(
                     expert,
                     &split.train,
@@ -303,20 +329,9 @@ impl Forecaster for ClassicalExpertBank {
             }
         }
         if scores.is_empty() {
-            for expert in &self.experts {
-                if let Ok(mut candidate) = expert.build() {
-                    if candidate.fit(frame).is_ok() {
-                        self.fitted = Some(FittedClassicalBankState {
-                            selected: expert.clone(),
-                            fitted: candidate,
-                            scores,
-                        });
-                        return Ok(());
-                    }
-                }
-            }
             return Err(CartoBoostError::InvalidInput(
-                "no classical expert could fit the forecast frame".to_string(),
+                "no classical expert has enough training history for an honest validation score"
+                    .to_string(),
             ));
         }
         scores.sort_by_key(|score| {
@@ -326,9 +341,22 @@ impl Forecaster for ClassicalExpertBank {
                 score.expert.name(),
             )
         });
-        let selected = robust_classical_expert(&scores)?.expert.clone();
-        let mut fitted = selected.build()?;
-        fitted.fit(frame)?;
+        let mut fitted_choice = None;
+        for score in &scores {
+            let candidate = score.expert.clone();
+            let Ok(mut fitted) = candidate.build() else {
+                continue;
+            };
+            if fitted.fit(frame).is_ok() {
+                fitted_choice = Some((candidate, fitted));
+                break;
+            }
+        }
+        let (selected, fitted) = fitted_choice.ok_or_else(|| {
+            CartoBoostError::InvalidInput(
+                "no classical expert could be refit on the complete frame".to_string(),
+            )
+        })?;
         self.fitted = Some(FittedClassicalBankState {
             selected,
             fitted,
@@ -392,7 +420,6 @@ struct ValidationSplit {
 fn default_experts(season_length: usize) -> Vec<ClassicalExpert> {
     let mut experts = vec![
         ClassicalExpert::Naive,
-        ClassicalExpert::SeasonalNaive { season_length },
         ClassicalExpert::WindowAverage { window_size: 3 },
         ClassicalExpert::WindowAverage { window_size: 7 },
         ClassicalExpert::Theta {
@@ -406,9 +433,6 @@ fn default_experts(season_length: usize) -> Vec<ClassicalExpert> {
         ClassicalExpert::OptimizedTheta {
             season_length: None,
         },
-        ClassicalExpert::OptimizedTheta {
-            season_length: Some(season_length),
-        },
         ClassicalExpert::ETS {
             alpha: 0.3,
             beta: 0.1,
@@ -417,25 +441,6 @@ fn default_experts(season_length: usize) -> Vec<ClassicalExpert> {
             alpha: 0.5,
             beta: 0.1,
         },
-        ClassicalExpert::SeasonalETS {
-            alpha: 0.3,
-            beta: 0.1,
-            gamma: 0.1,
-            season_length,
-        },
-        ClassicalExpert::SeasonalETS {
-            alpha: 0.5,
-            beta: 0.1,
-            gamma: 0.1,
-            season_length,
-        },
-        ClassicalExpert::SeasonalETS {
-            alpha: 0.5,
-            beta: 0.1,
-            gamma: 0.3,
-            season_length,
-        },
-        ClassicalExpert::AutoETS { season_length },
         ClassicalExpert::AutoARIMA { max_p: 2, max_d: 1 },
         ClassicalExpert::LocalLevelKalman,
         ClassicalExpert::Kalman,
@@ -443,13 +448,35 @@ fn default_experts(season_length: usize) -> Vec<ClassicalExpert> {
         ClassicalExpert::AutoKalman,
     ];
     if season_length > 1 {
-        experts.insert(
-            2,
+        experts.extend([
+            ClassicalExpert::SeasonalNaive { season_length },
             ClassicalExpert::SeasonalWindowAverage {
                 season_length,
                 window_count: 3,
             },
-        );
+            ClassicalExpert::OptimizedTheta {
+                season_length: Some(season_length),
+            },
+            ClassicalExpert::SeasonalETS {
+                alpha: 0.3,
+                beta: 0.1,
+                gamma: 0.1,
+                season_length,
+            },
+            ClassicalExpert::SeasonalETS {
+                alpha: 0.5,
+                beta: 0.1,
+                gamma: 0.1,
+                season_length,
+            },
+            ClassicalExpert::SeasonalETS {
+                alpha: 0.5,
+                beta: 0.1,
+                gamma: 0.3,
+                season_length,
+            },
+            ClassicalExpert::AutoETS { season_length },
+        ]);
     }
     experts
 }
@@ -503,25 +530,37 @@ fn score_expert(
             .count();
         let expected_horizon = validation_idx;
         if train_len == 0 || expected_horizon == 0 {
-            continue;
+            return Err(CartoBoostError::InvalidInput(
+                "classical validation produced an invalid train length or horizon".to_string(),
+            ));
         }
-        if let Some(prediction) = predictions.predictions().iter().find(|prediction| {
-            prediction.series_id == actual.series_id && prediction.horizon == expected_horizon
-        }) {
-            let err = prediction.mean - actual.target;
-            squared_error += err * err;
-            abs_error += err.abs();
-            let denominator = prediction.mean.abs() + actual.target.abs();
-            if denominator > 0.0 {
-                smape_sum += 2.0 * err.abs() / denominator;
-                smape_count += 1;
-            }
-            count += 1;
+        let prediction = predictions
+            .predictions()
+            .iter()
+            .find(|prediction| {
+                prediction.series_id == actual.series_id && prediction.horizon == expected_horizon
+            })
+            .ok_or_else(|| {
+                CartoBoostError::InvalidInput(format!(
+                    "classical expert {} omitted validation prediction for series {}, horizon {}",
+                    expert.name(),
+                    actual.series_id,
+                    expected_horizon
+                ))
+            })?;
+        let err = prediction.mean - actual.target;
+        squared_error += err * err;
+        abs_error += err.abs();
+        let denominator = prediction.mean.abs() + actual.target.abs();
+        if denominator > 0.0 {
+            smape_sum += 2.0 * err.abs() / denominator;
+            smape_count += 1;
         }
+        count += 1;
     }
-    if count == 0 {
+    if count != validation.len() {
         return Err(CartoBoostError::InvalidInput(
-            "classical expert produced no comparable validation predictions".to_string(),
+            "classical expert did not produce a complete validation prediction set".to_string(),
         ));
     }
     let mse = squared_error / count as f64;
@@ -539,7 +578,7 @@ fn score_expert(
                         .collect::<Vec<_>>()
                 })
                 .collect::<Vec<_>>();
-            let scale = m_competition_mase_scale(&training_series, seasonality)?;
+            let scale = competition_mase_scale(&training_series, seasonality)?;
             let mase = (abs_error / count as f64) / scale.max(1.0e-12);
             let smape = if smape_count == 0 {
                 0.0
@@ -566,21 +605,77 @@ fn validation_horizon(validation: &[ForecastRow]) -> usize {
 }
 
 impl ClassicalExpertBank {
-    fn effective_validation_window(&self, frame: &ForecastFrame) -> usize {
-        if let Some(window) = self.validation_window {
-            return window;
-        }
+    fn effective_validation_window(&self, frame: &ForecastFrame) -> Result<usize> {
         let min_history = history_by_series(frame.rows())
             .values()
             .map(Vec::len)
             .min()
-            .unwrap_or(0);
-        if min_history < 4 {
-            0
-        } else {
-            (min_history / 5).clamp(1, 8)
+            .ok_or_else(|| {
+                CartoBoostError::InvalidInput(
+                    "classical expert bank requires at least one series".to_string(),
+                )
+            })?;
+        if let Some(window) = self.validation_window {
+            if window >= min_history {
+                return Err(CartoBoostError::InvalidInput(format!(
+                    "classical expert validation_window must be smaller than every series history; minimum history is {min_history}, got {window}"
+                )));
+            }
+            return Ok(window);
         }
+        if min_history < 2 {
+            return Err(CartoBoostError::InvalidInput(
+                "classical expert bank requires at least two rows per series for a real holdout"
+                    .to_string(),
+            ));
+        }
+        Ok((min_history / 5).clamp(1, 8))
     }
+}
+
+fn expert_supports_history(expert: &ClassicalExpert, history_len: usize) -> bool {
+    let required = match expert {
+        ClassicalExpert::Naive
+        | ClassicalExpert::LocalLevelKalman
+        | ClassicalExpert::AutoARIMA { .. } => 1,
+        ClassicalExpert::SeasonalNaive { season_length } => *season_length,
+        ClassicalExpert::WindowAverage { window_size } => *window_size,
+        ClassicalExpert::SeasonalWindowAverage {
+            season_length,
+            window_count,
+        } => match season_length.checked_mul(*window_count) {
+            Some(required) => required,
+            None => return false,
+        },
+        ClassicalExpert::Theta { .. }
+        | ClassicalExpert::ETS { .. }
+        | ClassicalExpert::Kalman
+        | ClassicalExpert::AutoLocalLevelKalman => 2,
+        ClassicalExpert::OptimizedTheta {
+            season_length: None,
+        } => 3,
+        ClassicalExpert::OptimizedTheta {
+            season_length: Some(season_length),
+        }
+        | ClassicalExpert::SeasonalETS { season_length, .. }
+        | ClassicalExpert::AutoETS { season_length } => match season_length.checked_mul(2) {
+            Some(required)
+                if matches!(
+                    expert,
+                    ClassicalExpert::OptimizedTheta { .. } | ClassicalExpert::AutoETS { .. }
+                ) =>
+            {
+                match required.checked_add(1) {
+                    Some(required) => required,
+                    None => return false,
+                }
+            }
+            Some(required) => required,
+            None => return false,
+        },
+        ClassicalExpert::AutoKalman => 3,
+    };
+    history_len >= required
 }
 
 fn validate_horizon(horizon: usize) -> Result<()> {
@@ -615,6 +710,7 @@ fn expert_rank(expert: &ClassicalExpert) -> usize {
     }
 }
 
+#[cfg(test)]
 fn robust_classical_expert(scores: &[ClassicalExpertScore]) -> Result<&ClassicalExpertScore> {
     let best = scores.first().ok_or_else(|| {
         CartoBoostError::InvalidInput("classical expert scores must not be empty".to_string())

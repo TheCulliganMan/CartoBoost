@@ -33,7 +33,12 @@ const INTERMITTENT_DEMAND_EXPERT: &str = "intermittent_demand";
 const CLASSICAL_EXPERT: &str = "classical_expert_bank";
 const MIN_AUTO_TRAIN_HISTORY: usize = 4;
 const MIN_SERIES_WEIGHT_VALIDATION_POINTS: usize = 4;
-const AUTO_CANDIDATES: [&str; 14] = [
+// Keep the stable selector focused on candidates with deterministic fit
+// behavior across short, sparse panels. The broad classical expert bank is
+// still available as a standalone preview model, but is not part of the
+// stable AutoForecaster roster because one unstable ARIMA member can make an
+// otherwise valid panel selection fail.
+const AUTO_CANDIDATES: [&str; 13] = [
     LAG_EXPERT,
     RECENCY_WEIGHTED_LAG_EXPERT,
     SCALED_LAG_EXPERT,
@@ -47,7 +52,6 @@ const AUTO_CANDIDATES: [&str; 14] = [
     LOG1P_SCALED_LAG_EXPERT,
     LAG_PLUS_EXPERT,
     INTERMITTENT_DEMAND_EXPERT,
-    CLASSICAL_EXPERT,
 ];
 
 pub type AutoForecastObjective = ForecastObjective;
@@ -110,6 +114,18 @@ impl Default for AutoForecastConfig {
 pub struct AutoForecastModel {
     config: AutoForecastConfig,
     fitted: Option<FittedAutoForecastModel>,
+}
+
+impl Clone for AutoForecastModel {
+    fn clone(&self) -> Self {
+        // Backtesting clones an unfitted model for each fold. A fitted auto
+        // selector contains trait-object experts and is intentionally not
+        // copied across folds; each fold reruns native selection.
+        Self {
+            config: self.config.clone(),
+            fitted: None,
+        }
+    }
 }
 
 struct FittedAutoForecastModel {
@@ -217,20 +233,20 @@ impl AutoForecastModel {
 impl Forecaster for AutoForecastModel {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
         frame.require_regular_for_model(self.model_name())?;
-        let validation_window = effective_validation_window(frame, self.config.validation_window);
+        let validation_window = effective_validation_window(frame, self.config.validation_window)?;
         let validation_origin_count = effective_validation_origin_count(
             frame,
             validation_window,
             self.config.validation_origin_count,
-        );
+        )?;
         let nonnegative_output = frame_is_nonnegative(frame.rows());
         let splits = rolling_validation_splits(frame, validation_window, validation_origin_count)?;
-        let last_split = splits.last().ok_or_else(|| {
+        let oldest_split = splits.first().ok_or_else(|| {
             CartoBoostError::InvalidInput("no auto forecast validation splits".to_string())
         })?;
         let effective_config =
-            effective_auto_config_for_split(&self.config, &last_split.train, validation_window);
-        let scores = score_auto_candidates(frame, &effective_config, &splits, nonnegative_output);
+            effective_auto_config_for_split(&self.config, &oldest_split.train, validation_window);
+        let scores = score_auto_candidates(frame, &effective_config, &splits, nonnegative_output)?;
         if scores.is_empty() {
             return Err(CartoBoostError::InvalidInput(
                 "no auto forecast model candidate could be validated".to_string(),
@@ -389,7 +405,8 @@ fn fit_selected_members(
         .par_iter()
         .enumerate()
         .map(|(index, name)| {
-            let mut forecaster = build_candidate(name, config)?;
+            let member_config = effective_config_for_candidate(name, config, frame);
+            let mut forecaster = build_candidate(name, &member_config)?;
             forecaster.fit(frame)?;
             let metadata = forecaster.metadata();
             Ok(SelectedMemberFit {
@@ -549,9 +566,42 @@ fn candidate_is_eligible(name: &str, frame: &ForecastFrame, config: &AutoForecas
         INTERMITTENT_DEMAND_EXPERT => {
             frame_is_nonnegative(frame.rows()) && zero_fraction(frame.rows()) >= 0.25
         }
-        DIRECT_EXPERT | RECTIFIED_RECURSIVE_EXPERT => zero_fraction(frame.rows()) < 0.25,
+        DIRECT_EXPERT => {
+            zero_fraction(frame.rows()) < 0.25 && direct_history_sufficient(frame, config)
+        }
+        RECTIFIED_RECURSIVE_EXPERT => {
+            zero_fraction(frame.rows()) < 0.25
+                && direct_history_sufficient(frame, config)
+                && minimum_series_history(frame) > config.max_direct_horizon.saturating_add(2)
+        }
         _ => true,
     }
+}
+
+fn minimum_series_history(frame: &ForecastFrame) -> usize {
+    history_by_series(frame.rows())
+        .values()
+        .map(Vec::len)
+        .min()
+        .unwrap_or(0)
+}
+
+fn direct_history_sufficient(frame: &ForecastFrame, config: &AutoForecastConfig) -> bool {
+    let min_history = minimum_series_history(frame);
+    if min_history == 0 {
+        return false;
+    }
+    if min_history <= config.max_direct_horizon {
+        return false;
+    }
+    let validation_window = config
+        .validation_window
+        .unwrap_or((min_history / 5).clamp(1, 8))
+        .max(1);
+    let max_origins = min_history.saturating_sub(MIN_AUTO_TRAIN_HISTORY) / validation_window;
+    let origin_count = config.validation_origin_count.min(max_origins).max(1);
+    let first_train_len = min_history.saturating_sub(validation_window * origin_count);
+    first_train_len > MIN_AUTO_TRAIN_HISTORY
 }
 
 fn recency_half_life(config: &AutoForecastConfig) -> usize {
@@ -676,7 +726,17 @@ fn score_candidate(
     nonnegative_output: bool,
 ) -> Result<Vec<ExpertScore>> {
     let horizon = validation_horizon(&split.validation);
-    let mut candidate = build_candidate_with_direct_horizon(name, config, horizon)?;
+    let minimum_history = history_by_series(split.train.rows())
+        .values()
+        .map(Vec::len)
+        .min()
+        .unwrap_or(0);
+    let mut effective_config = config.clone();
+    effective_config.validation_window = Some(horizon);
+    let max_supported_prior = candidate_max_supported_prior(name, minimum_history, horizon);
+    effective_config.lag_config =
+        lag_config_supported_by_prior(&config.lag_config, max_supported_prior);
+    let mut candidate = build_candidate_with_direct_horizon(name, &effective_config, horizon)?;
     candidate.fit(&split.train)?;
     let predictions = maybe_clamp_result(candidate.predict(horizon)?, nonnegative_output)?;
     let actuals = validation_actuals(&split.validation);
@@ -706,21 +766,33 @@ fn score_auto_candidates(
     config: &AutoForecastConfig,
     splits: &[ValidationSplit],
     nonnegative_output: bool,
-) -> Vec<ExpertScore> {
+) -> Result<Vec<ExpertScore>> {
     let mut scored = auto_candidate_roster(config)
         .par_iter()
         .enumerate()
-        .filter_map(|(index, name)| {
-            if !candidate_is_eligible(name, frame, config) {
-                return None;
+        .map(|(index, name)| {
+            if !candidate_is_eligible(name, frame, config)
+                || !splits
+                    .iter()
+                    .all(|split| candidate_is_eligible_for_split(name, split, config))
+            {
+                return Ok(None);
             }
-            score_candidate_across_splits(name, config, splits, nonnegative_output)
-                .ok()
-                .map(|scores| (index, scores))
+            let candidate_config = effective_config_for_candidate(name, config, frame);
+            score_candidate_across_splits(name, &candidate_config, splits, nonnegative_output)
+                .map(|scores| Some((index, scores)))
+                .map_err(|error| {
+                    CartoBoostError::InvalidInput(format!(
+                        "auto forecast candidate {name:?} failed validation: {error}"
+                    ))
+                })
         })
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
         .collect::<Vec<_>>();
     scored.sort_by_key(|(index, _)| *index);
-    scored.into_iter().flat_map(|(_, scores)| scores).collect()
+    Ok(scored.into_iter().flat_map(|(_, scores)| scores).collect())
 }
 
 fn auto_candidate_roster(config: &AutoForecastConfig) -> Vec<&'static str> {
@@ -729,6 +801,58 @@ fn auto_candidate_roster(config: &AutoForecastConfig) -> Vec<&'static str> {
         .unwrap_or(AUTO_CANDIDATES.len())
         .min(AUTO_CANDIDATES.len());
     AUTO_CANDIDATES[..max_candidate_count].to_vec()
+}
+
+fn candidate_max_supported_prior(name: &str, minimum_history: usize, horizon: usize) -> usize {
+    match name {
+        DIRECT_EXPERT => minimum_history.saturating_sub(horizon),
+        RECTIFIED_RECURSIVE_EXPERT => {
+            let internal_holdout = (minimum_history / 5).clamp(1, 28).max(horizon);
+            minimum_history
+                .saturating_sub(internal_holdout)
+                .saturating_sub(1)
+        }
+        LAG_PLUS_EXPERT => minimum_history.saturating_sub(horizon).saturating_sub(1),
+        _ => minimum_history.saturating_sub(1),
+    }
+}
+
+fn effective_config_for_candidate(
+    name: &str,
+    config: &AutoForecastConfig,
+    full_frame: &ForecastFrame,
+) -> AutoForecastConfig {
+    let mut effective = config.clone();
+    if !matches!(name, DIRECT_EXPERT | RECTIFIED_RECURSIVE_EXPERT) {
+        return effective;
+    }
+    let full_history = minimum_series_history(full_frame);
+    let validation_window = config.validation_window.unwrap_or(1);
+    let oldest_history = full_history
+        .saturating_sub(validation_window.saturating_mul(config.validation_origin_count));
+    let score_support = candidate_max_supported_prior(name, oldest_history, validation_window);
+    let full_support = candidate_max_supported_prior(name, full_history, config.max_direct_horizon);
+    effective.lag_config =
+        lag_config_supported_by_prior(&config.lag_config, score_support.min(full_support));
+    effective
+}
+
+fn candidate_is_eligible_for_split(
+    name: &str,
+    split: &ValidationSplit,
+    config: &AutoForecastConfig,
+) -> bool {
+    let minimum_history = minimum_series_history(&split.train);
+    let horizon = validation_horizon(&split.validation);
+    match name {
+        SEASONAL_DELTA_LAG_EXPERT | SCALED_SEASONAL_DELTA_LAG_EXPERT => {
+            minimum_history > config.season_length
+        }
+        DIRECT_EXPERT => minimum_history > horizon,
+        RECTIFIED_RECURSIVE_EXPERT => minimum_history > horizon.saturating_add(1),
+        LAG_PLUS_EXPERT => minimum_history > horizon,
+        _ => true,
+    }
 }
 
 fn score_candidate_across_splits(
@@ -782,9 +906,11 @@ fn horizon_scores(
     }
     let mut scores = Vec::with_capacity(actuals_by_horizon.len());
     for (horizon, horizon_actuals) in actuals_by_horizon {
-        let Some(horizon_predictions) = predictions_by_horizon.get(&horizon) else {
-            continue;
-        };
+        let horizon_predictions = predictions_by_horizon.get(&horizon).ok_or_else(|| {
+            CartoBoostError::InvalidInput(format!(
+                "auto forecast candidate {name:?} omitted horizon {horizon} predictions"
+            ))
+        })?;
         let metrics = crate::forecasting::evaluate_forecast(
             &ForecastResult::new(horizon_predictions.clone())?,
             &horizon_actuals,
@@ -850,9 +976,11 @@ fn series_scores(
     }
     let mut scores = Vec::with_capacity(actuals_by_series.len());
     for (series_id, series_actuals) in actuals_by_series {
-        let Some(series_predictions) = predictions_by_series.get(&series_id) else {
-            continue;
-        };
+        let series_predictions = predictions_by_series.get(&series_id).ok_or_else(|| {
+            CartoBoostError::InvalidInput(format!(
+                "auto forecast candidate {name:?} omitted predictions for series {series_id:?}"
+            ))
+        })?;
         let metrics = crate::forecasting::evaluate_forecast(
             &ForecastResult::new(series_predictions.clone())?,
             &series_actuals,
@@ -947,17 +1075,33 @@ fn validation_horizon(validation: &[ForecastRow]) -> usize {
         .unwrap_or(1)
 }
 
-fn effective_validation_window(frame: &ForecastFrame, configured: Option<usize>) -> usize {
+fn effective_validation_window(frame: &ForecastFrame, configured: Option<usize>) -> Result<usize> {
     let min_history = history_by_series(frame.rows())
         .values()
         .map(Vec::len)
         .min()
-        .unwrap_or(0);
+        .ok_or_else(|| {
+            CartoBoostError::InvalidInput(
+                "auto forecast requires at least one series for validation".to_string(),
+            )
+        })?;
+    let max_feasible = min_history.checked_sub(MIN_AUTO_TRAIN_HISTORY).ok_or_else(|| {
+        CartoBoostError::InvalidInput(format!(
+            "auto forecast requires more than {MIN_AUTO_TRAIN_HISTORY} rows per series for a real holdout; minimum history is {min_history}"
+        ))
+    })?;
+    if max_feasible == 0 {
+        return Err(CartoBoostError::InvalidInput(format!(
+            "auto forecast requires more than {MIN_AUTO_TRAIN_HISTORY} rows per series for a real holdout; minimum history is {min_history}"
+        )));
+    }
     let automatic = (min_history / 5).clamp(1, 8);
-    let max_feasible = min_history.saturating_sub(MIN_AUTO_TRAIN_HISTORY).max(1);
     match configured {
-        Some(window) if window <= max_feasible => window.max(1),
-        Some(_) | None => automatic.min(max_feasible).max(1),
+        Some(window) if window <= max_feasible => Ok(window),
+        Some(window) => Err(CartoBoostError::InvalidInput(format!(
+            "auto forecast validation_window must be <= {max_feasible} to retain {MIN_AUTO_TRAIN_HISTORY} training rows per series; got {window}"
+        ))),
+        None => Ok(automatic.min(max_feasible)),
     }
 }
 
@@ -965,14 +1109,23 @@ fn effective_validation_origin_count(
     frame: &ForecastFrame,
     validation_window: usize,
     configured: usize,
-) -> usize {
+) -> Result<usize> {
     let min_history = history_by_series(frame.rows())
         .values()
         .map(Vec::len)
         .min()
-        .unwrap_or(0);
-    let max_origins = min_history.saturating_sub(1) / validation_window.max(1);
-    configured.max(1).min(max_origins.max(1))
+        .ok_or_else(|| {
+            CartoBoostError::InvalidInput(
+                "auto forecast requires at least one series for validation".to_string(),
+            )
+        })?;
+    let max_origins = min_history.saturating_sub(MIN_AUTO_TRAIN_HISTORY) / validation_window;
+    if configured > max_origins {
+        return Err(CartoBoostError::InvalidInput(format!(
+            "auto forecast validation_origin_count must be <= {max_origins} for validation_window={validation_window} while retaining {MIN_AUTO_TRAIN_HISTORY} training rows per series; got {configured}"
+        )));
+    }
+    Ok(configured)
 }
 
 fn effective_auto_config_for_split(
@@ -981,21 +1134,23 @@ fn effective_auto_config_for_split(
     validation_window: usize,
 ) -> AutoForecastConfig {
     let mut effective = config.clone();
+    effective.validation_window = Some(validation_window);
+    let train_history = minimum_series_history(train);
+    let roster = auto_candidate_roster(config);
+    let mut max_supported_prior = train_history.saturating_sub(1);
+    if roster.contains(&LAG_PLUS_EXPERT) {
+        max_supported_prior = max_supported_prior.min(
+            train_history
+                .saturating_sub(validation_window)
+                .saturating_sub(1),
+        );
+    }
     expand_lag_config_for_season(
         &mut effective.lag_config,
         config.season_length,
-        supported_history_len(train, validation_window),
+        max_supported_prior,
     );
     effective
-}
-
-fn supported_history_len(train: &ForecastFrame, validation_window: usize) -> usize {
-    history_by_series(train.rows())
-        .values()
-        .map(Vec::len)
-        .min()
-        .unwrap_or(0)
-        .saturating_sub(validation_window.min(2))
 }
 
 fn expand_lag_config_for_season(
@@ -1255,9 +1410,10 @@ mod tests {
         };
         let splits = rolling_validation_splits(&frame, 2, 2).expect("splits");
         let effective =
-            effective_auto_config_for_split(&config, &splits.last().expect("last").train, 2);
+            effective_auto_config_for_split(&config, &splits.first().expect("oldest").train, 2);
 
-        let scores = score_auto_candidates(&frame, &effective, &splits, true);
+        let scores =
+            score_auto_candidates(&frame, &effective, &splits, true).expect("candidate scoring");
         let global_experts = scores
             .iter()
             .filter(|score| score.series_id.is_none() && score.horizon.is_none())
@@ -1295,28 +1451,35 @@ mod tests {
     }
 
     #[test]
-    fn auto_validation_origin_count_is_capped_by_available_history() {
+    fn auto_validation_origin_count_must_preserve_training_history() {
         let short_frame = ForecastFrame::new(
-            (1..=5)
+            (1..=7)
                 .map(|day| ForecastRow::single(ts(day), 10.0 + f64::from(day)))
                 .collect(),
             crate::forecasting::ForecastFrequency::Daily,
         )
         .expect("frame");
         let long_frame = ForecastFrame::new(
-            (1..=12)
+            (1..=16)
                 .map(|day| ForecastRow::single(ts(day), 10.0 + f64::from(day)))
                 .collect(),
             crate::forecasting::ForecastFrequency::Daily,
         )
         .expect("frame");
 
-        assert_eq!(effective_validation_origin_count(&short_frame, 3, 4), 1);
-        assert_eq!(effective_validation_origin_count(&long_frame, 3, 4), 3);
+        assert_eq!(
+            effective_validation_origin_count(&short_frame, 3, 1).expect("one origin"),
+            1
+        );
+        assert!(effective_validation_origin_count(&short_frame, 3, 2).is_err());
+        assert_eq!(
+            effective_validation_origin_count(&long_frame, 3, 4).expect("four origins"),
+            4
+        );
     }
 
     #[test]
-    fn auto_forecast_caps_oversized_validation_window_for_short_panel_series() {
+    fn auto_forecast_rejects_oversized_explicit_validation_window() {
         let frame = ForecastFrame::new(
             ["PU4-DO7", "PU24-DO48", "PU132-DO236"]
                 .into_iter()
@@ -1358,18 +1521,12 @@ mod tests {
         })
         .expect("model");
 
-        model
+        let error = model
             .fit(&frame)
-            .expect("fit with capped validation window");
-        let metadata = model.metadata();
-        assert_eq!(metadata["validation_window"], serde_json::json!(4));
-
-        let forecast = model.predict(3).expect("forecast");
-        assert_eq!(forecast.predictions().len(), 9);
-        assert!(forecast
-            .predictions()
-            .iter()
-            .all(|prediction| prediction.mean.is_finite()));
+            .expect_err("explicit validation window must not be capped");
+        assert!(error
+            .to_string()
+            .contains("validation_window must be <= 16"));
     }
 
     #[test]

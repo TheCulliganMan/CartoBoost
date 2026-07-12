@@ -37,7 +37,7 @@ def main() -> int:
             raise RuntimeError("--input polars requires polars") from exc
         input_frame = pl.from_pandas(frame)
     if args.engine == "cartoboost":
-        from cartoboost import Prophet
+        from cartoboost.preview import Prophet
     else:
         from prophet import Prophet
     fit_start = perf_counter()

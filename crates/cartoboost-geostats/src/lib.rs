@@ -103,6 +103,11 @@ impl NngpConfig {
                 "nugget must be finite and nonnegative".to_string(),
             ));
         }
+        if !self.anisotropy.angle_degrees.is_finite() {
+            return Err(GeostatsError::InvalidInput(
+                "anisotropy angle must be finite".to_string(),
+            ));
+        }
         if !self.anisotropy.scaling.is_finite() || self.anisotropy.scaling <= 0.0 {
             return Err(GeostatsError::InvalidInput(
                 "anisotropy scaling must be finite and positive".to_string(),
@@ -250,8 +255,22 @@ impl NearestNeighborGPRegressor {
         }
         let weights = solve_spd(k_nn, k_star.clone())?;
         let mean = self.mean + dot(&weights, &centered);
-        let variance =
-            (self.config.sill + self.config.nugget - dot(&k_star, &weights).max(0.0)).max(0.0);
+        if !mean.is_finite() || weights.iter().any(|weight| !weight.is_finite()) {
+            return Err(GeostatsError::LinearSolve(
+                "GP prediction produced non-finite weights or mean".to_string(),
+            ));
+        }
+        let prior_variance = self.config.sill + self.config.nugget;
+        let variance_reduction = checked_nonnegative(
+            dot(&k_star, &weights),
+            prior_variance,
+            "GP variance reduction",
+        )?;
+        let variance = checked_nonnegative(
+            prior_variance - variance_reduction,
+            prior_variance.max(variance_reduction),
+            "GP prediction variance",
+        )?;
         Ok(NngpPrediction {
             mean,
             variance,
@@ -295,6 +314,25 @@ pub fn empirical_semivariogram(
             "at least two observations and one bin are required".to_string(),
         ));
     }
+    if let Some(max_distance) = max_distance {
+        if !max_distance.is_finite() || max_distance <= 0.0 {
+            return Err(GeostatsError::InvalidInput(
+                "max variogram distance must be finite and positive".to_string(),
+            ));
+        }
+    }
+    for (idx, (coord, value)) in coords.iter().zip(values).enumerate() {
+        if !coord[0].is_finite() || !coord[1].is_finite() {
+            return Err(GeostatsError::InvalidInput(format!(
+                "variogram coordinates must be finite at row {idx}"
+            )));
+        }
+        if !value.is_finite() {
+            return Err(GeostatsError::InvalidInput(format!(
+                "variogram value must be finite at row {idx}"
+            )));
+        }
+    }
     let distance_config = NngpConfig {
         anisotropy,
         ..NngpConfig::default()
@@ -305,11 +343,23 @@ pub fn empirical_semivariogram(
     for i in 0..coords.len() {
         for j in (i + 1)..coords.len() {
             let distance = transformed_distance(coords[i], coords[j], distance_config);
-            if distance == 0.0 || max_distance.is_some_and(|max| distance > max) {
+            if !distance.is_finite() {
+                return Err(GeostatsError::InvalidInput(format!(
+                    "variogram distance is not finite for rows {i} and {j}"
+                )));
+            }
+            if max_distance.is_some_and(|max| distance > max) {
                 continue;
             }
+            let difference = values[i] - values[j];
+            let semivariance = 0.5 * difference * difference;
+            if !semivariance.is_finite() {
+                return Err(GeostatsError::InvalidInput(format!(
+                    "variogram semivariance is not finite for rows {i} and {j}"
+                )));
+            }
             observed_max = observed_max.max(distance);
-            pairs.push((distance, 0.5 * (values[i] - values[j]).powi(2)));
+            pairs.push((distance, semivariance));
         }
     }
     if pairs.is_empty() {
@@ -324,6 +374,11 @@ pub fn empirical_semivariogram(
         ));
     }
     let width = upper / bin_count as f64;
+    if !width.is_finite() || width <= 0.0 {
+        return Err(GeostatsError::InvalidInput(
+            "variogram bin width must be finite and positive".to_string(),
+        ));
+    }
     let mut sums = vec![0.0; bin_count];
     let mut counts = vec![0usize; bin_count];
     for (distance, gamma) in pairs {
@@ -376,6 +431,10 @@ pub fn fit_variogram_wls(
             "variogram fitting requires bins and nonempty candidate grids".to_string(),
         ));
     }
+    validate_variogram_bins(bins)?;
+    validate_positive_candidates(range_candidates, "range candidates")?;
+    validate_positive_candidates(sill_candidates, "sill candidates")?;
+    validate_nonnegative_candidates(nugget_candidates, "nugget candidates")?;
     let kernels = if kernels.is_empty() {
         vec![CovarianceKernel::Exponential]
     } else {
@@ -394,23 +453,39 @@ pub fn fit_variogram_wls(
                         ..NngpConfig::default()
                     }
                     .validate()?;
-                    let weighted_sse = bins
-                        .iter()
-                        .map(|bin| {
-                            let model = nugget
-                                + sill
-                                    * (1.0
-                                        - covariance(
-                                            [0.0, 0.0],
-                                            [bin.lag_center, 0.0],
-                                            NngpConfig {
-                                                nugget: 0.0,
-                                                ..config
-                                            },
-                                        ) / sill);
-                            bin.pair_count as f64 * (bin.semivariance - model).powi(2)
-                        })
-                        .sum::<f64>();
+                    let mut weighted_sse = 0.0;
+                    for bin in bins {
+                        let model = nugget
+                            + sill
+                                * (1.0
+                                    - covariance(
+                                        [0.0, 0.0],
+                                        [bin.lag_center, 0.0],
+                                        NngpConfig {
+                                            nugget: 0.0,
+                                            ..config
+                                        },
+                                    ) / sill);
+                        if !model.is_finite() || model < 0.0 {
+                            return Err(GeostatsError::InvalidInput(
+                                "variogram candidate produced an invalid semivariance".to_string(),
+                            ));
+                        }
+                        let residual = bin.semivariance - model;
+                        let contribution = bin.pair_count as f64 * residual * residual;
+                        if !contribution.is_finite() || contribution < 0.0 {
+                            return Err(GeostatsError::InvalidInput(
+                                "variogram candidate produced a non-finite weighted error"
+                                    .to_string(),
+                            ));
+                        }
+                        weighted_sse += contribution;
+                        if !weighted_sse.is_finite() {
+                            return Err(GeostatsError::InvalidInput(
+                                "variogram weighted SSE is not finite".to_string(),
+                            ));
+                        }
+                    }
                     let candidate = VariogramFit {
                         kernel,
                         range,
@@ -431,6 +506,64 @@ pub fn fit_variogram_wls(
     best.ok_or_else(|| {
         GeostatsError::InvalidInput("no valid variogram candidates were supplied".to_string())
     })
+}
+
+fn validate_variogram_bins(bins: &[EmpiricalVariogramBin]) -> Result<()> {
+    for (idx, bin) in bins.iter().enumerate() {
+        if !bin.lag_start.is_finite() || bin.lag_start < 0.0 {
+            return Err(GeostatsError::InvalidInput(format!(
+                "variogram bin {idx} lag_start must be finite and nonnegative"
+            )));
+        }
+        if !bin.lag_end.is_finite() || bin.lag_end <= bin.lag_start {
+            return Err(GeostatsError::InvalidInput(format!(
+                "variogram bin {idx} lag_end must be finite and greater than lag_start"
+            )));
+        }
+        if !bin.lag_center.is_finite()
+            || bin.lag_center < bin.lag_start
+            || bin.lag_center > bin.lag_end
+        {
+            return Err(GeostatsError::InvalidInput(format!(
+                "variogram bin {idx} lag_center must be finite and within its lag bounds"
+            )));
+        }
+        if !bin.semivariance.is_finite() || bin.semivariance < 0.0 {
+            return Err(GeostatsError::InvalidInput(format!(
+                "variogram bin {idx} semivariance must be finite and nonnegative"
+            )));
+        }
+        if bin.pair_count == 0 {
+            return Err(GeostatsError::InvalidInput(format!(
+                "variogram bin {idx} pair_count must be positive"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_positive_candidates(values: &[f64], name: &str) -> Result<()> {
+    if values
+        .iter()
+        .any(|value| !value.is_finite() || *value <= 0.0)
+    {
+        return Err(GeostatsError::InvalidInput(format!(
+            "{name} must contain only finite positive values"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_nonnegative_candidates(values: &[f64], name: &str) -> Result<()> {
+    if values
+        .iter()
+        .any(|value| !value.is_finite() || *value < 0.0)
+    {
+        return Err(GeostatsError::InvalidInput(format!(
+            "{name} must contain only finite nonnegative values"
+        )));
+    }
+    Ok(())
 }
 
 pub fn deterministic_neighbors(coords: &[[f64; 2]], target: [f64; 2], k: usize) -> Vec<usize> {
@@ -703,6 +836,19 @@ fn dot(left: &[f64], right: &[f64]) -> f64 {
     left.iter().zip(right).map(|(a, b)| a * b).sum()
 }
 
+fn checked_nonnegative(value: f64, scale: f64, label: &str) -> Result<f64> {
+    if !value.is_finite() {
+        return Err(GeostatsError::LinearSolve(format!("{label} is not finite")));
+    }
+    let tolerance = 1.0e-10 * scale.abs().max(f64::MIN_POSITIVE);
+    if value < -tolerance {
+        return Err(GeostatsError::LinearSolve(format!(
+            "{label} is materially negative ({value:e}, tolerance {tolerance:e})"
+        )));
+    }
+    Ok(value.max(0.0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -811,5 +957,167 @@ mod tests {
         )
         .expect("fit");
         assert!(fit.weighted_sse.is_finite());
+    }
+
+    #[test]
+    fn config_rejects_non_finite_anisotropy_angle() {
+        let result = NngpConfig {
+            anisotropy: Anisotropy {
+                angle_degrees: f64::NAN,
+                scaling: 1.0,
+            },
+            ..NngpConfig::default()
+        }
+        .validate();
+
+        assert!(matches!(result, Err(GeostatsError::InvalidInput(_))));
+    }
+
+    #[test]
+    fn empirical_variogram_rejects_invalid_numeric_inputs() {
+        let valid_coords = [[0.0, 0.0], [1.0, 0.0]];
+        let valid_values = [1.0, 2.0];
+
+        assert!(empirical_semivariogram(
+            &[[f64::NAN, 0.0], [1.0, 0.0]],
+            &valid_values,
+            2,
+            None,
+            Anisotropy::default(),
+        )
+        .is_err());
+        assert!(empirical_semivariogram(
+            &valid_coords,
+            &[1.0, f64::INFINITY],
+            2,
+            None,
+            Anisotropy::default(),
+        )
+        .is_err());
+        assert!(empirical_semivariogram(
+            &valid_coords,
+            &valid_values,
+            2,
+            Some(-1.0),
+            Anisotropy::default(),
+        )
+        .is_err());
+        assert!(empirical_semivariogram(
+            &valid_coords,
+            &valid_values,
+            2,
+            None,
+            Anisotropy {
+                angle_degrees: f64::NAN,
+                scaling: 1.0,
+            },
+        )
+        .is_err());
+        assert!(empirical_semivariogram(
+            &[[f64::MAX, 0.0], [-f64::MAX, 0.0]],
+            &valid_values,
+            2,
+            None,
+            Anisotropy::default(),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn empirical_variogram_keeps_collocated_pairs_as_nugget_evidence() {
+        let bins = empirical_semivariogram(
+            &[[0.0, 0.0], [0.0, 0.0], [1.0, 0.0]],
+            &[0.0, 2.0, 1.0],
+            2,
+            None,
+            Anisotropy::default(),
+        )
+        .expect("variogram");
+
+        assert_eq!(bins.iter().map(|bin| bin.pair_count).sum::<usize>(), 3);
+        assert!(bins
+            .iter()
+            .any(|bin| bin.lag_start == 0.0 && bin.semivariance >= 2.0));
+    }
+
+    #[test]
+    fn variogram_fit_rejects_invalid_bins_candidates_and_objectives() {
+        let valid_bin = EmpiricalVariogramBin {
+            lag_start: 0.0,
+            lag_end: 1.0,
+            lag_center: 0.5,
+            semivariance: 1.0,
+            pair_count: 2,
+        };
+        let fit =
+            |bins: &[EmpiricalVariogramBin], ranges: &[f64], sills: &[f64], nuggets: &[f64]| {
+                fit_variogram_wls(
+                    bins,
+                    &[CovarianceKernel::Exponential],
+                    ranges,
+                    sills,
+                    nuggets,
+                )
+            };
+
+        assert!(fit(
+            &[EmpiricalVariogramBin {
+                semivariance: f64::NAN,
+                ..valid_bin.clone()
+            }],
+            &[1.0],
+            &[1.0],
+            &[0.0],
+        )
+        .is_err());
+        assert!(fit(
+            &[EmpiricalVariogramBin {
+                pair_count: 0,
+                ..valid_bin.clone()
+            }],
+            &[1.0],
+            &[1.0],
+            &[0.0],
+        )
+        .is_err());
+        assert!(fit(
+            &[EmpiricalVariogramBin {
+                lag_center: 2.0,
+                ..valid_bin.clone()
+            }],
+            &[1.0],
+            &[1.0],
+            &[0.0],
+        )
+        .is_err());
+        assert!(fit(
+            std::slice::from_ref(&valid_bin),
+            &[f64::NAN],
+            &[1.0],
+            &[0.0]
+        )
+        .is_err());
+        assert!(fit(std::slice::from_ref(&valid_bin), &[1.0], &[0.0], &[0.0]).is_err());
+        assert!(fit(std::slice::from_ref(&valid_bin), &[1.0], &[1.0], &[-1.0]).is_err());
+        assert!(fit(
+            &[EmpiricalVariogramBin {
+                semivariance: f64::MAX,
+                ..valid_bin
+            }],
+            &[1.0],
+            &[1.0],
+            &[0.0],
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn variance_validation_only_clamps_roundoff_scale_negatives() {
+        assert_eq!(
+            checked_nonnegative(-1.0e-12, 1.0, "variance").expect("tiny roundoff"),
+            0.0
+        );
+        assert!(checked_nonnegative(-1.0e-4, 1.0, "variance").is_err());
+        assert!(checked_nonnegative(f64::NAN, 1.0, "variance").is_err());
     }
 }

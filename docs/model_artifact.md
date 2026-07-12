@@ -1,11 +1,11 @@
 # Model Artifact
 
 CartoBoost models are stored as JSON artifacts. Use them when you need to reload
-a fitted temporal-spatial model with its splitters, sparse-feature requirements,
+a fitted temporal-spatial model with its split policy, sparse-feature requirements,
 feature schema, and training parameters intact.
 
 For scientific work, the artifact is part of the evidence chain. It should make
-clear which target, feature roles, sparse sets, splitters, loss, and training
+clear which target, feature roles, sparse sets, split policy, loss, and training
 configuration produced the reported taxi fare, duration, demand, or residual
 model. Keep the artifact together with the split definition and benchmark
 metrics so another reviewer can reproduce the same prediction surface.
@@ -25,7 +25,7 @@ The artifact includes:
 - optional `training_config`
 
 The optional fields make artifacts self-describing. For temporal-spatial models,
-the important fields are the feature schema, sparse-set names, splitters, fuzzy
+the important fields are the feature schema, sparse-set names, split policy, fuzzy
 settings, and leaf configuration.
 
 ## Graph-Derived Features
@@ -74,7 +74,7 @@ loaded = CartoBoostRegressor.load("model.cartoboost.json")
 ```
 
 Load restores public estimator parameters when training metadata is present,
-including splitters, leaf predictor, linear leaf features, fuzzy settings,
+including split policy, leaf predictor, linear leaf features, fuzzy settings,
 regularization, learning rate, depth, and minimum split controls.
 
 ## Weights Artifacts

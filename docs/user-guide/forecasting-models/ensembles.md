@@ -45,6 +45,13 @@ timestamps, and horizons. It cannot create a signal that none of its members
 learned. If every component misses a rush-hour disruption, averaging will miss
 it too.
 
+When every active member returns the same prediction-interval levels on the
+same forecast index, the native ensemble combines matching lower and upper
+quantiles with the normalized member weights. A partial or mismatched interval
+grid is an error, so uncertainty is not silently discarded. Native forecast
+details, when supplied by at least one member, include each member mean, weight,
+weighted contribution, and nested member detail for auditability.
+
 Failure modes include keeping a weak member because one split moved by chance,
 changing component parameters while tuning weights, or reporting only ensemble
 metrics without component metrics. Compare against the best individual member
@@ -54,7 +61,7 @@ scientific value.
 ## Example
 
 ```python
-from cartoboost.forecasting import (
+from cartoboost.preview.forecasting import (
     KalmanForecaster,
     SeasonalNaiveForecaster,
     ThetaForecaster,
@@ -88,9 +95,9 @@ Weights are normalized, so `{1.0, 3.0}` becomes `{0.25, 0.75}` in metadata.
 ## ForecastFrame Example
 
 ```python
-from cartoboost.forecasting import ForecastFrame, KalmanForecaster
-from cartoboost.forecasting import SeasonalNaiveForecaster, ThetaForecaster
-from cartoboost.forecasting import WeightedEnsembleForecaster
+from cartoboost.preview.forecasting import ForecastFrame, KalmanForecaster
+from cartoboost.preview.forecasting import SeasonalNaiveForecaster, ThetaForecaster
+from cartoboost.preview.forecasting import WeightedEnsembleForecaster
 
 frame = ForecastFrame.from_pandas(
     hourly_zone_demand.query("series_id == '161'"),
@@ -127,7 +134,7 @@ synthetic hourly pickup counts and does not download data.
 The core pattern is:
 
 ```python
-from cartoboost.forecasting import (
+from cartoboost.preview.forecasting import (
     ForecastFrame,
     KalmanForecaster,
     SeasonalNaiveForecaster,
@@ -201,7 +208,7 @@ hard to explain.
 | At least one model is required | Empty `models` raises `ValueError`. |
 | Weights must match model names exactly | Missing or extra names raise `ValueError`. |
 | Components must be supported CartoBoost forecasters | Arbitrary Python estimators are not accepted. |
-| Prediction intervals are not supported yet | Interval arguments raise `NotImplementedError`. |
+| Python interval arguments are not supported yet | Interval arguments raise `NotImplementedError`; native member intervals are retained only when every active member returns the same interval grid. |
 
 Supported ensemble members currently include naive, seasonal naive, theta,
 optimized theta, ETS, ARIMA, AutoARIMA, Kalman, and `CartoBoostLagForecaster`.

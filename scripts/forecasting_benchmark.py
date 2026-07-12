@@ -16,11 +16,13 @@ from cartoboost.forecasting import (
     CartoBoostLagForecaster,
     ForecastFrame,
     ForecastMetricSet,
-    KrigingForecaster,
     NaiveForecaster,
+    SeasonalNaiveForecaster,
+)
+from cartoboost.preview.forecasting import (
+    KrigingForecaster,
     OptimizedThetaForecaster,
     PiecewiseLinearSeasonalForecaster,
-    SeasonalNaiveForecaster,
     SpatialPiecewiseKrigingForecaster,
     ThetaForecaster,
     WeightedEnsembleForecaster,
@@ -409,8 +411,8 @@ def _models(frame: ForecastFrame | None = None) -> dict[str, Any]:
             "max_depth": 4,
             "min_samples_leaf": 5,
             "min_gain": 0.0,
-            "splitters": ["axis"],
         },
+        split_policy="axis_only",
     )
     models: dict[str, Any] = {
         "naive": NaiveForecaster(),

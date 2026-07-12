@@ -21,7 +21,7 @@ needed. Keep naive and seasonal naive in the comparison table.
 ## Public Contract
 
 ```python
-from cartoboost.forecasting import AutoStatsBank, ForecastFrame
+from cartoboost.preview.forecasting import AutoStatsBank, ForecastFrame
 
 frame = ForecastFrame.from_pandas(
     hourly_demand,
@@ -54,7 +54,14 @@ forecast = model.predict(12)
 
 ## Validation
 
-`AutoStatsBank` should be evaluated under the same rolling-origin split as the
-individual local forecasters. Report the selected candidate, validation window,
-horizon, RMSE, MAE, WAPE, train time, prediction time, and the simple baselines
-it had to beat.
+`AutoStatsBank` always reserves a non-empty suffix and fits every eligible
+expert on the earlier prefix. An explicit `validation_window` that leaves no
+training history is rejected rather than capped. Seasonal and window experts
+enter the roster only when the prefix satisfies their full configured history
+requirements; explicitly configured experts that fail to fit or omit a
+validation prediction produce an error instead of a partial score table.
+
+Evaluate the selected bank under the same rolling-origin split as the
+individual local forecasters. Report the selected candidate, internal
+validation window, external test horizon, RMSE, MAE, WAPE, train time,
+prediction time, and the simple baselines it had to beat.

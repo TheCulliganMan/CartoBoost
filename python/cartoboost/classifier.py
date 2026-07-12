@@ -21,9 +21,9 @@ except ImportError:  # pragma: no cover - lightweight fallback for core installs
         pass
 
 
-from ._artifacts import require_artifact_payload, versioned_artifact_payload
+from ._artifacts import decode_stable_model_artifact, library_version, stable_model_artifact_payload
 from ._native import CartoBoostClassifier as _NativeClassifierModel
-from .config import FuzzyKernel, LeafPredictor, Objective
+from .config import FuzzyKernel, LeafPredictor, Objective, SplitPolicy
 from .regressor import (
     _as_sample_weight_array,
     _encode_sparse_columns,
@@ -31,13 +31,16 @@ from .regressor import (
     _feature_schema_metadata,
     _fit_transform_categorical_features,
     _is_empty_sparse_sets,
-    _is_valid_splitter_name,
     _json_attr,
     _normalize_sparse_sets,
     _resolve_linear_leaf_features,
     _rust_feature_schema_json,
     _sparse_names_from_feature_schema,
+    _split_policy_from_native,
     _transform_categorical_features,
+)
+from .regressor import (
+    _resolve_splitters as _resolve_regressor_splitters,
 )
 from .tensorboard import write_training_history
 
@@ -50,7 +53,7 @@ class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
     are encoded for native training and decoded for predictions.
 
     Example:
-        >>> clf = CartoBoostClassifier(n_estimators=8, max_depth=1, splitters=["axis"])
+        >>> clf = CartoBoostClassifier(n_estimators=8, max_depth=1, split_policy="axis_only")
         >>> clf.fit([[0.0], [1.0], [2.0], [3.0]], ["low", "low", "high", "high"])
         CartoBoostClassifier(...)
         >>> clf.predict_proba([[2.5]]).shape
@@ -66,7 +69,7 @@ class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
         min_gain: float = 1e-8,
         objective: Objective = Objective.AUTO,
         class_weight: dict[Any, float] | str | None = None,
-        splitters: list[str] | None = None,
+        split_policy: SplitPolicy = SplitPolicy.AUTO,
         leaf_predictor: LeafPredictor = LeafPredictor.CONSTANT,
         linear_leaf_features: list[str] | None = None,
         fuzzy: bool = False,
@@ -86,7 +89,7 @@ class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
         self.min_gain = min_gain
         self.objective = objective
         self.class_weight = class_weight
-        self.splitters = splitters
+        self.split_policy = SplitPolicy(split_policy)
         self.leaf_predictor = leaf_predictor
         self.linear_leaf_features = linear_leaf_features
         self.fuzzy = fuzzy
@@ -115,7 +118,7 @@ class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
             "min_gain": self.min_gain,
             "objective": self.objective,
             "class_weight": self.class_weight,
-            "splitters": self.splitters,
+            "split_policy": self.split_policy,
             "leaf_predictor": self.leaf_predictor,
             "linear_leaf_features": self.linear_leaf_features,
             "fuzzy": self.fuzzy,
@@ -214,7 +217,11 @@ class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
             objective=_resolved_objective(str(self.objective), self.n_classes_),
             class_count=self.n_classes_,
             class_weights=class_weights,
-            splitters=list(self.splitters or ["auto"]),
+            splitters=_resolve_splitters(
+                self.split_policy,
+                feature_schema,
+                n_rows=dense_array.shape[0],
+            ),
             leaf_predictor=str(self.leaf_predictor),
             linear_leaf_features=_resolve_linear_leaf_features(
                 self.linear_leaf_features,
@@ -259,7 +266,7 @@ class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
         """Return predicted class labels for rows in ``X``.
 
         Example:
-            >>> clf = CartoBoostClassifier(n_estimators=2, splitters=["axis"])
+            >>> clf = CartoBoostClassifier(n_estimators=2, split_policy="axis_only")
             >>> clf.fit([[0.0], [1.0], [2.0], [3.0]], ["no", "no", "yes", "yes"])
             CartoBoostClassifier(...)
             >>> clf.predict([[2.5]]).tolist()
@@ -282,7 +289,7 @@ class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
         """Return class probabilities with columns ordered like ``classes_``.
 
         Example:
-            >>> clf = CartoBoostClassifier(n_estimators=2, splitters=["axis"])
+            >>> clf = CartoBoostClassifier(n_estimators=2, split_policy="axis_only")
             >>> clf.fit([[0.0], [1.0], [2.0], [3.0]], [0, 0, 1, 1])
             CartoBoostClassifier(...)
             >>> clf.predict_proba([[2.5]]).shape
@@ -304,7 +311,7 @@ class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
         """Return raw native margins before the probability transform.
 
         Example:
-            >>> clf = CartoBoostClassifier(n_estimators=2, splitters=["axis"])
+            >>> clf = CartoBoostClassifier(n_estimators=2, split_policy="axis_only")
             >>> clf.fit([[0.0], [1.0], [2.0], [3.0]], [0, 0, 1, 1])
             CartoBoostClassifier(...)
             >>> clf.decision_function([[2.5]]).shape
@@ -336,7 +343,7 @@ class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
         """Return classification accuracy.
 
         Example:
-            >>> clf = CartoBoostClassifier(n_estimators=2, splitters=["axis"])
+            >>> clf = CartoBoostClassifier(n_estimators=2, split_policy="axis_only")
             >>> clf.fit([[0.0], [1.0]], [0, 1])
             CartoBoostClassifier(...)
             >>> clf.score([[0.0], [1.0]], [0, 1]) >= 0.0
@@ -353,7 +360,7 @@ class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
         """Write a classifier artifact, including class labels and encoders.
 
         Example:
-            >>> clf = CartoBoostClassifier(n_estimators=2, splitters=["axis"])
+            >>> clf = CartoBoostClassifier(n_estimators=2, split_policy="axis_only")
             >>> clf.fit([[0.0], [1.0]], [0, 1])
             CartoBoostClassifier(...)
             >>> clf.save("airport-trip-classifier.json")
@@ -365,11 +372,15 @@ class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
             native_path = Path(temp_dir) / "native-classifier.json"
             self._model.save(native_path)
             native_payload = json.loads(native_path.read_text(encoding="utf-8"))
-        payload = versioned_artifact_payload(
-            "cartoboost.classifier",
-            classes=_jsonable_classes(self.classes_),
-            categorical_encoder=getattr(self, "categorical_encoder_", None),
-            native_model=native_payload,
+        payload = stable_model_artifact_payload(
+            "classifier",
+            library_version=library_version(),
+            training_config=native_payload.get("training_config", {}),
+            payload={
+                "classes": _jsonable_classes(self.classes_),
+                "categorical_encoder": getattr(self, "categorical_encoder_", None),
+                "native_model": native_payload,
+            },
         )
         path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
 
@@ -377,7 +388,7 @@ class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
         """Fail loudly for unsupported classifier weight/export artifacts.
 
         Example:
-            >>> clf = CartoBoostClassifier(n_estimators=2, splitters=["axis"])
+            >>> clf = CartoBoostClassifier(n_estimators=2, split_policy="axis_only")
             >>> clf.fit([[0.0], [1.0]], [0, 1])
             CartoBoostClassifier(...)
             >>> clf.save_weights("classifier.onnx", format="onnx")
@@ -403,29 +414,27 @@ class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
         """
         path = Path(path)
         payload = json.loads(path.read_text(encoding="utf-8"))
-        if payload.get("artifact_type") == "cartoboost.classifier":
-            require_artifact_payload(payload, "cartoboost.classifier")
-            with tempfile.TemporaryDirectory() as temp_dir:
-                native_path = Path(temp_dir) / "native-classifier.json"
-                native_path.write_text(
-                    json.dumps(payload["native_model"], sort_keys=True),
-                    encoding="utf-8",
-                )
-                native_model = _NativeClassifierModel.load(native_path)
-            estimator = cls._from_native_model(native_model)
-            estimator.classes_ = _object_array_1d(
-                [_decode_class_label(label) for label in payload["classes"]],
-            )
-            estimator.n_classes_ = int(estimator.classes_.shape[0])
-            estimator.categorical_encoder_ = payload.get("categorical_encoder")
-            if estimator.categorical_encoder_:
-                estimator.n_features_in_ = int(
-                    estimator.categorical_encoder_["original_feature_count"]
-                )
-                estimator.encoded_n_features_in_ = native_model.feature_count
-            return estimator
-        native_model = _NativeClassifierModel.load(path)
-        return cls._from_native_model(native_model)
+        envelope = decode_stable_model_artifact(payload, "classifier")
+        inner = envelope["payload"]
+        native_payload = inner.get("native_model")
+        if not isinstance(native_payload, dict):
+            raise ValueError("stable classifier artifact payload is missing native_model")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            native_path = Path(temp_dir) / "native-classifier.json"
+            native_path.write_text(json.dumps(native_payload, sort_keys=True), encoding="utf-8")
+            native_model = _NativeClassifierModel.load(native_path)
+        estimator = cls._from_native_model(native_model)
+        if "classes" not in inner:
+            raise ValueError("stable classifier artifact payload is missing classes")
+        estimator.classes_ = _object_array_1d(
+            [_decode_class_label(label) for label in inner["classes"]],
+        )
+        estimator.n_classes_ = int(estimator.classes_.shape[0])
+        estimator.categorical_encoder_ = inner.get("categorical_encoder")
+        if estimator.categorical_encoder_:
+            estimator.n_features_in_ = int(estimator.categorical_encoder_["original_feature_count"])
+            estimator.encoded_n_features_in_ = native_model.feature_count
+        return estimator
 
     @classmethod
     def _from_native_model(cls, native_model: Any) -> CartoBoostClassifier:
@@ -436,7 +445,7 @@ class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
             min_samples_leaf=native_model.min_samples_leaf,
             min_gain=native_model.min_gain,
             objective=str(native_model.objective),
-            splitters=list(native_model.splitters),
+            split_policy=_split_policy_from_native(native_model.splitters),
             class_weight=None,
         )
         estimator._model = native_model
@@ -554,14 +563,15 @@ class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
             )
         if self.n_threads is not None and int(self.n_threads) <= 0:
             raise ValueError("n_threads must be positive")
-        if self.splitters is not None:
-            if isinstance(self.splitters, str):
-                raise ValueError("splitters must be a list of splitter names")
-            unknown = [
-                splitter for splitter in self.splitters if not _is_valid_splitter_name(splitter)
-            ]
-            if unknown:
-                raise ValueError(f"unknown splitter(s): {unknown}")
+
+
+def _resolve_splitters(
+    policy: SplitPolicy | str,
+    schema: Any | None,
+    *,
+    n_rows: int | None = None,
+) -> list[str]:
+    return _resolve_regressor_splitters(policy, schema, n_rows=n_rows)
 
 
 def _encode_labels(labels: np.ndarray) -> tuple[np.ndarray, np.ndarray]:

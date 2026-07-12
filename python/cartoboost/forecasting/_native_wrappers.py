@@ -80,7 +80,13 @@ class NativeForecastWrapper:
         actual = np.asarray(values, dtype=float).reshape(-1)
         if actual.size == 0:
             raise ValueError("values must contain at least one observation")
-        prediction = np.asarray(self.predict(int(horizon or actual.size)), dtype=float).reshape(-1)
+        raw_prediction = self.predict(int(horizon or actual.size))
+        if hasattr(raw_prediction, "predictions"):
+            rows = raw_prediction.predictions
+            rows = rows() if callable(rows) else rows
+            prediction = np.asarray([row[-1] for row in rows], dtype=float).reshape(-1)
+        else:
+            prediction = np.asarray(raw_prediction, dtype=float).reshape(-1)
         if prediction.shape[0] != actual.shape[0]:
             raise ValueError("prediction and values must have the same length")
         return float(np.sqrt(np.mean((actual - prediction) ** 2)))
@@ -211,3 +217,69 @@ def _native_frame_from_values(values: Any) -> Any:
     else:
         raise ValueError("forecast training values must be a 1D series or 2D panel")
     return native_frame_class(rows, "D")
+
+
+def _forecast_frame_to_artifact(frame: Any) -> dict[str, Any]:
+    """Serialize a validated ForecastFrame into a JSON-safe training payload."""
+
+    data = frame.to_pandas()
+    records: list[dict[str, Any]] = []
+    for raw in data.to_dict(orient="records"):
+        record: dict[str, Any] = {}
+        for name, value in raw.items():
+            if isinstance(value, np.generic):
+                value = value.item()
+            if hasattr(value, "isoformat"):
+                value = value.isoformat()
+            elif value is not None:
+                try:
+                    if bool(np.isnan(value)):
+                        value = None
+                except (TypeError, ValueError):
+                    pass
+            record[str(name)] = value
+        records.append(record)
+    return {
+        "metadata": frame.to_metadata(),
+        "columns": [str(column) for column in data.columns],
+        "records": records,
+    }
+
+
+def _forecast_frame_from_artifact(payload: Any) -> Any:
+    """Restore a ForecastFrame from a JSON-safe training payload."""
+
+    if not isinstance(payload, dict):
+        raise ValueError("forecast artifact training_frame must be an object")
+    metadata = payload.get("metadata")
+    columns = payload.get("columns")
+    records = payload.get("records")
+    if (
+        not isinstance(metadata, dict)
+        or not isinstance(columns, list)
+        or not isinstance(records, list)
+    ):
+        raise ValueError("forecast artifact training_frame is malformed")
+    from .schema import ForecastFrame
+
+    try:
+        import pandas as pd
+    except ImportError as exc:  # pragma: no cover - pandas is an explicit forecast dependency.
+        raise ImportError(
+            "loading a forecasting artifact requires pandas; install cartoboost[pandas]"
+        ) from exc
+    data = pd.DataFrame.from_records(records, columns=[str(column) for column in columns])
+    return ForecastFrame.from_pandas(
+        data,
+        timestamp_col=str(metadata["timestamp_col"]),
+        target_col=str(metadata["target_col"]),
+        series_id_col=metadata.get("series_id_col"),
+        freq=metadata.get("freq"),
+        static_covariates=metadata.get("static_covariates", []),
+        known_future_covariates=metadata.get("known_future_covariates", []),
+        historical_covariates=metadata.get("historical_covariates", []),
+        allow_irregular=bool(metadata.get("allow_irregular", False)),
+        allow_missing_targets=bool(metadata.get("allow_missing_targets", False)),
+        allow_missing_covariates=bool(metadata.get("allow_missing_covariates", False)),
+        sample_weight_col=metadata.get("sample_weight_col"),
+    )

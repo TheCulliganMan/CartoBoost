@@ -4,7 +4,7 @@ import pandas as pd
 from cartoboost.forecasting.global_models import CartoBoostLagForecaster
 from cartoboost.forecasting.lag_features import (
     CalendarFeatureConfig,
-    LagFeatureConfig,
+    LagConfig,
     RollingFeatureConfig,
 )
 
@@ -34,7 +34,7 @@ def main() -> None:
         target_col="pickup_trips",
         panel_cols=["PULocationID"],
         frequency="H",
-        lag_config=LagFeatureConfig(lags=[1, 2, 24]),
+        lag_config=LagConfig(lags=[1, 2, 24]),
         rolling_config=RollingFeatureConfig(windows=[3, 6], aggregations=["mean"]),
         calendar_config=CalendarFeatureConfig(features=["dayofweek", "month", "day"]),
     ).fit(training)

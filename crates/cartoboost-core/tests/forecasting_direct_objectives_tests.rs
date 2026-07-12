@@ -106,7 +106,7 @@ fn rectified_recursive_forecaster_fits_horizon_specific_corrections() {
     forecaster.fit_horizon(&frame(), 2).expect("fit");
     let predictions = forecaster.predict(2).expect("predict");
 
-    assert_eq!(forecaster.training_rows_by_horizon(), Some(&[8, 6][..]));
+    assert_eq!(forecaster.training_rows_by_horizon(), Some(&[4, 2][..]));
     assert_eq!(predictions.predictions().len(), 4);
     assert!(predictions
         .predictions()
@@ -175,8 +175,9 @@ fn intermittent_experts_are_deterministic_and_validate_inputs() {
     assert!(sba[0] < croston[0]);
     assert!(tsb[0] > 0.0);
     assert!(adida[0] > 0.0);
-    assert!(croston_forecast(&[0.0, 0.0], 1, 0.2).is_err());
+    assert_eq!(croston_forecast(&[0.0, 0.0], 1, 0.2).unwrap(), vec![0.0]);
     assert!(adida_forecast(&values, 1, 0, 0.2).is_err());
+    assert!(adida_forecast(&values[..1], 1, 2, 0.2).is_err());
 }
 
 #[test]

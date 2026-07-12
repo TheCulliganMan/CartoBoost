@@ -116,6 +116,7 @@ class _SpatialRegressionBase(RegressorMixin, BaseEstimator):
         self.spatial_weights_isolated_rows_ = weights.isolated_rows_
         self.diagnostics_ = json.loads(model.diagnostics_json())
         self.coef_ = np.asarray(model.coefficients(), dtype=float)
+        self.durbin_coef_ = np.asarray(model.durbin_coefficients(), dtype=float)
         self.intercept_ = float(model.intercept())
         return self
 
@@ -142,15 +143,21 @@ class _SpatialRegressionBase(RegressorMixin, BaseEstimator):
             "model": self.model_name,
             "intercept": self.intercept_,
             "coefficients": self.coef_.tolist(),
+            "durbin_coefficients": self.durbin_coef_.tolist(),
             "diagnostics": dict(self.diagnostics_),
         }
 
     def score(self, X: Any, y: Any, *, spatial_weights: Any) -> float:
+        """Return the coefficient of determination (R-squared)."""
         pred = self.predict(X, spatial_weights=spatial_weights)
         truth = _as_1d_float_array(y, "y")
         if pred.shape[0] != truth.shape[0]:
             raise ValueError("prediction and y must contain the same number of rows")
-        return float(np.sqrt(np.mean((truth - pred) ** 2)))
+        residual_sum_squares = float(np.sum((truth - pred) ** 2))
+        total_sum_squares = float(np.sum((truth - np.mean(truth)) ** 2))
+        if total_sum_squares == 0.0:
+            return 1.0 if residual_sum_squares == 0.0 else 0.0
+        return 1.0 - residual_sum_squares / total_sum_squares
 
     def get_params(self, deep: bool = True) -> dict[str, Any]:
         del deep
@@ -190,6 +197,7 @@ class _SpatialRegressionBase(RegressorMixin, BaseEstimator):
         obj._model = cls._native_cls.load(Path(path))
         obj.diagnostics_ = json.loads(obj._model.diagnostics_json())
         obj.coef_ = np.asarray(obj._model.coefficients(), dtype=float)
+        obj.durbin_coef_ = np.asarray(obj._model.durbin_coefficients(), dtype=float)
         obj.intercept_ = float(obj._model.intercept())
         obj.n_features_in_ = int(obj.diagnostics_["n_features"])
         obj.n_samples_fit_ = int(obj.diagnostics_["n_samples"])

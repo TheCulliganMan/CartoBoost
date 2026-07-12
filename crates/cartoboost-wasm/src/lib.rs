@@ -74,6 +74,8 @@ use cartoboost_neural::{
     SpatialOperatorEdge as DeepSpatialOperatorEdge, StandaloneBoosterConfig,
     TrendMode as NeuralTrendMode,
 };
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+use cartoboost_neural::{webgpu_dense_layer_f32_async, webgpu_dispatch_report_async};
 use cartoboost_prob::{
     conditional_flow_fit_json as deep_conditional_flow_fit_json,
     conditional_flow_predict_json as deep_conditional_flow_predict_json,
@@ -1126,6 +1128,235 @@ pub fn available_deep_backends_wasm() -> std::result::Result<JsValue, JsValue> {
     serialize_json_response(&deep_available_backends(), "available deep backends")
 }
 
+/// Executes a browser WebGPU compute pass and resolves once the mapped output
+/// has been verified. Unlike the synchronous modeling exports, this function
+/// can await browser adapter and buffer-map promises safely.
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+#[wasm_bindgen(js_name = webgpuDispatchReport)]
+pub async fn webgpu_dispatch_report_wasm(len: usize) -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    let report = webgpu_dispatch_report_async(len)
+        .await
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    serialize_json_response(&report, "WebGPU dispatch report")
+}
+
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+#[wasm_bindgen(js_name = webgpuDenseLayer)]
+pub async fn webgpu_dense_layer_wasm(
+    features: JsValue,
+    weights: Vec<f32>,
+    biases: Vec<f32>,
+) -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    let features: Vec<Vec<f32>> = serde_wasm_bindgen::from_value(features)
+        .map_err(|error| JsValue::from_str(&format!("invalid dense features: {error}")))?;
+    let scores = webgpu_dense_layer_f32_async(&features, &weights, &biases)
+        .await
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    serialize_json_response(&scores, "WebGPU dense layer scores")
+}
+
+/// Predicts event probabilities with the artifact's hidden layer dispatched on
+/// WebGPU. The export is asynchronous because browser GPU work is asynchronous.
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+#[wasm_bindgen(js_name = deepEventOutcomePredictWebgpu)]
+pub async fn deep_event_outcome_predict_webgpu_wasm(
+    artifact: JsValue,
+    features: JsValue,
+) -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    let artifact: DeepEventArtifact = serde_wasm_bindgen::from_value(artifact)
+        .map_err(|error| JsValue::from_str(&format!("invalid event artifact: {error}")))?;
+    let features: Vec<Vec<f64>> = serde_wasm_bindgen::from_value(features)
+        .map_err(|error| JsValue::from_str(&format!("invalid event features: {error}")))?;
+    if features.is_empty()
+        || artifact.hidden_weights.is_empty()
+        || features
+            .iter()
+            .any(|row| row.len() != artifact.feature_means.len())
+    {
+        return Err(JsValue::from_str(
+            "WebGPU event prediction requires nonempty rectangular features and a hidden-layer artifact",
+        ));
+    }
+    let standardized = features
+        .iter()
+        .map(|row| {
+            row.iter()
+                .zip(&artifact.feature_means)
+                .map(|(value, mean)| (value - mean) as f32)
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let input = artifact.feature_means.len();
+    let weights = (0..input)
+        .flat_map(|column| {
+            artifact
+                .hidden_weights
+                .iter()
+                .map(move |row| row[column] as f32)
+        })
+        .collect::<Vec<_>>();
+    let biases = artifact
+        .hidden_biases
+        .iter()
+        .map(|value| *value as f32)
+        .collect::<Vec<_>>();
+    let hidden_values = webgpu_dense_layer_f32_async(&standardized, &weights, &biases)
+        .await
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    let predictions = hidden_values
+        .iter()
+        .map(|row| {
+            let logit = artifact.intercept
+                + row
+                    .iter()
+                    .zip(&artifact.output_weights)
+                    .map(|(value, weight)| f64::from(value.tanh()) * weight)
+                    .sum::<f64>();
+            let probability = 1.0 / (1.0 + (-logit).exp());
+            let calibrated_probability =
+                1.0 / (1.0 + (-(logit / artifact.temperature.max(1.0e-6))).exp());
+            serde_json::json!({
+                "logit": logit,
+                "probability": probability,
+                "calibrated_probability": calibrated_probability,
+            })
+        })
+        .collect::<Vec<_>>();
+    serialize_json_response(&predictions, "WebGPU event predictions")
+}
+
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+async fn webgpu_hidden_scores(
+    features: &[Vec<f64>],
+    means: &[f64],
+    hidden_weights: &[Vec<f64>],
+    hidden_biases: &[f64],
+    output_weights: &[f64],
+    intercepts: &[f64],
+) -> std::result::Result<Vec<f64>, JsValue> {
+    if features.is_empty()
+        || hidden_weights.is_empty()
+        || features.iter().any(|row| row.len() != means.len())
+        || hidden_biases.len() != hidden_weights.len()
+        || output_weights.len() != hidden_weights.len()
+        || intercepts.len() != features.len()
+    {
+        return Err(JsValue::from_str("invalid WebGPU hidden-layer inputs"));
+    }
+    let standardized = features
+        .iter()
+        .map(|row| {
+            row.iter()
+                .zip(means)
+                .map(|(value, mean)| (value - mean) as f32)
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let input = means.len();
+    let weights = (0..input)
+        .flat_map(|column| hidden_weights.iter().map(move |row| row[column] as f32))
+        .collect::<Vec<_>>();
+    let biases = hidden_biases
+        .iter()
+        .map(|value| *value as f32)
+        .collect::<Vec<_>>();
+    let hidden = webgpu_dense_layer_f32_async(&standardized, &weights, &biases)
+        .await
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    Ok(hidden
+        .iter()
+        .zip(intercepts)
+        .map(|(row, intercept)| {
+            *intercept
+                + row
+                    .iter()
+                    .zip(output_weights)
+                    .map(|(value, weight)| f64::from(value.tanh()) * weight)
+                    .sum::<f64>()
+        })
+        .collect())
+}
+
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+#[wasm_bindgen(js_name = deepResponseCurvePredictWebgpu)]
+pub async fn deep_response_curve_predict_webgpu_wasm(
+    artifact: JsValue,
+    rows: JsValue,
+) -> std::result::Result<JsValue, JsValue> {
+    let artifact: DeepResponseArtifact = serde_wasm_bindgen::from_value(artifact)
+        .map_err(|error| JsValue::from_str(&format!("invalid response artifact: {error}")))?;
+    let rows: Vec<DeepResponseRow> = serde_wasm_bindgen::from_value(rows)
+        .map_err(|error| JsValue::from_str(&format!("invalid response rows: {error}")))?;
+    let features = rows
+        .iter()
+        .map(|row| row.features.clone())
+        .collect::<Vec<_>>();
+    let intercepts = rows
+        .iter()
+        .map(|row| artifact.intercept + artifact.candidate_slope * row.candidate_value)
+        .collect::<Vec<_>>();
+    let scores = webgpu_hidden_scores(
+        &features,
+        &artifact.feature_means,
+        &artifact.hidden_weights,
+        &artifact.hidden_biases,
+        &artifact.output_weights,
+        &intercepts,
+    )
+    .await?;
+    let output = rows.iter().zip(scores).map(|(row, score)| {
+        let probability = (artifact.response_type == "binary").then(|| 1.0 / (1.0 + (-score).exp()));
+        serde_json::json!({
+            "group_id": row.group_id, "candidate_id": row.candidate_id, "candidate_value": row.candidate_value,
+            "response_score": score, "response_probability": probability,
+            "calibrated_probability": probability,
+        })
+    }).collect::<Vec<_>>();
+    serialize_json_response(&output, "WebGPU response predictions")
+}
+
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+#[wasm_bindgen(js_name = deepServiceResidualPredictWebgpu)]
+pub async fn deep_service_residual_predict_webgpu_wasm(
+    artifact: JsValue,
+    rows: JsValue,
+) -> std::result::Result<JsValue, JsValue> {
+    let artifact: DeepServiceResidualArtifact = serde_wasm_bindgen::from_value(artifact)
+        .map_err(|error| JsValue::from_str(&format!("invalid residual artifact: {error}")))?;
+    let rows: Vec<DeepServiceResidualRow> = serde_wasm_bindgen::from_value(rows)
+        .map_err(|error| JsValue::from_str(&format!("invalid residual rows: {error}")))?;
+    let features = rows
+        .iter()
+        .map(|row| row.features.clone())
+        .collect::<Vec<_>>();
+    let scores = webgpu_hidden_scores(
+        &features,
+        &artifact.feature_means,
+        &artifact.hidden_weights,
+        &artifact.hidden_biases,
+        &artifact.output_weights,
+        &vec![artifact.intercept; rows.len()],
+    )
+    .await?;
+    let output = rows
+        .iter()
+        .zip(scores)
+        .map(|(row, residual)| {
+            let prediction = artifact.baseline_weight * row.baseline_value + residual;
+            serde_json::json!({
+                "prediction": prediction,
+                "residual_mean": residual,
+                "lower_quantile": prediction - 1.2815515655446004 * artifact.residual_scale,
+                "upper_quantile": prediction + 1.2815515655446004 * artifact.residual_scale,
+            })
+        })
+        .collect::<Vec<_>>();
+    serialize_json_response(&output, "WebGPU service residual predictions")
+}
+
 #[wasm_bindgen(js_name = deepServiceResidualPredict)]
 pub fn deep_service_residual_predict_wasm(
     artifact: JsValue,
@@ -1685,11 +1916,6 @@ fn forecast_model_registry() -> Vec<BrowserForecastModel> {
             pipeline: "local",
         },
         BrowserForecastModel {
-            name: "arima",
-            label: "ARIMA",
-            pipeline: "local",
-        },
-        BrowserForecastModel {
             name: "kalman",
             label: "Kalman",
             pipeline: "local",
@@ -1708,16 +1934,6 @@ fn forecast_model_registry() -> Vec<BrowserForecastModel> {
             name: "auto_local_level_kalman",
             label: "Auto Local Level Kalman",
             pipeline: "local",
-        },
-        BrowserForecastModel {
-            name: "kriging",
-            label: "Kriging",
-            pipeline: "spatial",
-        },
-        BrowserForecastModel {
-            name: "spatial_piecewise_kriging",
-            label: "Spatial Piecewise Kriging",
-            pipeline: "spatial",
         },
         BrowserForecastModel {
             name: "optimized_theta",

@@ -8,6 +8,7 @@ use crate::loss::{
 use crate::predictors::LinearLeafPredictor;
 use crate::profile;
 use crate::Result;
+use rayon::iter::Either;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -727,7 +728,33 @@ impl TreeBuilder {
                     vec![CandidateStats::default(); context.cols * bins]
                 });
                 profile::timed(profile::HIST_ACCUMULATE, || {
-                    if context.histogram_all_features {
+                    if context.histogram_all_features && indices.len() >= 32_768 {
+                        let chunk_size =
+                            (indices.len() / rayon::current_num_threads().max(1)).max(16_384);
+                        let partials = indices
+                            .par_chunks(chunk_size)
+                            .map(|chunk| {
+                                let mut partial =
+                                    vec![CandidateStats::default(); context.cols * bins];
+                                for &idx in chunk {
+                                    add_histogram_stats_row(
+                                        context,
+                                        bins,
+                                        target,
+                                        weights,
+                                        idx,
+                                        &mut partial,
+                                    );
+                                }
+                                partial
+                            })
+                            .collect::<Vec<_>>();
+                        for partial in partials {
+                            for (total, item) in computed_stats.iter_mut().zip(partial) {
+                                total.merge(item);
+                            }
+                        }
+                    } else {
                         for &idx in indices {
                             add_histogram_stats_row(
                                 context,
@@ -737,25 +764,6 @@ impl TreeBuilder {
                                 idx,
                                 &mut computed_stats,
                             );
-                        }
-                    } else {
-                        for &idx in indices {
-                            let weight = weights[idx];
-                            let value = target[idx];
-                            let weighted_target = weight * value;
-                            let weighted_target_square = weighted_target * value;
-                            let row_offset = idx * context.cols;
-                            for &feature in &context.histogram_feature_indices {
-                                let bin = context.histogram_row_bins[row_offset + feature];
-                                if bin == MISSING_BIN {
-                                    continue;
-                                }
-                                let item = &mut computed_stats[feature * bins + usize::from(bin)];
-                                item.count += 1;
-                                item.weight_sum += weight;
-                                item.weighted_target_sum += weighted_target;
-                                item.weighted_target_square_sum += weighted_target_square;
-                            }
                         }
                     }
                 });
@@ -774,23 +782,35 @@ impl TreeBuilder {
                         stats,
                     )
                 });
-                let mut candidates = context
-                    .histogram_feature_indices
-                    .par_iter()
-                    .filter_map(|&feature| {
-                        if !self.interaction_split_allowed(active_features, &[feature]) {
-                            return None;
-                        }
-                        self.best_histogram_candidate_for_feature(
-                            feature,
-                            bins,
-                            context,
-                            stats,
-                            common_total,
-                            parent_sse,
-                        )
-                    })
-                    .collect::<Vec<_>>();
+                let candidate_for_feature = |&feature: &usize| {
+                    if !self.interaction_split_allowed(active_features, &[feature]) {
+                        return None;
+                    }
+                    self.best_histogram_candidate_for_feature(
+                        feature,
+                        bins,
+                        context,
+                        stats,
+                        common_total,
+                        parent_sse,
+                    )
+                };
+                // A small feature set is faster sequentially; spawning one
+                // Rayon task per feature otherwise dominates histogram scoring
+                // for the maintained 20-feature structured workload.
+                let mut candidates = if context.histogram_feature_indices.len() < 64 {
+                    context
+                        .histogram_feature_indices
+                        .iter()
+                        .filter_map(candidate_for_feature)
+                        .collect::<Vec<_>>()
+                } else {
+                    context
+                        .histogram_feature_indices
+                        .par_iter()
+                        .filter_map(candidate_for_feature)
+                        .collect::<Vec<_>>()
+                };
                 candidates.sort_by_key(|candidate| candidate.feature().unwrap_or(usize::MAX));
                 for candidate in candidates {
                     if best
@@ -3316,6 +3336,14 @@ impl CandidateStats {
     }
 
     #[inline(always)]
+    fn merge(&mut self, other: Self) {
+        self.count += other.count;
+        self.weight_sum += other.weight_sum;
+        self.weighted_target_sum += other.weighted_target_sum;
+        self.weighted_target_square_sum += other.weighted_target_square_sum;
+    }
+
+    #[inline(always)]
     fn minus(&self, other: &Self) -> Self {
         Self {
             count: self.count - other.count,
@@ -3371,11 +3399,13 @@ fn add_histogram_stats_row(
     macro_rules! add_feature {
         ($feature:expr) => {{
             let bin = usize::from(context.histogram_row_bins[row_offset + $feature]);
-            let item = &mut stats[($feature * bins) + bin];
-            item.count += 1;
-            item.weight_sum += weight;
-            item.weighted_target_sum += weighted_target;
-            item.weighted_target_square_sum += weighted_target_square;
+            if bin != usize::from(MISSING_BIN) {
+                let item = &mut stats[($feature * bins) + bin];
+                item.count += 1;
+                item.weight_sum += weight;
+                item.weighted_target_sum += weighted_target;
+                item.weighted_target_square_sum += weighted_target_square;
+            }
         }};
     }
     match context.cols {
@@ -3418,12 +3448,49 @@ fn add_histogram_stats_row(
         .iter()
         .enumerate()
     {
+        if bin == MISSING_BIN {
+            continue;
+        }
         let item = &mut stats[feature * bins + usize::from(bin)];
         item.count += 1;
         item.weight_sum += weight;
         item.weighted_target_sum += weighted_target;
         item.weighted_target_square_sum += weighted_target_square;
     }
+}
+
+fn histogram_stats_for_indices(
+    context: &FitContext,
+    bins: usize,
+    target: &[f64],
+    weights: &[f64],
+    indices: &[usize],
+) -> Vec<CandidateStats> {
+    if indices.len() < 32_768 {
+        let mut stats = vec![CandidateStats::default(); context.cols * bins];
+        for &idx in indices {
+            add_histogram_stats_row(context, bins, target, weights, idx, &mut stats);
+        }
+        return stats;
+    }
+    let chunk_size = (indices.len() / rayon::current_num_threads().max(1)).max(16_384);
+    let partials = indices
+        .par_chunks(chunk_size)
+        .map(|chunk| {
+            let mut partial = vec![CandidateStats::default(); context.cols * bins];
+            for &idx in chunk {
+                add_histogram_stats_row(context, bins, target, weights, idx, &mut partial);
+            }
+            partial
+        })
+        .collect::<Vec<_>>();
+    let mut stats = vec![CandidateStats::default(); context.cols * bins];
+    for partial in partials {
+        for (total, item) in stats.iter_mut().zip(partial) {
+            total.merge(item);
+        }
+    }
+    stats
 }
 
 #[inline(always)]
@@ -3745,7 +3812,19 @@ fn materialize_histogram_candidate(
         None
     };
     profile::timed(profile::MATERIALIZE_PARTITION, || {
-        if context.histogram_all_features {
+        if context.histogram_all_features && indices.len() >= 32_768 {
+            let (parallel_left, parallel_right): (Vec<_>, Vec<_>) =
+                indices.par_iter().copied().partition_map(|idx| {
+                    let bin = histogram_feature.bins[idx];
+                    if bin <= candidate.split_bin as u16 {
+                        Either::Left(idx)
+                    } else {
+                        Either::Right(idx)
+                    }
+                });
+            left = parallel_left;
+            right = parallel_right;
+        } else if context.histogram_all_features {
             let split_bin = candidate.split_bin as u16;
             // SAFETY: capacities come from the same histogram counts and split bin used here.
             // Every input row is written exactly once to either `left` or `right`, and the
@@ -3795,9 +3874,8 @@ fn materialize_histogram_candidate(
                 } else {
                     right.as_slice()
                 };
-                for &idx in histogram_rows {
-                    add_histogram_stats_row(context, bins, target, weights, idx, stats);
-                }
+                *stats =
+                    histogram_stats_for_indices(context, bins, target, weights, histogram_rows);
             }
             match (parent_histogram_stats, smaller_histogram_stats) {
                 (Some(parent_stats), Some(smaller_stats)) => {

@@ -43,12 +43,17 @@ if str(ROOT) not in sys.path:
 if str(PYTHON_SOURCE) not in sys.path:
     sys.path.insert(0, str(PYTHON_SOURCE))
 
-from cartoboost import __version__, _native, croston_forecast, sba_forecast, tsb_forecast  # noqa: E402
+from cartoboost import __version__  # noqa: E402
+from cartoboost import _native  # noqa: E402
+from cartoboost.preview import croston_forecast, sba_forecast, tsb_forecast  # noqa: E402
 from cartoboost.forecasting.global_models import CartoBoostLagForecaster  # noqa: E402
-from cartoboost.forecasting.local import AutoStatsBank, PiecewiseLinearSeasonalForecaster  # noqa: E402
-from cartoboost.forecasting.neural import LaneNeuralPanelForecaster  # noqa: E402
+from cartoboost.preview.forecasting import (  # noqa: E402
+    AutoStatsBank,
+    LaneNeuralPanelForecaster,
+    PiecewiseLinearSeasonalForecaster,
+)
 from cartoboost.forecasting.schema import ForecastFrame  # noqa: E402
-from cartoboost.metrics import m_competition_metrics  # noqa: E402
+from cartoboost.metrics import competition_forecast_metrics  # noqa: E402
 from cartoboost.metrics.rank_portfolio import (
     portfolio_summary as native_portfolio_summary,
 )  # noqa: E402
@@ -58,7 +63,7 @@ from cartoboost.metrics.rank_portfolio import (
 from cartoboost.metrics.rank_portfolio import (
     rank_probability_calibration as native_rank_probability_calibration,
 )
-from cartoboost.metrics.wrmsse import m5_equal_level_wrmsse, rmsse_scale, wrmsse  # noqa: E402
+from cartoboost.metrics.wrmsse import aggregate_equal_level_wrmsse, rmsse_scale, wrmsse  # noqa: E402
 
 DEFAULT_CACHE_DIR = ROOT / "data" / "nyc_taxi"
 DEFAULT_FORECASTING_CACHE_DIR = ROOT / "data" / "forecasting_benchmarks"
@@ -244,6 +249,15 @@ def main() -> int:
     parser.add_argument("--lanes", type=int, default=36)
     parser.add_argument("--days", type=int, default=180)
     parser.add_argument("--horizon", type=int, default=14)
+    parser.add_argument(
+        "--rolling-origin-folds",
+        type=int,
+        default=1,
+        help=(
+            "For real taxi demand, score this many leakage-safe outer rolling-origin "
+            "folds instead of one final holdout."
+        ),
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--year", type=int, default=2024)
     parser.add_argument("--months", default="1", help="Comma-separated month numbers, e.g. 1,2,3")
@@ -411,7 +425,7 @@ def main() -> int:
         "learning_rate": args.cartoboost_learning_rate,
         "max_depth": args.cartoboost_max_depth,
         "min_samples_leaf": args.cartoboost_min_samples_leaf,
-        "splitters": ["axis_histogram:128", "periodic:7"],
+        "split_policy": "structured",
     }
 
     benchmark_start = perf_counter()
@@ -441,15 +455,32 @@ def main() -> int:
         )
     benchmark_horizon = int(dataset.get("horizon", args.horizon))
     season_length = int(dataset.get("season_length", 7))
-    metrics, quality, timing, scored = score_models(
-        table,
-        horizon=benchmark_horizon,
-        season_length=season_length,
-        cartoboost_config=cartoboost_config,
-        model_names=benchmark_model_names(args.model_roster),
-        source=args.source,
-        candidate_selection=not args.no_candidate_selection,
-    )
+    model_names = benchmark_model_names(args.model_roster)
+    if args.rolling_origin_folds > 1:
+        if args.source != "nyc-taxi":
+            raise ValueError(
+                "--rolling-origin-folds > 1 is currently supported for --source nyc-taxi"
+            )
+        split_results, metrics, quality, timing, scored = score_rolling_origin_problem(
+            table,
+            horizon=benchmark_horizon,
+            season_length=season_length,
+            folds=args.rolling_origin_folds,
+            cartoboost_config=cartoboost_config,
+            model_names=model_names,
+            source=args.source,
+        )
+    else:
+        split_results = None
+        metrics, quality, timing, scored = score_models(
+            table,
+            horizon=benchmark_horizon,
+            season_length=season_length,
+            cartoboost_config=cartoboost_config,
+            model_names=model_names,
+            source=args.source,
+            candidate_selection=not args.no_candidate_selection,
+        )
     total_seconds = perf_counter() - benchmark_start
     timing = {
         "total_seconds": total_seconds,
@@ -461,7 +492,7 @@ def main() -> int:
             scored,
             args.plot_dir,
             prefix=args.source,
-            models=benchmark_model_names(args.model_roster),
+            models=model_names,
         )
         if args.plot_dir
         else []
@@ -481,7 +512,7 @@ def main() -> int:
         "forecasting_library_models": forecasting_library_models_for_roster(args.model_roster),
         "model_libraries": MODEL_LIBRARIES,
         "dataset": dataset,
-        "models": benchmark_model_names(args.model_roster),
+        "models": model_names,
         "model_roster": args.model_roster,
         "model_settings": cartoboost_model_settings(cartoboost_config),
         "metrics": metrics,
@@ -495,12 +526,20 @@ def main() -> int:
             cartoboost_config=cartoboost_config,
         ),
         "timing": timing,
+        "rolling_origin": (
+            {
+                "folds": args.rolling_origin_folds,
+                "splits": split_results,
+            }
+            if split_results is not None
+            else None
+        ),
         "resource_usage": resource_usage_snapshot(),
         "plots": plots,
     }
     payload["comparability_audit"] = forecasting_comparability_audit(
         args=args,
-        model_names=benchmark_model_names(args.model_roster),
+        model_names=model_names,
         metrics=metrics,
     )
     output = Path(args.output)
@@ -515,6 +554,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--lanes must be positive")
     if args.horizon <= 0:
         raise ValueError("--horizon must be positive")
+    if getattr(args, "rolling_origin_folds", 1) <= 0:
+        raise ValueError("--rolling-origin-folds must be positive")
     if args.source in {"polars", "duckdb"} and args.days <= args.horizon + max(28, args.horizon):
         raise ValueError("--days must leave at least 28 training days before the holdout")
     if args.cartoboost_n_estimators <= 0:
@@ -2851,6 +2892,44 @@ def quality_summary(
         best_model = min(available_models, key=lambda name: metrics[name]["rmse"])
         summary[f"best_{library}_method"] = best_model
         summary[f"best_{library}_rmse"] = metrics[best_model]["rmse"]
+    # The v0.3 lane-demand acceptance gate compares CartoBoost with the
+    # strongest completed external learned baseline, rather than a seasonal
+    # naive library baseline. Keep that comparison explicit in the artifact so
+    # the gate cannot be inferred from a mixed roster or stale prose.
+    external_models = [
+        name
+        for name in model_names
+        if MODEL_LIBRARIES.get(name) == "external_trees" and name in metrics
+    ]
+    if cartoboost_models and external_models:
+        best_external_model = min(external_models, key=lambda name: metrics[name]["rmse"])
+        external_rmse = metrics[best_external_model]["rmse"]
+        cartoboost_rmse = metrics[best_cartoboost_model]["rmse"]
+        summary.update(
+            {
+                "best_external_baseline": best_external_model,
+                "best_external_baseline_rmse": external_rmse,
+                "best_external_baseline_mae": metrics[best_external_model]["mae"],
+                "best_external_baseline_wape": metrics[best_external_model]["wape"],
+                "rmse_delta_vs_best_external_baseline": cartoboost_rmse - external_rmse,
+                "rmse_ratio_vs_best_external_baseline": cartoboost_rmse / external_rmse,
+                "external_baseline_rmse_gate_limit": 1.05,
+                "external_baseline_rmse_gate_passed": cartoboost_rmse <= external_rmse * 1.05,
+            }
+        )
+    else:
+        summary.update(
+            {
+                "best_external_baseline": None,
+                "best_external_baseline_rmse": None,
+                "best_external_baseline_mae": None,
+                "best_external_baseline_wape": None,
+                "rmse_delta_vs_best_external_baseline": None,
+                "rmse_ratio_vs_best_external_baseline": None,
+                "external_baseline_rmse_gate_limit": 1.05,
+                "external_baseline_rmse_gate_passed": False,
+            }
+        )
     return summary
 
 
@@ -3019,7 +3098,7 @@ def m_series_owa_artifact(
         .iter_rows(named=True)
     ]
     actual_values = ordered_scored["actual"].to_list()
-    baseline = m_competition_metrics(
+    baseline = competition_forecast_metrics(
         training_series,
         actual_values,
         ordered_scored["m4_seasonal_naive2"].to_list(),
@@ -3029,7 +3108,7 @@ def m_series_owa_artifact(
     baseline_mase = max(float(baseline["mase"]), 1.0e-12)
     models: dict[str, Any] = {}
     for model in model_names:
-        metrics = m_competition_metrics(
+        metrics = competition_forecast_metrics(
             training_series,
             actual_values,
             ordered_scored[model].to_list(),
@@ -3106,7 +3185,7 @@ def m5_wrmsse_artifact(
             if model in level["models"] and level["models"][model]["wrmsse"] is not None
         ]
         if available_scores:
-            aggregate = m5_equal_level_wrmsse(available_scores, return_breakdown=True)
+            aggregate = aggregate_equal_level_wrmsse(available_scores, return_breakdown=True)
             model_scores[model] = float(aggregate["wrmsse"])
             model_level_contributions[model] = aggregate["levels"]
         else:
@@ -6130,7 +6209,7 @@ def cartoboost_native_forecaster_params(
         "n_estimators": config["n_estimators"],
         "learning_rate": config["learning_rate"],
         **cartoboost_tree_regularization(season_length, horizon, config),
-        "splitters": config.get("splitters"),
+        "split_policy": config.get("split_policy", "structured"),
     }
 
 

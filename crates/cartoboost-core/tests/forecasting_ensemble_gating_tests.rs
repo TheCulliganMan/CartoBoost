@@ -91,11 +91,45 @@ fn native_validation_ensemble_weights_use_best_four_inverse_square_losses() {
         ("c".to_string(), 4.0),
         ("d".to_string(), 8.0),
         ("e".to_string(), 16.0),
-    ]));
+    ]))
+    .expect("weights");
 
     assert!(!weights.contains_key("e"));
     assert!((weights.values().sum::<f64>() - 1.0).abs() < 1e-12);
     assert!(weights["a"] > weights["b"]);
+}
+
+#[test]
+fn native_validation_ensemble_weights_handle_zero_and_extreme_losses() {
+    let perfect = validation_ensemble_weights(&BTreeMap::from([
+        ("perfect_a".to_string(), 0.0),
+        ("perfect_b".to_string(), 0.0),
+        ("other".to_string(), 1.0),
+    ]))
+    .expect("perfect weights");
+    assert_eq!(
+        perfect,
+        BTreeMap::from([
+            ("perfect_a".to_string(), 0.5),
+            ("perfect_b".to_string(), 0.5),
+        ])
+    );
+
+    let extreme = validation_ensemble_weights(&BTreeMap::from([
+        ("a".to_string(), 1.0e300),
+        ("b".to_string(), 2.0e300),
+    ]))
+    .expect("extreme finite scores");
+    assert!((extreme.values().sum::<f64>() - 1.0).abs() < 1.0e-12);
+    assert!(extreme["a"] > extreme["b"]);
+}
+
+#[test]
+fn native_validation_ensemble_weights_reject_invalid_scores() {
+    assert!(validation_ensemble_weights(&BTreeMap::new()).is_err());
+    assert!(
+        validation_ensemble_weights(&BTreeMap::from([("bad".to_string(), f64::NAN,)])).is_err()
+    );
 }
 
 #[test]
@@ -438,6 +472,34 @@ fn rule_based_gating_bounds_close_race_blends() {
         .values()
         .all(|weight| (0.15..=0.85).contains(weight)));
     assert!((weights.values().sum::<f64>() - 1.0).abs() < 1e-12);
+}
+
+#[test]
+fn rule_based_gating_projection_keeps_all_weights_within_bounds() {
+    let table = ValidationScoreTable::new(vec![
+        ExpertScore::global("best", "rmse", 0.01),
+        ExpertScore::global("second", "rmse", 1.0),
+        ExpertScore::global("third", "rmse", 1.0),
+    ])
+    .expect("score table");
+    let gating = RuleBasedGating::with_guardrails(
+        "rmse",
+        table,
+        RuleBasedGatingGuardrails {
+            top_k: Some(3),
+            weight_bounds: Some((0.2, 0.8)),
+            ..RuleBasedGatingGuardrails::default()
+        },
+    )
+    .expect("gating");
+
+    let weights = gating.weights_for(None, None).expect("weights");
+
+    assert!((weights.values().sum::<f64>() - 1.0).abs() < 1.0e-12);
+    assert!(weights.values().all(|weight| (0.2..=0.8).contains(weight)));
+    assert!((weights["best"] - 0.6).abs() < 1.0e-12);
+    assert!((weights["second"] - 0.2).abs() < 1.0e-12);
+    assert!((weights["third"] - 0.2).abs() < 1.0e-12);
 }
 
 #[test]

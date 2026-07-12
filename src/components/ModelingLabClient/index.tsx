@@ -620,11 +620,6 @@ function runDeepModelWasmExample(wasmModule: WasmModule, model: string): unknown
       }
       return wasmModule.runGraphForecast(deepGraphForecastRequest());
     }
-    case 'TemporalSSMForecaster':
-    case 'SelectiveStateSpaceBlock':
-    case 'EntityTemporalSSM':
-    case 'PairTemporalSSM':
-    case 'GraphTemporalSSM':
     case 'TemporalEntityTransformer':
     case 'InvertedTemporalTransformer':
     case 'InvertedEntityTransformer': {
@@ -2890,7 +2885,6 @@ export default function ModelingLabClient(): React.ReactElement {
                   <DeepModelWasmExample model="EventOutcomeModel" />
                   <DeepModelWasmExample model="ServiceTimeResidualModel" />
                   <DeepModelWasmExample model="SpatioTemporalGraphForecaster" />
-                  <DeepModelWasmExample model="TemporalSSMForecaster" />
                   <DeepModelWasmExample model="ConditionalFlowDistributionHead" />
                   <DeepModelWasmExample model="GeoTemporalDiffusionScenarioModel" />
                   <DeepModelWasmExample model="GraphNeuralOperator" />

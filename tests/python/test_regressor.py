@@ -37,6 +37,29 @@ def test_fit_predict_and_roundtrip_native_backend(tmp_path: Path):
     assert loaded.predict([[0.0], [3.0]]) == pytest.approx(predictions)
 
 
+def test_stable_model_save_uses_v2_envelope_and_migrates_v1(tmp_path: Path):
+    model = CartoBoostRegressor(n_estimators=2, min_samples_leaf=1).fit(
+        [[0.0], [1.0], [2.0]], [0.0, 1.0, 2.0]
+    )
+    path = tmp_path / "model.json"
+    model.save(path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["format"] == "cartoboost.model"
+    assert payload["artifact_version"] == 2
+    assert payload["model_type"] == "regressor"
+    assert payload["schema_hash"]
+    assert set(("library_version", "training_config", "payload")) <= set(payload)
+
+    # v0.2.45's Python envelope is accepted only for the matching stable model
+    # and is migrated in memory; it is never rewritten as a compatibility alias.
+    legacy = dict(payload["payload"])
+    legacy.update({"artifact_type": "cartoboost.regressor", "artifact_version": 1})
+    legacy_path = tmp_path / "legacy.json"
+    legacy_path.write_text(json.dumps(legacy), encoding="utf-8")
+    restored = CartoBoostRegressor.load(legacy_path)
+    assert restored.predict([[0.0], [2.0]]) == pytest.approx(model.predict([[0.0], [2.0]]))
+
+
 def test_regressor_records_training_history_and_tensorboard_scalars(monkeypatch, tmp_path: Path):
     calls = []
 

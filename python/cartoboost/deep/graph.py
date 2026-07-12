@@ -11,7 +11,6 @@ from cartoboost.forecasting.graph_st import DCRNNForecaster as _DCRNNForecaster
 from cartoboost.forecasting.graph_st import GraphTemporalFrame as _NativeGraphTemporalFrame
 from cartoboost.forecasting.graph_st import GraphWaveNetForecaster as _GraphWaveNetForecaster
 from cartoboost.forecasting.graph_st import STAEformerForecaster as _STAEformerForecaster
-from cartoboost.representation import GraphContextEmbedding, MultiViewSpatialAttention
 
 from ..config import Backend, GraphBackbone
 from .flow import flow_uncertainty_report
@@ -33,7 +32,12 @@ class SpatioTemporalGraphForecaster:
         except ValueError as exc:
             raise ValueError("unknown graph backbone") from exc
         self.backbone = backbone
-        self.multi_view_views = None if multi_view_views is None else dict(multi_view_views)
+        if multi_view_views is not None:
+            raise RuntimeError(
+                "NumPy representation primitives are not shipped in CartoBoost 0.3; "
+                "provide graph structure through the native frame instead"
+            )
+        self.multi_view_views = None
         if backbone is GraphBackbone.DELAY_AWARE_GRAPH_TRANSFORMER:
             self._model = PropagationDelayGraphForecaster(**params)
         elif backbone is GraphBackbone.DCRNN:
@@ -51,13 +55,6 @@ class SpatioTemporalGraphForecaster:
 
     def fit(self, *args: Any, **kwargs: Any) -> Any:
         self._model.fit(*args, **kwargs)
-        if self.multi_view_views is not None and args:
-            frame = args[0]
-            if hasattr(frame, "node_ids"):
-                self._multi_view_attention = MultiViewSpatialAttention(
-                    embedding_dim=max(2, min(16, len(frame.node_ids))),
-                    random_seed=41,
-                ).fit(frame.node_ids, self.multi_view_views)
         return self
 
     def predict(self, *args: Any, **kwargs: Any) -> Any:
@@ -85,13 +82,7 @@ class SpatioTemporalGraphForecaster:
     def metadata_(self) -> dict[str, Any]:
         metadata = dict(self._model.metadata_)
         metadata["backbone"] = self.backbone.value
-        if hasattr(self, "_multi_view_attention"):
-            output = self._multi_view_attention.transform(self.multi_view_views)
-            metadata["multi_view_spatial_attention"] = {
-                "consumed": True,
-                "artifact": self._multi_view_attention.artifact_metadata(),
-                "view_weights": output["view_weights"].tolist(),
-            }
+        metadata["multi_view_spatial_attention"] = None
         return metadata
 
 
@@ -115,7 +106,12 @@ class DelayAwareGraphTransformer:
         )
         self.ridge = float(ridge)
         self.backend = _backend_value(backend)
-        self.multi_view_views = None if multi_view_views is None else dict(multi_view_views)
+        if multi_view_views is not None:
+            raise RuntimeError(
+                "NumPy representation primitives are not shipped in CartoBoost 0.3; "
+                "provide graph structure through the native frame instead"
+            )
+        self.multi_view_views = None
         if self.backend not in {"auto", "cpu", "cuda", "rocm", "mlx"}:
             raise ValueError("backend must be one of 'auto', 'cpu', 'cuda', 'rocm', or 'mlx'")
         self._native_model = None
@@ -145,35 +141,10 @@ class DelayAwareGraphTransformer:
             self.horizon,
             len(frame.node_ids),
         )
-        self.shared_node_embedding_ = GraphContextEmbedding(
-            embedding_dim=max(2, min(16, len(frame.node_ids))),
-            random_seed=23,
-            architecture="shared_graph_context_embedding",
-            feature_roles={"node_id": "graph_context"},
-        ).fit(frame.node_ids)
-        node_embedding = self.shared_node_embedding_.transform(frame.node_ids)
-        node_norm = np.linalg.norm(node_embedding, axis=1, keepdims=True).clip(min=1e-12)
-        node_similarity = (node_embedding @ node_embedding.T) / (node_norm @ node_norm.T)
+        # Representation and multi-view NumPy helpers were removed in v0.3.
+        # Native graph structure remains the sole source of graph context.
+        node_similarity = np.eye(len(frame.node_ids), dtype=float)
         multi_view_metadata = None
-        if self.multi_view_views is not None:
-            self.multi_view_attention_ = MultiViewSpatialAttention(
-                embedding_dim=max(2, min(16, len(frame.node_ids))),
-                random_seed=43,
-            ).fit(frame.node_ids, self.multi_view_views)
-            multi_view_output = self.multi_view_attention_.transform(self.multi_view_views)
-            fused = np.asarray(multi_view_output["embedding"], dtype=float)
-            fused_norm = np.linalg.norm(fused, axis=1, keepdims=True).clip(min=1e-12)
-            node_similarity = node_similarity + 0.1 * (
-                (fused @ fused.T) / (fused_norm @ fused_norm.T)
-            )
-            multi_view_metadata = {
-                "consumed": True,
-                "artifact": self.multi_view_attention_.artifact_metadata(),
-                "view_weights": np.asarray(multi_view_output["view_weights"], dtype=float).tolist(),
-                "ablation_report": self.multi_view_attention_.view_ablation_report(
-                    self.multi_view_views
-                ),
-            }
         attention = _graph_attention_report(
             y,
             edges,
@@ -218,8 +189,8 @@ class DelayAwareGraphTransformer:
             "horizon": self.horizon,
             "directed": True,
             "backend": self._backend_metadata(),
-            "shared_representation_consumed": True,
-            "shared_representation": self.shared_node_embedding_.artifact_metadata(),
+            "shared_representation_consumed": False,
+            "shared_representation": None,
             "inputs": {
                 "edge_distances": frame.edge_distances is not None,
                 "node_covariates": frame.node_covariates is not None,

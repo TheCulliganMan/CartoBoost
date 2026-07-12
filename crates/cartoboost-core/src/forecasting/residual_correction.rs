@@ -14,11 +14,20 @@ pub struct ResidualStateKey {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "UncheckedStateFilter")]
 pub struct StateFilter {
     pub mean: f64,
     pub variance: f64,
     pub process_variance: f64,
     pub observation_variance: f64,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+struct UncheckedStateFilter {
+    mean: f64,
+    variance: f64,
+    process_variance: f64,
+    observation_variance: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -80,21 +89,14 @@ impl ResidualStateKey {
 
 impl StateFilter {
     pub fn new(process_variance: f64, observation_variance: f64) -> Result<Self> {
-        if !process_variance.is_finite()
-            || process_variance < 0.0
-            || !observation_variance.is_finite()
-            || observation_variance <= 0.0
-        {
-            return Err(CartoBoostError::InvalidInput(
-                "state filter variances must be finite, process >= 0, observation > 0".to_string(),
-            ));
-        }
-        Ok(Self {
+        let filter = Self {
             mean: 0.0,
             variance: observation_variance,
             process_variance,
             observation_variance,
-        })
+        };
+        filter.validate()?;
+        Ok(filter)
     }
 
     pub fn with_state(
@@ -103,26 +105,50 @@ impl StateFilter {
         process_variance: f64,
         observation_variance: f64,
     ) -> Result<Self> {
-        let filter = Self::new(process_variance, observation_variance)?;
-        if !mean.is_finite() || !variance.is_finite() || variance < 0.0 {
+        let filter = Self {
+            mean,
+            variance,
+            process_variance,
+            observation_variance,
+        };
+        filter.validate()?;
+        Ok(filter)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        if !self.mean.is_finite() || !self.variance.is_finite() || self.variance < 0.0 {
             return Err(CartoBoostError::InvalidInput(
                 "state filter mean and variance must be finite with variance >= 0".to_string(),
             ));
         }
-        Ok(Self {
-            mean,
-            variance,
-            ..filter
-        })
+        if !self.process_variance.is_finite()
+            || self.process_variance < 0.0
+            || !self.observation_variance.is_finite()
+            || self.observation_variance <= 0.0
+        {
+            return Err(CartoBoostError::InvalidInput(
+                "state filter variances must be finite, process >= 0, observation > 0".to_string(),
+            ));
+        }
+        Ok(())
     }
 
     pub fn predict(&self) -> Result<Self> {
-        Ok(Self {
+        self.validate()?;
+        let variance = self.variance + self.process_variance;
+        if !variance.is_finite() {
+            return Err(CartoBoostError::InvalidInput(
+                "state filter prediction variance overflowed".to_string(),
+            ));
+        }
+        let predicted = Self {
             mean: self.mean,
-            variance: self.variance + self.process_variance,
+            variance,
             process_variance: self.process_variance,
             observation_variance: self.observation_variance,
-        })
+        };
+        predicted.validate()?;
+        Ok(predicted)
     }
 
     pub fn update(&self, residual: f64) -> Result<Self> {
@@ -133,18 +159,45 @@ impl StateFilter {
         }
         let predicted = self.predict()?;
         let innovation_variance = predicted.variance + predicted.observation_variance;
-        let gain = if innovation_variance <= 0.0 {
-            0.0
-        } else {
-            predicted.variance / innovation_variance
-        };
+        if !innovation_variance.is_finite() || innovation_variance <= 0.0 {
+            return Err(CartoBoostError::InvalidInput(
+                "state filter innovation variance must be finite and positive".to_string(),
+            ));
+        }
+        let gain = predicted.variance / innovation_variance;
         let innovation = residual - predicted.mean;
-        Ok(Self {
-            mean: predicted.mean + gain * innovation,
-            variance: (1.0 - gain) * predicted.variance,
+        if !gain.is_finite() || !innovation.is_finite() {
+            return Err(CartoBoostError::InvalidInput(
+                "state filter update produced a non-finite gain or innovation".to_string(),
+            ));
+        }
+        let posterior_mean = predicted.mean + gain * innovation;
+        let retained = 1.0 - gain;
+        // Joseph's scalar covariance update is robust to roundoff and preserves
+        // non-negative variance for a valid gain.
+        let posterior_variance =
+            retained * retained * predicted.variance + gain * gain * predicted.observation_variance;
+        let updated = Self {
+            mean: posterior_mean,
+            variance: posterior_variance,
             process_variance: self.process_variance,
             observation_variance: self.observation_variance,
-        })
+        };
+        updated.validate()?;
+        Ok(updated)
+    }
+}
+
+impl TryFrom<UncheckedStateFilter> for StateFilter {
+    type Error = CartoBoostError;
+
+    fn try_from(value: UncheckedStateFilter) -> Result<Self> {
+        Self::with_state(
+            value.mean,
+            value.variance,
+            value.process_variance,
+            value.observation_variance,
+        )
     }
 }
 
@@ -166,17 +219,24 @@ impl KalmanResidualCorrector {
                 "structural prediction must be finite".to_string(),
             ));
         }
+        self.default_filter.validate()?;
         let filter = self
             .states
             .get(key)
             .copied()
             .unwrap_or(self.default_filter)
             .predict()?;
+        let corrected_prediction = structural_prediction + filter.mean;
+        if !corrected_prediction.is_finite() {
+            return Err(CartoBoostError::InvalidInput(
+                "state-corrected prediction overflowed".to_string(),
+            ));
+        }
         Ok(StatePrediction {
             key: key.clone(),
             structural_prediction,
             residual_adjustment: filter.mean,
-            corrected_prediction: structural_prediction + filter.mean,
+            corrected_prediction,
             residual_variance: filter.variance,
         })
     }
@@ -189,6 +249,13 @@ impl KalmanResidualCorrector {
     ) -> Result<StateCorrection> {
         let prediction = self.predict(&key, structural_prediction)?;
         let Some(observed) = observed else {
+            let predicted_filter = self
+                .states
+                .get(&key)
+                .copied()
+                .unwrap_or(self.default_filter)
+                .predict()?;
+            self.states.insert(key, predicted_filter);
             return Ok(StateCorrection {
                 prediction,
                 updated: false,
@@ -312,16 +379,101 @@ mod tests {
     }
 
     #[test]
-    fn missing_observations_do_not_update_state() {
-        let filter = StateFilter::new(0.1, 0.1).unwrap();
+    fn missing_observations_advance_and_persist_process_uncertainty() {
+        let filter = StateFilter::with_state(2.0, 1.0, 0.25, 0.5).unwrap();
         let mut corrector = KalmanResidualCorrector::new(filter);
         let key = key("hour=09");
 
-        let correction = corrector.update(key.clone(), 10.0, None).unwrap();
+        let first = corrector.update(key.clone(), 10.0, None).unwrap();
 
-        assert!(!correction.updated);
-        assert!(correction.residual.is_none());
-        assert!(!corrector.states.contains_key(&key));
+        assert!(!first.updated);
+        assert!(first.residual.is_none());
+        assert_eq!(first.prediction.residual_adjustment, 2.0);
+        assert_eq!(first.prediction.residual_variance, 1.25);
+        assert_eq!(corrector.states[&key].mean, 2.0);
+        assert_eq!(corrector.states[&key].variance, 1.25);
+
+        let second = corrector.update(key.clone(), 10.0, None).unwrap();
+
+        assert!(!second.updated);
+        assert_eq!(second.prediction.residual_variance, 1.5);
+        assert_eq!(corrector.states[&key].variance, 1.5);
+
+        // Read-only prediction projects one step but does not mutate the clock.
+        let projected = corrector.predict(&key, 10.0).unwrap();
+        assert_eq!(projected.residual_variance, 1.75);
+        assert_eq!(corrector.states[&key].variance, 1.5);
+    }
+
+    #[test]
+    fn state_filter_update_matches_scalar_kalman_equations() {
+        let filter = StateFilter::with_state(2.0, 3.0, 1.0, 4.0).unwrap();
+
+        let updated = filter.update(10.0).unwrap();
+
+        assert_eq!(updated.mean, 6.0);
+        assert_eq!(updated.variance, 2.0);
+    }
+
+    #[test]
+    fn public_state_filter_fields_cannot_bypass_runtime_validation() {
+        let invalid_filters = [
+            StateFilter {
+                mean: f64::NAN,
+                variance: 1.0,
+                process_variance: 0.1,
+                observation_variance: 1.0,
+            },
+            StateFilter {
+                mean: 0.0,
+                variance: -1.0,
+                process_variance: 0.1,
+                observation_variance: 1.0,
+            },
+            StateFilter {
+                mean: 0.0,
+                variance: 1.0,
+                process_variance: -0.1,
+                observation_variance: 1.0,
+            },
+            StateFilter {
+                mean: 0.0,
+                variance: 1.0,
+                process_variance: 0.1,
+                observation_variance: 0.0,
+            },
+        ];
+
+        for filter in invalid_filters {
+            assert!(filter.validate().is_err());
+            assert!(filter.predict().is_err());
+            assert!(filter.update(1.0).is_err());
+        }
+    }
+
+    #[test]
+    fn state_filter_rejects_numerical_overflow() {
+        let overflowing_variance = StateFilter::with_state(0.0, f64::MAX, f64::MAX, 1.0).unwrap();
+        assert!(overflowing_variance.predict().is_err());
+
+        let overflowing_innovation = StateFilter::with_state(-f64::MAX, 1.0, 0.0, 1.0).unwrap();
+        assert!(overflowing_innovation.update(f64::MAX).is_err());
+
+        let overflowing_prediction = StateFilter::with_state(f64::MAX, 1.0, 0.0, 1.0).unwrap();
+        let corrector = KalmanResidualCorrector::new(overflowing_prediction);
+        assert!(corrector.predict(&key("hour=overflow"), f64::MAX).is_err());
+    }
+
+    #[test]
+    fn deserialization_rejects_invalid_state_filters() {
+        let serialized = r#"{
+            "mean": 0.0,
+            "variance": -1.0,
+            "process_variance": 0.1,
+            "observation_variance": 1.0
+        }"#;
+
+        assert!(serde_json::from_str::<StateFilter>(serialized).is_err());
     }
 
     #[test]

@@ -10,7 +10,7 @@ returns utilities and softmax choice probabilities.
 ## Public Contract
 
 ```python
-from cartoboost.deep import ChoiceSetTransformer
+from cartoboost.preview.deep import ChoiceSetTransformer
 
 report = ChoiceSetTransformer(
     temperature=0.85,

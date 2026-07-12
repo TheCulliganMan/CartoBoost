@@ -62,7 +62,7 @@ time-ordered validation before treating a spatial surface as forecast evidence.
 ## Example With Panel Dict
 
 ```python
-from cartoboost.forecasting import KrigingForecaster
+from cartoboost.preview.forecasting import KrigingForecaster
 
 coordinates = {
     "132": (-73.7781, 40.6413),  # location 132
@@ -82,7 +82,7 @@ model = KrigingForecaster(
     nugget=1.0e-6,
     variogram_model="spherical",
     max_neighbors=32,
-    min_neighbors=4,
+    min_neighbors=3,
 )
 model.fit(series)
 forecast = model.predict(3)
@@ -93,12 +93,12 @@ for row in forecast.predictions():
 
 This panel form forecasts every training zone at the requested horizon. The
 model uses the latest value from each series and predicts each target zone from
-the spatial covariance implied by the coordinates and variogram settings.
+the spatial dependence implied by the coordinates and variogram settings.
 
 ## ForecastFrame Example
 
 ```python
-from cartoboost.forecasting import ForecastFrame, KrigingForecaster
+from cartoboost.preview.forecasting import ForecastFrame, KrigingForecaster
 
 frame = ForecastFrame.from_pandas(
     hourly_zone_demand,
@@ -137,7 +137,7 @@ configuration. They let you inspect the spatial surface and residual behavior at
 one timestamp or validation fold.
 
 ```python
-import cartoboost as cb
+import cartoboost.preview as cb
 
 observations = [
     (-73.7781, 40.6413, 126.0),  # location 132
@@ -274,13 +274,26 @@ that regenerated images can be compared with the committed documentation assets.
 | Parameter | Notes |
 | --- | --- |
 | `coordinates` | Mapping from series id to `(x, y)` or rows of `(series_id, x, y)`. |
-| `range` | Spatial correlation range. Larger values make distant zones influence each other more. |
-| `nugget` | Small positive stabilizer for the kriging system. |
-| `sill` | Marginal spatial covariance scale. |
+| `range` | Distance scale for bounded variograms. For the linear model it sets the slope denominator. |
+| `nugget` | Non-negative origin discontinuity representing an uncorrelated or measurement-scale component. |
+| `sill` | Structural semivariance contribution for bounded models; for the linear model it is the contribution reached at `range`. |
 | `variogram_model` | `exponential`, `gaussian`, `spherical`, or `linear`. |
 | `drift` | `ordinary` for constant mean or `linear` for universal kriging with x/y drift. |
 | `anisotropy_angle_degrees`, `anisotropy_scaling` | Rotate and stretch the spatial distance metric for directional taxi corridors. |
 | `max_neighbors`, `min_neighbors`, `max_distance` | Optional local neighbor controls. When no local neighbor controls are set, the forecaster caches the fixed kriging system and reuses it across targets. |
+
+For positive separation distance `d`, the implemented semivariograms are:
+
+| Model | Semivariogram `gamma(d)` |
+| --- | --- |
+| `exponential` | `nugget + sill * (1 - exp(-d / range))` |
+| `gaussian` | `nugget + sill * (1 - exp(-(d / range)^2))` |
+| `spherical` | `nugget + sill * (1.5r - 0.5r^3)` for `r = d / range < 1`, then `nugget + sill` |
+| `linear` | `nugget + (sill / range) * d` |
+
+The linear semivariogram is unbounded: `range` and `sill` determine its slope,
+not a plateau or cutoff. CartoBoost uses a zero diagonal in the kriging system;
+the nugget applies between distinct or target/observation locations.
 
 ## Choosing Settings
 
@@ -289,9 +302,9 @@ tune the variogram only by making the surface look attractive.
 
 | Setting | Lower values | Higher values |
 | --- | --- | --- |
-| `range` | Nearby zones dominate; surfaces can become local and peaky. | Distant zones borrow more strongly; surfaces become smoother. |
-| `nugget` | The model treats colocated or near-colocated observations as precise. | The model allows zone-specific noise and stabilizes the kriging system. |
-| `sill` | Spatial deviations have smaller amplitude. | Spatial deviations can explain larger pickup-count differences. |
+| `range` | Nearby zones dominate for bounded models; linear semivariance has a steeper slope for fixed `sill`. | Distant zones borrow more strongly for bounded models; linear semivariance has a shallower slope for fixed `sill`. |
+| `nugget` | The model assigns less discontinuity to distinct or near-colocated observations. | The model allows a larger uncorrelated component. |
+| `sill` | Bounded semivariograms have a lower structural plateau; the linear model has a shallower slope for fixed `range`. | Bounded semivariograms have a higher structural plateau; the linear model has a steeper slope for fixed `range`. |
 | `max_neighbors` | Faster local prediction and less distant borrowing. | More stable global borrowing, but more compute and possible over-smoothing. |
 | `max_distance` | Prevents extrapolation from far-away zones. | Allows broad citywide borrowing when local coverage is sparse. |
 
@@ -303,12 +316,12 @@ pattern where distance in one direction should count differently.
 
 ## Diagnostics
 
-For one-off coordinate interpolation, `cartoboost.ordinary_kriging_predict(...,
+For one-off coordinate interpolation, `cartoboost.preview.utilities.ordinary_kriging_predict(...,
 detailed=True)` returns kriging variance and selected neighbor indices alongside
-the mean and weights. Use `cartoboost.empirical_variogram(...)` to inspect binned
-semivariances, `cartoboost.fit_ordinary_kriging_variogram(...)` to choose a
+the mean and weights. Use `cartoboost.preview.utilities.empirical_variogram(...)` to inspect binned
+semivariances, `cartoboost.preview.utilities.fit_ordinary_kriging_variogram(...)` to choose a
 range/nugget/sill/variogram model by weighted least squares, and
-`cartoboost.ordinary_kriging_leave_one_out_diagnostics(...)` to inspect
+`cartoboost.preview.utilities.ordinary_kriging_leave_one_out_diagnostics(...)` to inspect
 leave-one-out bias, MAE, RMSE, standardized residuals, interval coverage, and
 average kriging variance before using the configuration in a panel forecaster.
 

@@ -1,8 +1,22 @@
 from __future__ import annotations
 
+import inspect
+
 import pandas as pd
 import pytest
-from cartoboost.forecasting import AutoForecaster, ForecastFrame
+from cartoboost import BoosterConfig
+from cartoboost.forecasting import AutoForecastConfig, AutoForecaster, ForecastFrame
+
+
+def test_auto_forecaster_uses_typed_configuration_without_generic_kwargs() -> None:
+    signature = inspect.signature(AutoForecaster)
+    assert not any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in signature.parameters.values()
+    )
+    config = AutoForecastConfig(booster_config=BoosterConfig(n_estimators=12))
+    model = AutoForecaster(config=config)
+    assert model.config.booster_config.n_estimators == 12
 
 
 def test_auto_forecaster_delegates_to_native_auto_model(install_fake_native):

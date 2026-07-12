@@ -9,7 +9,7 @@ from statistics import mean
 from typing import Any
 
 import pandas as pd
-from cartoboost.forecasting import ETSForecaster, ForecastFrame
+from cartoboost.preview.forecasting import ETSForecaster, ForecastFrame
 
 
 def synthetic_airport_pickups(hours: int) -> pd.DataFrame:

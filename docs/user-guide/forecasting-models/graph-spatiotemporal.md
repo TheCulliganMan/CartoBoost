@@ -25,7 +25,7 @@ same rolling-origin split used by the baselines.
 
 ```python
 import numpy as np
-from cartoboost.forecasting import (
+from cartoboost.preview.forecasting import (
     DCRNNForecaster,
     GraphTemporalFrame,
     GraphWaveNetForecaster,

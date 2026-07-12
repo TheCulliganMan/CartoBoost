@@ -68,7 +68,7 @@ flowchart TD
     A["ForecastFrame<br/>series panels"] --> B["Python AutoForecaster<br/>normalizes config"]
     B --> C["AutoForecastModel"]
     C --> D["Choose validation_window<br/>configured or min_history / 5 clamped to 1..8"]
-    D --> E["Choose validation_origin_count<br/>configured count capped by available history"]
+    D --> E["Validate validation_origin_count<br/>against available history"]
     E --> F["Build non-overlapping trailing rolling-origin splits"]
     F --> G["Expand lag config with supported season-length multiples"]
     G --> H["Score eligible candidate roster on every split"]
@@ -87,9 +87,9 @@ If `validation_window` is omitted, the selector uses the shortest series history
 effective_validation_window = clamp(floor(min_series_history / 5), 1, 8)
 ```
 
-If `validation_origin_count` is too large for the available history, it is
-capped to the maximum number of non-overlapping trailing windows that still
-leave at least one training row. A configured zero is rejected.
+If `validation_window` or `validation_origin_count` is too large to preserve
+the required training prefix, fitting fails with the feasible limit. Neither
+setting is silently capped. A configured zero is also rejected.
 
 ## Candidate Roster
 
@@ -105,15 +105,24 @@ data support their assumptions.
 | `scaled_lag` | Lag spine wrapped in local standard scaling. | Always eligible. |
 | `delta_lag` | Lag spine predicting change from the latest value. | Always eligible. |
 | `scaled_delta_lag` | Delta lag wrapped in local standard scaling. | Always eligible. |
-| `seasonal_delta_lag` | Lag spine predicting change from the value one season ago. | Always eligible. |
-| `scaled_seasonal_delta_lag` | Seasonal delta lag wrapped in local standard scaling. | Always eligible. |
+| `seasonal_delta_lag` | Lag spine predicting change from the value one season ago. | Eligible only when every validation-training prefix contains the configured season. |
+| `scaled_seasonal_delta_lag` | Seasonal delta lag wrapped in local standard scaling. | Same complete-season requirement as `seasonal_delta_lag`. |
 | `ewm_lag` | Lag spine with an extra 90% exponentially weighted mean feature. | Always eligible as a candidate; user-provided EWM alphas also feed the lag config. |
 | `cartoboost_direct` | Horizon-specific direct CartoBoost forecast model. | Skipped when at least 25% of training targets are zero. |
-| `cartoboost_rectified_recursive` | Recursive forecast with direct residual rectification. | Skipped when at least 25% of training targets are zero. |
+| `cartoboost_rectified_recursive` | Recursive forecast with direct residual rectification; correction targets come from a trailing holdout forecast by a prefix-only baseline. | Skipped when at least 25% of training targets are zero. |
 | `log1p_scaled_lag` | Nonnegative log1p transform around scaled lag. | Eligible only when all training targets are nonnegative. |
-| `lag_plus` | Lag spine plus residual correction and seasonal bucket shrinkage. | Always eligible. |
+| `lag_plus` | Lag spine plus residual correction and seasonal bucket shrinkage. | Requires a non-empty internal suffix holdout and a prefix that supports the effective lag config. |
 | `intermittent_demand` | Sparse nonnegative demand methods for many-zero panels. | Eligible only when all targets are nonnegative and at least 25% are zero. |
 | `classical_expert_bank` | Native bank over classical local forecasters. | Always eligible. |
+
+Target-transform candidates retain historical and known covariates while
+transforming only the target. Local standard scaling maps point forecasts,
+intervals, additive corrections, and variances back to the original target
+scale. The log1p wrapper maps points and interval endpoints through `expm1`;
+because a nonlinear transform cannot exactly invert a variance without a full
+distribution, any inner-scale kriging variance remains explicitly labeled in
+forecast-detail metadata instead of being reported as an exact original-scale
+variance.
 
 ```mermaid
 flowchart LR
@@ -126,7 +135,7 @@ flowchart LR
     F -- yes --> G["Enable intermittent_demand"]
     C -- no --> H["Enable direct and rectified-recursive candidates"]
     D -- yes --> I["Enable recency_weighted_lag"]
-    A --> J["Always score lag, scaled, delta, seasonal-delta, ewm, lag_plus, classical bank"]
+    A --> J["Always consider lag, scaled, delta, seasonal-delta, ewm, lag_plus, classical bank"]
 ```
 
 The recent-shift gate compares the latest window to the preceding window. The
@@ -155,8 +164,11 @@ The default lag spine starts with:
 Before validation scoring, the model expands the effective lag configuration
 with supported multiples of `season_length`. It adds `season_length * 1` through
 `season_length * 4` to lag, rolling, trend, and difference features only when
-the shortest training history can support those windows. The final effective
-lag config is sorted, deduplicated, and saved in metadata.
+the shortest prefix can support those windows after reserving the selector's
+holdout and any nested LagPlus or rectified-recursive holdout. The automatic
+model records this adaptation in `effective_lag_config`; explicit standalone
+lag models remain strict and do not remove requested features. The final
+effective lag config is sorted, deduplicated, and saved in metadata.
 
 ## Scoring Objective
 
@@ -303,7 +315,7 @@ WAPE, training time, and prediction time.
 | `rich_calendar_features` | `False` | Enables the richer calendar feature set. |
 | `ewm_alpha_percents` | `()` | Adds explicit EWM target-mean features to the lag config. Values must be unique integers in `1..=100`. |
 | `partial_rolling_mean_windows` | `()` | Adds partial rolling-mean windows. Values must be unique positive integers. |
-| `n_estimators`, `learning_rate`, `max_depth`, `min_samples_leaf`, `min_gain`, `splitters` | Booster defaults | Passed into the CartoBoost booster config used by tree-based candidates. |
+| `n_estimators`, `learning_rate`, `max_depth`, `min_samples_leaf`, `min_gain`, `split_policy` | Booster defaults | Passed into the typed CartoBoost booster config used by tree-based candidates. |
 | `target_mode` | `"level"` | Base lag target mode before auto candidates add delta and seasonal-delta alternatives. |
 
 `recursive=False` is not supported for the current auto model.
@@ -317,12 +329,14 @@ WAPE, training time, and prediction time.
   zero;
 - blend bounds are invalid;
 - no validation split can be built from the available history;
-- every eligible candidate fails validation;
+- an eligible candidate fails to fit or produce its complete series-by-horizon validation output;
 - prediction is requested before fitting;
 - selected members return different forecast indexes.
 
-Candidate-level failures during validation remove that candidate from the
-scored roster. If no candidates can be validated, fitting fails.
+Only documented eligibility rules omit a candidate before fitting. Once an
+eligible candidate run begins, its fitting, prediction, or index failure is
+reported and the selector stops; it is not reinterpreted as evidence for the
+remaining roster.
 
 ## When Not To Use It
 

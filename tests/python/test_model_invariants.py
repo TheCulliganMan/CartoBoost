@@ -4,8 +4,9 @@ import json
 
 import numpy as np
 import pytest
-from cartoboost import CartoBoostRegressor, Prophet
-from cartoboost.forecasting import ForecastFrame, PiecewiseLinearSeasonalForecaster
+from cartoboost import CartoBoostRegressor
+from cartoboost.preview import Prophet
+from cartoboost.preview.forecasting import ForecastFrame, PiecewiseLinearSeasonalForecaster
 
 
 def _radial_fixture() -> tuple[np.ndarray, np.ndarray]:
@@ -767,6 +768,7 @@ def test_real_native_save_load_restores_public_params_and_metadata(tmp_path):
         "log_offset": 1.0,
         "loss_params": None,
         "splitters": ["gaussian_2d"],
+        "split_policy": "auto",
         "leaf_predictor": "constant",
         "linear_leaf_features": [],
         "fuzzy": True,

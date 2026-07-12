@@ -173,7 +173,7 @@ impl Forecaster for IntermittentDemandForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
         frame.require_regular_for_model(self.model_name())?;
         validate_nonnegative_frame(frame)?;
-        let validation_window = effective_validation_window(frame, self.config.validation_window);
+        let validation_window = effective_validation_window(frame, self.config.validation_window)?;
         let mut series = BTreeMap::new();
         for (series_id, rows) in history_by_series(frame.rows()) {
             if rows.len() <= validation_window {
@@ -223,7 +223,7 @@ impl Forecaster for IntermittentDemandForecaster {
                         timestamp: fitted.frame.frequency().advance(last.timestamp, step)?,
                         horizon: step,
                         model: self.model_name().to_string(),
-                        mean: state.level.max(0.0),
+                        mean: state.level,
                     });
                 }
                 Ok(predictions)
@@ -354,11 +354,17 @@ impl Forecaster for TsbForecaster {
 
 pub fn croston_forecast(values: &[f64], horizon: usize, alpha: f64) -> Result<Vec<f64>> {
     validate_inputs(values, horizon, alpha, None)?;
+    if values.iter().all(|value| *value == 0.0) {
+        return Ok(vec![0.0; horizon]);
+    }
     Ok(vec![croston_level(values, alpha)?; horizon])
 }
 
 pub fn sba_forecast(values: &[f64], horizon: usize, alpha: f64) -> Result<Vec<f64>> {
     validate_inputs(values, horizon, alpha, None)?;
+    if values.iter().all(|value| *value == 0.0) {
+        return Ok(vec![0.0; horizon]);
+    }
     Ok(vec![
         croston_level(values, alpha)? * (1.0 - alpha / 2.0);
         horizon
@@ -367,6 +373,9 @@ pub fn sba_forecast(values: &[f64], horizon: usize, alpha: f64) -> Result<Vec<f6
 
 pub fn tsb_forecast(values: &[f64], horizon: usize, alpha: f64, beta: f64) -> Result<Vec<f64>> {
     validate_inputs(values, horizon, alpha, Some(beta))?;
+    if values.iter().all(|value| *value == 0.0) {
+        return Ok(vec![0.0; horizon]);
+    }
     Ok(vec![tsb_level(values, alpha, beta)?; horizon])
 }
 
@@ -382,11 +391,22 @@ pub fn adida_forecast(
             "ADIDA bucket_size must be positive".to_string(),
         ));
     }
-    let mut buckets = Vec::new();
-    for chunk in values.chunks(bucket_size) {
-        buckets.push(chunk.iter().sum::<f64>());
+    if values.len() < bucket_size {
+        return Err(CartoBoostError::InvalidInput(format!(
+            "ADIDA requires at least one complete bucket of {bucket_size} observations; got {}",
+            values.len()
+        )));
     }
-    let aggregate = croston_level(&buckets, alpha)? / bucket_size as f64;
+    let complete_start = values.len() % bucket_size;
+    let buckets = values[complete_start..]
+        .chunks_exact(bucket_size)
+        .map(|chunk| chunk.iter().sum::<f64>())
+        .collect::<Vec<_>>();
+    let aggregate = if buckets.iter().all(|value| *value == 0.0) {
+        0.0
+    } else {
+        croston_level(&buckets, alpha)? / bucket_size as f64
+    };
     Ok(vec![aggregate; horizon])
 }
 
@@ -395,23 +415,27 @@ fn fit_series(
     validation_window: usize,
     config: &IntermittentDemandConfig,
 ) -> Result<FittedIntermittentSeries> {
+    if validation_window == 0 || validation_window >= values.len() {
+        return Err(CartoBoostError::InvalidInput(
+            "intermittent demand selection requires a non-empty training split and a real holdout"
+                .to_string(),
+        ));
+    }
     let split_at = values.len() - validation_window;
     let train = &values[..split_at];
     let validation = &values[split_at..];
     let zero_fraction =
         values.iter().filter(|value| **value == 0.0).count() as f64 / values.len().max(1) as f64;
-    let candidates = candidate_methods(values);
+    let candidates = candidate_methods(train, config);
     let mut best: Option<(IntermittentDemandMethod, f64)> = None;
     for method in candidates {
-        let loss = if validation_window == 0 {
-            method_forecast(method, values, 1, config)?;
-            0.0
-        } else {
-            let forecast = method_forecast(method, train, validation.len(), config)?;
-            objective_loss(validation, &forecast, config.objective)?
-        };
+        let forecast = method_forecast(method, train, validation.len(), config)?;
+        let loss = objective_loss(validation, &forecast, config.objective)?;
         if !loss.is_finite() {
-            continue;
+            return Err(CartoBoostError::InvalidInput(format!(
+                "intermittent demand method {} produced a non-finite validation loss",
+                method.as_str()
+            )));
         }
         let replace = best
             .as_ref()
@@ -429,8 +453,13 @@ fn fit_series(
     let level = method_forecast(method, values, 1, config)?
         .into_iter()
         .next()
-        .unwrap_or(0.0)
-        .max(0.0);
+        .ok_or_else(|| {
+            CartoBoostError::InvalidInput(format!(
+                "intermittent demand method {} returned no fitted forecast",
+                method.as_str()
+            ))
+        })?;
+    validate_fitted_level(level, method.as_str())?;
     Ok(FittedIntermittentSeries {
         method,
         level,
@@ -439,16 +468,23 @@ fn fit_series(
     })
 }
 
-fn candidate_methods(values: &[f64]) -> Vec<IntermittentDemandMethod> {
+fn candidate_methods(
+    values: &[f64],
+    config: &IntermittentDemandConfig,
+) -> Vec<IntermittentDemandMethod> {
     if values.iter().all(|value| *value == 0.0) {
         return vec![IntermittentDemandMethod::Zero];
     }
-    vec![
+    let mut methods = vec![
+        IntermittentDemandMethod::Zero,
         IntermittentDemandMethod::Tsb,
         IntermittentDemandMethod::Sba,
         IntermittentDemandMethod::Croston,
-        IntermittentDemandMethod::Adida,
-    ]
+    ];
+    if values.len() >= config.adida_bucket_size {
+        methods.push(IntermittentDemandMethod::Adida);
+    }
+    methods
 }
 
 fn method_forecast(
@@ -486,14 +522,28 @@ fn fit_fixed_intermittent(
         let level = method_forecast(method, &values, 1, &config)?
             .into_iter()
             .next()
-            .unwrap_or(0.0)
-            .max(0.0);
+            .ok_or_else(|| {
+                CartoBoostError::InvalidInput(format!(
+                    "intermittent method {} returned no fitted forecast",
+                    method.as_str()
+                ))
+            })?;
+        validate_fitted_level(level, method.as_str())?;
         levels.insert(series_id, level);
     }
     Ok(FittedFixedIntermittentDemand {
         frame: frame.clone(),
         levels,
     })
+}
+
+fn validate_fitted_level(level: f64, method: &str) -> Result<()> {
+    if !level.is_finite() || level < 0.0 {
+        return Err(CartoBoostError::InvalidInput(format!(
+            "intermittent method {method} produced an invalid fitted level {level}"
+        )));
+    }
+    Ok(())
 }
 
 fn predict_fixed_intermittent(
@@ -586,19 +636,31 @@ fn wape_loss(actuals: &[f64], predictions: &[f64]) -> Result<f64> {
     Ok(numerator / denominator)
 }
 
-fn effective_validation_window(frame: &ForecastFrame, configured: Option<usize>) -> usize {
-    if let Some(window) = configured {
-        return window;
-    }
+fn effective_validation_window(frame: &ForecastFrame, configured: Option<usize>) -> Result<usize> {
     let min_history = history_by_series(frame.rows())
         .values()
         .map(Vec::len)
         .min()
-        .unwrap_or(0);
+        .ok_or_else(|| {
+            CartoBoostError::InvalidInput(
+                "intermittent demand selection requires at least one series".to_string(),
+            )
+        })?;
     if min_history < 2 {
-        return 0;
+        return Err(CartoBoostError::InvalidInput(
+            "intermittent demand selection requires at least two rows per series for a real holdout"
+                .to_string(),
+        ));
     }
-    (min_history / 5).clamp(1, 8)
+    if let Some(window) = configured {
+        if window >= min_history {
+            return Err(CartoBoostError::InvalidInput(format!(
+                "intermittent demand validation_window must be smaller than every series history; minimum history is {min_history}, got {window}"
+            )));
+        }
+        return Ok(window);
+    }
+    Ok((min_history / 5).clamp(1, 8))
 }
 
 fn validate_nonnegative_frame(frame: &ForecastFrame) -> Result<()> {

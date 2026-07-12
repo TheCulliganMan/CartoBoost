@@ -10,7 +10,7 @@ or service-level curves.
 ## Public Contract
 
 ```python
-from cartoboost.deep import ResponseCurveFrame, ResponseCurveModel
+from cartoboost.preview.deep import ResponseCurveFrame, ResponseCurveModel
 
 frame = ResponseCurveFrame.from_pandas(
     candidates,

@@ -16,8 +16,8 @@ pub use rank_portfolio::{
 };
 pub use rps::rank_probability_score;
 pub use wrmsse::{
-    m5_equal_level_wrmsse, ordered_nonnegative_weights, rmsse_scale, wrmsse,
-    M5AggregateWrmsseScore, M5LevelWrmsseScore, WrmsseScore, WrmsseSeries, WrmsseSeriesScore,
+    aggregate_equal_level_wrmsse, ordered_nonnegative_weights, rmsse_scale, wrmsse,
+    AggregateWrmsseScore, LevelWrmsseScore, WrmsseScore, WrmsseSeries, WrmsseSeriesScore,
 };
 
 pub fn mae(y_true: &[f64], y_pred: &[f64]) -> f64 {

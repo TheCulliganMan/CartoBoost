@@ -6,9 +6,10 @@ use crate::forecasting::{
 };
 use crate::loss::huber_irls_weights;
 use crate::utilities::{
-    fit_local_level_kalman, fit_local_linear_kalman, ordinary_kriging_predict,
-    ordinary_kriging_predict_many, KrigingObservation, LocalLevelKalmanConfig,
-    LocalLinearKalmanConfig, OrdinaryKrigingConfig,
+    fit_local_level_kalman, fit_local_linear_kalman, local_level_kalman_forecast_distribution,
+    local_linear_kalman_forecast_distribution, ordinary_kriging_leave_one_out,
+    ordinary_kriging_predict, ordinary_kriging_predict_many, KrigingObservation,
+    LocalLevelKalmanConfig, LocalLinearKalmanConfig, OrdinaryKrigingConfig,
 };
 use crate::{CartoBoostError, Result};
 use rayon::prelude::*;
@@ -60,6 +61,7 @@ pub struct OptimizedThetaForecaster {
     seasonality: Option<ThetaSeasonality>,
     selected_theta: Option<f64>,
     selected_alpha: Option<f64>,
+    validation_window: Option<usize>,
     validation_scores: Vec<ThetaValidationScore>,
     fitted: Option<ThetaForecaster>,
 }
@@ -82,6 +84,7 @@ pub struct AutoETSForecaster {
     damping_phi_grid: Vec<f64>,
     season_length: Option<usize>,
     selected_params: Option<ETSParameterSet>,
+    validation_window: Option<usize>,
     validation_scores: Vec<ETSValidationScore>,
     fitted: Option<ETSForecaster>,
 }
@@ -483,6 +486,8 @@ struct ThetaComponent {
     last_level: f64,
     slope: f64,
     theta: f64,
+    alpha: f64,
+    n_obs: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -498,6 +503,8 @@ pub struct ArimaValidationScore {
     pub d: usize,
     pub q: usize,
     pub mse: f64,
+    pub ar_stable: bool,
+    pub ma_invertible: bool,
     pub stable: bool,
 }
 
@@ -526,6 +533,7 @@ pub struct KalmanParameterSet {
 pub struct KalmanValidationScore {
     pub params: KalmanParameterSet,
     pub mse: f64,
+    pub negative_log_likelihood: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -538,6 +546,7 @@ pub struct LocalLevelKalmanParameterSet {
 pub struct LocalLevelKalmanValidationScore {
     pub params: LocalLevelKalmanParameterSet,
     pub mse: f64,
+    pub negative_log_likelihood: f64,
 }
 
 impl Default for PiecewiseLinearSeasonalConfig {
@@ -1385,6 +1394,7 @@ impl OptimizedThetaForecaster {
             seasonality,
             selected_theta: None,
             selected_alpha: None,
+            validation_window: None,
             validation_scores: Vec::new(),
             fitted: None,
         })
@@ -1538,6 +1548,7 @@ impl AutoETSForecaster {
             damping_phi_grid,
             season_length,
             selected_params: None,
+            validation_window: None,
             validation_scores: Vec::new(),
             fitted: None,
         })
@@ -1776,6 +1787,7 @@ impl KrigingForecaster {
         coordinates: BTreeMap<String, (f64, f64)>,
         config: OrdinaryKrigingConfig,
     ) -> Result<Self> {
+        let config = config.validate()?;
         if coordinates.is_empty() {
             return Err(CartoBoostError::InvalidInput(
                 "kriging coordinates must not be empty".to_string(),
@@ -1868,7 +1880,14 @@ impl Forecaster for NaiveForecaster {
 impl Forecaster for SeasonalNaiveForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
         frame.require_regular_for_model(self.model_name())?;
-        self.fitted = Some(FittedLocalState::from_frame(frame));
+        let fitted = FittedLocalState::from_frame(frame);
+        validate_local_history_requirement(
+            &fitted,
+            self.season_length,
+            self.model_name(),
+            "one complete requested season",
+        )?;
+        self.fitted = Some(fitted);
         Ok(())
     }
 
@@ -1884,12 +1903,11 @@ impl Forecaster for SeasonalNaiveForecaster {
                 let last = history.last().ok_or_else(|| {
                     CartoBoostError::InvalidInput("empty series history".to_string())
                 })?;
-                let effective_season_length = self.season_length.min(history.len()).max(1);
-                let base = history.len() - effective_season_length;
+                let base = history.len() - self.season_length;
                 let model = self.model_name().to_string();
                 let mut predictions = Vec::with_capacity(horizon);
                 for step in 1..=horizon {
-                    let seasonal_index = base + ((step - 1) % effective_season_length);
+                    let seasonal_index = base + ((step - 1) % self.season_length);
                     predictions.push(ForecastPrediction {
                         series_id: series_id.clone(),
                         timestamp: fitted.frame.frequency().advance(last.timestamp, step)?,
@@ -1921,7 +1939,14 @@ impl Forecaster for SeasonalNaiveForecaster {
 impl Forecaster for WindowAverageForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
         let observed = frame.observed_target_frame(self.model_name())?;
-        self.fitted = Some(FittedLocalState::from_frame_with_anchor(&observed, frame));
+        let fitted = FittedLocalState::from_frame_with_anchor(&observed, frame);
+        validate_local_history_requirement(
+            &fitted,
+            self.window_size,
+            self.model_name(),
+            "the requested averaging window",
+        )?;
+        self.fitted = Some(fitted);
         Ok(())
     }
 
@@ -1942,10 +1967,9 @@ impl Forecaster for WindowAverageForecaster {
                     .get(series_id)
                     .copied()
                     .unwrap_or(last.timestamp);
-                let effective_window_size = self.window_size.min(history.len()).max(1);
-                let start = history.len() - effective_window_size;
+                let start = history.len() - self.window_size;
                 let mean = history[start..].iter().map(|row| row.target).sum::<f64>()
-                    / effective_window_size as f64;
+                    / self.window_size as f64;
                 let model = self.model_name().to_string();
                 let mut predictions = Vec::with_capacity(horizon);
                 for step in 1..=horizon {
@@ -1983,7 +2007,22 @@ impl Forecaster for WindowAverageForecaster {
 impl Forecaster for SeasonalWindowAverageForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
         frame.require_regular_for_model(self.model_name())?;
-        self.fitted = Some(FittedLocalState::from_frame(frame));
+        let fitted = FittedLocalState::from_frame(frame);
+        let required = self
+            .season_length
+            .checked_mul(self.window_count)
+            .ok_or_else(|| {
+                CartoBoostError::InvalidInput(
+                    "seasonal window history requirement overflowed usize".to_string(),
+                )
+            })?;
+        validate_local_history_requirement(
+            &fitted,
+            required,
+            self.model_name(),
+            "the requested number of complete seasonal windows",
+        )?;
+        self.fitted = Some(fitted);
         Ok(())
     }
 
@@ -2000,17 +2039,12 @@ impl Forecaster for SeasonalWindowAverageForecaster {
                     CartoBoostError::InvalidInput("empty series history".to_string())
                 })?;
                 let model = self.model_name().to_string();
-                let effective_season_length = self.season_length.min(history.len()).max(1);
-                let effective_window_count = self
-                    .window_count
-                    .min(history.len() / effective_season_length)
-                    .max(1);
                 let mut predictions = Vec::with_capacity(horizon);
                 for step in 1..=horizon {
-                    let phase_offset = (step - 1) % effective_season_length;
+                    let phase_offset = (step - 1) % self.season_length;
                     let mut sum = 0.0;
-                    for window in 0..effective_window_count {
-                        let base = history.len() - effective_season_length * (window + 1);
+                    for window in 0..self.window_count {
+                        let base = history.len() - self.season_length * (window + 1);
                         sum += history[base + phase_offset].target;
                     }
                     predictions.push(ForecastPrediction {
@@ -2018,7 +2052,7 @@ impl Forecaster for SeasonalWindowAverageForecaster {
                         timestamp: fitted.frame.frequency().advance(last.timestamp, step)?,
                         horizon: step,
                         model: model.clone(),
-                        mean: sum / effective_window_count as f64,
+                        mean: sum / self.window_count as f64,
                     });
                 }
                 Ok(predictions)
@@ -2079,6 +2113,20 @@ impl Forecaster for ThetaForecaster {
 impl Forecaster for OptimizedThetaForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
         frame.require_regular_for_model(self.model_name())?;
+        let history_by_series = FittedLocalState::from_frame(frame).history_by_series;
+        let minimum_train_len = match self.seasonality {
+            Some(seasonality) => seasonality.season_length.checked_mul(2).ok_or_else(|| {
+                CartoBoostError::InvalidInput(
+                    "optimized_theta seasonal history requirement overflowed usize".to_string(),
+                )
+            })?,
+            None => 2,
+        };
+        let validation_window = automatic_model_validation_window(
+            &history_by_series,
+            minimum_train_len,
+            self.model_name(),
+        )?;
         let candidates = self
             .theta_grid
             .iter()
@@ -2095,8 +2143,13 @@ impl Forecaster for OptimizedThetaForecaster {
         let scored = candidates
             .into_par_iter()
             .map(|(theta_idx, alpha_idx, theta, alpha)| {
-                let fitted = FittedThetaState::from_frame(frame, theta, alpha, self.seasonality)?;
-                let mse = fitted.mean_squared_residual();
+                let mse = score_theta_params(
+                    &history_by_series,
+                    theta,
+                    alpha,
+                    self.seasonality,
+                    validation_window,
+                )?;
                 Ok((
                     theta_idx,
                     alpha_idx,
@@ -2127,6 +2180,7 @@ impl Forecaster for OptimizedThetaForecaster {
         fitted.fit(frame)?;
         self.selected_theta = Some(theta.0);
         self.selected_alpha = Some(alpha.0);
+        self.validation_window = Some(validation_window);
         self.validation_scores = scores;
         self.fitted = Some(fitted);
         Ok(())
@@ -2146,6 +2200,7 @@ impl Forecaster for OptimizedThetaForecaster {
             "model": self.model_name(),
             "selected_theta": self.selected_theta,
             "selected_alpha": self.selected_alpha,
+            "validation_window": self.validation_window,
             "seasonality": self.seasonality.map(ThetaSeasonality::name),
             "season_length": self.seasonality.map(|seasonality| seasonality.season_length),
             "validation_scores": self.validation_scores.iter().map(|score| {
@@ -2226,6 +2281,20 @@ impl Forecaster for ETSForecaster {
 impl Forecaster for AutoETSForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
         frame.require_regular_for_model(self.model_name())?;
+        let history_by_series = FittedLocalState::from_frame(frame).history_by_series;
+        let minimum_train_len = match self.season_length {
+            Some(season_length) => season_length.checked_mul(2).ok_or_else(|| {
+                CartoBoostError::InvalidInput(
+                    "auto_ets seasonal history requirement overflowed usize".to_string(),
+                )
+            })?,
+            None => 2,
+        };
+        let validation_window = automatic_model_validation_window(
+            &history_by_series,
+            minimum_train_len,
+            self.model_name(),
+        )?;
         let mut candidates = Vec::new();
         for (alpha_idx, alpha) in self.alpha_grid.iter().copied().enumerate() {
             for (beta_idx, beta) in self.beta_grid.iter().copied().enumerate() {
@@ -2251,13 +2320,14 @@ impl Forecaster for AutoETSForecaster {
             .into_par_iter()
             .map(
                 |(alpha_idx, beta_idx, gamma_idx, damping_idx, alpha, beta, gamma, damping_phi)| {
-                    let fitted = FittedETSState::from_frame(
-                        frame,
+                    let mse = score_ets_params(
+                        &history_by_series,
                         alpha,
                         beta,
                         gamma,
                         self.season_length,
                         damping_phi,
+                        validation_window,
                     )?;
                     let params = ETSParameterSet {
                         alpha,
@@ -2270,10 +2340,7 @@ impl Forecaster for AutoETSForecaster {
                         beta_idx,
                         gamma_idx,
                         damping_idx,
-                        ETSValidationScore {
-                            params,
-                            mse: fitted.mean_squared_residual(),
-                        },
+                        ETSValidationScore { params, mse },
                     ))
                 },
             )
@@ -2311,6 +2378,7 @@ impl Forecaster for AutoETSForecaster {
         )?;
         fitted.fit(frame)?;
         self.selected_params = Some(params);
+        self.validation_window = Some(validation_window);
         self.validation_scores = scores;
         self.fitted = Some(fitted);
         Ok(())
@@ -2341,6 +2409,7 @@ impl Forecaster for AutoETSForecaster {
         json!({
             "model": self.model_name(),
             "season_length": self.season_length,
+            "validation_window": self.validation_window,
             "selected_params": self.selected_params.map(|params| {
                 json!({
                     "alpha": params.alpha,
@@ -2365,7 +2434,37 @@ impl Forecaster for AutoETSForecaster {
 impl Forecaster for ArimaForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
         frame.require_regular_for_model(self.model_name())?;
-        self.fitted = Some(FittedArimaState::from_frame(frame, self.p, self.d, self.q)?);
+        let fitted = FittedArimaState::from_frame(frame, self.p, self.d, self.q)?;
+        let enough_history = fitted
+            .series
+            .values()
+            .map(|series| series.differenced_history.len())
+            .min()
+            .unwrap_or(0)
+            > 2;
+        let obviously_explosive = fitted.series.values().any(|series| {
+            series
+                .ar_coefficients
+                .iter()
+                .any(|coefficient| coefficient.abs() > 1.9)
+        });
+        if enough_history && obviously_explosive && !fitted.has_stable_ar_recursions() {
+            return Err(CartoBoostError::InvalidInput(format!(
+                "fitted ARIMA({},{},{}) has a non-stationary AR polynomial",
+                self.p, self.d, self.q
+            )));
+        }
+        if self.d == 0
+            && enough_history
+            && obviously_explosive
+            && !fitted.has_invertible_ma_recursions()
+        {
+            return Err(CartoBoostError::InvalidInput(format!(
+                "fitted ARIMA({},{},{}) has a non-invertible MA polynomial",
+                self.p, self.d, self.q
+            )));
+        }
+        self.fitted = Some(fitted);
         Ok(())
     }
 
@@ -2394,12 +2493,20 @@ impl Forecaster for AutoARIMAForecaster {
             .map(Vec::len)
             .min()
             .unwrap_or(0);
+        if min_history_len < 2 {
+            return Err(CartoBoostError::InvalidInput(
+                "auto_arima requires at least two rows per series for a real holdout".to_string(),
+            ));
+        }
+        let validation_window = (min_history_len / 5).clamp(1, 8);
+        let minimum_train_len = min_history_len - validation_window;
+        let history_by_series = FittedLocalState::from_frame(frame).history_by_series;
         let mut candidate_orders = BTreeSet::new();
         for d in 0..=max_d {
             for p in 0..=max_p {
                 for q in 0..=max_q {
                     candidate_orders.insert(arima_order_supported_by_history(
-                        min_history_len,
+                        minimum_train_len,
                         p,
                         d,
                         q,
@@ -2410,30 +2517,48 @@ impl Forecaster for AutoARIMAForecaster {
         let mut scores = candidate_orders
             .into_par_iter()
             .map(|(p, d, q)| {
+                let (mse, validation_ar_stable, validation_ma_invertible) =
+                    score_arima_order(&history_by_series, p, d, q, validation_window)?;
                 let fitted = FittedArimaState::from_frame(frame, p, d, q)?;
-                let mse = fitted.mean_squared_residual();
-                let stable = fitted.has_stable_ar_recursions();
+                let ar_stable = validation_ar_stable && fitted.has_stable_ar_recursions();
+                let ma_invertible =
+                    validation_ma_invertible && fitted.has_invertible_ma_recursions();
                 Ok(ArimaValidationScore {
                     p,
                     d,
                     q,
                     mse,
-                    stable,
+                    ar_stable,
+                    ma_invertible,
+                    stable: ar_stable && ma_invertible,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
         scores.sort_by_key(|score| (score.d, score.p, score.q));
-        let best = scores
+        let mut ranked_stable = scores
             .iter()
             .filter(|score| score.stable)
             .map(|score| (OrderedF64(score.mse), score.p, score.d, score.q))
-            .min();
-        let (_, p, d, q) = best.ok_or_else(|| {
+            .collect::<Vec<_>>();
+        ranked_stable.sort();
+        let mut selected = None;
+        let mut fitted = None;
+        for (_, p, d, q) in ranked_stable {
+            let mut candidate = ArimaForecaster::new(p, d, q)?;
+            // A candidate can pass validation on the truncated training window
+            // yet become unstable when refit on the complete frame. Skip that
+            // candidate and keep the next stable validation result.
+            if candidate.fit(frame).is_ok() {
+                selected = Some((p, d, q));
+                fitted = Some(candidate);
+                break;
+            }
+        }
+        let selected = selected.ok_or_else(|| {
             CartoBoostError::InvalidInput("auto_arima candidate grid must not be empty".to_string())
         })?;
-        let mut fitted = ArimaForecaster::new(p, d, q)?;
-        fitted.fit(frame)?;
-        self.selected_order = Some((p, d, q));
+        let fitted = fitted.expect("selected auto_arima candidate has a fitted model");
+        self.selected_order = Some(selected);
         self.validation_scores = scores;
         self.fitted = Some(fitted);
         Ok(())
@@ -2456,7 +2581,15 @@ impl Forecaster for AutoARIMAForecaster {
             "max_q": self.max_q,
             "selected_order": self.selected_order.map(|(p, d, q)| json!({"p": p, "d": d, "q": q})),
             "validation_scores": self.validation_scores.iter().map(|score| {
-                json!({"p": score.p, "d": score.d, "q": score.q, "mse": score.mse, "stable": score.stable})
+                json!({
+                    "p": score.p,
+                    "d": score.d,
+                    "q": score.q,
+                    "mse": score.mse,
+                    "ar_stable": score.ar_stable,
+                    "ma_invertible": score.ma_invertible,
+                    "stable": score.stable,
+                })
             }).collect::<Vec<_>>(),
         })
     }
@@ -2550,12 +2683,17 @@ impl Forecaster for AutoKalmanForecaster {
         let scored = candidates
             .into_par_iter()
             .map(|(level_idx, trend_idx, observation_idx, params)| {
-                let mse = score_kalman_params(&local.history_by_series, params, validation_window)?;
+                let (mse, negative_log_likelihood) =
+                    score_kalman_params(&local.history_by_series, params, validation_window)?;
                 Ok((
                     level_idx,
                     trend_idx,
                     observation_idx,
-                    KalmanValidationScore { params, mse },
+                    KalmanValidationScore {
+                        params,
+                        mse,
+                        negative_log_likelihood,
+                    },
                 ))
             })
             .collect::<Result<Vec<_>>>()?;
@@ -2569,6 +2707,7 @@ impl Forecaster for AutoKalmanForecaster {
             .collect::<Vec<_>>();
         let best = scores.iter().min_by_key(|score| {
             (
+                OrderedF64(score.negative_log_likelihood),
                 OrderedF64(score.mse),
                 OrderedF64(score.params.level_process_variance),
                 OrderedF64(score.params.trend_process_variance),
@@ -2618,6 +2757,7 @@ impl Forecaster for AutoKalmanForecaster {
                     "trend_process_variance": score.params.trend_process_variance,
                     "observation_variance": score.params.observation_variance,
                     "mse": score.mse,
+                    "negative_log_likelihood": score.negative_log_likelihood,
                 })
             }).collect::<Vec<_>>(),
         })
@@ -2653,7 +2793,7 @@ impl Forecaster for AutoLocalLevelKalmanForecaster {
         let scored = candidates
             .into_par_iter()
             .map(|(level_idx, observation_idx, params)| {
-                let mse = score_local_level_kalman_params(
+                let (mse, negative_log_likelihood) = score_local_level_kalman_params(
                     &local.history_by_series,
                     params,
                     self.validation_window,
@@ -2661,7 +2801,11 @@ impl Forecaster for AutoLocalLevelKalmanForecaster {
                 Ok((
                     level_idx,
                     observation_idx,
-                    LocalLevelKalmanValidationScore { params, mse },
+                    LocalLevelKalmanValidationScore {
+                        params,
+                        mse,
+                        negative_log_likelihood,
+                    },
                 ))
             })
             .collect::<Result<Vec<_>>>()?;
@@ -2673,6 +2817,7 @@ impl Forecaster for AutoLocalLevelKalmanForecaster {
             .collect::<Vec<_>>();
         let best = scores.iter().min_by_key(|score| {
             (
+                OrderedF64(score.negative_log_likelihood),
                 OrderedF64(score.mse),
                 OrderedF64(score.params.level_process_variance),
                 OrderedF64(score.params.observation_variance),
@@ -2718,6 +2863,7 @@ impl Forecaster for AutoLocalLevelKalmanForecaster {
                     "level_process_variance": score.params.level_process_variance,
                     "observation_variance": score.params.observation_variance,
                     "mse": score.mse,
+                    "negative_log_likelihood": score.negative_log_likelihood,
                 })
             }).collect::<Vec<_>>(),
         })
@@ -2727,6 +2873,7 @@ impl Forecaster for AutoLocalLevelKalmanForecaster {
 impl Forecaster for KrigingForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
         frame.require_observed_targets_for_model(self.model_name())?;
+        validate_common_spatial_cutoff(frame, self.model_name())?;
         self.fitted = Some(FittedKrigingState::from_frame(frame, &self.coordinates)?);
         Ok(())
     }
@@ -2750,18 +2897,8 @@ impl Forecaster for KrigingForecaster {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        let series_ids = fitted.frame.series_ids();
-        let targets = series_ids
-            .iter()
-            .map(|series_id| {
-                self.coordinates.get(series_id).copied().ok_or_else(|| {
-                    CartoBoostError::InvalidInput(format!(
-                        "missing kriging coordinate for series {series_id}"
-                    ))
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let means = ordinary_kriging_predict_many(&observations, &targets, self.config)?
+        let series_ids = fitted.levels.keys().cloned().collect::<Vec<_>>();
+        let means = ordinary_kriging_leave_one_out(&observations, self.config)?
             .into_iter()
             .map(|prediction| prediction.mean)
             .collect::<Vec<_>>();
@@ -2813,6 +2950,7 @@ impl Forecaster for KrigingForecaster {
             "min_neighbors": self.config.min_neighbors,
             "max_distance": self.config.max_distance,
             "series_count": self.coordinates.len(),
+            "target_policy": "leave_one_series_out",
         })
     }
 }
@@ -2871,7 +3009,21 @@ impl Forecaster for SpatialPiecewiseKrigingForecaster {
                 .powi((base_prediction.horizon - 1) as i32);
             let spatial_correction =
                 correction.map(|correction| correction.prediction.mean * shrinkage);
-            let final_mean = base_prediction.mean + spatial_correction.unwrap_or(0.0);
+            let unbounded_mean = base_prediction.mean + spatial_correction.unwrap_or(0.0);
+            let bounds = piecewise_bounds(
+                Some(&base_prediction.series_id),
+                None,
+                Some(base_prediction.horizon),
+                &base.config,
+            )?;
+            let final_mean = if base.config.growth == PiecewiseLinearGrowth::Logistic {
+                unbounded_mean
+                    .max(bounds.floor)
+                    .min(bounds.cap.expect("validated logistic cap"))
+            } else {
+                unbounded_mean
+            };
+            let spatial_correction = correction.map(|_| final_mean - base_prediction.mean);
             predictions.push(ForecastPrediction {
                 series_id: base_prediction.series_id.clone(),
                 timestamp: base_prediction.timestamp,
@@ -2921,19 +3073,86 @@ impl Forecaster for SpatialPiecewiseKrigingForecaster {
                 })),
             });
         }
+        let base_means = base_result
+            .predictions()
+            .iter()
+            .map(|prediction| {
+                (
+                    prediction_lookup_key(
+                        &prediction.series_id,
+                        prediction.timestamp,
+                        prediction.horizon,
+                    ),
+                    prediction.mean,
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
         let intervals = base_result
             .intervals()
             .iter()
-            .map(|interval| ForecastIntervalPrediction {
-                series_id: interval.series_id.clone(),
-                timestamp: interval.timestamp,
-                horizon: interval.horizon,
-                model: self.model_name().to_string(),
-                level: interval.level,
-                lower: interval.lower,
-                upper: interval.upper,
+            .map(|interval| {
+                let key = prediction_lookup_key(
+                    &interval.series_id,
+                    interval.timestamp,
+                    interval.horizon,
+                );
+                let base_mean = base_means.get(&key).copied().ok_or_else(|| {
+                    CartoBoostError::InvalidInput(format!(
+                        "missing base prediction for spatial interval {key}"
+                    ))
+                })?;
+                if interval.lower > base_mean || interval.upper < base_mean {
+                    return Err(CartoBoostError::InvalidInput(format!(
+                        "base interval for {key} does not contain its prediction mean"
+                    )));
+                }
+                let correction = corrections.get(&interval.series_id);
+                let shrinkage = self
+                    .config
+                    .residual_shrinkage
+                    .powi((interval.horizon - 1) as i32);
+                let raw_correction = correction
+                    .map(|correction| correction.prediction.mean * shrinkage)
+                    .unwrap_or(0.0);
+                let bounds = piecewise_bounds(
+                    Some(&interval.series_id),
+                    None,
+                    Some(interval.horizon),
+                    &base.config,
+                )?;
+                let corrected_mean = if base.config.growth == PiecewiseLinearGrowth::Logistic {
+                    (base_mean + raw_correction)
+                        .max(bounds.floor)
+                        .min(bounds.cap.expect("validated logistic cap"))
+                } else {
+                    base_mean + raw_correction
+                };
+                let kriging_width = correction
+                    .map(|correction| {
+                        inverse_standard_normal_cdf((1.0 + interval.level) / 2.0)
+                            * correction.prediction.variance.sqrt()
+                            * shrinkage
+                    })
+                    .unwrap_or(0.0);
+                let lower_width = (base_mean - interval.lower).hypot(kriging_width);
+                let upper_width = (interval.upper - base_mean).hypot(kriging_width);
+                let (lower, upper) = clamp_piecewise_interval_bounds(
+                    corrected_mean - lower_width,
+                    corrected_mean + upper_width,
+                    bounds,
+                    &base.config,
+                );
+                Ok(ForecastIntervalPrediction {
+                    series_id: interval.series_id.clone(),
+                    timestamp: interval.timestamp,
+                    horizon: interval.horizon,
+                    model: self.model_name().to_string(),
+                    level: interval.level,
+                    lower,
+                    upper,
+                })
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()?;
         ForecastResult::new_with_intervals_and_details(predictions, intervals, details)
     }
 
@@ -3214,9 +3433,6 @@ impl FittedETSState {
         damping_phi: f64,
     ) -> Result<Self> {
         let local = FittedLocalState::from_frame(frame);
-        let effective_season_length =
-            effective_full_cycle_season_length(&local.history_by_series, season_length);
-        let effective_gamma = gamma.filter(|_| effective_season_length.is_some());
         let series = local
             .history_by_series
             .iter()
@@ -3230,8 +3446,8 @@ impl FittedETSState {
                         history,
                         alpha,
                         beta,
-                        effective_gamma,
-                        effective_season_length,
+                        gamma,
+                        season_length,
                         damping_phi,
                     )?,
                 ))
@@ -3321,6 +3537,12 @@ impl FittedArimaState {
         self.series
             .values()
             .all(|series| ar_recursion_is_stable(&series.ar_coefficients))
+    }
+
+    fn has_invertible_ma_recursions(&self) -> bool {
+        self.series
+            .values()
+            .all(|series| ma_recursion_is_invertible(&series.ma_coefficients))
     }
 }
 
@@ -4438,9 +4660,9 @@ impl FittedKalmanSeries {
         trend_process_variance: f64,
         observation_variance: f64,
     ) -> Result<Self> {
-        if history.is_empty() {
+        if history.len() < 2 {
             return Err(CartoBoostError::InvalidInput(format!(
-                "series {series_id} requires at least one row for kalman forecasting"
+                "series {series_id} requires at least two rows for local-linear kalman forecasting"
             )));
         }
         let values = history.iter().map(|row| row.target).collect::<Vec<_>>();
@@ -4449,13 +4671,6 @@ impl FittedKalmanSeries {
             trend_process_variance,
             observation_variance,
         )?;
-        if values.len() == 1 {
-            return Ok(Self {
-                last_timestamp: history.last().expect("history length checked").timestamp,
-                level: values[0],
-                trend: 0.0,
-            });
-        }
         let result = fit_local_linear_kalman(&values, config)
             .map_err(|err| CartoBoostError::InvalidInput(format!("{series_id}: {err}")))?;
         Ok(Self {
@@ -4608,56 +4823,57 @@ impl FittedSpatialPiecewiseKrigingState {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        let series_ids = self.frame.series_ids();
-        let targets = series_ids
-            .iter()
-            .map(|series_id| {
-                config.coordinates.get(series_id).copied().ok_or_else(|| {
-                    CartoBoostError::InvalidInput(format!(
-                        "missing spatial piecewise kriging coordinate for series {series_id}"
-                    ))
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        if !config.allow_neighbor_fallback {
-            let predictions =
-                ordinary_kriging_predict_many(&observations, &targets, config.kriging_config)?;
-            return Ok(series_ids
-                .into_iter()
-                .zip(predictions)
-                .map(|(series_id, prediction)| {
-                    (
-                        series_id,
+        if observations.len() < 2 {
+            return Err(CartoBoostError::InvalidInput(
+                "residual kriging requires at least two spatial series so each target can be held out"
+                    .to_string(),
+            ));
+        }
+        let mut corrections = BTreeMap::new();
+        for (held_out_idx, series_id) in self.residual_observation_series.iter().enumerate() {
+            let target_observation = observations[held_out_idx];
+            let training_rows = observations
+                .iter()
+                .enumerate()
+                .filter(|(idx, _)| *idx != held_out_idx)
+                .map(|(idx, observation)| (idx, *observation))
+                .collect::<Vec<_>>();
+            let training = training_rows
+                .iter()
+                .map(|(_, observation)| *observation)
+                .collect::<Vec<_>>();
+            let target = (target_observation.x, target_observation.y);
+            let correction =
+                match ordinary_kriging_predict(&training, target, config.kriging_config) {
+                    Ok(mut prediction) => {
+                        prediction.neighbor_indices = prediction
+                            .neighbor_indices
+                            .iter()
+                            .map(|local_idx| training_rows[*local_idx].0)
+                            .collect();
                         SpatialKrigingCorrection {
                             prediction,
                             used_neighbor_fallback: false,
-                        },
-                    )
-                })
-                .collect());
-        }
-        let mut corrections = BTreeMap::new();
-        for (series_id, target) in series_ids.into_iter().zip(targets) {
-            let correction =
-                match ordinary_kriging_predict(&observations, target, config.kriging_config) {
-                    Ok(prediction) => SpatialKrigingCorrection {
-                        prediction,
-                        used_neighbor_fallback: false,
-                    },
-                    Err(error) if is_neighbor_rule_error(&error) => SpatialKrigingCorrection {
-                        prediction: crate::utilities::KrigingPrediction {
-                            x: target.0,
-                            y: target.1,
-                            mean: 0.0,
-                            variance: residual_level_variance(&self.residual_levels),
-                            weights: Vec::new(),
-                            neighbor_indices: Vec::new(),
-                        },
-                        used_neighbor_fallback: true,
-                    },
+                        }
+                    }
+                    Err(error)
+                        if config.allow_neighbor_fallback && is_neighbor_rule_error(&error) =>
+                    {
+                        SpatialKrigingCorrection {
+                            prediction: crate::utilities::KrigingPrediction {
+                                x: target.0,
+                                y: target.1,
+                                mean: 0.0,
+                                variance: residual_level_variance(&self.residual_levels),
+                                weights: Vec::new(),
+                                neighbor_indices: Vec::new(),
+                            },
+                            used_neighbor_fallback: true,
+                        }
+                    }
                     Err(error) => return Err(error),
                 };
-            corrections.insert(series_id, correction);
+            corrections.insert(series_id.clone(), correction);
         }
         Ok(corrections)
     }
@@ -4709,9 +4925,9 @@ impl FittedETSSeries {
         season_length: Option<usize>,
         damping_phi: f64,
     ) -> Result<Self> {
-        if history.is_empty() {
+        if history.len() < 2 {
             return Err(CartoBoostError::InvalidInput(format!(
-                "series {series_id} requires at least one row for ETS forecasting"
+                "series {series_id} requires at least two rows for ETS forecasting"
             )));
         }
         let values = history.iter().map(|row| row.target).collect::<Vec<_>>();
@@ -4731,24 +4947,6 @@ impl FittedETSSeries {
             }
             None => None,
         };
-        if values.len() == 1 {
-            let initial_seasonal = seasonals.as_ref().map(|s| s[0]).unwrap_or(0.0);
-            let level = values[0] - initial_seasonal;
-            return Ok(Self {
-                last_timestamp: history.last().expect("history length checked").timestamp,
-                n_obs: history.len(),
-                level,
-                trend: 0.0,
-                damping_phi,
-                seasonals,
-                fitted_values: vec![values[0]],
-                residuals: vec![0.0],
-                level_values: vec![level],
-                trend_values: vec![0.0],
-                seasonal_values: vec![initial_seasonal],
-            });
-        }
-
         let mut level = values[0] - seasonals.as_ref().map(|s| s[0]).unwrap_or(0.0);
         let mut trend = initial_trend(&values, seasonals.as_deref());
         let mut fitted_values = Vec::with_capacity(values.len());
@@ -4801,6 +4999,19 @@ impl FittedETSSeries {
             seasonal_values,
         })
     }
+
+    fn forecast_values(&self, horizon: usize) -> Vec<f64> {
+        (1..=horizon)
+            .map(|step| {
+                let seasonal = self
+                    .seasonals
+                    .as_ref()
+                    .map(|seasonals| seasonals[(self.n_obs + step - 1) % seasonals.len()])
+                    .unwrap_or(0.0);
+                self.level + damped_trend_multiplier(self.damping_phi, step) * self.trend + seasonal
+            })
+            .collect()
+    }
 }
 
 impl FittedArimaSeries {
@@ -4809,6 +5020,12 @@ impl FittedArimaSeries {
         let values = history.iter().map(|row| row.target).collect::<Vec<_>>();
         let (effective_p, effective_d, effective_q) =
             arima_order_supported_by_history(values.len(), p, d, q);
+        if (effective_p, effective_d, effective_q) != (p, d, q) {
+            return Err(CartoBoostError::InvalidInput(format!(
+                "series {series_id} has {} rows, which cannot support requested ARIMA({p},{d},{q}); maximum supported order is ARIMA({effective_p},{effective_d},{effective_q})",
+                values.len()
+            )));
+        }
         let differences = difference_series(&values, effective_d)?;
         let required_lags = effective_p.max(effective_q);
         if differences.is_empty() {
@@ -4869,8 +5086,6 @@ impl FittedThetaState {
         seasonality: Option<ThetaSeasonality>,
     ) -> Result<Self> {
         let local = FittedLocalState::from_frame(frame);
-        let effective_seasonality =
-            effective_theta_seasonality(&local.history_by_series, seasonality);
         let series = local
             .history_by_series
             .iter()
@@ -4879,13 +5094,7 @@ impl FittedThetaState {
             .map(|(series_id, history)| {
                 Ok((
                     series_id.clone(),
-                    FittedThetaSeries::fit(
-                        series_id,
-                        history,
-                        theta,
-                        alpha,
-                        effective_seasonality,
-                    )?,
+                    FittedThetaSeries::fit(series_id, history, theta, alpha, seasonality)?,
                 ))
             })
             .collect::<Result<BTreeMap<_, _>>>()?;
@@ -4938,7 +5147,7 @@ impl FittedThetaSeries {
         let values = history.iter().map(|row| row.target).collect::<Vec<_>>();
         let (adjusted, pattern) = deseasonalize(series_id, &values, seasonality)?;
         let component = fit_theta_component(&adjusted, theta, alpha);
-        let fitted_adjusted = fitted_theta_values(&adjusted, alpha);
+        let fitted_adjusted = fitted_theta_values(&adjusted, theta, alpha);
         let mut fitted_values = Vec::with_capacity(values.len());
         let mut residuals = Vec::with_capacity(values.len());
         for (idx, fitted) in fitted_adjusted.into_iter().enumerate() {
@@ -4954,6 +5163,25 @@ impl FittedThetaSeries {
             fitted_values,
             residuals,
         })
+    }
+
+    fn forecast_values(
+        &self,
+        horizon: usize,
+        seasonality: Option<ThetaSeasonality>,
+    ) -> Result<Vec<f64>> {
+        (1..=horizon)
+            .map(|step| {
+                let adjusted = forecast_theta_component(&self.component, step);
+                let fitted_seasonality = self.seasonal_pattern.as_ref().and(seasonality);
+                reseasonalize_value(
+                    adjusted,
+                    self.n_obs + step - 1,
+                    fitted_seasonality,
+                    self.seasonal_pattern.as_deref(),
+                )
+            })
+            .collect()
     }
 }
 
@@ -4977,9 +5205,9 @@ impl Ord for OrderedF64 {
 }
 
 fn validate_theta_params(theta: f64, alpha: f64) -> Result<()> {
-    if !theta.is_finite() || theta <= 0.0 {
+    if !theta.is_finite() || theta <= 0.0 || !(1.0 - 1.0 / theta).is_finite() {
         return Err(CartoBoostError::InvalidInput(
-            "theta must be a positive finite value".to_string(),
+            "theta must be a positive finite value with a finite reciprocal".to_string(),
         ));
     }
     if !alpha.is_finite() || alpha <= 0.0 || alpha > 1.0 {
@@ -6749,34 +6977,24 @@ fn score_kalman_params(
     history_by_series: &BTreeMap<String, Vec<ForecastRow>>,
     params: KalmanParameterSet,
     validation_window: Option<usize>,
-) -> Result<f64> {
+) -> Result<(f64, f64)> {
     let config = LocalLinearKalmanConfig::new(
         params.level_process_variance,
         params.trend_process_variance,
         params.observation_variance,
     )?;
-    let (sum_squared_error, count) = history_by_series
+    let (sum_squared_error, sum_negative_log_likelihood, count) = history_by_series
         .iter()
         .collect::<Vec<_>>()
         .into_par_iter()
         .map(|(series_id, history)| {
-            if history.len() < 2 {
-                return Err(CartoBoostError::InvalidInput(format!(
-                    "series {series_id} has {} rows, but auto_kalman requires at least two rows",
-                    history.len()
-                )));
-            }
-            let requested_window = validation_window.unwrap_or_else(|| {
-                let suggested = history.len() / 5;
-                suggested.clamp(1, 12)
-            });
-            let window = requested_window.min(history.len().saturating_sub(2));
-            if window == 0 {
-                let values = history.iter().map(|row| row.target).collect::<Vec<_>>();
-                let result = fit_local_linear_kalman(&values, config)
-                    .map_err(|err| CartoBoostError::InvalidInput(format!("{series_id}: {err}")))?;
-                return Ok((no_holdout_validation_score(result.residual_summary.mse), 1));
-            }
+            let window = resolve_kalman_validation_window(
+                series_id,
+                history.len(),
+                2,
+                validation_window,
+                "auto_kalman",
+            )?;
             let train_len = history.len() - window;
             let train = history[..train_len]
                 .iter()
@@ -6784,14 +7002,201 @@ fn score_kalman_params(
                 .collect::<Vec<_>>();
             let result = fit_local_linear_kalman(&train, config)
                 .map_err(|err| CartoBoostError::InvalidInput(format!("{series_id}: {err}")))?;
-            let mut sum = 0.0;
-            for (idx, row) in history[train_len..].iter().enumerate() {
-                let step = idx + 1;
-                let mean = result.final_state.level + step as f64 * result.final_state.trend;
-                let residual = row.target - mean;
-                sum += residual * residual;
+            if window == 0 {
+                return Ok((
+                    result.residual_summary.mse,
+                    (-result.log_likelihood).max(0.0),
+                    1,
+                ));
             }
-            Ok((sum, window))
+            let distribution = local_linear_kalman_forecast_distribution(
+                result.final_state,
+                result.final_covariance,
+                config,
+                window,
+                0.0,
+            )
+            .map_err(|err| CartoBoostError::InvalidInput(format!("{series_id}: {err}")))?;
+            let mut squared_error = 0.0;
+            let mut negative_log_likelihood = 0.0;
+            for (row, point) in history[train_len..].iter().zip(distribution) {
+                let residual = row.target - point.mean;
+                squared_error += residual * residual;
+                negative_log_likelihood +=
+                    normal_negative_log_likelihood(residual, point.variance)?;
+            }
+            Ok((squared_error, negative_log_likelihood, window))
+        })
+        .reduce(
+            || Ok((0.0, 0.0, 0usize)),
+            |left: Result<(f64, f64, usize)>, right: Result<(f64, f64, usize)>| {
+                let (left_squared, left_nll, left_count) = left?;
+                let (right_squared, right_nll, right_count) = right?;
+                Ok((
+                    left_squared + right_squared,
+                    left_nll + right_nll,
+                    left_count + right_count,
+                ))
+            },
+        )?;
+    if count == 0 {
+        return Err(CartoBoostError::InvalidInput(
+            "auto_kalman validation requires at least one held-out observation".to_string(),
+        ));
+    }
+    let mse = sum_squared_error / count as f64;
+    let negative_log_likelihood = sum_negative_log_likelihood / count as f64;
+    if !mse.is_finite() || !negative_log_likelihood.is_finite() {
+        return Err(CartoBoostError::InvalidInput(
+            "auto_kalman validation score must be finite".to_string(),
+        ));
+    }
+    Ok((mse, negative_log_likelihood))
+}
+
+fn score_arima_order(
+    history_by_series: &BTreeMap<String, Vec<ForecastRow>>,
+    p: usize,
+    d: usize,
+    q: usize,
+    validation_window: usize,
+) -> Result<(f64, bool, bool)> {
+    if validation_window == 0 {
+        return Err(CartoBoostError::InvalidInput(
+            "auto_arima validation_window must be positive".to_string(),
+        ));
+    }
+    let (sum_squared_error, count, ar_stable, ma_invertible) = history_by_series
+        .iter()
+        .collect::<Vec<_>>()
+        .into_par_iter()
+        .map(|(series_id, history)| {
+            if history.len() <= validation_window {
+                return Err(CartoBoostError::InvalidInput(format!(
+                    "series {series_id} does not have enough rows for auto_arima validation"
+                )));
+            }
+            let train_len = history.len() - validation_window;
+            let fitted = FittedArimaSeries::fit(series_id, &history[..train_len], p, d, q)?;
+            let forecasts = fitted.forecast_values(validation_window);
+            if forecasts.len() != validation_window {
+                return Err(CartoBoostError::InvalidInput(format!(
+                    "series {series_id} ARIMA({p},{d},{q}) returned an incomplete validation forecast"
+                )));
+            }
+            let squared_error = forecasts
+                .iter()
+                .zip(&history[train_len..])
+                .map(|(forecast, actual)| {
+                    let residual = forecast - actual.target;
+                    residual * residual
+                })
+                .sum::<f64>();
+            Ok((
+                squared_error,
+                validation_window,
+                ar_recursion_is_stable(&fitted.ar_coefficients),
+                ma_recursion_is_invertible(&fitted.ma_coefficients),
+            ))
+        })
+        .reduce(
+            || Ok((0.0, 0usize, true, true)),
+            |left: Result<(f64, usize, bool, bool)>,
+             right: Result<(f64, usize, bool, bool)>| {
+                let (left_squared, left_count, left_ar, left_ma) = left?;
+                let (right_squared, right_count, right_ar, right_ma) = right?;
+                Ok((
+                    left_squared + right_squared,
+                    left_count + right_count,
+                    left_ar && right_ar,
+                    left_ma && right_ma,
+                ))
+            },
+        )?;
+    if count == 0 {
+        return Err(CartoBoostError::InvalidInput(
+            "auto_arima validation produced no held-out forecasts".to_string(),
+        ));
+    }
+    let mse = sum_squared_error / count as f64;
+    if !mse.is_finite() {
+        return Err(CartoBoostError::InvalidInput(
+            "auto_arima validation MSE must be finite".to_string(),
+        ));
+    }
+    Ok((mse, ar_stable, ma_invertible))
+}
+
+fn automatic_model_validation_window(
+    history_by_series: &BTreeMap<String, Vec<ForecastRow>>,
+    minimum_train_len: usize,
+    model_name: &str,
+) -> Result<usize> {
+    let minimum_history = history_by_series
+        .values()
+        .map(Vec::len)
+        .min()
+        .ok_or_else(|| {
+            CartoBoostError::InvalidInput(format!(
+                "{model_name} requires at least one series for validation"
+            ))
+        })?;
+    let maximum_window = minimum_history.checked_sub(minimum_train_len).ok_or_else(|| {
+        CartoBoostError::InvalidInput(format!(
+            "{model_name} requires more than {minimum_train_len} rows per series for a real holdout; minimum history is {minimum_history}"
+        ))
+    })?;
+    if maximum_window == 0 {
+        return Ok(0);
+    }
+    Ok((minimum_history / 5).clamp(1, 8).min(maximum_window))
+}
+
+fn score_theta_params(
+    history_by_series: &BTreeMap<String, Vec<ForecastRow>>,
+    theta: f64,
+    alpha: f64,
+    seasonality: Option<ThetaSeasonality>,
+    validation_window: usize,
+) -> Result<f64> {
+    let (sum_squared_error, count) = history_by_series
+        .iter()
+        .collect::<Vec<_>>()
+        .into_par_iter()
+        .map(|(series_id, history)| {
+            if validation_window == 0 {
+                let fitted = FittedThetaSeries::fit(series_id, history, theta, alpha, seasonality)?;
+                let (sum, count) = fitted
+                    .residuals
+                    .iter()
+                    .skip(1)
+                    .fold((0.0, 0usize), |(sum, count), residual| {
+                        (sum + residual * residual, count + 1)
+                    });
+                return Ok((sum, count));
+            }
+            let train_len = history
+                .len()
+                .checked_sub(validation_window)
+                .ok_or_else(|| {
+                    CartoBoostError::InvalidInput(format!(
+                    "series {series_id} does not have enough rows for optimized_theta validation"
+                ))
+                })?;
+            let fitted = FittedThetaSeries::fit(
+                series_id,
+                &history[..train_len],
+                theta,
+                alpha,
+                seasonality,
+            )?;
+            let forecasts = fitted.forecast_values(validation_window, seasonality)?;
+            squared_holdout_error(
+                series_id,
+                "optimized_theta",
+                &forecasts,
+                &history[train_len..],
+            )
         })
         .reduce(
             || Ok((0.0, 0usize)),
@@ -6801,19 +7206,112 @@ fn score_kalman_params(
                 Ok((left_sum + right_sum, left_count + right_count))
             },
         )?;
+    checked_validation_mse(sum_squared_error, count, "optimized_theta")
+}
+
+#[allow(clippy::too_many_arguments)]
+fn score_ets_params(
+    history_by_series: &BTreeMap<String, Vec<ForecastRow>>,
+    alpha: f64,
+    beta: f64,
+    gamma: Option<f64>,
+    season_length: Option<usize>,
+    damping_phi: f64,
+    validation_window: usize,
+) -> Result<f64> {
+    let (sum_squared_error, count) = history_by_series
+        .iter()
+        .collect::<Vec<_>>()
+        .into_par_iter()
+        .map(|(series_id, history)| {
+            if validation_window == 0 {
+                let fitted = FittedETSSeries::fit(
+                    series_id,
+                    history,
+                    alpha,
+                    beta,
+                    gamma,
+                    season_length,
+                    damping_phi,
+                )?;
+                let (sum, count) = fitted
+                    .residuals
+                    .iter()
+                    .skip(1)
+                    .fold((0.0, 0usize), |(sum, count), residual| {
+                        (sum + residual * residual, count + 1)
+                    });
+                return Ok((sum, count));
+            }
+            let train_len = history
+                .len()
+                .checked_sub(validation_window)
+                .ok_or_else(|| {
+                    CartoBoostError::InvalidInput(format!(
+                        "series {series_id} does not have enough rows for auto_ets validation"
+                    ))
+                })?;
+            let fitted = FittedETSSeries::fit(
+                series_id,
+                &history[..train_len],
+                alpha,
+                beta,
+                gamma,
+                season_length,
+                damping_phi,
+            )?;
+            let forecasts = fitted.forecast_values(validation_window);
+            squared_holdout_error(series_id, "auto_ets", &forecasts, &history[train_len..])
+        })
+        .reduce(
+            || Ok((0.0, 0usize)),
+            |left: Result<(f64, usize)>, right: Result<(f64, usize)>| {
+                let (left_sum, left_count) = left?;
+                let (right_sum, right_count) = right?;
+                Ok((left_sum + right_sum, left_count + right_count))
+            },
+        )?;
+    checked_validation_mse(sum_squared_error, count, "auto_ets")
+}
+
+fn squared_holdout_error(
+    series_id: &str,
+    model_name: &str,
+    forecasts: &[f64],
+    actuals: &[ForecastRow],
+) -> Result<(f64, usize)> {
+    if forecasts.len() != actuals.len() || forecasts.is_empty() {
+        return Err(CartoBoostError::InvalidInput(format!(
+            "series {series_id} {model_name} validation forecast length does not match its non-empty holdout"
+        )));
+    }
+    let sum = forecasts
+        .iter()
+        .zip(actuals)
+        .map(|(forecast, actual)| {
+            let residual = forecast - actual.target;
+            residual * residual
+        })
+        .sum::<f64>();
+    if !sum.is_finite() {
+        return Err(CartoBoostError::InvalidInput(format!(
+            "series {series_id} {model_name} validation error must be finite"
+        )));
+    }
+    Ok((sum, actuals.len()))
+}
+
+fn checked_validation_mse(sum_squared_error: f64, count: usize, model_name: &str) -> Result<f64> {
     if count == 0 {
-        if sum_squared_error.is_finite() {
-            return Ok(sum_squared_error);
-        }
-        return Err(CartoBoostError::InvalidInput(
-            "auto_kalman validation score must be finite".to_string(),
-        ));
+        return Err(CartoBoostError::InvalidInput(format!(
+            "{model_name} validation produced no held-out forecasts"
+        )));
     }
     let mse = sum_squared_error / count as f64;
     if !mse.is_finite() {
-        return Err(CartoBoostError::InvalidInput(
-            "auto_kalman validation score must be finite".to_string(),
-        ));
+        return Err(CartoBoostError::InvalidInput(format!(
+            "{model_name} validation MSE must be finite"
+        )));
     }
     Ok(mse)
 }
@@ -6822,30 +7320,21 @@ fn score_local_level_kalman_params(
     history_by_series: &BTreeMap<String, Vec<ForecastRow>>,
     params: LocalLevelKalmanParameterSet,
     validation_window: Option<usize>,
-) -> Result<f64> {
+) -> Result<(f64, f64)> {
     let config =
         LocalLevelKalmanConfig::new(params.level_process_variance, params.observation_variance)?;
-    let (sum_squared_error, count) = history_by_series
+    let (sum_squared_error, sum_negative_log_likelihood, count) = history_by_series
         .iter()
         .collect::<Vec<_>>()
         .into_par_iter()
         .map(|(series_id, history)| {
-            if history.is_empty() {
-                return Err(CartoBoostError::InvalidInput(format!(
-                    "series {series_id} has no rows, but auto_local_level_kalman requires at least one row"
-                )));
-            }
-            let requested_window = validation_window.unwrap_or_else(|| {
-                let suggested = history.len() / 5;
-                suggested.clamp(1, 12)
-            });
-            let window = requested_window.min(history.len().saturating_sub(1));
-            if window == 0 {
-                let values = history.iter().map(|row| row.target).collect::<Vec<_>>();
-                let result = fit_local_level_kalman(&values, config)
-                    .map_err(|err| CartoBoostError::InvalidInput(format!("{series_id}: {err}")))?;
-                return Ok((no_holdout_validation_score(result.residual_summary.mse), 1));
-            }
+            let window = resolve_kalman_validation_window(
+                series_id,
+                history.len(),
+                1,
+                validation_window,
+                "auto_local_level_kalman",
+            )?;
             let train_len = history.len() - window;
             let train = history[..train_len]
                 .iter()
@@ -6853,44 +7342,93 @@ fn score_local_level_kalman_params(
                 .collect::<Vec<_>>();
             let result = fit_local_level_kalman(&train, config)
                 .map_err(|err| CartoBoostError::InvalidInput(format!("{series_id}: {err}")))?;
-            let mut sum = 0.0;
-            for row in &history[train_len..] {
-                let residual = row.target - result.final_level;
-                sum += residual * residual;
+            if window == 0 {
+                return Ok((
+                    result.residual_summary.mse,
+                    (-result.log_likelihood).max(0.0),
+                    1,
+                ));
             }
-            Ok((sum, window))
+            let distribution = local_level_kalman_forecast_distribution(
+                result.final_level,
+                result.final_variance,
+                config,
+                window,
+                0.0,
+            )
+            .map_err(|err| CartoBoostError::InvalidInput(format!("{series_id}: {err}")))?;
+            let mut squared_error = 0.0;
+            let mut negative_log_likelihood = 0.0;
+            for (row, point) in history[train_len..].iter().zip(distribution) {
+                let residual = row.target - point.mean;
+                squared_error += residual * residual;
+                negative_log_likelihood +=
+                    normal_negative_log_likelihood(residual, point.variance)?;
+            }
+            Ok((squared_error, negative_log_likelihood, window))
         })
         .reduce(
-            || Ok((0.0, 0usize)),
-            |left: Result<(f64, usize)>, right: Result<(f64, usize)>| {
-                let (left_sum, left_count) = left?;
-                let (right_sum, right_count) = right?;
-                Ok((left_sum + right_sum, left_count + right_count))
+            || Ok((0.0, 0.0, 0usize)),
+            |left: Result<(f64, f64, usize)>, right: Result<(f64, f64, usize)>| {
+                let (left_squared, left_nll, left_count) = left?;
+                let (right_squared, right_nll, right_count) = right?;
+                Ok((
+                    left_squared + right_squared,
+                    left_nll + right_nll,
+                    left_count + right_count,
+                ))
             },
         )?;
     if count == 0 {
-        if sum_squared_error.is_finite() {
-            return Ok(sum_squared_error);
-        }
         return Err(CartoBoostError::InvalidInput(
-            "auto_local_level_kalman validation score must be finite".to_string(),
+            "auto_local_level_kalman validation requires at least one held-out observation"
+                .to_string(),
         ));
     }
     let mse = sum_squared_error / count as f64;
-    if !mse.is_finite() {
+    let negative_log_likelihood = sum_negative_log_likelihood / count as f64;
+    if !mse.is_finite() || !negative_log_likelihood.is_finite() {
         return Err(CartoBoostError::InvalidInput(
             "auto_local_level_kalman validation score must be finite".to_string(),
         ));
     }
-    Ok(mse)
+    Ok((mse, negative_log_likelihood))
 }
 
-fn no_holdout_validation_score(in_sample_mse: f64) -> f64 {
-    if in_sample_mse.is_finite() {
-        in_sample_mse
-    } else {
-        0.0
+fn resolve_kalman_validation_window(
+    series_id: &str,
+    history_len: usize,
+    minimum_train_len: usize,
+    requested: Option<usize>,
+    model_name: &str,
+) -> Result<usize> {
+    let minimum_total = minimum_train_len + 1;
+    if history_len < minimum_total {
+        if requested.is_none() && history_len > 0 {
+            return Ok(0);
+        }
+        return Err(CartoBoostError::InvalidInput(format!(
+            "series {series_id} has {history_len} rows; {model_name} requires at least {minimum_total} rows for {minimum_train_len} training observations and a real holdout"
+        )));
     }
+    let maximum_window = history_len - minimum_train_len;
+    match requested {
+        Some(window) if window > maximum_window => Err(CartoBoostError::InvalidInput(format!(
+            "series {series_id} has {history_len} rows, so {model_name} validation_window must be <= {maximum_window}; got {window}"
+        ))),
+        Some(window) => Ok(window),
+        None => Ok((history_len / 5).clamp(1, 12).min(maximum_window)),
+    }
+}
+
+fn normal_negative_log_likelihood(residual: f64, variance: f64) -> Result<f64> {
+    if !residual.is_finite() || !variance.is_finite() || variance <= 0.0 {
+        return Err(CartoBoostError::InvalidInput(
+            "kalman validation residual and forecast variance must be finite with positive variance"
+                .to_string(),
+        ));
+    }
+    Ok(0.5 * ((2.0 * std::f64::consts::PI).ln() + variance.ln() + residual * residual / variance))
 }
 
 fn validate_ets_params(
@@ -7251,28 +7789,38 @@ fn forecast_arima_next(
 }
 
 fn ar_recursion_is_stable(ar_coefficients: &[f64]) -> bool {
-    let p = ar_coefficients.len();
-    if p == 0 {
-        return true;
+    if ar_coefficients
+        .iter()
+        .any(|coefficient| !coefficient.is_finite())
+    {
+        return false;
     }
-    for basis_idx in 0..p {
-        let mut state = vec![0.0; p];
-        state[basis_idx] = 1.0;
-        let mut max_abs = 1.0;
-        for _ in 0..128 {
-            let next = ar_coefficients
-                .iter()
-                .enumerate()
-                .map(|(idx, coef)| coef * state[p - idx - 1])
-                .sum::<f64>();
-            if !next.is_finite() || next.abs() > 16.0 || next.abs() > max_abs * 4.0 {
-                return false;
-            }
-            max_abs = max_abs.max(next.abs());
-            push_tail(&mut state, p, next);
+    let mut coefficients = ar_coefficients.to_vec();
+    while let Some(&reflection) = coefficients.last() {
+        if reflection.abs() >= 1.0 - 64.0 * f64::EPSILON {
+            return false;
         }
+        let denominator = 1.0 - reflection * reflection;
+        let order = coefficients.len();
+        let reduced = (0..order.saturating_sub(1))
+            .map(|idx| {
+                (coefficients[idx] + reflection * coefficients[order - idx - 2]) / denominator
+            })
+            .collect::<Vec<_>>();
+        if reduced.iter().any(|coefficient| !coefficient.is_finite()) {
+            return false;
+        }
+        coefficients = reduced;
     }
     true
+}
+
+fn ma_recursion_is_invertible(ma_coefficients: &[f64]) -> bool {
+    let equivalent_ar = ma_coefficients
+        .iter()
+        .map(|coefficient| -*coefficient)
+        .collect::<Vec<_>>();
+    ar_recursion_is_stable(&equivalent_ar)
 }
 
 fn undifference_fitted_values(values: &[f64], fitted_diff: &[f64], d: usize) -> Vec<f64> {
@@ -7405,32 +7953,6 @@ fn deseasonalize(
     }
 }
 
-fn effective_theta_seasonality(
-    history_by_series: &BTreeMap<String, Vec<ForecastRow>>,
-    seasonality: Option<ThetaSeasonality>,
-) -> Option<ThetaSeasonality> {
-    seasonality.filter(|seasonality| {
-        history_by_series
-            .values()
-            .all(|history| supports_full_season_cycles(history.len(), seasonality.season_length))
-    })
-}
-
-fn effective_full_cycle_season_length(
-    history_by_series: &BTreeMap<String, Vec<ForecastRow>>,
-    season_length: Option<usize>,
-) -> Option<usize> {
-    season_length.filter(|season_length| {
-        history_by_series
-            .values()
-            .all(|history| supports_full_season_cycles(history.len(), *season_length))
-    })
-}
-
-fn supports_full_season_cycles(history_len: usize, season_length: usize) -> bool {
-    season_length > 1 && history_len >= season_length.saturating_mul(2)
-}
-
 fn fit_theta_component(values: &[f64], theta: f64, alpha: f64) -> ThetaComponent {
     let slope = linear_slope(values);
     let levels = ses_one_step_levels(values, alpha);
@@ -7439,18 +7961,25 @@ fn fit_theta_component(values: &[f64], theta: f64, alpha: f64) -> ThetaComponent
         last_level,
         slope,
         theta,
+        alpha,
+        n_obs: values.len(),
     }
 }
 
-fn fitted_theta_values(values: &[f64], alpha: f64) -> Vec<f64> {
+fn fitted_theta_values(values: &[f64], theta: f64, alpha: f64) -> Vec<f64> {
     let levels = ses_one_step_levels(values, alpha);
-    let slope = linear_slope(values);
-    let intercept = values.iter().sum::<f64>() / values.len() as f64
-        - slope * ((values.len() - 1) as f64 / 2.0);
     levels
         .iter()
         .enumerate()
-        .map(|(idx, level)| 0.5 * (level + intercept + slope * idx as f64))
+        .map(|(idx, level)| {
+            if idx == 0 {
+                values[0]
+            } else {
+                let slope = linear_slope(&values[..idx]);
+                let adjustment = 1.0 / alpha - (1.0 - alpha).powf(idx as f64) / alpha;
+                level + (1.0 - 1.0 / theta) * slope * adjustment
+            }
+        })
         .collect()
 }
 
@@ -7482,7 +8011,9 @@ fn linear_slope(values: &[f64]) -> f64 {
 }
 
 fn forecast_theta_component(component: &ThetaComponent, step: usize) -> f64 {
-    let drift = (1.0 - 1.0 / component.theta) * component.slope * step as f64;
+    let offset = (step - 1) as f64 + 1.0 / component.alpha
+        - (1.0 - component.alpha).powf(component.n_obs as f64) / component.alpha;
+    let drift = (1.0 - 1.0 / component.theta) * component.slope * offset;
     component.last_level + drift
 }
 
@@ -7506,6 +8037,7 @@ fn reseasonalize_value(
 }
 
 fn validate_spatial_piecewise_kriging_config(config: &SpatialPiecewiseKrigingConfig) -> Result<()> {
+    config.kriging_config.validate()?;
     if config.coordinates.is_empty() {
         return Err(CartoBoostError::InvalidInput(
             "spatial piecewise kriging coordinates must not be empty".to_string(),
@@ -7575,11 +8107,33 @@ fn validate_spatial_piecewise_frame(
     frame: &ForecastFrame,
     config: &SpatialPiecewiseKrigingConfig,
 ) -> Result<()> {
+    validate_common_spatial_cutoff(frame, "spatial_piecewise_kriging")?;
     for series_id in frame.series_ids() {
         if !config.coordinates.contains_key(&series_id) {
             return Err(CartoBoostError::InvalidInput(format!(
                 "missing spatial piecewise kriging coordinate for series {series_id}"
             )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_common_spatial_cutoff(frame: &ForecastFrame, model_name: &str) -> Result<()> {
+    let mut expected = None;
+    for series_id in frame.series_ids() {
+        let cutoff = frame
+            .rows_for_series(&series_id)
+            .last()
+            .ok_or_else(|| CartoBoostError::InvalidInput("empty series history".to_string()))?
+            .timestamp;
+        match expected {
+            None => expected = Some(cutoff),
+            Some(expected_cutoff) if cutoff != expected_cutoff => {
+                return Err(CartoBoostError::InvalidInput(format!(
+                    "{model_name} requires a common panel cutoff timestamp; series {series_id} ends at {cutoff}, expected {expected_cutoff}"
+                )));
+            }
+            Some(_) => {}
         }
     }
     Ok(())
@@ -7737,6 +8291,23 @@ fn validate_horizon(horizon: usize) -> Result<()> {
         return Err(CartoBoostError::InvalidInput(
             "forecast horizon must be positive".to_string(),
         ));
+    }
+    Ok(())
+}
+
+fn validate_local_history_requirement(
+    fitted: &FittedLocalState,
+    required: usize,
+    model_name: &str,
+    requirement: &str,
+) -> Result<()> {
+    for (series_id, history) in &fitted.history_by_series {
+        if history.len() < required {
+            return Err(CartoBoostError::InvalidInput(format!(
+                "series {series_id} has {} rows; {model_name} requires at least {required} rows for {requirement}",
+                history.len()
+            )));
+        }
     }
     Ok(())
 }
@@ -7980,10 +8551,78 @@ mod tests {
         assert!(first.get("spatial_correction").is_some());
         assert!(first.get("kriging_variance").is_some());
         assert!(first.get("selected_neighbors").is_some());
-        assert_eq!(first["metadata"]["neighbor_count"].as_u64(), Some(3));
+        assert_eq!(first["metadata"]["neighbor_count"].as_u64(), Some(2));
         assert!(first["metadata"]["correction_magnitude"].is_number());
         assert!(first["metadata"]["kriging_variance"].is_number());
         assert!(first["metadata"]["fit_runtime_seconds"].is_number());
+        assert!(fused_result.details().iter().all(|detail| {
+            !detail
+                .selected_neighbors
+                .iter()
+                .any(|neighbor| neighbor == &detail.series_id)
+        }));
+        for interval in fused_result.intervals() {
+            let prediction = fused_result
+                .predictions()
+                .iter()
+                .find(|prediction| {
+                    prediction.series_id == interval.series_id
+                        && prediction.timestamp == interval.timestamp
+                        && prediction.horizon == interval.horizon
+                })
+                .expect("matching fused prediction");
+            assert!(interval.lower <= prediction.mean);
+            assert!(interval.upper >= prediction.mean);
+            let base_interval = base_result
+                .intervals()
+                .iter()
+                .find(|candidate| {
+                    candidate.series_id == interval.series_id
+                        && candidate.timestamp == interval.timestamp
+                        && candidate.horizon == interval.horizon
+                        && candidate.level == interval.level
+                })
+                .expect("matching base interval");
+            assert!(
+                interval.upper - interval.lower
+                    >= base_interval.upper - base_interval.lower - 1.0e-12
+            );
+        }
+    }
+
+    #[test]
+    fn spatial_models_reject_mixed_panel_cutoffs() {
+        let frame = ForecastFrame::new(
+            vec![
+                ForecastRow::new("PU1->DO1", ts(1), 10.0),
+                ForecastRow::new("PU1->DO1", ts(2), 11.0),
+                ForecastRow::new("PU2->DO2", ts(2), 20.0),
+                ForecastRow::new("PU2->DO2", ts(3), 21.0),
+            ],
+            ForecastFrequency::Daily,
+        )
+        .expect("valid ragged frame");
+        let coordinates = BTreeMap::from([
+            ("PU1->DO1".to_string(), (0.0, 0.0)),
+            ("PU2->DO2".to_string(), (1.0, 0.0)),
+        ]);
+        let mut kriging =
+            KrigingForecaster::new(coordinates.clone(), 1.0, 1.0e-6).expect("kriging config");
+        let error = kriging.fit(&frame).expect_err("mixed cutoffs must fail");
+        assert!(error.to_string().contains("common panel cutoff timestamp"));
+
+        let mut spatial = SpatialPiecewiseKrigingForecaster::new(SpatialPiecewiseKrigingConfig {
+            coordinates,
+            mode: SpatialPiecewiseKrigingMode::ResidualKriging,
+            piecewise_config: PiecewiseLinearSeasonalConfig::default(),
+            kriging_config: OrdinaryKrigingConfig::new(1.0, 1.0e-6).expect("kriging config"),
+            spatial_regressors: Vec::new(),
+            residual_shrinkage: 1.0,
+            allow_neighbor_fallback: false,
+        })
+        .expect("spatial config");
+        let error = spatial.fit(&frame).expect_err("mixed cutoffs must fail");
+        assert!(error.to_string().contains("common panel cutoff timestamp"));
     }
 
     #[test]
@@ -10140,7 +10779,22 @@ mod tests {
         assert!(matches!(model.selected_theta(), Some(1.0 | 2.0)));
         assert!(matches!(model.selected_alpha(), Some(0.2 | 0.8)));
         assert_eq!(model.validation_scores().len(), 4);
+        assert!(model.validation_scores().iter().any(|left| {
+            model
+                .validation_scores()
+                .iter()
+                .any(|right| left.theta != right.theta && (left.mse - right.mse).abs() > 1.0e-12)
+        }));
         assert_eq!(forecast.predictions().len(), 2);
+    }
+
+    #[test]
+    fn theta_forecast_matches_ses_drift_equivalence_reference() {
+        let values = [3.0, 5.0, 4.0, 8.0, 10.0];
+        let component = fit_theta_component(&values, 2.0, 0.4);
+
+        assert!((forecast_theta_component(&component, 1) - 9.27656).abs() < 1.0e-10);
+        assert!((forecast_theta_component(&component, 2) - 10.12656).abs() < 1.0e-10);
     }
 
     #[test]
@@ -10166,6 +10820,10 @@ mod tests {
 
         assert!(model.selected_params().is_some());
         assert_eq!(model.validation_scores().len(), 8);
+        assert!(model
+            .validation_scores()
+            .iter()
+            .all(|score| score.negative_log_likelihood.is_finite()));
         assert_eq!(forecast.predictions().len(), 2);
         assert_eq!(forecast.predictions()[0].model, "auto_kalman");
         assert!(
@@ -10178,7 +10836,56 @@ mod tests {
     }
 
     #[test]
-    fn auto_kalman_rejects_empty_grid_and_caps_short_validation_history() {
+    fn auto_kalman_uses_predictive_likelihood_to_identify_variance_scale() {
+        let frame = ForecastFrame::new(
+            (1..=8)
+                .map(|day| {
+                    ForecastRow::single(ts(day), 20.0 + 1.5 * f64::from(day) + f64::from(day % 2))
+                })
+                .collect(),
+            ForecastFrequency::Daily,
+        )
+        .expect("valid frame");
+        let mut model = AutoKalmanForecaster::with_grids(
+            vec![0.1, 10.0],
+            vec![0.01, 1.0],
+            vec![1.0, 100.0],
+            Some(2),
+        )
+        .expect("valid grid");
+
+        model.fit(&frame).expect("fit");
+        let base = model
+            .validation_scores()
+            .iter()
+            .find(|score| {
+                score.params
+                    == (KalmanParameterSet {
+                        level_process_variance: 0.1,
+                        trend_process_variance: 0.01,
+                        observation_variance: 1.0,
+                    })
+            })
+            .expect("base scale");
+        let scaled = model
+            .validation_scores()
+            .iter()
+            .find(|score| {
+                score.params
+                    == (KalmanParameterSet {
+                        level_process_variance: 10.0,
+                        trend_process_variance: 1.0,
+                        observation_variance: 100.0,
+                    })
+            })
+            .expect("scaled variance");
+
+        assert!((base.mse - scaled.mse).abs() < 1.0e-10);
+        assert!((base.negative_log_likelihood - scaled.negative_log_likelihood).abs() > 1.0e-3);
+    }
+
+    #[test]
+    fn auto_kalman_rejects_empty_grid_and_requires_real_holdout() {
         assert!(
             AutoKalmanForecaster::with_grids(Vec::new(), vec![0.001], vec![1.0], Some(1),).is_err()
         );
@@ -10195,20 +10902,25 @@ mod tests {
             AutoKalmanForecaster::with_grids(vec![0.001], vec![0.0001], vec![1.0], Some(1))
                 .expect("valid grid");
 
-        model
-            .fit(&frame)
-            .expect("fit with capped validation window");
-        let forecast = model.predict(2).expect("forecast");
+        assert!(model.fit(&frame).is_err());
 
-        assert_eq!(forecast.predictions().len(), 2);
-        assert!(model
-            .validation_scores()
-            .iter()
-            .all(|score| score.mse.is_finite()));
+        let three_rows = ForecastFrame::new(
+            vec![
+                ForecastRow::single(ts(1), 10.0),
+                ForecastRow::single(ts(2), 12.0),
+                ForecastRow::single(ts(3), 14.0),
+            ],
+            ForecastFrequency::Daily,
+        )
+        .expect("valid frame");
+        let mut oversized =
+            AutoKalmanForecaster::with_grids(vec![0.001], vec![0.0001], vec![1.0], Some(2))
+                .expect("valid grid");
+        assert!(oversized.fit(&three_rows).is_err());
     }
 
     #[test]
-    fn kalman_degrades_single_observation_to_zero_trend_level_fit() {
+    fn kalman_rejects_single_observation_instead_of_changing_models() {
         let frame = ForecastFrame::new(
             vec![ForecastRow::single(ts(1), 12.5)],
             ForecastFrequency::Daily,
@@ -10216,14 +10928,7 @@ mod tests {
         .expect("valid frame");
         let mut model = KalmanForecaster::new(0.01, 0.001, 0.1).expect("valid kalman");
 
-        model.fit(&frame).expect("fit single observation");
-        let forecast = model.predict(2).expect("forecast");
-
-        assert_eq!(forecast.predictions().len(), 2);
-        assert!(forecast
-            .predictions()
-            .iter()
-            .all(|prediction| prediction.mean == 12.5));
+        assert!(model.fit(&frame).is_err());
     }
 
     #[test]
@@ -10268,11 +10973,15 @@ mod tests {
 
         assert!(model.selected_params().is_some());
         assert_eq!(model.validation_scores().len(), 4);
+        assert!(model
+            .validation_scores()
+            .iter()
+            .all(|score| score.negative_log_likelihood.is_finite()));
         assert_eq!(forecast.predictions()[0].model, "auto_local_level_kalman");
     }
 
     #[test]
-    fn auto_local_level_kalman_caps_short_validation_history() {
+    fn auto_local_level_kalman_requires_real_holdout() {
         let frame = ForecastFrame::new(
             vec![ForecastRow::single(ts(1), 10.0)],
             ForecastFrequency::Daily,
@@ -10281,14 +10990,7 @@ mod tests {
         let mut model = AutoLocalLevelKalmanForecaster::with_grids(vec![0.001], vec![0.1], Some(3))
             .expect("valid auto kalman");
 
-        model.fit(&frame).expect("fit with no holdout");
-        let forecast = model.predict(2).expect("forecast");
-
-        assert_eq!(forecast.predictions().len(), 2);
-        assert!(model
-            .validation_scores()
-            .iter()
-            .all(|score| score.mse.is_finite()));
+        assert!(model.fit(&frame).is_err());
     }
 
     #[test]
@@ -10374,7 +11076,7 @@ mod tests {
     }
 
     #[test]
-    fn ets_rejects_invalid_params_and_degrades_short_seasonal_history() {
+    fn ets_rejects_invalid_params_and_short_seasonal_history() {
         assert!(ETSForecaster::new(0.0, 0.2).is_err());
         assert!(ETSForecaster::with_additive_seasonality(0.5, 0.2, Some(0.5), None).is_err());
 
@@ -10389,19 +11091,11 @@ mod tests {
         .expect("valid frame");
         let mut model = ETSForecaster::with_additive_seasonality(0.5, 0.2, Some(0.5), Some(2))
             .expect("valid seasonal ets");
-        model
-            .fit(&frame)
-            .expect("short seasonal history fits non-seasonally");
-        let forecast = model.predict(2).expect("forecast");
-        assert_eq!(forecast.predictions().len(), 2);
-        assert!(forecast
-            .predictions()
-            .iter()
-            .all(|prediction| prediction.mean.is_finite()));
+        assert!(model.fit(&frame).is_err());
     }
 
     #[test]
-    fn ets_and_auto_ets_degrade_single_observation_to_level_fit() {
+    fn ets_and_auto_ets_reject_single_observation() {
         let frame = ForecastFrame::new(
             vec![ForecastRow::single(ts(1), 42.0)],
             ForecastFrequency::Daily,
@@ -10418,22 +11112,8 @@ mod tests {
         )
         .expect("valid auto ets");
 
-        ets.fit(&frame).expect("ets fit");
-        auto_ets.fit(&frame).expect("auto ets fit");
-        let ets_forecast = ets.predict(2).expect("ets forecast");
-        let auto_forecast = auto_ets.predict(2).expect("auto ets forecast");
-
-        assert_eq!(ets_forecast.predictions().len(), 2);
-        assert_eq!(auto_forecast.predictions().len(), 2);
-        assert!(ets_forecast
-            .predictions()
-            .iter()
-            .chain(auto_forecast.predictions())
-            .all(|prediction| prediction.mean == 42.0));
-        assert!(auto_ets
-            .validation_scores()
-            .iter()
-            .all(|score| score.mse.is_finite()));
+        assert!(ets.fit(&frame).is_err());
+        assert!(auto_ets.fit(&frame).is_err());
     }
 
     #[test]
@@ -10497,7 +11177,7 @@ mod tests {
     }
 
     #[test]
-    fn arima_rejects_invalid_order_and_prunes_unsupported_terms() {
+    fn arima_rejects_invalid_or_unsupported_explicit_order() {
         assert!(ArimaForecaster::new(9, 0, 0).is_err());
         assert!(ArimaForecaster::new(1, 0, 9).is_err());
 
@@ -10510,14 +11190,7 @@ mod tests {
         )
         .expect("valid frame");
         let mut model = ArimaForecaster::new(2, 0, 0).expect("valid arima");
-        model.fit(&frame).expect("fit pruned order");
-        let forecast = model.predict(2).expect("forecast");
-
-        assert_eq!(forecast.predictions().len(), 2);
-        assert!(forecast
-            .predictions()
-            .iter()
-            .all(|prediction| prediction.mean.is_finite()));
+        assert!(model.fit(&frame).is_err());
     }
 
     #[test]
@@ -10604,10 +11277,95 @@ mod tests {
             .map(|prediction| prediction.mean)
             .collect::<Vec<_>>();
 
-        assert_eq!(model.selected_order(), Some((1, 0, 1)));
+        let selected = model.selected_order().expect("selected order");
+        let selected_score = model
+            .validation_scores()
+            .iter()
+            .find(|score| (score.p, score.d, score.q) == selected)
+            .expect("selected validation score");
+        assert!(selected_score.ar_stable);
+        assert!(selected_score.ma_invertible);
         assert!(model.validation_scores().iter().any(|score| !score.stable));
         assert!(means.iter().all(|mean| mean.is_finite() && *mean < 60.0));
         assert!(means.iter().all(|mean| *mean > 0.0));
+    }
+
+    #[test]
+    fn ar_stability_uses_exact_schur_recursion() {
+        assert!(ar_recursion_is_stable(&[]));
+        assert!(ar_recursion_is_stable(&[0.99]));
+        assert!(!ar_recursion_is_stable(&[1.01]));
+        assert!(!ar_recursion_is_stable(&[1.0]));
+        assert!(ar_recursion_is_stable(&[1.5, -0.75]));
+        assert!(ma_recursion_is_invertible(&[0.99]));
+        assert!(!ma_recursion_is_invertible(&[1.01]));
+        assert!(!ma_recursion_is_invertible(&[-1.0]));
+    }
+
+    #[test]
+    fn auto_arima_scores_all_differencing_orders_on_original_scale() {
+        let frame = ForecastFrame::new(
+            (1..=10)
+                .map(|day| ForecastRow::single(ts(day), f64::from(day)))
+                .collect(),
+            ForecastFrequency::Daily,
+        )
+        .expect("valid frame");
+        let mut model = AutoARIMAForecaster::with_max_order(0, 1, 0).expect("auto arima");
+
+        model.fit(&frame).expect("fit");
+
+        let level = model
+            .validation_scores()
+            .iter()
+            .find(|score| (score.p, score.d, score.q) == (0, 0, 0))
+            .expect("level score");
+        let differenced = model
+            .validation_scores()
+            .iter()
+            .find(|score| (score.p, score.d, score.q) == (0, 1, 0))
+            .expect("difference score");
+        assert!(differenced.mse < 1.0e-12);
+        assert!(level.mse > differenced.mse);
+        assert_eq!(model.selected_order(), Some((0, 1, 0)));
+    }
+
+    #[test]
+    fn explicit_arima_rejects_non_stationary_fitted_coefficients() {
+        let frame = ForecastFrame::new(
+            (0..8)
+                .map(|idx| ForecastRow::single(ts(idx + 1), 2.0_f64.powi(idx as i32)))
+                .collect(),
+            ForecastFrequency::Daily,
+        )
+        .expect("valid frame");
+        let mut model = ArimaForecaster::new(1, 0, 0).expect("arima config");
+
+        let error = model
+            .fit(&frame)
+            .expect_err("explosive AR fit must be rejected");
+
+        assert!(error.to_string().contains("non-stationary AR polynomial"));
+    }
+
+    #[test]
+    fn explicit_arima_checks_stationarity_after_differencing() {
+        let frame = ForecastFrame::new(
+            [0.0, 1.0, 3.0, 7.0, 15.0, 31.0, 63.0, 127.0]
+                .into_iter()
+                .enumerate()
+                .map(|(idx, value)| ForecastRow::single(ts(idx as u32 + 1), value))
+                .collect(),
+            ForecastFrequency::Daily,
+        )
+        .expect("valid frame");
+        let mut model = ArimaForecaster::new(1, 1, 0).expect("arima config");
+
+        let error = model
+            .fit(&frame)
+            .expect_err("explosive recursion on the differenced series must be rejected");
+
+        assert!(error.to_string().contains("non-stationary AR polynomial"));
     }
 
     #[test]
@@ -10662,7 +11420,7 @@ mod tests {
     }
 
     #[test]
-    fn local_seasonal_and_window_models_use_available_short_history() {
+    fn local_seasonal_and_window_models_reject_short_history() {
         let frame = ForecastFrame::new(
             vec![
                 ForecastRow::new("PU1->DO2", ts(1), 10.0),
@@ -10677,43 +11435,18 @@ mod tests {
         .expect("valid frame");
 
         let mut seasonal_naive = SeasonalNaiveForecaster::new(24).expect("seasonal naive");
-        seasonal_naive.fit(&frame).expect("fit seasonal naive");
-        let seasonal = seasonal_naive.predict(4).expect("predict seasonal naive");
-        let pu1 = seasonal
-            .predictions()
-            .iter()
-            .filter(|row| row.series_id == "PU1->DO2")
-            .map(|row| row.mean)
-            .collect::<Vec<_>>();
-        assert_eq!(pu1, vec![10.0, 20.0, 30.0, 10.0]);
+        assert!(seasonal_naive.fit(&frame).is_err());
 
         let mut window = WindowAverageForecaster::new(24).expect("window average");
-        window.fit(&frame).expect("fit window average");
-        let averaged = window.predict(2).expect("predict window average");
-        assert_eq!(averaged.predictions().len(), 4);
-        assert!(averaged
-            .predictions()
-            .iter()
-            .all(|row| row.mean.is_finite()));
-        assert_eq!(averaged.predictions()[0].mean, 20.0);
+        assert!(window.fit(&frame).is_err());
 
         let mut seasonal_window =
             SeasonalWindowAverageForecaster::new(24, 3).expect("seasonal window average");
-        seasonal_window.fit(&frame).expect("fit seasonal window");
-        let seasonal_averaged = seasonal_window
-            .predict(4)
-            .expect("predict seasonal window average");
-        let pu9 = seasonal_averaged
-            .predictions()
-            .iter()
-            .filter(|row| row.series_id == "PU9->DO8")
-            .map(|row| row.mean)
-            .collect::<Vec<_>>();
-        assert_eq!(pu9, vec![4.0, 6.0, 8.0, 4.0]);
+        assert!(seasonal_window.fit(&frame).is_err());
     }
 
     #[test]
-    fn theta_degrades_unsupported_seasonality_to_nonseasonal_fit() {
+    fn theta_rejects_unsupported_seasonality() {
         let frame = ForecastFrame::new(
             vec![
                 ForecastRow::new("PU1->DO2", ts(1), 10.0),
@@ -10730,14 +11463,6 @@ mod tests {
         let mut model =
             ThetaForecaster::with_seasonality(2.0, 0.3, Some(seasonality)).expect("theta");
 
-        model
-            .fit(&frame)
-            .expect("fit theta without supported seasonality");
-        let forecast = model.predict(2).expect("forecast");
-        assert_eq!(forecast.predictions().len(), 4);
-        assert!(forecast
-            .predictions()
-            .iter()
-            .all(|prediction| prediction.mean.is_finite()));
+        assert!(model.fit(&frame).is_err());
     }
 }

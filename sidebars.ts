@@ -10,6 +10,7 @@ const sidebars: SidebarsConfig = {
         'index',
         'installation',
         'getting-started',
+        'migration-v0.3',
         'user-guide/model-types',
       ],
     },
@@ -99,7 +100,6 @@ const sidebars: SidebarsConfig = {
             'user-guide/deep-models/cartoboost-response-curve-model',
             'user-guide/deep-models/cartoboost-service-time-residual-model',
             'user-guide/deep-models/cartoboost-spatiotemporal-graph-forecaster',
-            'user-guide/deep-models/cartoboost-temporal-ssm-forecaster',
           ],
         },
         {

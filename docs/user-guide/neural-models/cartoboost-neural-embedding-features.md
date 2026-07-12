@@ -16,7 +16,7 @@ not for serving a neural model directly.
 ## Public Contract
 
 ```python
-from cartoboost.neural import NeuralEmbeddingFeatures
+from cartoboost.preview.neural import NeuralEmbeddingFeatures
 
 features = NeuralEmbeddingFeatures(dim=8, random_state=7)
 features.fit(train_ids, train_target)

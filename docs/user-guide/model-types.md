@@ -8,12 +8,9 @@ direct graph structure, or learned ID embeddings.
 Use the model whose assumptions match the unit being predicted. Then compare it
 against simpler baselines under the same split before interpreting a gain.
 
-For automated routing, use `cartoboost.models.ModelRegistry` to inspect the
-stable model families and `cartoboost.AutoGeoModel` when the input may contain
-coordinates, graph structure, panel ids, time indexes, sparse targets, or
-leakage constraints. The selector starts with cheap baselines, escalates only
-when the required structure exists, and refuses random row CV for spatial
-claims.
+Use `cartoboost.preview.models.ModelRegistry` to inspect preview model metadata.
+Automatic geo model selection is intentionally not shipped in v0.3; choose a
+registered estimator explicitly and pair it with a native validation manifest.
 
 ## Start With The Scientific Unit
 
@@ -34,7 +31,7 @@ claims.
 | Should temporal changepoints and seasonality be fused with cutoff-safe spatial kriging? | `SpatialPiecewiseKrigingForecaster` | [Spatial Piecewise Kriging](forecasting-models/spatial-piecewise-kriging.md) |
 | Are you estimating intervention lift or designing a geographic experiment rather than forecasting? | `SyntheticDIDEstimator`, `GeoLiftEstimator`, `GeoExperimentDesigner`, or `SpatialPlaceboTester` | [Geo-Causal Experiment Models](geo-causal-models.md) |
 | Should a neural panel forecaster preserve directional entity identity? | `NeuralPanelForecaster` or `LaneNeuralPanelForecaster` | [Neural Panel](forecasting-models/neural-panel.md) |
-| Do you need generic ordered-pair, response-curve, event, residual, graph-sequence, or constrained candidate models? | `cartoboost.deep.*` | [Generic Deep Models](deep-models.md) |
+| Do you need generic ordered-pair, response-curve, event, residual, graph-sequence, or constrained candidate models? | `cartoboost.preview.deep.*` | [Generic Deep Models](deep-models.md) |
 | Do you need a fixed combination of fitted forecasters? | `WeightedEnsembleForecaster` | [Weighted Ensembles](forecasting-models/ensembles.md) |
 | Are stable ids themselves the learned artifact? | `NeuralEmbeddingStandaloneRegressor` | [CartoBoost Neural Embedding Regressor](neural-models/cartoboost-neural-embedding.md) |
 | Is the relationship network the object being modeled? | Graph models | [CartoBoost Graph Model Guides](graph-models/index.md) |
@@ -43,50 +40,31 @@ claims.
 
 ## Unified Model Registry
 
-`cartoboost.models.ModelRegistry.defaults()` describes the stable public model
-surfaces under the namespaces `cartoboost.models`, `cartoboost.forecasting`,
-`cartoboost.geo`, `cartoboost.graph`, `cartoboost.causal`, and
-`cartoboost.prob`. Each spec carries typed metadata: model name, namespace,
+`cartoboost.preview.models.ModelRegistry.defaults()` describes preview model
+surfaces under the namespaces `cartoboost.forecasting` and preview modules
+such as `cartoboost.preview.geo`, `cartoboost.preview.graph`,
+`cartoboost.preview.causal`, and `cartoboost.preview.prob`. Each spec carries
+typed metadata: model name, namespace,
 task types, capabilities, stability, artifact format, and optional dependency
 notes.
 
 ```python
-from cartoboost.models import AutoGeoModel, ModelRegistry, model_card
+from cartoboost.preview.models import ModelRegistry
 
 registry = ModelRegistry.defaults()
 registry.names(namespace="geo")
-
-model = AutoGeoModel(max_escalation_level=1)
-model.fit(
-    X_train,
-    y_train,
-    coords=pickup_xy,
-    validation={"train": train_idx, "holdout": holdout_idx},
-    validation_strategy="spatial_holdout",
-)
-pred = model.predict(X_test, coords=pickup_xy_test)
-card = model_card(model)
 ```
 
-Start with `AutoGeoModel` when model choice itself is part of the workflow.
-Inspect its evidence card first: it records which candidates were tried, which
-were skipped with typed reasons, the baseline comparison, split hash, leakage
-policy, interval or calibration diagnostics when present, residual Moran's I
-when coordinates are supplied, and whether the selected artifact can be saved
-and reloaded without prediction drift. Drop down to individual models only when
-the evidence card shows that a specific family, contract field, or diagnostic
-needs direct control.
-
-The executable contract for this registry and selector example is checked by
+The executable contract for this registry example is checked by
 `scripts/check_docs_examples.py` in CI.
 
-Use `GeoModelStack` when the desired structure is explicit: a tabular booster,
-an optional residual kriging or NNGP layer, an optional graph residual layer,
-and an optional conformal interval layer. Its layer explanation reports which
-component changed the point metric and which component adds calibration rather
-than point accuracy.
+Select the estimator that matches the study design, then use
+`cartoboost.validation` native split-manifest constructors to make the
+leakage policy explicit. The v0.3 distribution does not include an automatic
+geo selector or a model stack; any future return requires native selection
+behavior and real-family evidence.
 
-Experimental research adapters live under `cartoboost.experimental`. They are
+Experimental research adapters live under `cartoboost.preview.experimental`. They are
 not registered as stable models and require an explicit backend before fitting.
 
 ## When CartoBoostRegressor Fits
@@ -108,7 +86,7 @@ Prefer it for experiments where you want to ask questions such as:
   residual artifacts?
 - Does an outlier-resistant or quantile objective match the scientific target
   more closely than mean regression?
-- Can the fitted artifact preserve the schema, splitters, loss, fuzzy settings,
+- Can the fitted artifact preserve the schema, split policy, loss, fuzzy settings,
   sparse-set requirements, and additive values needed for later interpretation?
 
 Do not treat this as a broad claim about CartoBoost versus LightGBM, XGBoost,
@@ -126,13 +104,14 @@ operational regions.
 
 ```python
 from cartoboost import CartoBoostRegressor
+from cartoboost.config import SplitPolicy
 
 model = CartoBoostRegressor(
     n_estimators=200,
     learning_rate=0.04,
     max_depth=5,
     min_samples_leaf=20,
-    splitters=["axis", "diagonal_2d", "gaussian_2d", "periodic:24"],
+    split_policy=SplitPolicy.STRUCTURED,
 )
 model.fit(X_train, y_train)
 pred = model.predict(X_test)
@@ -142,10 +121,10 @@ Choose controls from the structure you want to test:
 
 | Scientific need | Parameter family |
 | --- | --- |
-| Dense tabular baseline | `splitters=None`, `["auto"]`, `["axis"]`, or `["axis_histogram:<bins>"]` |
-| Spatial boundaries in coordinates | `["axis", "diagonal_2d", "gaussian_2d"]` |
-| Wraparound time effects | `["axis", "periodic:24"]` or another `periodic:<period>` |
-| Sparse zones, routes, cells, or areas | `["axis", "sparse_set"]` plus `sparse_sets=` |
+| Dense tabular baseline | `SplitPolicy.AXIS_ONLY` |
+| Spatial boundaries in coordinates | `SplitPolicy.STRUCTURED` plus spatial-pair schema entries |
+| Wraparound time effects | `SplitPolicy.STRUCTURED` plus periodic schema entries |
+| Sparse zones, routes, cells, or areas | `SplitPolicy.STRUCTURED` plus `sparse_sets=` |
 | Native categorical labels or service tiers | `FeatureKind.CATEGORICAL` or `FeatureKind.ORDINAL` in `feature_schema=` |
 | Smooth changes near boundaries | `fuzzy=True`, `fuzzy_bandwidth=...`, `fuzzy_kernel=...` |
 | Outlier-resistant regression | `loss="mae"`, `loss="huber"`, or `loss="log_l2"` |
@@ -169,10 +148,11 @@ high-cardinality nominal columns use smoothed target statistics with an explicit
 unknown-category value.
 
 ```python
-from cartoboost import CartoBoostRegressor, FeatureKind
+from cartoboost import CartoBoostRegressor
+from cartoboost.preview import FeatureKind
 
 schema = {"dense": [{"name": "location_id", "kind": FeatureKind.CATEGORICAL}]}
-model = CartoBoostRegressor(splitters=["axis"])
+model = CartoBoostRegressor(split_policy="axis_only")
 model.fit(zone_features, fare, feature_schema=schema)
 pred = model.predict(zone_features_holdout)
 ```
@@ -198,7 +178,7 @@ clf = CartoBoostClassifier(
     learning_rate=0.04,
     max_depth=4,
     min_samples_leaf=20,
-    splitters=["axis", "diagonal_2d", "gaussian_2d", "periodic:24"],
+    split_policy="structured",
     class_weight="balanced",
 )
 clf.fit(X_train, airport_trip_flag)
@@ -223,7 +203,7 @@ ranker = CartoBoostRanker(
     n_estimators=200,
     learning_rate=0.04,
     max_depth=4,
-    splitters=["axis", "diagonal_2d", "gaussian_2d"],
+    split_policy="structured",
     objective="lambdarank",
 )
 ranker.fit(X_train, relevance_train, groups=query_sizes_train)
@@ -244,20 +224,11 @@ whole-group holdout with the same optional buffer, which is useful for grouped
 entities. `environmental_blocked_cv` clusters covariates such as weather,
 demand regimes, or operational conditions.
 
-```python
-from cartoboost import residual_morans_i, spatial_buffered_cv, spatial_cv_gap
-
-folds = list(
-    spatial_buffered_cv(
-        projected_pickup_xy,
-        n_splits=5,
-        buffer_radius=500.0,
-        coordinate_units="meters",
-    )
-)
-gap = spatial_cv_gap(random_cv_rmse, buffered_cv_rmse)
-residual_i = residual_morans_i(projected_pickup_xy, y_test - pred_test)
-```
+Use the stable native manifest constructors in `cartoboost.validation` for
+spatial and temporal split definitions. Preview diagnostics such as residual
+Moran's I and the random-to-spatial score gap live under
+`cartoboost.preview.metrics`; keep their output in the benchmark artifact
+alongside the manifest hash.
 
 Positive spatial buffers should use projected linear units. Latitude/longitude
 degree buffers fail clearly unless the caller explicitly allows degree
@@ -273,7 +244,7 @@ without sending data to a server.
 The visualizer summarizes the boosted trees, split kinds, top splitter rules,
 depth profile, and largest holdout residuals after fitting. This is the best
 place to confirm whether axis, diagonal spatial, Gaussian spatial, periodic,
-sparse-set, or fuzzy splitters are actually used on your features.
+sparse-set or fuzzy structured policy is actually used on your features.
 
 ## Forecasting
 

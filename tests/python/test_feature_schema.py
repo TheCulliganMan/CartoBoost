@@ -1,7 +1,9 @@
 from pathlib import Path
 
+import cartoboost._native as _native
 import pytest
-from cartoboost import CartoBoostRegressor, FeatureKind, FeatureSchema
+from cartoboost import CartoBoostRegressor
+from cartoboost.schema import FeatureKind, FeatureSchema, SpatialPairSpec
 
 
 def _fit_or_skip(model, *args, **kwargs):
@@ -48,6 +50,39 @@ def test_feature_schema_helper_accepts_feature_kind_enum():
     }
 
 
+def test_spatial_pair_schema_marks_both_coordinates_for_native_search():
+    schema = FeatureSchema.from_specs(
+        [SpatialPairSpec("pickup_x", "pickup_y"), ("pickup_y", "numeric")]
+    )
+    payload = schema.to_rust_payload(dense_width=2, sparse_names=[])
+    assert payload["names"] == ["pickup_x", "pickup_y"]
+    assert payload["kinds"] == [FeatureKind.SPATIAL, FeatureKind.SPATIAL]
+
+
+def test_compact_spatial_pair_schema_marks_both_coordinates_for_native_search():
+    model = CartoBoostRegressor(
+        n_estimators=1,
+        max_depth=1,
+        min_samples_leaf=1,
+        split_policy="structured",
+    ).fit(
+        [[-1.0, -1.0], [1.0, 1.0]],
+        [-1.0, 1.0],
+        feature_schema={
+            "dense": [
+                {"name": "pickup_x", "kind": "spatial", "other": "pickup_y"},
+                {"name": "pickup_y", "kind": "numeric"},
+            ]
+        },
+    )
+    assert model._model.splitters == ["axis_histogram", "diagonal_2d", "gaussian_2d"]
+
+
+def test_native_feature_schema_validator_rejects_duplicate_names():
+    with pytest.raises(ValueError, match="duplicate feature name"):
+        _native.validate_feature_schema_json('{"names":["x","x"],"kinds":["Numeric","Numeric"]}')
+
+
 def test_python_schema_periodic_feature_used_without_full_period_coverage():
     x = [[7.0], [8.0], [9.0], [10.0]]
     y = [3.0, 3.0, -1.0, -1.0]
@@ -58,7 +93,7 @@ def test_python_schema_periodic_feature_used_without_full_period_coverage():
         max_depth=1,
         min_samples_leaf=1,
         min_gain=0.0,
-        splitters=["periodic:24"],
+        split_policy="structured",
     )
 
     _fit_or_skip(model, x, y, feature_schema=schema)
@@ -82,7 +117,7 @@ def test_python_schema_sparse_columns_restrict_sparse_splitter():
         max_depth=1,
         min_samples_leaf=1,
         min_gain=0.0,
-        splitters=["sparse_set"],
+        split_policy="structured",
     )
 
     _fit_or_skip(model, x, y, sparse_sets=sparse_sets, feature_schema=schema)
@@ -167,7 +202,7 @@ def test_schema_survives_save_load(tmp_path: Path):
         max_depth=1,
         min_samples_leaf=1,
         min_gain=0.0,
-        splitters=["sparse_set"],
+        split_policy="structured",
     )
     _fit_or_skip(model, x, y, sparse_sets=sparse_sets, feature_schema=schema)
     path = tmp_path / "schema.json"

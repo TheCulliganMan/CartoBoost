@@ -5,7 +5,10 @@ from datetime import date
 from pathlib import Path
 
 import pytest
-from cartoboost.forecasting import (
+from cartoboost.forecasting.local import PiecewiseLinearSeasonalForecaster
+from cartoboost.forecasting.registry import ForecastModelSpec, ForecastRegistry
+from cartoboost.forecasting.schema import ForecastFrame
+from cartoboost.preview.forecasting import (
     CrostonForecaster,
     NBeatsForecaster,
     NeuralPanelForecaster,
@@ -13,9 +16,6 @@ from cartoboost.forecasting import (
     SbaForecaster,
     TsbForecaster,
 )
-from cartoboost.forecasting.local import PiecewiseLinearSeasonalForecaster
-from cartoboost.forecasting.registry import ForecastModelSpec, ForecastRegistry
-from cartoboost.forecasting.schema import ForecastFrame
 
 
 def test_default_registry_contains_forecasting_v1_models():

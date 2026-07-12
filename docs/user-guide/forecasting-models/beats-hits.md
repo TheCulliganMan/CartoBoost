@@ -22,7 +22,7 @@ longer-horizon structure.
 ## Public Contract
 
 ```python
-from cartoboost.forecasting import ForecastFrame, NBeatsForecaster, NHiTSForecaster
+from cartoboost.preview.forecasting import ForecastFrame, NBeatsForecaster, NHiTSForecaster
 
 frame = ForecastFrame.from_pandas(
     hourly_demand,
@@ -93,7 +93,7 @@ These models can look strong when a random split leaks nearby time windows. Use
 rolling-origin validation and keep the baseline table visible:
 
 ```python
-from cartoboost.forecasting import RollingOriginBacktester, RollingOriginSplitter
+from cartoboost.preview.forecasting import RollingOriginBacktester, RollingOriginSplitter
 
 splitter = RollingOriginSplitter(horizon=12, step=12, min_train_size=96)
 backtester = RollingOriginBacktester(splitter=splitter)

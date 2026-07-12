@@ -443,7 +443,7 @@ def fit_cartoboost(
         max_depth=qargs.cartoboost_max_depth,
         min_samples_leaf=qargs.cartoboost_min_samples_leaf,
         min_gain=0.0,
-        splitters=splitters,
+        split_policy="structured",
         leaf_predictor=qargs.cartoboost_leaf_predictor,
     )
     tracemalloc.start()

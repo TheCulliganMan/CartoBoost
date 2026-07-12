@@ -35,11 +35,9 @@ REQUIRED_FIELDS = {
 
 REQUIRED_CLAIMS = {
     "pair_embedding_mlp_nonlinear_directional_pair",
-    "selective_ssm_lite_long_memory_panel",
     "inverted_transformer_cross_entity_panel",
     "delay_aware_graph_transformer_directional_delay",
     "regime_moe_mixed_regime_data",
-    "retrieval_augmented_forecaster_rare_pattern",
     "conditional_flow_distribution_head_calibration_sharpness",
     "choice_set_utility_softmax_candidate_competition",
 }

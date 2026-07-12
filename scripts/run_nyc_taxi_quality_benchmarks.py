@@ -79,7 +79,6 @@ GRAPH_MODEL_FAMILIES = {
     "cartoboost_graph_hinsage": "hinsage",
 }
 CARTOBOOST_MODEL_NAMES = {
-    "autogeo",
     "cartoboost",
     "cartoboost_reference",
     "cartoboost_neural",
@@ -121,6 +120,11 @@ class BenchmarkTask:
     sparse_sets: dict[str, list[list[int]]]
     zone_adjacency: dict[int, list[int]] | None = None
     zone_centroids: dict[int, tuple[float, float]] | None = None
+    # Row-level tasks retain the pickup timestamp so temporal holdouts can be
+    # constructed without deriving a split from a feature that may be supplied
+    # to the model.  Aggregated demand tasks intentionally leave this unset.
+    timestamps: np.ndarray | None = None
+    timestamp_column: str | None = None
 
 
 @dataclass(frozen=True)
@@ -143,18 +147,26 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="Comma-separated task names to run, for example pickup_demand.",
     )
+    parser.add_argument(
+        "--split-modes",
+        default="",
+        help=(
+            "Optional comma-separated outer splits. Defaults to every split "
+            "applicable to each task; valid values are random, spatial_holdout, and out_of_time."
+        ),
+    )
     parser.add_argument("--no-download", action="store_true")
     parser.add_argument(
         "--models",
         default=(
-            "autogeo,cartoboost,cartoboost_reference,cartoboost_neural,"
+            "cartoboost,cartoboost_reference,cartoboost_neural,"
             "cartoboost_graph_node2vec,cartoboost_graph_graphsage,"
             "cartoboost_graph_hetero_graphsage,cartoboost_graph_hinsage,"
             "lightgbm,xgboost,catboost,hist_gradient_boosting,random_forest,"
             "extra_trees,ridge,mean"
         ),
         help=(
-            "Comma-separated models from: autogeo, cartoboost, cartoboost_reference, "
+            "Comma-separated models from: cartoboost, cartoboost_reference, "
             "cartoboost_neural, cartoboost_graph, cartoboost_graph_node2vec, "
             "cartoboost_graph_graphsage, cartoboost_graph_hetero_graphsage, "
             "cartoboost_graph_hinsage, lightgbm, xgboost, catboost, "
@@ -305,6 +317,15 @@ def parse_splitters(value: str) -> list[str]:
     if not splitters:
         raise ValueError("splitter list must not be empty")
     return splitters
+
+
+def parse_split_modes(value: str) -> list[str]:
+    modes = [part.strip() for part in value.split(",") if part.strip()]
+    valid = {"random", "spatial_holdout", "out_of_time"}
+    unknown = sorted(set(modes) - valid)
+    if unknown:
+        raise ValueError(f"unknown split modes: {', '.join(unknown)}")
+    return modes
 
 
 def requested_model_names(value: str) -> set[str]:
@@ -624,6 +645,7 @@ def build_real_tasks(
             display_name="Trip duration",
             description="Predict log trip duration from zone, trip, passenger, and time features.",
             target_column="log_duration_sec",
+            timestamp_column="tpep_pickup_datetime",
         ),
         row_task(
             frame,
@@ -634,6 +656,7 @@ def build_real_tasks(
             display_name="Fare amount",
             description="Predict log total amount from zone, trip, passenger, and time features.",
             target_column="log_total_amount",
+            timestamp_column="tpep_pickup_datetime",
         ),
         demand_task(
             demand_source,
@@ -654,10 +677,16 @@ def row_task(
     display_name: str,
     description: str,
     target_column: str,
+    timestamp_column: str | None = "tpep_pickup_datetime",
 ) -> BenchmarkTask:
     features = frame[ROW_FEATURES].to_numpy(dtype=float)
     target = frame[target_column].to_numpy(dtype=float)
     pickup_zones = frame["PULocationID"].to_numpy(dtype=int)
+    timestamps = None
+    if timestamp_column is not None:
+        if timestamp_column not in frame:
+            raise ValueError(f"row task {name!r} requires timestamp column {timestamp_column!r}")
+        timestamps = normalize_timestamps(frame[timestamp_column].to_numpy())
     sparse_sets = {
         "pickup_zone": [[int(value)] for value in frame["PULocationID"].to_numpy(dtype=int)],
         "dropoff_zone": [[int(value)] for value in frame["DOLocationID"].to_numpy(dtype=int)],
@@ -685,6 +714,8 @@ def row_task(
         sparse_sets=sparse_sets,
         zone_adjacency=zone_adjacency,
         zone_centroids=zone_centroids,
+        timestamps=timestamps,
+        timestamp_column=timestamp_column,
     )
 
 
@@ -727,6 +758,7 @@ def synthetic_tasks() -> list[BenchmarkTask]:
     rows: list[list[float]] = []
     targets_duration: list[float] = []
     targets_fare: list[float] = []
+    timestamps: list[np.datetime64] = []
     for pickup in range(1, 13):
         for dropoff in range(1, 13):
             for hour in range(24):
@@ -736,6 +768,12 @@ def synthetic_tasks() -> list[BenchmarkTask]:
                 weekday = float((pickup + hour) % 7)
                 rows.append(
                     [distance, log_distance, passenger_count, float(hour), weekday, pickup, dropoff]
+                )
+                # Keep the synthetic fixture temporal as well.  This exercises
+                # the exact same leakage-safe split path as real TLC rows while
+                # remaining deterministic and independent of wall-clock time.
+                timestamps.append(
+                    np.datetime64("2024-01-01T00", "h") + np.timedelta64(len(rows), "h")
                 )
                 night = 1.0 if hour >= 22 or hour <= 2 else 0.0
                 zone_effect = 0.08 * pickup + 0.05 * dropoff
@@ -758,6 +796,8 @@ def synthetic_tasks() -> list[BenchmarkTask]:
         pickup_zones=pickup_zones,
         feature_names=list(ROW_FEATURES),
         sparse_sets=sparse_sets,
+        timestamps=np.asarray(timestamps, dtype="datetime64[h]"),
+        timestamp_column="synthetic_timestamp",
     )
     fare = BenchmarkTask(
         name="fare",
@@ -768,6 +808,8 @@ def synthetic_tasks() -> list[BenchmarkTask]:
         pickup_zones=pickup_zones,
         feature_names=list(ROW_FEATURES),
         sparse_sets=sparse_sets,
+        timestamps=np.asarray(timestamps, dtype="datetime64[h]"),
+        timestamp_column="synthetic_timestamp",
     )
 
     demand_rows: list[list[float]] = []
@@ -821,6 +863,56 @@ def optional_import(module_name: str) -> Any | None:
         return None
 
 
+def normalize_timestamps(values: Any) -> np.ndarray:
+    """Convert row timestamps to a comparable, timezone-normalized array.
+
+    The benchmark stores timestamps as ``datetime64[ns]`` so the split boundary
+    is computed from the source timestamp rather than from a model feature.  A
+    clear error for missing or invalid values is important here: dropping rows
+    or substituting a synthetic date would invalidate the temporal claim.
+    """
+
+    array = np.asarray(values)
+    if np.issubdtype(array.dtype, np.datetime64):
+        normalized = array.astype("datetime64[ns]")
+    else:
+        pandas = optional_import("pandas")
+        if pandas is None:
+            raise RuntimeError("pandas is required to parse non-NumPy timestamps in NYC row tasks")
+        try:
+            try:
+                parsed = pandas.to_datetime(array, errors="raise", utc=True, format="mixed")
+            except (TypeError, ValueError):
+                # ``format='mixed'`` is unavailable on older pandas releases;
+                # their parser is still valid for uniformly formatted input.
+                parsed = pandas.to_datetime(array, errors="raise", utc=True)
+            normalized = parsed.to_numpy(dtype="datetime64[ns]")
+        except Exception as exc:
+            raise ValueError("row task timestamps must be valid datetimes") from exc
+    if normalized.ndim != 1:
+        raise ValueError("row task timestamps must be one-dimensional")
+    if np.any(normalized == np.datetime64("NaT", "ns")):
+        raise ValueError("row task timestamps must not contain NaT")
+    return normalized
+
+
+def timestamp_integer_values(values: np.ndarray) -> np.ndarray:
+    """Return timestamps as integer nanoseconds for ordering and hashing."""
+
+    normalized = normalize_timestamps(values)
+    return normalized.astype("datetime64[ns]").astype(np.int64)
+
+
+def timestamp_json_value(value: Any) -> str:
+    """Render one timestamp deterministically for split manifests."""
+
+    if isinstance(value, (int, np.integer)):
+        timestamp = np.datetime64(int(value), "ns")
+    else:
+        timestamp = np.datetime64(value, "ns")
+    return np.datetime_as_string(timestamp, unit="ns")
+
+
 def split_indices(task: BenchmarkTask, *, mode: str, seed: int) -> tuple[np.ndarray, np.ndarray]:
     count = len(task.target)
     if mode == "random":
@@ -828,6 +920,12 @@ def split_indices(task: BenchmarkTask, *, mode: str, seed: int) -> tuple[np.ndar
         order = rng.permutation(count)
         test_count = max(1, int(count * 0.2))
         return order[test_count:], order[:test_count]
+
+    if mode == "out_of_time":
+        return out_of_time_indices(task)
+
+    if mode != "spatial_holdout":
+        raise ValueError(f"unknown split mode: {mode!r}")
 
     unique_zones = np.unique(task.pickup_zones)
     holdout_zones = set(int(zone) for zone in unique_zones[::5])
@@ -840,6 +938,73 @@ def split_indices(task: BenchmarkTask, *, mode: str, seed: int) -> tuple[np.ndar
             f"{len(train_indices)} train rows and {len(test_indices)} test rows"
         )
     return train_indices, test_indices
+
+
+def out_of_time_indices(task: BenchmarkTask) -> tuple[np.ndarray, np.ndarray]:
+    """Split rows chronologically while keeping equal timestamps together.
+
+    The latest approximately 20 percent of *distinct timestamp groups* is the
+    holdout.  Rows sharing the boundary timestamp all remain on the test side,
+    so no exact pickup time appears in both train and test.  This is stricter
+    than slicing a shuffled sample at a quantile and prevents timestamp leakage
+    when many TLC trips share the same pickup second.
+    """
+
+    if task.timestamps is None:
+        raise ValueError(f"out_of_time split for task {task.name!r} requires source row timestamps")
+    if len(task.timestamps) != len(task.target):
+        raise ValueError(
+            f"out_of_time split for task {task.name!r} has {len(task.timestamps)} timestamps "
+            f"for {len(task.target)} target rows"
+        )
+    if len(task.target) < 2:
+        raise ValueError(f"out_of_time split for task {task.name!r} requires at least two rows")
+
+    timestamp_values = timestamp_integer_values(task.timestamps)
+    unique_timestamps = np.unique(timestamp_values)
+    if unique_timestamps.size < 2:
+        raise ValueError(
+            f"out_of_time split for task {task.name!r} requires at least two distinct timestamps"
+        )
+
+    desired_test_rows = max(1, int(len(task.target) * 0.2))
+    # Pick the distinct boundary whose test-group count is closest to the
+    # requested holdout size.  Ties prefer a later boundary (more training
+    # rows), while preserving timestamp disjointness takes precedence over an
+    # exact row fraction when a large tie group straddles the nominal cutoff.
+    candidate_boundaries = unique_timestamps[1:]
+    boundary = min(
+        candidate_boundaries,
+        key=lambda candidate: (
+            abs(int(np.count_nonzero(timestamp_values >= candidate)) - desired_test_rows),
+            -int(candidate),
+        ),
+    )
+    test_mask = timestamp_values >= boundary
+    train_indices = np.flatnonzero(~test_mask).astype(np.int64)
+    test_indices = np.flatnonzero(test_mask).astype(np.int64)
+    if train_indices.size == 0 or test_indices.size == 0:
+        raise ValueError(
+            f"out_of_time split for task {task.name!r} produced "
+            f"{len(train_indices)} train rows and {len(test_indices)} test rows"
+        )
+    if np.intersect1d(timestamp_values[train_indices], timestamp_values[test_indices]).size:
+        raise AssertionError("out_of_time split has overlapping train/test timestamps")
+    return train_indices, test_indices
+
+
+def split_modes_for_task(task: BenchmarkTask) -> list[str]:
+    """Return the outer splits applicable to one benchmark task.
+
+    Out-of-time evaluation is a row-task protocol.  Pickup demand is an
+    aggregated zone/time task and remains on its random and spatial diagnostics
+    until a dedicated rolling-origin protocol is run.
+    """
+
+    modes = ["random", "spatial_holdout"]
+    if task.name in {"duration", "fare"} and task.timestamps is not None:
+        modes.append("out_of_time")
+    return modes
 
 
 def train_only_validation_indices(row_count: int, *, seed: int) -> tuple[np.ndarray, np.ndarray]:
@@ -864,7 +1029,7 @@ def task_coordinate_matrix(task: BenchmarkTask) -> np.ndarray | None:
     for zone in task.pickup_zones:
         centroid = task.zone_centroids.get(int(zone))
         if centroid is None:
-            raise ValueError(f"missing pickup zone centroid for AutoGeoModel: {int(zone)}")
+            raise ValueError(f"missing pickup zone centroid for spatial benchmark: {int(zone)}")
         coords.append((float(centroid[0]), float(centroid[1])))
     return np.asarray(coords, dtype=float)
 
@@ -1748,7 +1913,6 @@ def fit_graph_guarded_cartoboost(
 ) -> tuple[Any, np.ndarray, dict[str, Any]]:
     from cartoboost import CartoBoostRegressor
 
-    splitters = graph_cartoboost_splitters(args)
     base_schema = cartoboost_schema(
         task,
         feature_names=effective_feature_names,
@@ -1767,7 +1931,7 @@ def fit_graph_guarded_cartoboost(
             max_depth=args.cartoboost_max_depth,
             min_samples_leaf=args.cartoboost_min_samples_leaf,
             min_gain=0.0,
-            splitters=splitters,
+            split_policy="structured",
             n_threads=args.n_threads or None,
         )
 
@@ -1818,7 +1982,7 @@ def fit_graph_guarded_cartoboost(
         prediction_input,
         {
             "backend": getattr(final_model, "_backend_used", None),
-            "splitters": splitters,
+            "split_policy": "structured",
             "graph_guard": {
                 "selected": selected_schema,
                 "base_validation_rmse": base_validation_rmse,
@@ -1841,7 +2005,8 @@ def fit_neural_guarded_model(
     effective_feature_names: list[str],
     args: argparse.Namespace,
 ) -> tuple[Any, dict[str, Any], dict[str, Any]]:
-    from cartoboost import CartoBoostRegressor, NeuralEmbeddingRegressor
+    from cartoboost import CartoBoostRegressor
+    from cartoboost.preview import NeuralEmbeddingRegressor
 
     ids = task_embedding_ids(task)
     schema = cartoboost_schema(
@@ -1849,7 +2014,6 @@ def fit_neural_guarded_model(
         feature_names=effective_feature_names,
         include_sparse_sets=False,
     )
-    splitters = parse_splitters(args.cartoboost_splitters)
 
     def build_base_model() -> CartoBoostRegressor:
         return CartoBoostRegressor(
@@ -1858,7 +2022,7 @@ def fit_neural_guarded_model(
             max_depth=args.cartoboost_max_depth,
             min_samples_leaf=args.cartoboost_min_samples_leaf,
             min_gain=0.0,
-            splitters=splitters,
+            split_policy="structured",
             n_threads=args.n_threads or None,
         )
 
@@ -1876,7 +2040,7 @@ def fit_neural_guarded_model(
                 "max_depth": args.cartoboost_max_depth,
                 "min_samples_leaf": args.cartoboost_min_samples_leaf,
                 "min_gain": 0.0,
-                "splitters": splitters,
+                "split_policy": "structured",
                 "n_threads": args.n_threads or None,
             },
             final_model_kwargs={
@@ -1885,7 +2049,7 @@ def fit_neural_guarded_model(
                 "max_depth": args.cartoboost_max_depth,
                 "min_samples_leaf": args.cartoboost_min_samples_leaf,
                 "min_gain": 0.0,
-                "splitters": splitters,
+                "split_policy": "structured",
                 "n_threads": args.n_threads or None,
             },
         )
@@ -2044,61 +2208,6 @@ def fit_predict_model(
             ),
         }
 
-    if model_name == "autogeo":
-        from cartoboost import AutoGeoModel
-
-        coords = task_coordinate_matrix(task)
-        train_coords = None if coords is None else coords[train_indices]
-        test_coords = None if coords is None else coords[test_indices]
-        inner_train, inner_holdout = train_only_validation_indices(
-            len(train_indices),
-            seed=int(args.seed),
-        )
-        validation_strategy = "spatial_holdout" if train_coords is not None else "train_holdout"
-        leakage_constraints = ("spatial_block",) if train_coords is not None else ()
-        train_started = time.perf_counter()
-        model = AutoGeoModel(random_state=int(args.seed))
-        model.fit(
-            train_x,
-            train_y,
-            coords=train_coords,
-            validation={
-                "train": inner_train.tolist(),
-                "holdout": inner_holdout.tolist(),
-            },
-            leakage_constraints=leakage_constraints,
-            validation_strategy=validation_strategy,
-        )
-        train_seconds = time.perf_counter() - train_started
-        predict_started = time.perf_counter()
-        prediction = model.predict(test_x, coords=test_coords)
-        predict_seconds = time.perf_counter() - predict_started
-        metadata = getattr(model, "metadata_", {})
-        return {
-            "status": "ok",
-            "metrics": metric_summary(test_y, prediction),
-            "timing": timing_summary(
-                train_seconds=train_seconds,
-                predict_seconds=predict_seconds,
-                prediction_rows=len(test_indices),
-            ),
-            "backend": "cartoboost.autogeo",
-            "config": {
-                "selected_family": getattr(model, "selected_family_", None),
-                "selection_metric": getattr(model, "metric", None),
-                "candidate_evaluations": metadata.get("evaluations", []),
-                "inner_validation": {
-                    "strategy": validation_strategy,
-                    "train_rows": int(inner_train.size),
-                    "holdout_rows": int(inner_holdout.size),
-                    "uses_benchmark_holdout": False,
-                },
-                "coords": train_coords is not None,
-                "feature_count": int(train_x.shape[1]),
-            },
-            "predictions": np.asarray(prediction, dtype=float),
-        }
-
     if model_name in {"cartoboost", "cartoboost_reference"}:
         from cartoboost import CartoBoostRegressor
 
@@ -2126,7 +2235,7 @@ def fit_predict_model(
             max_depth=max_depth,
             min_samples_leaf=min_leaf,
             min_gain=0.0,
-            splitters=splitters,
+            split_policy="structured",
             leaf_predictor=args.cartoboost_leaf_predictor,
             constant_l2_regularization=args.cartoboost_constant_l2,
         )
@@ -2300,7 +2409,7 @@ def fit_predict_model(
                 "min_samples_leaf": int(args.cartoboost_min_samples_leaf),
                 "zone_treatment": args.zone_treatment,
                 "feature_count": int(graph_guard_config["selected_feature_count"]),
-                "splitters": graph_guard_config["splitters"],
+                "split_policy": graph_guard_config["split_policy"],
                 "graph_guard": graph_guard_config["graph_guard"],
                 **graph_config,
             },
@@ -2616,7 +2725,6 @@ def sparse_subset(
 def run_benchmarks(tasks: list[BenchmarkTask], args: argparse.Namespace) -> dict[str, Any]:
     models = [part.strip() for part in args.models.split(",") if part.strip()]
     valid_models = {
-        "autogeo",
         "cartoboost",
         "cartoboost_reference",
         "cartoboost_neural",
@@ -2674,7 +2782,10 @@ def run_benchmarks(tasks: list[BenchmarkTask], args: argparse.Namespace) -> dict
             "zone_treatment": args.zone_treatment,
             "splits": {},
         }
-        for split_mode in ["random", "spatial_holdout"]:
+        requested_split_modes = parse_split_modes(args.split_modes)
+        for split_mode in split_modes_for_task(task):
+            if requested_split_modes and split_mode not in requested_split_modes:
+                continue
             train_indices, test_indices = split_indices(task, mode=split_mode, seed=args.seed)
             split_results: dict[str, Any] = {
                 "train_rows": int(len(train_indices)),
@@ -2717,7 +2828,7 @@ def run_benchmarks(tasks: list[BenchmarkTask], args: argparse.Namespace) -> dict
                     )
                     prediction = result.pop("predictions", None)
                 except Exception as exc:
-                    if model_name == "autogeo" or model_name.startswith("cartoboost"):
+                    if model_name.startswith("cartoboost"):
                         raise
                     result = {
                         "status": "skipped",
@@ -2835,6 +2946,11 @@ def benchmark_dataset_hash(args: argparse.Namespace, tasks: list[BenchmarkTask])
             hasher.update(str(materialized.dtype).encode("utf-8"))
             hasher.update(json.dumps(materialized.shape).encode("utf-8"))
             hasher.update(materialized.tobytes())
+        if task.timestamps is not None:
+            timestamp_values = timestamp_integer_values(task.timestamps)
+            hasher.update(b"timestamps")
+            hasher.update(timestamp_values.tobytes())
+            hasher.update(str(task.timestamp_column).encode("utf-8"))
         hasher.update(json.dumps(task.feature_names, sort_keys=True).encode("utf-8"))
     return hasher.hexdigest()
 
@@ -2872,6 +2988,7 @@ def read_git_commit() -> str | None:
 
 
 def benchmark_integrity(args: argparse.Namespace) -> dict[str, Any]:
+    requested_split_modes = parse_split_modes(args.split_modes)
     return {
         "command_argv": list(sys.argv),
         "seed": int(args.seed),
@@ -2879,7 +2996,12 @@ def benchmark_integrity(args: argparse.Namespace) -> dict[str, Any]:
         "no_download": bool(args.no_download),
         "no_plots": bool(args.no_plots),
         "model_roster": [part.strip() for part in args.models.split(",") if part.strip()],
-        "split_modes": ["random", "spatial_holdout"],
+        "split_modes": requested_split_modes or ["random", "spatial_holdout", "out_of_time"],
+        "split_modes_by_task": {
+            "duration": ["random", "spatial_holdout", "out_of_time"],
+            "fare": ["random", "spatial_holdout", "out_of_time"],
+            "pickup_demand": ["random", "spatial_holdout"],
+        },
         "hpo": "fixed_settings_no_hpo",
         "target_transforms": {
             "duration": "log_trip_duration_seconds",
@@ -2940,6 +3062,13 @@ def split_definitions() -> dict[str, dict[str, str]]:
             "train_fraction": "zone_blocked_approximately_0.8_by_row",
             "purpose": "generalization to held-out pickup zones where eligible",
         },
+        "out_of_time": {
+            "kind": "chronological_timestamp_holdout",
+            "train_fraction": "earlier_timestamp_groups_approximately_0.8_by_row",
+            "purpose": "forward generalization to later pickup times without timestamp overlap",
+            "scope": "duration_and_fare_row_tasks_only",
+            "tie_policy": "all_rows_at_boundary_timestamp_remain_in_test",
+        },
     }
 
 
@@ -2953,7 +3082,13 @@ def split_manifest_metadata(
     dataset_fingerprint: str,
 ) -> dict[str, Any]:
     split_id = f"{task.name}_{split_mode}"
-    split_kind = "seeded_row_shuffle" if split_mode == "random" else "group_spatial_cv"
+    split_kind = {
+        "random": "seeded_row_shuffle",
+        "spatial_holdout": "group_spatial_cv",
+        "out_of_time": "chronological_timestamp_holdout",
+    }.get(split_mode)
+    if split_kind is None:
+        raise ValueError(f"unknown split mode: {split_mode!r}")
     train_hash = index_sha256(train_indices)
     test_hash = index_sha256(test_indices)
     manifest = {
@@ -2967,8 +3102,32 @@ def split_manifest_metadata(
         "row_count": int(len(task.target)),
         "train_index_sha256": train_hash,
         "test_index_sha256": test_hash,
-        "random_row_split_allowed_for_geo_claim": split_mode != "random",
+        "random_row_split_allowed_for_geo_claim": split_mode == "random",
     }
+    if split_mode == "out_of_time":
+        if task.timestamps is None:
+            raise ValueError(
+                f"out_of_time manifest for task {task.name!r} requires source row timestamps"
+            )
+        timestamp_values = timestamp_integer_values(task.timestamps)
+        train_timestamps = timestamp_values[train_indices]
+        test_timestamps = timestamp_values[test_indices]
+        if np.intersect1d(train_timestamps, test_timestamps).size:
+            raise ValueError("out_of_time manifest cannot contain overlapping timestamps")
+        manifest.update(
+            {
+                "timestamp_column": task.timestamp_column or "not_recorded",
+                "timestamp_tie_policy": "grouped_at_boundary_no_timestamp_overlap",
+                "train_timestamp_min": timestamp_json_value(np.min(train_timestamps)),
+                "train_timestamp_max": timestamp_json_value(np.max(train_timestamps)),
+                "test_timestamp_min": timestamp_json_value(np.min(test_timestamps)),
+                "test_timestamp_max": timestamp_json_value(np.max(test_timestamps)),
+                "temporal_boundary": timestamp_json_value(np.min(test_timestamps)),
+                "leakage_safe": True,
+            }
+        )
+    else:
+        manifest["leakage_safe"] = split_mode != "random"
     manifest["split_manifest_hash"] = "sha256:" + stable_json_sha256(manifest)
     return manifest
 
@@ -2976,6 +3135,8 @@ def split_manifest_metadata(
 def coordinate_crs_note(split_mode: str) -> str:
     if split_mode == "random":
         return "No coordinate CRS applies to this random-row diagnostic split."
+    if split_mode == "out_of_time":
+        return "No coordinate CRS applies to this chronological timestamp split."
     return (
         "NYC TLC pickup/dropoff zone identifiers are treated as spatial groups; "
         "distance-buffered claims require projected taxi zone geometry."
@@ -3815,13 +3976,14 @@ def write_jsonl_results(results: dict[str, Any], output: Path) -> None:
     rows = []
     for task_name, task in results["tasks"].items():
         for split_name, split in task["splits"].items():
+            track = "temporal" if split_name == "out_of_time" else "spatial"
             for model_name, model in split["models"].items():
                 if model.get("status") != "ok":
                     continue
                 for metric, value in model["metrics"].items():
                     rows.append(
                         {
-                            "track": "spatial",
+                            "track": track,
                             "task_id": task_name,
                             "split_id": split_name,
                             "model_family": model_name,
@@ -3838,7 +4000,7 @@ def write_jsonl_results(results: dict[str, Any], output: Path) -> None:
                     if metric in timing:
                         rows.append(
                             {
-                                "track": "spatial",
+                                "track": track,
                                 "task_id": task_name,
                                 "split_id": split_name,
                                 "model_family": model_name,

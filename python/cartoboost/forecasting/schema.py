@@ -621,5 +621,8 @@ def _build_native_frame(frame: ForecastFrame, *, data: Any | None = None) -> Any
             allow_missing_targets=frame.allow_missing_targets,
             allow_missing_covariates=frame.allow_missing_covariates,
         )
-    except TypeError:
-        return _native.ForecastFrame(rows, frame.freq)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(
+            "cartoboost._native.ForecastFrame rejected the typed ForecastFrame payload; "
+            "rebuild the native extension to match the Python package"
+        ) from exc

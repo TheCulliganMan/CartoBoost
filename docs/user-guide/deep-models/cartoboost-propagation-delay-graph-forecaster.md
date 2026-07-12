@@ -9,7 +9,7 @@ edges, edge distances, known future covariates, and delay priors.
 ## Public Contract
 
 ```python
-from cartoboost.deep import GraphTemporalFrame, PropagationDelayGraphForecaster
+from cartoboost.preview.deep import GraphTemporalFrame, PropagationDelayGraphForecaster
 
 frame = GraphTemporalFrame(
     node_ids=["PULocationID:161", "PULocationID:236", "PULocationID:132"],

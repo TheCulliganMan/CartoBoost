@@ -7,23 +7,45 @@ split.
 
 ## NYC Taxi Demand
 
-Real taxi demand uses January 2024 NYC TLC yellow taxi trips, 24 pickup/dropoff
-lanes, daily aggregation, and a 7-day holdout.
+Real taxi demand uses January–April 2024 NYC TLC yellow taxi trips, 24
+pickup/dropoff lanes, daily aggregation, and three leakage-safe rolling origins
+with a 7-day horizon. The maintained artifact compares CartoBoost with
+functime and external lag-tree baselines under the same protocol.
 
 | Rank | Model | RMSE | MAE | WAPE | Artifact |
 | ---: | --- | ---: | ---: | ---: | --- |
-| 1 | `cartoboost_auto_forecast` | 39.033944 | 29.172619 | 0.093742 | `forecasting_library_benchmark_real.json` |
-| 2 | `cartoboost_lag` | 125.811224 | 84.679383 | 0.272104 | `forecasting_library_benchmark_real.json` |
+| 1 | `functime_snaive` | 77.690688 | 48.091270 | 0.169428 | `forecasting_library_benchmark_real.json` |
+| 2 | `cartoboost_auto_forecast` | 85.726457 | 50.868085 | 0.177963 | `forecasting_library_benchmark_real.json` |
+| 3 | `cartoboost_lag` | 88.662817 | 50.014466 | 0.174668 | `forecasting_library_benchmark_real.json` |
+| 4 | `lightgbm_lag` | 89.462956 | 50.795280 | 0.177978 | `forecasting_library_benchmark_real.json` |
+| 5 | `xgboost_lag` | 89.670441 | 50.722884 | 0.177666 | `forecasting_library_benchmark_real.json` |
+| 6 | `functime_ridge` | 100.668198 | 67.930666 | 0.237628 | `forecasting_library_benchmark_real.json` |
+| 7 | `functime_lightgbm` | 123.966168 | 78.958623 | 0.271460 | `forecasting_library_benchmark_real.json` |
 
-Read: `cartoboost_auto_forecast` is the stronger current-code model on this
-real taxi lane-demand split. The run is short, so it is useful evidence for the
-taxi workflow, not a broad forecasting claim by itself.
+Read: `cartoboost_auto_forecast` is 4.18% lower RMSE than the strongest completed
+external learned baseline (`lightgbm_lag`) across the three rolling origins. It
+does not beat the seasonal-naive library baseline, so the artifact does not
+claim a win against every forecasting library. The external-baseline gate is
+recorded directly in the JSON artifact and passes the v0.3 within-5% RMSE rule.
 
-Comparability audit for `forecasting_library_benchmark_real.json`: both
-requested CartoBoost models score the same forecast rows and 7-day horizon,
-use the same metric set, select by RMSE without outer test-label selection, and
-record no skipped requested models. The roster is `cartoboost`, so this artifact
-does not compare against external forecasting-library baselines.
+Reproduce the maintained artifact with:
+
+```bash
+PYTHONPATH=python uv run --group dev --group bench python scripts/forecasting_library_benchmark.py \
+  --source nyc-taxi --year 2024 --months 1,2,3,4 --taxi-type yellow \
+  --lanes 24 --horizon 7 --rolling-origin-folds 3 --no-hyperopt \
+  --model-roster scalable --cartoboost-n-estimators 48 \
+  --cartoboost-auto-n-estimators 48 \
+  --output docs/assets/nyc_taxi_benchmarks/forecasting_library_benchmark_real.json
+```
+
+Comparability audit for `forecasting_library_benchmark_real.json`: every
+requested model completed on the same three rolling-origin folds and 7-day
+horizon, uses the same metric set, and records candidate selection without
+outer test-label selection. The strongest completed external learned baseline
+is `lightgbm_lag`; CartoBoost's 0.958234 RMSE ratio versus that baseline is
+inside the five-percent acceptance gate. The seasonal-naive result remains
+reported as a separate, stronger forecasting-library reference.
 
 ## Synthetic Demand Checks
 
@@ -43,7 +65,7 @@ Read: the current scalable synthetic checks favor CartoBoost.
 
 ## Prophet-Compatible Surface
 
-`cartoboost.Prophet` provides the familiar `ds`/`y` workflow over the Rust
+`cartoboost.preview.Prophet` provides the familiar `ds`/`y` workflow over the Rust
 piecewise-linear core. The façade accepts pandas or Polars input, creates
 future dataframes, supports Fourier seasonalities, extra regressors, holidays,
 intervals, component columns, and predictive-sample access, and returns
@@ -56,9 +78,9 @@ and converts Polars to pandas, while CartoBoost fits the Polars frame directly.
 
 | Rows | Engine | Input | Fit seconds | Predict seconds | Total seconds | Output rows |
 | ---: | --- | --- | ---: | ---: | ---: | ---: |
-| 500 | `cartoboost.Prophet` | Polars | 0.0170 | 0.0052 | 0.0222 | 30 |
+| 500 | `cartoboost.preview.Prophet` | Polars | 0.0170 | 0.0052 | 0.0222 | 30 |
 | 500 | `prophet.Prophet` | Polars → pandas | 0.0538 | 0.0037 | 0.0575 | 30 |
-| 100,000 | `cartoboost.Prophet` | Polars | 0.2359 | 0.0098 | 0.2457 | 30 |
+| 100,000 | `cartoboost.preview.Prophet` | Polars | 0.2359 | 0.0098 | 0.2457 | 30 |
 | 100,000 | `prophet.Prophet` | Polars → pandas | 1.8920 | 0.0040 | 1.8960 | 30 |
 
 CartoBoost is 2.6× faster on the 500-row run and 7.7× faster on the
@@ -341,13 +363,16 @@ Read: `cartoboost_auto_forecast` is first by RMSE on the sample and
 uv run --group dev python scripts/forecasting_library_benchmark.py \
   --source nyc-taxi \
   --year 2024 \
-  --months 1 \
+  --months 1,2,3,4 \
   --taxi-type yellow \
   --lanes 24 \
   --horizon 7 \
+  --rolling-origin-folds 3 \
   --no-download \
   --no-hyperopt \
-  --model-roster cartoboost \
+  --model-roster scalable \
+  --cartoboost-n-estimators 48 \
+  --cartoboost-auto-n-estimators 48 \
   --output docs/assets/nyc_taxi_benchmarks/forecasting_library_benchmark_real.json \
   --plot-dir docs/assets/nyc_taxi_benchmarks/forecasting_plots
 
@@ -422,7 +447,8 @@ uv run --group dev --group bench python scripts/forecasting_library_benchmark.py
 
 ## Limits
 
-- Real taxi demand covers one month and a 7-day holdout.
+- Real taxi demand covers January–April 2024, 24 lanes, and three 7-day
+  rolling-origin folds.
 - Synthetic demand checks are diagnostics.
 - The CartoBoost piecewise local diagnostics are synthetic and should be read as
   wiring and behavior evidence for Prophet-shaped tasks, not broad real-data

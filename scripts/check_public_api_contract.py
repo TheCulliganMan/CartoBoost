@@ -10,31 +10,43 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON_SOURCE = ROOT / "python"
 if str(PYTHON_SOURCE) not in sys.path:
     sys.path.insert(0, str(PYTHON_SOURCE))
 
-from cartoboost.models import GeoModelStack, ModelRegistry, ModelSpec  # noqa: E402
+from cartoboost.forecasting import (  # noqa: E402
+    ForecastFrame,
+    LagConfig,
+)
+from cartoboost.models import (  # noqa: E402
+    STABLE_MODEL_KEYS,
+    ModelRegistry,
+    ModelSpec,
+    native_model_manifest,
+)
 
 REQUIRED_LIFECYCLE = ("fit", "predict", "score", "save", "load", "get_params", "set_params")
 ROUNDTRIP_CASES = {
     "models.cartoboost_regressor",
     "models.cartoboost_classifier",
     "models.cartoboost_ranker",
-    "models.auto_geo_model",
-    "models.geo_model_stack",
     "geo.nngp",
     "geo.residual_nngp",
     "prob.conformal_interval",
     "prob.spatial_conformal",
+    "forecasting.auto_forecaster",
+    "forecasting.cartoboost_lag",
 }
 
 
 def main() -> int:
     registry = ModelRegistry.defaults()
+    stable_registry = ModelRegistry.stable_defaults()
     structural = [audit_spec(spec) for spec in registry.specs()]
+    native_manifest = native_model_manifest()
     roundtrips = [
         run_roundtrip_case(get_registry_key(registry, name)) for name in sorted(ROUNDTRIP_CASES)
     ]
@@ -42,12 +54,32 @@ def main() -> int:
         "artifact_type": "cartoboost.public_api_contract_audit",
         "artifact_version": 1,
         "registry_size": len(registry.specs()),
+        "stable_registry_size": len(stable_registry.specs()),
+        "stable_keys": sorted(spec.key for spec in stable_registry.specs()),
+        "stable_contract": {
+            "expected_keys": sorted(STABLE_MODEL_KEYS),
+            "passed": {spec.key for spec in stable_registry.specs()} == set(STABLE_MODEL_KEYS),
+        },
+        "native_manifest": {
+            "entries": len(native_manifest),
+            "stable_keys": sorted(
+                row["key"] for row in native_manifest if row.get("tier") == "stable"
+            ),
+            "passed": {row["key"] for row in native_manifest if row.get("tier") == "stable"}
+            == set(STABLE_MODEL_KEYS),
+        },
         "required_lifecycle": list(REQUIRED_LIFECYCLE),
         "structural": structural,
         "roundtrips": roundtrips,
-        "passed": all(row["passed"] for row in structural)
-        and all(row["passed"] for row in roundtrips),
+        "passed": False,
     }
+    payload["passed"] = (
+        all(row["passed"] for row in structural)
+        and all(row["passed"] for row in roundtrips)
+        and bool(stable_registry.manifest(tier="stable"))
+        and payload["stable_contract"]["passed"]
+        and payload["native_manifest"]["passed"]
+    )
     print(json.dumps(payload, indent=2, sort_keys=True))
     if not payload["passed"]:
         raise SystemExit("public API contract audit failed")
@@ -60,7 +92,20 @@ def audit_spec(spec: ModelSpec) -> dict[str, Any]:
     class_missing = [name for name in REQUIRED_LIFECYCLE if not hasattr(factory, name)]
     metadata_missing = [
         key
-        for key in ("name", "namespace", "task_types", "capabilities", "stable", "artifact_format")
+        for key in (
+            "name",
+            "namespace",
+            "task_types",
+            "capabilities",
+            "stable",
+            "tier",
+            "artifact_format",
+            "artifact_version",
+            "backend",
+            "evidence_level",
+            "optional_dependencies",
+            "dependencies",
+        )
         if key not in metadata
     ]
     key = f"{spec.namespace}.{spec.name}"
@@ -100,6 +145,8 @@ def run_roundtrip_case(spec: ModelSpec) -> dict[str, Any]:
 
 
 def _fit_predict_reload(spec: ModelSpec) -> tuple[np.ndarray, np.ndarray]:
+    if spec.key in {"forecasting.auto_forecaster", "forecasting.cartoboost_lag"}:
+        return _fit_forecast_predict_reload(spec)
     with tempfile.TemporaryDirectory() as temp_dir:
         path = Path(temp_dir) / f"{spec.namespace}-{spec.name}.json"
         model, X, kwargs = fit_registry_roundtrip_case(spec)
@@ -110,6 +157,33 @@ def _fit_predict_reload(spec: ModelSpec) -> tuple[np.ndarray, np.ndarray]:
         return before, after
 
 
+def _fit_forecast_predict_reload(spec: ModelSpec) -> tuple[np.ndarray, np.ndarray]:
+    frame = ForecastFrame.from_pandas(
+        pd.DataFrame(
+            {
+                "timestamp": pd.date_range("2024-01-01", periods=40, freq="D"),
+                "fare": np.arange(40, dtype=float),
+            }
+        ),
+        timestamp_col="timestamp",
+        target_col="fare",
+        freq="D",
+    )
+    kwargs: dict[str, Any] = {"n_estimators": 4}
+    if spec.key == "forecasting.cartoboost_lag":
+        kwargs.update(max_depth=2, min_samples_leaf=1)
+        kwargs["lag_config"] = LagConfig(lags=[1, 2])
+    model = spec.create(**kwargs)
+    model.fit(frame)
+    before = np.asarray([row[-1] for row in model.predict(3).predictions()], dtype=float)
+    with tempfile.TemporaryDirectory() as temp_dir:
+        path = Path(temp_dir) / f"{spec.namespace}-{spec.name}.json"
+        model.save(path)
+        loaded = spec.factory.load(path)
+        after = np.asarray([row[-1] for row in loaded.predict(3).predictions()], dtype=float)
+    return before, after
+
+
 def fit_registry_roundtrip_case(spec: ModelSpec) -> tuple[Any, np.ndarray, dict[str, Any]]:
     key = f"{spec.namespace}.{spec.name}"
     if key == "models.cartoboost_regressor":
@@ -118,10 +192,6 @@ def fit_registry_roundtrip_case(spec: ModelSpec) -> tuple[Any, np.ndarray, dict[
         return _fit_classifier(spec)
     if key == "models.cartoboost_ranker":
         return _fit_ranker(spec)
-    if key == "models.auto_geo_model":
-        return _fit_auto_geo(spec)
-    if key == "models.geo_model_stack":
-        return _fit_geo_stack()
     if key == "geo.nngp":
         return _fit_nngp(spec)
     if key == "geo.residual_nngp":
@@ -152,25 +222,6 @@ def _fit_ranker(spec: ModelSpec) -> tuple[Any, np.ndarray, dict[str, Any]]:
     model = spec.create(n_estimators=8, max_depth=2, min_samples_leaf=1, min_gain=0.0)
     model.fit(X, y, groups=[3, 3])
     return model, X, {}
-
-
-def _fit_auto_geo(spec: ModelSpec) -> tuple[Any, np.ndarray, dict[str, Any]]:
-    X, y, coords = _sample_rows()
-    model = spec.create(max_escalation_level=1)
-    model.fit(
-        X,
-        y,
-        coords=coords,
-        validation={"train": [0, 1, 2, 3, 4], "holdout": [5, 6, 7]},
-    )
-    return model, X, {"coords": coords}
-
-
-def _fit_geo_stack() -> tuple[Any, np.ndarray, dict[str, Any]]:
-    X, y, coords = _sample_rows()
-    model = GeoModelStack()
-    model.fit(X, y, coords=coords)
-    return model, X, {"coords": coords}
 
 
 def _fit_nngp(spec: ModelSpec) -> tuple[Any, np.ndarray, dict[str, Any]]:

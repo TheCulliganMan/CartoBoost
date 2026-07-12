@@ -24,7 +24,7 @@ Declare dense features and sparse-set columns separately:
 ```python
 schema = {
     "dense": [
-        {"name": "pickup_x", "kind": "numeric"},
+        {"name": "pickup_x", "kind": "spatial", "other": "pickup_y"},
         {"name": "pickup_y", "kind": "numeric"},
         {"name": "location_id", "kind": "categorical"},
         {"name": "service_tier", "kind": "ordinal"},
@@ -52,7 +52,7 @@ model.fit(
 
 ## Modeling Effects
 
-Periodic declarations let splitters treat values near the cycle boundary as
+Periodic declarations let the structured split policy treat values near the cycle boundary as
 neighbors. For cyclic time, `hour_of_day=23` and `hour_of_day=0` can be
 adjacent late-night behavior rather than opposite ends of a numeric line.
 
@@ -68,10 +68,11 @@ categories, and high-cardinality categorical columns use smoothed target-stat
 encodings. The saved model artifact records the encoder mapping so prediction
 applies the same contract.
 
-Numeric dense columns remain eligible for numeric and spatial split candidates.
-The current schema does not express named latitude/longitude pairs or richer
-spatial roles; diagonal and Gaussian splitters still work from dense numeric
-feature pairs according to the current candidate search.
+Numeric dense columns remain eligible for axis candidates. Declare a coordinate
+pair with `SpatialPairSpec("pickup_x", "pickup_y")` (or the equivalent
+`{"kind": "spatial", "other": "pickup_y"}` entry) to mark both named
+coordinates for the native diagonal and radial candidates. Unpaired numeric
+columns are not searched as arbitrary spatial pairs.
 
 ## Saved Schema Format
 
@@ -89,7 +90,7 @@ CartoBoost stores supported schema dictionaries in a compact artifact payload:
   ],
   "kinds": [
     "Numeric",
-    "Numeric",
+    "Spatial",
     "Categorical",
     "Numeric",
     {"Periodic": {"period": 24}},
@@ -117,11 +118,11 @@ CartoBoost stores supported schema dictionaries in a compact artifact payload:
 
 When a schema is present:
 
-- periodic splitters use declared periods and do not rely on observed values
+- periodic candidates use declared periods and do not rely on observed values
   covering a full cycle;
 - categorical encoders preserve category mappings across prediction and
   save/load;
-- sparse splitters prefer schema-declared sparse-set columns;
+- sparse candidates prefer schema-declared sparse-set columns;
 - numeric dense columns remain eligible for numeric and spatial split
   candidates.
 

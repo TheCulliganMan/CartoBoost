@@ -69,7 +69,7 @@ model = CartoBoostLagForecaster(
     max_depth=5,
     min_samples_leaf=20,
     min_gain=1e-8,
-    splitters=["axis", "periodic:24"],
+    split_policy="structured",
 )
 
 model.fit(hourly_zone_demand)
@@ -83,10 +83,10 @@ and timestamp before building the forecast frame.
 ## Config Object Example
 
 ```python
-from cartoboost.forecasting import (
+from cartoboost.preview.forecasting import (
     CalendarFeatureConfig,
     CartoBoostLagForecaster,
-    LagFeatureConfig,
+    LagConfig,
     RollingFeatureConfig,
 )
 
@@ -95,7 +95,7 @@ model = CartoBoostLagForecaster(
     target_col="demand",
     panel_cols=["zone_id"],
     frequency="h",
-    lag_config=LagFeatureConfig(lags=[1, 24, 168]),
+    lag_config=LagConfig(lags=[1, 24, 168]),
     rolling_config=RollingFeatureConfig(windows=[24, 168], aggregations=("mean",)),
     calendar_config=CalendarFeatureConfig(features=("dayofweek", "month", "day")),
     regressor_params={
@@ -103,7 +103,7 @@ model = CartoBoostLagForecaster(
         "learning_rate": 0.04,
         "max_depth": 5,
         "min_samples_leaf": 20,
-        "splitters": ["axis", "periodic:24"],
+        "split_policy": "structured",
     },
 )
 model.fit(hourly_zone_demand)
@@ -143,7 +143,7 @@ model = CartoBoostLagForecaster(
     learning_rate=0.05,
     max_depth=4,
     min_samples_leaf=8,
-    splitters=["axis", "periodic:24"],
+    split_policy="structured",
 )
 model.fit(train)
 
@@ -174,6 +174,13 @@ data, `24` usually means same hour yesterday and `168` means same hour last
 week. For daily aggregates, those same numbers mean very different behavior and
 should be chosen deliberately.
 
+Explicit lag-model configurations are strict. The shortest series must contain
+enough prior observations for every complete lag, difference, rolling, and
+trend feature. Unsupported features are not deleted and windows are not
+shortened during fitting; the error reports the required and available prior
+history. Partial rolling means remain available when intentionally configured
+as partial windows.
+
 ## Splitter Choices
 
 Use `["axis"]` for a basic supervised lag model. Add `periodic:24` when hourly
@@ -198,7 +205,7 @@ to align with the same cycle.
 | `CalendarFeatureConfig` | Supports `dayofweek`, `month`, and `day`. |
 | `trend_features=True` | Enables lag-delta and rolling-trend features. |
 | `target_mode` | Supports `level`, `delta_from_last`, and explicit seasonal modes such as `seasonal_delta_7`. |
-| `regressor_params` | Supports `n_estimators`, `learning_rate`, `max_depth`, `min_samples_leaf`, `min_gain`, and `splitters`. |
+| `regressor_params` | Supports the typed booster values `n_estimators`, `learning_rate`, `max_depth`, `min_samples_leaf`, `min_gain`, and `n_threads`. Split selection uses `split_policy`. |
 
 Unsupported feature-builder options fail explicitly rather than being silently
 ignored.

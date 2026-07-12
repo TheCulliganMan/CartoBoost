@@ -1,9 +1,10 @@
-# CLI Reference
+# Source-checkout CLI Reference
 
-The `cartoboost` CLI is a dense numeric CSV interface for reproducible training,
+The Rust CLI is a source-checkout dense numeric CSV interface for reproducible training,
 prediction, inspection, and simple evaluation. Use it for command-line evidence
 when the data is already encoded into comparable columns for CartoBoost and
-baseline tools.
+baseline tools. It is not installed by the PyPI wheel; prefix commands with
+`cargo run -p cartoboost-cli --`.
 
 The CLI is intentionally narrower than the Python API. For sparse sets, graph
 features, neural residual embeddings, rolling-origin forecasting, or
@@ -12,7 +13,7 @@ leakage-aware split generation, use the Python API and benchmark scripts.
 ## `train`
 
 ```sh
-cartoboost train --data <csv> [--config <toml>] [--model-out <path>] [--output json|csv]
+cargo run -p cartoboost-cli -- train --data <csv> [--config <toml>] [--model-out <path>] [--output json|csv]
 ```
 
 Trains a dense numeric CSV model. If `--model-out` is omitted, the CLI writes
@@ -27,7 +28,7 @@ JSON output:
 ## `predict`
 
 ```sh
-cartoboost predict --model <path> --input <csv> [--predictions-out <path>] [--output json|csv]
+cargo run -p cartoboost-cli -- predict --model <path> --input <csv> [--predictions-out <path>] [--output json|csv]
 ```
 
 Loads a model and predicts dense numeric rows. Prediction CSV output uses:
@@ -41,7 +42,7 @@ row,prediction
 ## `eval`
 
 ```sh
-cartoboost eval --model <path> --data <csv> [--output json|csv]
+cargo run -p cartoboost-cli -- eval --model <path> --data <csv> [--output json|csv]
 ```
 
 Computes mean absolute error against the target column stored in the model, or
@@ -53,7 +54,7 @@ out-of-time, spatial, or grouped splits for you.
 ## `inspect`
 
 ```sh
-cartoboost inspect [--model <path>] [--config <toml>] [--data <csv>] [--output json|csv]
+cargo run -p cartoboost-cli -- inspect [--model <path>] [--config <toml>] [--data <csv>] [--output json|csv]
 ```
 
 Summarizes model, config, and data inputs without training.
@@ -75,19 +76,19 @@ For a CLI-backed comparison, create train and validation CSVs once, then reuse
 them for every model:
 
 ```sh
-cartoboost train \
+cargo run -p cartoboost-cli -- train \
   --data taxi_train.csv \
   --config configs/regression.toml \
   --model-out target/evidence/cartoboost-model.json \
   --output json
 
-cartoboost predict \
+cargo run -p cartoboost-cli -- predict \
   --model target/evidence/cartoboost-model.json \
   --input taxi_validation_features.csv \
   --predictions-out target/evidence/cartoboost-predictions.csv \
   --output csv
 
-cartoboost eval \
+cargo run -p cartoboost-cli -- eval \
   --model target/evidence/cartoboost-model.json \
   --data taxi_validation_with_target.csv \
   --output json

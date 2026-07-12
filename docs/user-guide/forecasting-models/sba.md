@@ -13,7 +13,7 @@ the standard bias adjustment to reduce Croston's upward bias on sparse series.
 ## Python Example
 
 ```python
-from cartoboost.forecasting import SbaForecaster
+from cartoboost.preview.forecasting import SbaForecaster
 
 demand = [0, 0, 4, 0, 0, 7, 0, 3, 0, 0, 0, 5]
 

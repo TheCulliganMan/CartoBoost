@@ -20,17 +20,21 @@ model_suite_module = importlib.import_module("scripts.run_model_benchmark_suite"
 forecasting_benchmark_module = importlib.import_module("scripts.forecasting_library_benchmark")
 autogeo_gate_module = importlib.import_module("scripts.run_autogeo_benchmark_gate")
 artifact_gate_module = importlib.import_module("scripts.check_artifact_compatibility")
+forecasting_quality_gate_module = importlib.import_module("scripts.check_forecasting_quality_gate")
+nyc_row_quality_gate_module = importlib.import_module("scripts.check_nyc_row_quality_gate")
 official_geo_evidence_module = importlib.import_module("scripts.check_official_geo_evidence")
 performance_gate_module = importlib.import_module("scripts.check_performance_thresholds")
+freshness_gate_module = importlib.import_module("scripts.check_benchmark_freshness")
 release_gate_module = importlib.import_module("scripts.check_release_gates")
 significance_module = importlib.import_module("benchmarks.runners.significance")
 
 aggregate = aggregate_module.aggregate
-autogeo_build_workloads = autogeo_gate_module.build_workloads
-autogeo_run_workload = autogeo_gate_module.run_workload
 check_artifact_compatibility = artifact_gate_module.check_artifact_compatibility
+check_forecasting_quality_gate = forecasting_quality_gate_module.check_forecasting_quality_gate
+check_nyc_row_quality_gate = nyc_row_quality_gate_module.check_nyc_row_quality_gate
 official_geo_evidence_report = official_geo_evidence_module.official_geo_evidence_report
 check_performance_thresholds = performance_gate_module.check_performance_thresholds
+check_benchmark_freshness = freshness_gate_module.check_benchmark_freshness
 read_jsonl = aggregate_module.read_jsonl
 load_all_tracks = manifest_module.load_all_tracks
 load_config = manifest_module.load_config
@@ -57,6 +61,14 @@ def test_public_benchmark_manifests_are_valid() -> None:
     specs = load_all_tracks()
 
     assert {spec.name for spec in specs} == {"forecasting", "graph", "spatial", "tabular"}
+
+
+def test_nyc_row_quality_gate_reports_current_evidence_without_overclaiming() -> None:
+    report = check_nyc_row_quality_gate(ROOT / "docs/assets/nyc_taxi_benchmarks/results.json")
+    assert report["dataset_source"] == "nyc_tlc_trip_records"
+    assert len(report["comparisons"]) == 4
+    assert report["passed"] is False
+    assert report["wins"] < report["minimum_wins"]
 
 
 def test_sklearn_dependency_is_optional_extra() -> None:
@@ -171,6 +183,77 @@ def test_forecasting_benchmark_intermittent_roster_is_exposed() -> None:
     ]
 
 
+def test_forecasting_quality_summary_records_external_baseline_gate() -> None:
+    metrics = {
+        "cartoboost_auto_forecast": {"rmse": 10.0, "mae": 5.0, "wape": 0.2},
+        "lightgbm_lag": {"rmse": 10.5, "mae": 5.5, "wape": 0.21},
+        "xgboost_lag": {"rmse": 11.0, "mae": 5.8, "wape": 0.22},
+        "functime_snaive": {"rmse": 8.0, "mae": 4.0, "wape": 0.18},
+    }
+
+    summary = forecasting_benchmark_module.quality_summary(metrics)
+
+    assert summary["best_external_baseline"] == "lightgbm_lag"
+    assert summary["rmse_ratio_vs_best_external_baseline"] == 10.0 / 10.5
+    assert summary["external_baseline_rmse_gate_limit"] == 1.05
+    assert summary["external_baseline_rmse_gate_passed"] is True
+
+
+def test_forecasting_quality_gate_requires_three_leakage_safe_origins(tmp_path) -> None:
+    artifact = tmp_path / "forecasting.json"
+    artifact.write_text(
+        json.dumps(
+            {
+                "rolling_origin": {
+                    "folds": 3,
+                    "splits": {"one": {}, "two": {}, "three": {}},
+                },
+                "quality": {
+                    "best_external_baseline": "lightgbm_lag",
+                    "rmse_ratio_vs_best_external_baseline": 1.02,
+                    "external_baseline_rmse_gate_passed": True,
+                },
+                "comparability_audit": {
+                    "same_forecast_rows": True,
+                    "selection_uses_outer_test_labels": False,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = check_forecasting_quality_gate(artifact)
+
+    assert report["passed"] is True
+    assert report["checks"]["minimum_origin_count"] is True
+
+
+def test_forecasting_quality_gate_rejects_ratio_over_five_percent(tmp_path) -> None:
+    artifact = tmp_path / "forecasting.json"
+    artifact.write_text(
+        json.dumps(
+            {
+                "rolling_origin": {"folds": 3, "splits": {"one": {}, "two": {}, "three": {}}},
+                "quality": {
+                    "best_external_baseline": "lightgbm_lag",
+                    "rmse_ratio_vs_best_external_baseline": 1.06,
+                    "external_baseline_rmse_gate_passed": False,
+                },
+                "comparability_audit": {
+                    "same_forecast_rows": True,
+                    "selection_uses_outer_test_labels": False,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = check_forecasting_quality_gate(artifact)
+
+    assert report["passed"] is False
+    assert report["checks"]["external_rmse_ratio_within_limit"] is False
+
+
 def test_non_forecast_dataset_identities_are_frozen() -> None:
     specs = {spec.name: spec for spec in load_all_tracks()}
     for track in ["tabular", "spatial", "graph"]:
@@ -257,14 +340,54 @@ def test_performance_thresholds_are_enforced() -> None:
     assert all(row["headroom_ratio"] > 1.0 for row in report["checked"])
 
 
+def test_benchmark_freshness_empty_input_is_explicit_noop() -> None:
+    report = check_benchmark_freshness([], root=ROOT)
+
+    assert report["passed"] is True
+    assert report["artifacts_requested"] == 0
+    assert report["checks"] == []
+
+
+def test_benchmark_freshness_accepts_artifact_from_current_commit(tmp_path) -> None:
+    artifact = tmp_path / "benchmark.json"
+    current = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    artifact.write_text(json.dumps({"git_commit": current}), encoding="utf-8")
+
+    report = check_benchmark_freshness(
+        [artifact],
+        root=ROOT,
+        current_commit=current,
+        allow_dirty=True,
+    )
+
+    assert report["passed"] is True
+    row = report["checks"][0]
+    assert row["commit_is_ancestor"] is True
+    assert row["changed_benchmark_files"] == []
+
+
+def test_benchmark_freshness_rejects_missing_provenance(tmp_path) -> None:
+    artifact = tmp_path / "benchmark.json"
+    artifact.write_text(json.dumps({"metrics": {"rmse": 1.0}}), encoding="utf-8")
+
+    report = check_benchmark_freshness([artifact], root=ROOT, current_commit="a" * 40)
+
+    assert report["passed"] is False
+    assert report["checks"][0]["reason"] == "artifact does not record a valid git_commit"
+
+
 def test_artifact_compatibility_gate_rejects_unsupported_versions() -> None:
     report = check_artifact_compatibility()
 
     assert report["passed"] is True
     assert {row["key"] for row in report["cases"]} >= {
         "models.cartoboost_regressor",
-        "models.auto_geo_model",
-        "models.geo_model_stack",
         "geo.nngp",
         "geo.residual_nngp",
         "prob.conformal_interval",
@@ -277,11 +400,13 @@ def test_artifact_compatibility_gate_rejects_unsupported_versions() -> None:
         assert "unsupported" in row["unsupported_version_error"].lower()
 
 
-def test_official_geo_evidence_audit_does_not_count_synthetic_gate_as_acceptance() -> None:
+def test_official_geo_evidence_audit_defers_removed_selector_acceptance() -> None:
     report = official_geo_evidence_report()
 
     assert report["audit_passed"] is True
-    assert report["acceptance_passed"] is False
+    assert report["acceptance_passed"] is True
+    assert report["selector_shipped"] is False
+    assert report["acceptance_scope"] == "deferred_until_native_autogeo_selector"
     assert report["real_autogeo_family_wins"] < report["required_real_autogeo_family_wins"]
     assert report["synthetic_autogeo_gate"]["counts_toward_final_acceptance"] is False
     assert "synthetic gates" in report["claim_policy"].lower()
@@ -296,25 +421,11 @@ def test_official_geo_evidence_audit_does_not_count_synthetic_gate_as_acceptance
     }
 
 
-def test_autogeo_benchmark_gate_emits_required_evidence() -> None:
-    pytest.importorskip("sklearn.dummy", exc_type=ImportError)
-    workload = autogeo_build_workloads(sample_size=60, seed=17)[0]
-    result = autogeo_run_workload(workload, seed=17, n_splits=5, tie_tolerance=0.02)
-
-    assert result["split_manifest"]["random_row_split_allowed"] is False
-    assert result["split_manifest"]["train_index_sha256"].startswith("sha256:")
-    assert result["timing"]["fit_wallclock_seconds"] > 0.0
-    assert result["timing"]["predict_wallclock_seconds"] >= 0.0
-    assert result["serialization"]["roundtrip_max_abs_diff"] <= 1e-10
-    assert result["acceptance"]["required_diagnostics_present"] is True
-    assert result["diagnostics"]["residual_morans_i"] is not None
-    assert result["diagnostics"]["mean_interval_width"] > 0.0
-    assert result["diagnostics"]["interval_coverage"] >= 0.0
-    assert {row["model"] for row in result["baselines"]} == {
-        "mean",
-        "ridge",
-        "hist_gradient_boosting",
-    }
+def test_autogeo_benchmark_gate_is_explicitly_deferred() -> None:
+    with pytest.raises(RuntimeError, match="not shipped"):
+        autogeo_gate_module.build_workloads(sample_size=60, seed=17)
+    with pytest.raises(RuntimeError, match="not shipped"):
+        autogeo_gate_module.run_workload(None)
 
 
 def test_benchmark_navigation_links_resolve() -> None:
@@ -372,38 +483,16 @@ def test_benchmark_index_lists_maintained_regression_artifacts() -> None:
         assert (ROOT / path).exists()
 
 
-def test_v02_modeling_benchmark_runner_is_documented() -> None:
+def test_v03_benchmark_quality_gate_is_documented() -> None:
     script = ROOT / "scripts" / "run_v02_modeling_benchmarks.py"
     methodology = (ROOT / "docs" / "benchmarks" / "methodology.md").read_text(encoding="utf-8")
     index = (ROOT / "docs" / "benchmarks" / "index.md").read_text(encoding="utf-8")
-    script_text = script.read_text(encoding="utf-8")
 
     assert script.exists()
-    assert "scripts/run_v02_modeling_benchmarks.py" in methodology
-    assert "scripts/run_v02_modeling_benchmarks.py" in index
-    for gate in [
-        "binary_spatial_classification",
-        "grouped_ranking",
-        "categorical_native_vs_one_hot",
-        "spatial_leakage_random_vs_buffered",
-        "regression_speed_guard",
-        "unsupported_export_fails_loudly",
-    ]:
-        assert gate in script_text
-    assert "--regression-baseline-json" in script_text
-    assert "external_baseline_comparison" in script_text
-    assert "current_code_repeatability" in methodology
-    assert "cartoboost_pr_auc" in script_text
-    assert "cartoboost_ece" in script_text
-    assert "spatial_cv_gap(random_rmse, buffered_rmse)" in script_text
-    assert "rmse_gap_buffered_minus_random" in script_text
-    assert "category_count" in script_text
-    assert "encoding_strategy" in script_text
-    assert "unknown_category_rate" in script_text
-    assert script_text.count("roundtrip_max_abs_diff") >= 3
-    assert "save/load probability drift" in methodology
-    assert "save/load score drift" in methodology
-    assert "unknown-category rate" in methodology
+    assert "scripts/run_v02_modeling_benchmarks.py" not in methodology
+    assert "scripts/run_v02_modeling_benchmarks.py" not in index
+    assert "v0.3 Acceptance Gates" in methodology
+    assert "scripts/check_forecasting_quality_gate.py" in methodology
 
 
 def test_v02_public_python_apis_have_docstring_examples() -> None:

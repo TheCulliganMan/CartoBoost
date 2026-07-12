@@ -14,7 +14,8 @@ import json
 from typing import Any
 
 import numpy as np
-from cartoboost import CartoBoostRegressor, NeuralEmbeddingRegressor
+from cartoboost import CartoBoostRegressor
+from cartoboost.preview import NeuralEmbeddingRegressor
 
 SPLITTERS = ["axis_histogram:256"]
 
@@ -97,7 +98,7 @@ def dense_model(n_estimators: int) -> CartoBoostRegressor:
         max_depth=4,
         min_samples_leaf=5,
         min_gain=0.0,
-        splitters=SPLITTERS,
+        split_policy="structured",
     )
 
 
@@ -108,7 +109,7 @@ def neural_model(n_estimators: int, embedding_dim: int, seed: int) -> NeuralEmbe
         "max_depth": 4,
         "min_samples_leaf": 5,
         "min_gain": 0.0,
-        "splitters": SPLITTERS,
+        "split_policy": "structured",
     }
     return NeuralEmbeddingRegressor(
         dim=embedding_dim,

@@ -56,10 +56,28 @@ those patterns as evidence about model mismatch, not as reasons to tune by eye.
 | `ThetaForecaster` | You want to set `theta` and smoothing `alpha` directly. |
 | `OptimizedThetaForecaster` | You want deterministic grid search over theta and alpha values. |
 
+`OptimizedThetaForecaster` reserves a non-empty suffix from every series,
+fits each candidate only on the earlier prefix, forecasts the suffix, and
+selects the lowest mean squared holdout error. It refits the winning
+`(theta, alpha)` pair on the complete history after selection.
+
+For a non-seasonal series, the horizon-`h` forecast combines the simple
+exponential-smoothing forecast with the theta drift term:
+
+```text
+forecast(T + h) = SES(T + h)
+  + (1 - 1 / theta) * b0
+    * (h - 1 + 1 / alpha - (1 - alpha)^T / alpha)
+```
+
+Here `b0` is the fitted linear slope and `T` is the prefix length. The
+sample-length and smoothing adjustment matters most on short histories; it is
+not equivalent to adding an unadjusted `h * slope` term.
+
 ## Example
 
 ```python
-from cartoboost.forecasting import OptimizedThetaForecaster, ThetaForecaster
+from cartoboost.preview.forecasting import OptimizedThetaForecaster, ThetaForecaster
 
 hourly_airport_pickups = [
     88, 84, 79, 72, 91, 118, 146, 162, 155, 141, 130, 126,
@@ -87,7 +105,7 @@ Use a `ForecastFrame` for panel data. Each `series_id` is fit as its own local
 series.
 
 ```python
-from cartoboost.forecasting import ForecastFrame, OptimizedThetaForecaster
+from cartoboost.preview.forecasting import ForecastFrame, OptimizedThetaForecaster
 
 frame = ForecastFrame.from_pandas(
     hourly_zone_demand,
@@ -111,7 +129,7 @@ Hourly demand often has a daily cycle. Set both `seasonality` and
 `season_length` when the training window contains enough full cycles.
 
 ```python
-from cartoboost.forecasting import ThetaForecaster
+from cartoboost.preview.forecasting import ThetaForecaster
 
 model = ThetaForecaster(
     theta=2.0,
@@ -128,6 +146,10 @@ validation layer. Additive seasonality is usually the first choice for pickup
 counts because rush-hour lift is often a roughly fixed number of trips.
 Multiplicative seasonality requires strictly positive values and fits series
 where rush-hour effects scale with the level.
+
+Seasonal theta requires at least two complete cycles per series. A configured
+season length is never shortened or silently removed when the history is too
+short; fitting fails with the required history length instead.
 
 ## Parameters
 
@@ -189,7 +211,7 @@ The core plotting pattern is:
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-from cartoboost.forecasting import ForecastFrame, OptimizedThetaForecaster, ThetaForecaster
+from cartoboost.preview.forecasting import ForecastFrame, OptimizedThetaForecaster, ThetaForecaster
 
 frame = ForecastFrame.from_pandas(
     train_pickups,
@@ -227,9 +249,10 @@ plt.savefig("target/examples/theta_forecast_comparison.png", dpi=150)
 Use the plot to explain model behavior, not to choose parameters by eye. The
 validation metric should decide between candidate grids.
 
-## CLI Example
+## Command-line Example
 
-The existing single-series theta example exercises the forecasting CLI:
+The existing single-series Python example exercises the forecasting command-line
+workflow:
 
 ```bash
 uv run python examples/forecasting/single_series_theta.py

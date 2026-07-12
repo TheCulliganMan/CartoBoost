@@ -26,7 +26,7 @@ held-out taxi trips, route groups, and time blocks.
 
 ```python
 model = CartoBoostRegressor(
-    splitters=["axis"],
+    split_policy="axis_only",
     monotonic_constraints=[1, 0, -1],
 )
 ```

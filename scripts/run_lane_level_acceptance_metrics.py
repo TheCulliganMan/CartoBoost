@@ -74,18 +74,66 @@ def fit_model(
     fuzzy: bool = False,
     fuzzy_bandwidth: float = 0.0,
 ) -> CartoBoostRegressor:
+    requested = {str(value).split(":", 1)[0].lower() for value in splitters}
+    dense: list[dict[str, object]] = [
+        {"name": f"feature_{index}", "kind": "numeric"} for index in range(x.shape[1])
+    ]
+    if "gaussian_2d" in requested:
+        if x.shape[1] == 2:
+            spatial_pairs = [(0, 1)]
+        else:
+            spatial_pairs = [(0, 1), (2, 3), (6, 7)]
+        for left, right in spatial_pairs:
+            dense[left] = {
+                "name": f"feature_{left}",
+                "kind": "spatial",
+                "other": f"feature_{right}",
+            }
+            dense[right] = {
+                "name": f"feature_{right}",
+                "kind": "spatial",
+                "other": f"feature_{left}",
+            }
+    if "periodic_time" in requested:
+        periodic_index = 5 if x.shape[1] >= 6 else 0
+        dense[periodic_index] = {
+            "name": f"feature_{periodic_index}",
+            "kind": "periodic",
+            "period": 24,
+        }
+    feature_schema: dict[str, list[dict[str, object]]] | None = None
+    sparse_sets: dict[str, list[list[int]]] | None = None
+    if requested & {"gaussian_2d", "periodic_time", "sparse_set"}:
+        feature_schema = {"dense": dense, "sparse_sets": []}
+    if "sparse_set" in requested:
+        sparse_index = 4 if x.shape[1] >= 5 else 0
+        sparse_sets = {"lane_id": [[int(value)] for value in x[:, sparse_index]]}
+        if feature_schema is None:
+            feature_schema = {"dense": dense, "sparse_sets": []}
+        feature_schema["sparse_sets"] = [{"name": "lane_id", "kind": "sparse_set"}]
+    policy = "axis_only" if requested <= {"axis"} else "structured"
     model = CartoBoostRegressor(
         n_estimators=n_estimators,
         learning_rate=1.0,
         max_depth=max_depth,
         min_samples_leaf=min_samples_leaf,
         min_gain=0.0,
-        splitters=splitters,
+        split_policy=policy,
         fuzzy=fuzzy,
         fuzzy_bandwidth=fuzzy_bandwidth,
     )
-    model.fit(x, y)
+    model.fit(x, y, feature_schema=feature_schema, sparse_sets=sparse_sets)
+    model._acceptance_sparse_index = 4 if x.shape[1] >= 5 else 0
+    model._acceptance_uses_sparse = sparse_sets is not None
     return model
+
+
+def predict_model(model: CartoBoostRegressor, x: np.ndarray) -> np.ndarray:
+    if getattr(model, "_acceptance_uses_sparse", False):
+        index = int(getattr(model, "_acceptance_sparse_index", 0))
+        sparse_sets = {"lane_id": [[int(value)] for value in x[:, index]]}
+        return model.predict(x, sparse_sets=sparse_sets)
+    return model.predict(x)
 
 
 def lane_rows(*, repeats_per_hour: int = 1) -> np.ndarray:
@@ -144,19 +192,19 @@ def sparse_lane_metrics() -> dict[str, Any]:
     y = lane_id_target(x)
     axis = fit_model(x, y, splitters=["axis"], min_samples_leaf=10)
     sparse = fit_model(x, y, splitters=["sparse_set"], min_samples_leaf=10)
-    axis_pred = axis.predict(x)
-    sparse_pred = sparse.predict(x)
+    axis_pred = predict_model(axis, x)
+    sparse_pred = predict_model(sparse, x)
     hot_probe = x[x[:, 4] == 7.0][0:1]
     cold_probe = x[x[:, 4] == 6.0][0:1]
-    margin = float(sparse.predict(hot_probe)[0] - sparse.predict(cold_probe)[0])
+    margin = float(predict_model(sparse, hot_probe)[0] - predict_model(sparse, cold_probe)[0])
     return {
         "models": {
             "axis_lane_id": {"train_rmse": rmse(y, axis_pred)},
             "sparse_lane_id": {"train_rmse": rmse(y, sparse_pred)},
         },
         "inspection_metrics": {
-            "hot_lane_prediction": float(sparse.predict(hot_probe)[0]),
-            "cold_neighbor_lane_prediction": float(sparse.predict(cold_probe)[0]),
+            "hot_lane_prediction": float(predict_model(sparse, hot_probe)[0]),
+            "cold_neighbor_lane_prediction": float(predict_model(sparse, cold_probe)[0]),
             "hot_lane_margin": margin,
             "hot_lane_id": 7.0,
             "lane_count": 16.0,
@@ -186,19 +234,22 @@ def route_cartometry_metrics() -> dict[str, Any]:
     y = route_midpoint_target(x)
     axis = fit_model(x[:, [6, 7]], y, splitters=["axis"], min_samples_leaf=12)
     gaussian = fit_model(x[:, [6, 7]], y, splitters=["gaussian_2d"], min_samples_leaf=12)
-    axis_pred = axis.predict(x[:, [6, 7]])
-    gaussian_pred = gaussian.predict(x[:, [6, 7]])
+    route_features = x[:, [6, 7]]
+    axis_pred = predict_model(axis, route_features)
+    gaussian_pred = predict_model(gaussian, route_features)
     center_probe = np.array([[0.0, 0.0]])
     outer_probe = np.array([[1.5, 1.5]])
-    margin = float(gaussian.predict(center_probe)[0] - gaussian.predict(outer_probe)[0])
+    margin = float(
+        predict_model(gaussian, center_probe)[0] - predict_model(gaussian, outer_probe)[0]
+    )
     return {
         "models": {
             "axis_midpoint": {"train_rmse": rmse(y, axis_pred)},
             "gaussian_midpoint": {"train_rmse": rmse(y, gaussian_pred)},
         },
         "inspection_metrics": {
-            "center_lane_prediction": float(gaussian.predict(center_probe)[0]),
-            "outer_lane_prediction": float(gaussian.predict(outer_probe)[0]),
+            "center_lane_prediction": float(predict_model(gaussian, center_probe)[0]),
+            "outer_lane_prediction": float(predict_model(gaussian, outer_probe)[0]),
             "center_outer_margin": margin,
             "axis_to_gaussian_rmse_ratio": rmse(y, gaussian_pred) / rmse(y, axis_pred),
         },
@@ -228,10 +279,13 @@ def wraparound_hour_metrics() -> dict[str, Any]:
     hours = x[:, [5]]
     axis = fit_model(hours, y, splitters=["axis"], min_samples_leaf=16)
     periodic = fit_model(hours, y, splitters=["periodic_time"], min_samples_leaf=16)
-    axis_pred = axis.predict(hours)
-    periodic_pred = periodic.predict(hours)
-    edge_gap = abs(float(periodic.predict([[23.0]])[0] - periodic.predict([[1.0]])[0]))
-    axis_edge_gap = abs(float(axis.predict([[23.0]])[0] - axis.predict([[1.0]])[0]))
+    axis_pred = predict_model(axis, hours)
+    periodic_pred = predict_model(periodic, hours)
+    edge_probes = np.array([[23.0], [1.0]])
+    periodic_edge_predictions = predict_model(periodic, edge_probes)
+    axis_edge_predictions = predict_model(axis, edge_probes)
+    edge_gap = abs(float(periodic_edge_predictions[0] - periodic_edge_predictions[1]))
+    axis_edge_gap = abs(float(axis_edge_predictions[0] - axis_edge_predictions[1]))
     return {
         "models": {
             "axis_hour": {"train_rmse": rmse(y, axis_pred)},
@@ -241,7 +295,8 @@ def wraparound_hour_metrics() -> dict[str, Any]:
             "periodic_23_vs_1_gap": edge_gap,
             "axis_23_vs_1_gap": axis_edge_gap,
             "periodic_peak_to_midday_margin": float(
-                np.mean(periodic.predict([[23.0], [1.0]])) - periodic.predict([[12.0]])[0]
+                np.mean(predict_model(periodic, np.array([[23.0], [1.0]])))
+                - predict_model(periodic, np.array([[12.0]]))[0]
             ),
         },
         "acceptance_gates": [
@@ -284,12 +339,12 @@ def regional_lane_boosting_metrics() -> dict[str, Any]:
         max_depth=2,
         min_samples_leaf=12,
     )
-    axis_holdout = axis.predict(holdout)
-    full_holdout = full.predict(holdout)
+    axis_holdout = predict_model(axis, holdout)
+    full_holdout = predict_model(full, holdout)
     holdout_ratio = rmse(y_holdout, full_holdout) / rmse(y_holdout, axis_holdout)
     hot_midnight = holdout[(holdout[:, 4] == 7.0) & (holdout[:, 5] == 23.0)][0:1]
     cold_midday = holdout[(holdout[:, 4] == 6.0) & (holdout[:, 5] == 12.0)][0:1]
-    contrast = float(full.predict(hot_midnight)[0] - full.predict(cold_midday)[0])
+    contrast = float(predict_model(full, hot_midnight)[0] - predict_model(full, cold_midday)[0])
     return {
         "models": {
             "axis_only": {"holdout_rmse": rmse(y_holdout, axis_holdout)},
@@ -297,8 +352,8 @@ def regional_lane_boosting_metrics() -> dict[str, Any]:
         },
         "inspection_metrics": {
             "holdout_rmse_ratio": holdout_ratio,
-            "hot_lane_midnight_prediction": float(full.predict(hot_midnight)[0]),
-            "cold_lane_midday_prediction": float(full.predict(cold_midday)[0]),
+            "hot_lane_midnight_prediction": float(predict_model(full, hot_midnight)[0]),
+            "cold_lane_midday_prediction": float(predict_model(full, cold_midday)[0]),
             "hot_cold_operating_contrast": contrast,
             "uses_hidden_simulator_metadata_in_training": 0.0,
         },
@@ -402,7 +457,7 @@ def save_lane_heatmap(path: Path) -> None:
         min_samples_leaf=6,
     )
     noon = x[x[:, 5] == 12.0]
-    predictions = model.predict(noon).reshape(4, 4)
+    predictions = predict_model(model, noon).reshape(4, 4)
 
     fig, ax = plt.subplots(figsize=(5.5, 4.5), dpi=160)
     mesh = ax.imshow(predictions, cmap="viridis", origin="lower")
@@ -437,8 +492,10 @@ def save_hour_profile(path: Path) -> None:
 
     fig, ax = plt.subplots(figsize=(6, 4), dpi=160)
     ax.plot(probe[:, 0], truth, label="truth", marker="o", linewidth=1.5)
-    ax.plot(probe[:, 0], axis.predict(probe), label="axis", marker="o", linewidth=1.5)
-    ax.plot(probe[:, 0], periodic.predict(probe), label="periodic", marker="o", linewidth=1.5)
+    ax.plot(probe[:, 0], predict_model(axis, probe), label="axis", marker="o", linewidth=1.5)
+    ax.plot(
+        probe[:, 0], predict_model(periodic, probe), label="periodic", marker="o", linewidth=1.5
+    )
     ax.set_title("Lane hour wraparound")
     ax.set_xlabel("hour")
     ax.set_ylabel("prediction")
@@ -455,7 +512,7 @@ def save_route_cartometry(path: Path) -> None:
     probe = np.column_stack([xx.ravel(), yy.ravel()])
     target = np.where(np.hypot(probe[:, 0], probe[:, 1]) <= 0.25, 260.0, 90.0)
     model = fit_model(probe, target, splitters=["gaussian_2d"], min_samples_leaf=16)
-    pred = model.predict(probe).reshape(xx.shape)
+    pred = predict_model(model, probe).reshape(xx.shape)
 
     fig, ax = plt.subplots(figsize=(5, 5), dpi=160)
     mesh = ax.contourf(xx, yy, pred, levels=18, cmap="coolwarm")

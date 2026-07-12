@@ -5,8 +5,9 @@ maintained narrative is
 [NYC Taxi Benchmarks](../../benchmarks/nyc-taxi.md).
 
 The current maintained run uses real 2024 NYC TLC yellow taxi data, a
-100,000-row sample across all 12 months, transformed trip duration, transformed
-fare amount, and transformed pickup-zone demand. The feature sets include
+50,000-row sample across January–April, transformed trip duration, and
+transformed fare amount with a fixed 8-tree CartoBoost qualification profile.
+The feature sets include
 pickup/dropoff zone context, trip descriptors, hour/day features, and graph
 features for the zone-demand task.
 

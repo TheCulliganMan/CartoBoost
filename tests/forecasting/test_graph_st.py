@@ -4,7 +4,7 @@ import json
 from types import SimpleNamespace
 
 import numpy as np
-from cartoboost.forecasting import (
+from cartoboost.preview.forecasting import (
     DCRNNForecaster,
     GraphTemporalFrame,
     GraphWaveNetForecaster,

@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
-from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -91,8 +89,6 @@ class RollingOriginBacktester:
         target_col: str = "target",
         timestamp_col: str = "timestamp",
         series_id_col: str | None = "series_id",
-        feature_cols: list[str] | None = None,
-        model_factory: Callable[[], Any] | None = None,
     ) -> None:
         if splitter is None:
             if horizon is None:
@@ -110,81 +106,38 @@ class RollingOriginBacktester:
         self.target_col = target_col
         self.timestamp_col = timestamp_col
         self.series_id_col = series_id_col
-        self.feature_cols = feature_cols
-        self.model_factory = model_factory
 
     def evaluate(self, model: Any, frame: ForecastFrame) -> BacktestResult:
         if not isinstance(frame, ForecastFrame):
             raise TypeError("evaluate requires a ForecastFrame")
-        native_result = self._evaluate_native(model, frame)
-        if native_result is not None:
-            return native_result
-        data = frame.to_pandas()
-        splitter = RollingOriginSplitter(
-            horizon=self.splitter.horizon,
-            step=self.splitter.step,
-            min_train_size=self.splitter.min_train_size,
-            max_train_size=self.splitter.max_train_size,
-            n_splits=self.splitter.n_splits,
-            timestamp_col=frame.timestamp_col,
-            series_id_col=frame.series_id_col,
-            window=self.splitter.window,
-        )
-        folds: list[BacktestFoldResult] = []
-        for fold in splitter.split(data):
-            train = _take(data, fold.train_indices)
-            validation = _take(data, fold.validation_indices)
-            train_frame = ForecastFrame.from_pandas(
-                train,
-                timestamp_col=frame.timestamp_col,
-                target_col=frame.target_col,
-                series_id_col=frame.series_id_col,
-                freq=frame.freq,
-                static_covariates=frame.static_covariates,
-                known_future_covariates=frame.known_future_covariates,
-                historical_covariates=frame.historical_covariates,
-                allow_irregular=frame.allow_irregular,
-            )
-            fitted = self._new_model(model)
-            fitted.fit(train_frame)
-            forecast = fitted.predict(fold.horizon)
-            forecast_data = forecast.to_pandas().rename(columns={"mean": "prediction"})
-            actual = validation.copy()
-            if frame.series_id_col is None:
-                actual["series_id"] = "__single__"
-            else:
-                actual["series_id"] = actual[frame.series_id_col]
-            actual = actual.rename(
-                columns={frame.timestamp_col: "timestamp", frame.target_col: "actual"}
-            )
-            actual["horizon"] = _horizon_numbers(validation, frame.timestamp_col)
-            merged = _align_forecast_rows(
-                actual[["series_id", "timestamp", "horizon", "actual"]],
-                forecast_data[["series_id", "timestamp", "horizon", "prediction"]],
-            )
-            metrics = self.metric_set.evaluate_frame(
-                merged,
-                y_train=train[frame.target_col],
-            )
-            rows = []
-            for row in merged.to_dict(orient="records"):
-                rows.append({"fold_id": fold.fold_id, **row})
-            folds.append(BacktestFoldResult(fold=fold, metrics=metrics, predictions=rows))
-        return BacktestResult(folds=folds)
+        return self._evaluate_native(model, frame)
 
-    def _evaluate_native(self, model: Any, frame: ForecastFrame) -> BacktestResult | None:
+    def _evaluate_native(self, model: Any, frame: ForecastFrame) -> BacktestResult:
         native_frame = getattr(frame, "_native_frame", None)
         new_native_model = getattr(model, "_new_native_model", None)
-        if native_frame is None or new_native_model is None:
-            return None
+        if native_frame is None:
+            raise RuntimeError(
+                "Rust ForecastFrame binding is unavailable; rolling-origin backtesting "
+                "does not run a Python fallback"
+            )
+        if not callable(new_native_model):
+            raise RuntimeError(
+                f"{model.__class__.__name__} has no Rust backtesting model binding; "
+                "rolling-origin backtesting does not run a Python fallback"
+            )
         try:
             from cartoboost import _native
-        except ImportError:
-            return None
+        except ImportError as exc:
+            raise RuntimeError(
+                "cartoboost._native is required for rolling-origin backtesting; "
+                "install a native CartoBoost wheel"
+            ) from exc
         native_splitter_class = getattr(_native, "RollingOriginSplitter", None)
         native_backtester_class = getattr(_native, "RollingOriginBacktester", None)
         if native_splitter_class is None or native_backtester_class is None:
-            return None
+            raise RuntimeError(
+                "cartoboost._native does not expose the Rust rolling-origin backtester"
+            )
         native_splitter = native_splitter_class(
             self.splitter.horizon,
             step=self.splitter.step,
@@ -196,59 +149,26 @@ class RollingOriginBacktester:
         native_backtester = native_backtester_class(native_splitter)
         native_model = new_native_model()
         runner_name = _native_backtest_runner_name(model)
+        if not runner_name:
+            raise RuntimeError(
+                f"Rust rolling-origin backtesting does not support "
+                f"{model.__class__.__name__}; no Python fallback is available"
+            )
         runner = getattr(native_backtester, runner_name, None)
         if runner is None:
-            return None
+            raise RuntimeError(
+                f"cartoboost._native.RollingOriginBacktester is missing {runner_name} "
+                f"for {model.__class__.__name__}; no Python fallback is available"
+            )
         return _backtest_result_from_native(runner(native_model, native_frame))
 
     def run(self, model: Any, data: Any) -> BacktestResult:
-        folds: list[BacktestFoldResult] = []
-        for fold in self.splitter.split(data):
-            train = _take(data, fold.train_indices)
-            validation = _take(data, fold.validation_indices)
-            y_train = np.asarray(_column(train, self.target_col), dtype=float)
-            y_validation = np.asarray(_column(validation, self.target_col), dtype=float)
-            fitted = self._new_model(model)
-            fitted.fit(_features(train, self.target_col, self.feature_cols), y_train)
-            predictions = np.asarray(
-                fitted.predict(_features(validation, self.target_col, self.feature_cols)),
-                dtype=float,
-            )
-            if predictions.shape != y_validation.shape:
-                raise ValueError("model predictions must match the exact validation horizon shape")
-
-            horizon = _horizon_numbers(validation, self.timestamp_col)
-            rows = _prediction_rows(
-                fold,
-                validation,
-                y_validation,
-                predictions,
-                horizon,
-                self.timestamp_col,
-                self.series_id_col,
-            )
-            metrics = _score_prediction_rows(self.metric_set, rows, y_train)
-            folds.append(BacktestFoldResult(fold=fold, metrics=metrics, predictions=rows))
-        return BacktestResult(folds=folds)
-
-    def _new_model(self, model: Any) -> Any:
-        if self.model_factory is not None:
-            return self.model_factory()
-        try:
-            from sklearn.base import clone
-
-            return clone(model)
-        except Exception:
-            return deepcopy(model)
-
-
-def _features(data: Any, target_col: str, feature_cols: list[str] | None) -> Any:
-    if feature_cols is not None:
-        return data[feature_cols]
-    if hasattr(data, "drop"):
-        return data.drop(columns=[target_col])
-    arr = np.asarray(data)
-    return np.delete(arr, -1, axis=1)
+        del model, data
+        raise RuntimeError(
+            "RollingOriginBacktester.run is not available for Python-side models; "
+            "construct a ForecastFrame and call evaluate() with a Rust-backed "
+            "forecaster"
+        )
 
 
 def _native_backtest_runner_name(model: Any) -> str:
@@ -261,150 +181,58 @@ def _native_backtest_runner_name(model: Any) -> str:
         "ETSForecaster": "run_ets",
         "ArimaForecaster": "run_arima",
         "AutoARIMAForecaster": "run_auto_arima",
+        "AutoForecaster": "run_auto_forecast",
         "CartoBoostLagForecaster": "run_cartoboost_lag",
     }
     return mapping.get(name, "")
 
 
 def _backtest_result_from_native(native_result: Any) -> BacktestResult:
-    payload = json.loads(native_result.to_json())
     folds: list[BacktestFoldResult] = []
-    for fold_result in payload.get("folds", []):
-        fold_payload = fold_result["fold"]
+    for fold_result in native_result.folds:
+        native_fold = fold_result.fold
         fold = ForecastFold(
-            fold_id=fold_payload["fold_id"],
-            train_indices=np.asarray(fold_payload["train_indices"], dtype=int),
-            validation_indices=np.asarray(fold_payload["validation_indices"], dtype=int),
-            train_start=fold_payload["train_start"],
-            train_end=fold_payload["train_end"],
-            validation_start=fold_payload["validation_start"],
-            validation_end=fold_payload["validation_end"],
-            horizon=int(fold_payload["horizon"]),
-            step=int(fold_payload["step"]),
-            metadata=dict(fold_payload.get("metadata", {})),
+            fold_id=native_fold.fold_id,
+            train_indices=np.asarray(native_fold.train_indices, dtype=int),
+            validation_indices=np.asarray(native_fold.validation_indices, dtype=int),
+            train_start=native_fold.train_start,
+            train_end=native_fold.train_end,
+            validation_start=native_fold.validation_start,
+            validation_end=native_fold.validation_end,
+            horizon=int(native_fold.horizon),
+            step=int(native_fold.step),
+            metadata=json.loads(native_fold.metadata_json()),
         )
         predictions = [
             {
                 "fold_id": fold.fold_id,
-                "series_id": row["series_id"],
-                "timestamp": row["timestamp"],
-                "horizon": row["horizon"],
-                "model": row["model"],
-                "prediction": row["mean"],
+                "series_id": row[0],
+                "timestamp": row[1],
+                "horizon": row[2],
+                "model": row[3],
+                "prediction": row[4],
             }
-            for row in fold_result.get("predictions", [])
+            for row in fold_result.predictions
         ]
+        native_metrics = fold_result.metrics
+        metrics = {
+            "mae": native_metrics.mae,
+            "rmse": native_metrics.rmse,
+            "normalized_rmse": native_metrics.normalized_rmse,
+            "wape": native_metrics.wape,
+            "smape": native_metrics.smape,
+            "bias": native_metrics.bias,
+        }
+        if native_metrics.mase is not None:
+            metrics["mase"] = native_metrics.mase
         folds.append(
             BacktestFoldResult(
                 fold=fold,
-                metrics=dict(fold_result["metrics"]),
+                metrics=metrics,
                 predictions=predictions,
             )
         )
     return BacktestResult(folds=folds)
-
-
-def _take(data: Any, indices: np.ndarray) -> Any:
-    if hasattr(data, "iloc"):
-        return data.iloc[indices]
-    return np.asarray(data)[indices]
-
-
-def _column(data: Any, name: str) -> Any:
-    try:
-        return data[name]
-    except Exception as exc:
-        raise ValueError(f"data must contain column {name!r}") from exc
-
-
-def _optional_column(data: Any, name: str | None) -> Any | None:
-    if name is None:
-        return None
-    try:
-        return data[name]
-    except Exception:
-        return None
-
-
-def _align_forecast_rows(actual: Any, prediction: Any) -> Any:
-    try:
-        return actual.merge(
-            prediction,
-            on=["series_id", "timestamp", "horizon"],
-            how="inner",
-            validate="one_to_one",
-        ).pipe(
-            lambda merged: _require_complete_alignment(
-                merged,
-                actual_len=len(actual),
-                prediction_len=len(prediction),
-            )
-        )
-    except ValueError as exc:
-        raise ValueError("forecast rows did not align by series_id/timestamp/horizon") from exc
-
-
-def _require_complete_alignment(merged: Any, *, actual_len: int, prediction_len: int) -> Any:
-    if len(merged) != actual_len or len(merged) != prediction_len:
-        raise ValueError("incomplete forecast alignment")
-    return merged
-
-
-def _score_prediction_rows(
-    metric_set: ForecastMetricSet,
-    rows: list[dict[str, Any]],
-    y_train: Any,
-) -> dict[str, Any]:
-    _validate_prediction_row_keys(rows)
-    try:
-        import pandas as pd
-    except ImportError:
-        return metric_set.evaluate(
-            [row["actual"] for row in rows],
-            [row["prediction"] for row in rows],
-            horizon=[row["horizon"] for row in rows],
-            series_id=[row["series_id"] for row in rows],
-            y_train=y_train,
-        )
-    return metric_set.evaluate_frame(pd.DataFrame(rows), y_train=y_train)
-
-
-def _validate_prediction_row_keys(rows: list[dict[str, Any]]) -> None:
-    keys = [(row["series_id"], row["timestamp"], row["horizon"]) for row in rows]
-    if len(keys) != len(set(keys)):
-        raise ValueError("metric rows must be unique by series_id/timestamp/horizon")
-
-
-def _horizon_numbers(validation: Any, timestamp_col: str) -> np.ndarray:
-    timestamps = np.asarray(_column(validation, timestamp_col))
-    unique = np.unique(timestamps)
-    mapping = {value: i + 1 for i, value in enumerate(unique)}
-    return np.asarray([mapping[value] for value in timestamps], dtype=int)
-
-
-def _prediction_rows(
-    fold: ForecastFold,
-    validation: Any,
-    actual: np.ndarray,
-    prediction: np.ndarray,
-    horizon: np.ndarray,
-    timestamp_col: str,
-    series_id_col: str | None,
-) -> list[dict[str, Any]]:
-    timestamps = np.asarray(_column(validation, timestamp_col))
-    series = _optional_column(validation, series_id_col)
-    series_values = np.asarray(series) if series is not None else np.array([None] * actual.size)
-    return [
-        {
-            "fold_id": fold.fold_id,
-            "series_id": _jsonable(series_values[i]),
-            "timestamp": _jsonable(timestamps[i]),
-            "horizon": int(horizon[i]),
-            "actual": float(actual[i]),
-            "prediction": float(prediction[i]),
-        }
-        for i in range(actual.size)
-    ]
 
 
 def _jsonable(value: Any) -> Any:

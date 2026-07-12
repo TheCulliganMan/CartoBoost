@@ -25,14 +25,14 @@ holdout splits.
 ### Quantile Regressor
 
 ```python
-from cartoboost.forecasting import QuantileCartoBoostRegressor
+from cartoboost.preview.forecasting import QuantileCartoBoostRegressor
 
 model = QuantileCartoBoostRegressor(
     quantiles=(0.1, 0.5, 0.9),
     n_estimators=160,
     learning_rate=0.05,
     max_depth=5,
-    splitters=["axis", "periodic:24"],
+    split_policy="structured",
 )
 model.fit(x_train, y_train)
 
@@ -48,7 +48,7 @@ optional `median`, quantile columns, and interval bounds.
 
 ```python
 from cartoboost import CartoBoostRegressor
-from cartoboost.forecasting import ConformalIntervalRegressor
+from cartoboost.preview.forecasting import ConformalIntervalRegressor
 
 base = CartoBoostRegressor(n_estimators=200, learning_rate=0.04)
 model = ConformalIntervalRegressor(base, alpha=0.1)
@@ -72,7 +72,7 @@ width. Holdout rows are not used for fitting or calibration.
 ### Spatial Group Conformal
 
 ```python
-from cartoboost.forecasting import SpatialConformalRegressor
+from cartoboost.preview.forecasting import SpatialConformalRegressor
 
 model = SpatialConformalRegressor(base_estimator, alpha=0.1)
 model.fit(
@@ -101,7 +101,7 @@ the method in metadata.
 ### Rolling-Origin Forecast Calibration
 
 ```python
-from cartoboost.forecasting import ForecastConformalCalibrator
+from cartoboost.preview.forecasting import ForecastConformalCalibrator
 
 calibrator = ForecastConformalCalibrator(alpha=0.2).fit(
     actual=backtest_actual,
@@ -140,7 +140,7 @@ the prediction cutoff.
 Use interval metrics beside point metrics:
 
 ```python
-from cartoboost.forecasting import (
+from cartoboost.preview.forecasting import (
     interval_coverage,
     mean_interval_width,
     pinball_loss,
@@ -168,6 +168,13 @@ Keep splits explicit:
 
 Do not calibrate on the holdout rows. For rolling-origin forecasts, use only
 residuals from earlier cutoffs when predicting a later cutoff.
+
+For the native split-conformal calibrator, the calibration arrays must contain
+exactly the rows declared by the calibration bounds. A finite two-sided
+residual interval at miscoverage `alpha` also requires
+`alpha >= 1 / (n_calibration + 1)`. If that finite-sample rank does not exist,
+calibration fails instead of substituting the largest observed residual and
+overstating the requested coverage.
 
 ## Limitations
 

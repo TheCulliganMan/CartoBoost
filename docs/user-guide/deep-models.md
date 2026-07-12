@@ -1,27 +1,17 @@
 # CartoBoost Deep Model Guides
 
-Use `cartoboost.deep` when the modeling unit is more structured than one
+> CartoBoost 0.3 does not ship the former NumPy representation or selective-SSM
+> modules. They have no import or compatibility namespace; any future return
+> requires a native binding and real-data evidence.
+
+Use `cartoboost.preview.deep` when the modeling unit is more structured than one
 ordinary row: ordered pairs, candidate response curves, event probabilities,
 baseline residual correction, graph sequences, or constrained candidate
 selection.
 
-Use `cartoboost.representation` when multiple deep surfaces need the same ID,
-source-target, node-time, or context-dependent embedding contract. The stable
-first cut includes `EntityEmbedding`, `PairEmbedding`, and
-`SpatioTemporalAdaptiveEmbedding`. `RegimeRouter` adds deterministic
-entity/context routing for mixture-of-experts surfaces and records router
-entropy plus expert usage. `HistoricalAnalogRetriever` adds exact normalized
-KNN memory for similar historical contexts, with explainable analog IDs,
-distances, persisted memory, and optional cutoff filtering to avoid future
-leakage. `SelfSupervisedPretrainer` creates reusable entity embeddings from
-cutoff-safe feature summaries and records masked entity, masked pair,
-graph-denoising, temporal-order, spatial-neighbor, and future-patch proxy
-tasks. It emits reusable entity, pair, node, and temporal encoder outputs.
-`MultiViewSpatialAttention` fuses several spatial views, records learned view
-weights, emits ablation reports, and can transform when one fitted view is
-missing. `RegimeMoEForecaster` combines six named regime experts with router
-entropy, expert usage, expert predictions, combined predictions, and
-single-expert comparison metrics. `ConditionalFlowDistributionHead` fits a
+`RegimeMoEForecaster` combines six named regime experts with router entropy,
+expert usage, expert predictions, combined predictions, and single-expert
+comparison metrics. `ConditionalFlowDistributionHead` fits a
 native residual distribution head over model hidden state plus optional horizon,
 entity/pair, and graph context features; it emits deterministic joint scenario
 samples, log likelihoods, marginal quantiles, tail-risk summaries, and
@@ -34,7 +24,7 @@ save/load parity status, and backend metadata.
 diffuses deterministic residual shocks over a graph around an existing point
 forecast panel. It reports scenario mean, variance, spatial correlation, and
 comparison to the point forecast, and its metadata explicitly excludes it from
-default AutoGeoModel selection and primary benchmark evidence.
+stable model selection and primary benchmark evidence.
 `GraphNeuralOperator` is an advanced experimental field-to-field layer for
 spatial panels. It consumes field values, coordinates, optional graph edges,
 and optional exogenous fields, then returns future, residual, and uncertainty
@@ -45,16 +35,11 @@ emits utility, softmax choice probability, optional nested probability,
 counterfactual best candidates, and calibration metrics when chosen labels are
 available. `UtilityNet`, `NestedChoiceHead`, and
 `CounterfactualCandidateScorer` are aliases for that native-backed surface.
-`RetrievalAugmentedForecaster` and `RetrievalAugmentedPairModel` use
-`HistoricalAnalogRetriever` memory to retrieve similar past contexts, attend to
-their targets with deterministic inverse-distance weights, and return
-explainable analog IDs, distances, and retrieved targets. Cutoff filtering keeps
-future rows out of the memory query.
 Foundation adapters such as `ChronosAdapter`, `TimesFMAdapter`,
 `MoiraiAdapter`, `TimeGPTAdapter`, and `TabPFNAdapter` are optional wrappers for
 external models. They can cache outputs with external version and model-hash
 metadata, but they are never core dependencies and are only eligible for
-AutoGeoModel-style orchestration when explicitly enabled.
+automatic model-selection orchestration; choose a registered model explicitly.
 
 These guides are for Python developers and data scientists choosing a model
 surface. Start with the page that matches the unit being modeled, then validate
@@ -65,13 +50,10 @@ against a simpler baseline under the same split.
 | Model surface | Architecture | Evidence label |
 | --- | --- | --- |
 | `DirectionalPairForecaster(architecture="pair_embedding_mlp")` | `pair_embedding_mlp` | synthetic claim evidence |
-| `TemporalSSMForecaster` | `selective_ssm_lite` | synthetic claim evidence |
 | `InvertedTemporalTransformer` | `inverted_transformer` | synthetic claim evidence |
 | `PropagationDelayGraphForecaster` | `delay_aware_graph_transformer` | synthetic claim evidence |
-| `RetrievalAugmentedForecaster` | `retrieval_augmented_forecaster` | synthetic claim evidence |
 | `ConditionalFlowDistributionHead` | `conditional_residual_sampler` | synthetic claim evidence |
 | `ChoiceSetTransformer` | `choice_set_utility_softmax` | synthetic claim evidence |
-| `EntityEmbedding`, `PairEmbedding`, `SpatioTemporalAdaptiveEmbedding` | deterministic embedding contracts | API contract only |
 | `ResponseCurveModel`, `EventOutcomeModel`, `ServiceTimeResidualModel`, `ConstrainedDecisionOptimizer` | native utility/residual heads | API contract only |
 | `GeoTemporalDiffusionScenarioModel` | `conditional_residual_diffusion` | experimental only |
 | `GraphNeuralOperator` | `graph_neural_operator` | experimental only |
@@ -87,17 +69,13 @@ evidence, and maturity status.
 
 | Need | Guide |
 | --- | --- |
-| Shared entity, pair, or adaptive context embeddings | `cartoboost.representation` |
-| Fuse multiple graph or spatial views | `cartoboost.representation.MultiViewSpatialAttention` |
 | Mixed geo-temporal regimes with named experts | [CartoBoost RegimeMoEForecaster](deep-models/cartoboost-regime-moe-forecaster.md) |
-| CPU deterministic selective state-space forecasting | [CartoBoost TemporalSSMForecaster](deep-models/cartoboost-temporal-ssm-forecaster.md) |
 | Wide synchronized panels with entity-token attention | [CartoBoost InvertedTemporalTransformer](deep-models/cartoboost-inverted-temporal-transformer.md) |
 | Directed graph propagation with known lag priors | [CartoBoost PropagationDelayGraphForecaster](deep-models/cartoboost-propagation-delay-graph-forecaster.md) |
 | Joint multi-horizon uncertainty from hidden-state context | [CartoBoost ConditionalFlowDistributionHead](deep-models/cartoboost-conditional-flow-distribution-head.md) |
 | Experimental graph-wide residual scenario generation | [CartoBoost GeoTemporalDiffusionScenarioModel](deep-models/cartoboost-geotemporal-diffusion-scenario-model.md) |
 | Advanced experimental spatial field-to-field mapping | [CartoBoost GraphNeuralOperator](deep-models/cartoboost-graph-neural-operator.md) |
 | Candidate competition and counterfactual best selection | [CartoBoost ChoiceSetTransformer](deep-models/cartoboost-choice-set-transformer.md) |
-| Retrieval-augmented rare-pattern forecasting | `cartoboost.representation.RetrievalAugmentedForecaster` |
 | Optional foundation model features and baselines | `cartoboost.FoundationForecastFeatures` |
 | Repeated ordered source-target rows | [CartoBoost DirectionalPairForecaster](deep-models/cartoboost-directional-pair-forecaster.md) |
 | Candidate values with monotone response | [CartoBoost ResponseCurveModel](deep-models/cartoboost-response-curve-model.md) |
@@ -113,21 +91,15 @@ as a CPU-resolving alias for ordinary workflows. Request a specific accelerator
 only when the environment has been provisioned for it and the run needs that
 hardware contract.
 
-Representation primitives are CPU-deterministic in the first cut. Their
-artifact metadata already reserves `cuda`, `rocm`, and `mlx` as supported
-accelerator targets, but `selected` remains `cpu` until native kernels for
-those backends are implemented and validated. Do not report accelerated
-representation results unless the artifact backend says that accelerator was
-selected.
+`backend="webgpu"` is available in native builds that include the WebGPU
+feature and expose a compatible adapter. It runs the verified vector-add,
+affine-head, dense-layer, and pair-scoring kernels; an explicit request fails
+when the feature or adapter is unavailable.
 
-`TemporalSSMForecaster` and `SelectiveStateSpaceBlock` expose the selective
-state-space-lite backbone under `architecture="selective_ssm_lite"`. This is
-not a full Mamba implementation. It uses a deterministic selective recurrence
-plus encoded-state, horizon-specific ridge decoders fitted with a rolling-origin
-squared-error objective. Accelerator kernels should attach to the same surface
-later.
-Runtime scaling reports cover lookbacks 64, 128, 256, 512, and 1024, and
-artifacts record save/load parity.
+The browser bundle exposes the same adapter through the asynchronous
+`webgpuDispatchReport` export. It resolves only after a real WebGPU compute
+pass and readback complete, so browser applications can verify availability
+without blocking the JavaScript event loop.
 
 `InvertedTemporalTransformer` models synchronized wide panels with entities as
 tokens. It reports horizon-wise metrics, cross-entity ablation, and metadata
@@ -178,14 +150,6 @@ choice probabilities, nested probabilities when `nest_id` is present,
 counterfactual best candidates by decision, and Brier/ECE calibration when
 binary `chosen` labels are supplied.
 
-`RetrievalAugmentedForecaster` fits exact normalized KNN memory over entity,
-pair, time, recent-history, weather/event, graph-neighborhood, and residual
-regime context keys. Prediction retrieves cutoff-safe analogs, computes
-inverse-distance attention over retrieved targets, and can return the analog
-IDs, distances, attention weights, and retrieved targets used for each
-prediction. `RetrievalAugmentedPairModel` stores directional `source->target`
-analog IDs for pair-specific retrieval.
-
 Foundation model adapters are optional comparators and feature generators. Use
 the adapter-specific extras such as `cartoboost[chronos]`,
 `cartoboost[timesfm]`, `cartoboost[moirai]`, `cartoboost[timegpt]`, or
@@ -194,7 +158,7 @@ raise a clear skip reason. Cached outputs include external version metadata,
 model hash, input hash, output shape, and whether the adapter was explicitly
 enabled for orchestration.
 
-Use `cartoboost.deep.available_deep_backends()` to inspect the installed wheel.
+Use `cartoboost.preview.deep.available_deep_backends()` to inspect the installed wheel.
 If a requested accelerator is unavailable, treat that as an environment error
 rather than silently changing the benchmark or production contract.
 On Apple-platform builds with the native Metal feature, `backend="metal"` is
@@ -205,18 +169,6 @@ compiled in. On Linux or WSL builds with ROCm support compiled in and a usable
 HIP device present, `backend="rocm"` is advertised for the same verified shared
 kernels. On Windows or Linux builds with the CUDA driver and NVRTC available,
 `backend="cuda"` is advertised for the same verified shared kernels.
-
-## Rust-Native Migration Priorities
-
-Only move Python/NumPy deep components into Rust when benchmark evidence shows
-the port changes runtime, memory, or reliability enough to matter. Current
-priority order is:
-
-1. `PairEmbedding` / `EntityEmbedding` ID maps and transforms.
-2. `SpatioTemporalAdaptiveEmbedding`.
-3. `HistoricalAnalogRetriever` exact KNN.
-4. `SelectiveStateSpaceBlock`.
-5. `MultiViewSpatialAttention`.
 
 ## Input Validation
 

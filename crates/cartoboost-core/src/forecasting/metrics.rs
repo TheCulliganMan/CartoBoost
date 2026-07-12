@@ -16,7 +16,7 @@ pub struct ForecastMetricSet {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct MCompetitionMetricSet {
+pub struct CompetitionMetricSet {
     pub smape: f64,
     pub mase: f64,
     pub smape_ratio_to_baseline: Option<f64>,
@@ -149,33 +149,33 @@ pub fn evaluate_forecast_with_training(
     })
 }
 
-pub fn evaluate_m_competition_metrics(
+pub fn evaluate_competition_metrics(
     training_series: &[Vec<f64>],
     actuals: &[f64],
     forecasts: &[f64],
     seasonality: usize,
     baseline: Option<(f64, f64)>,
-) -> Result<MCompetitionMetricSet> {
+) -> Result<CompetitionMetricSet> {
     if seasonality == 0 {
         return Err(CartoBoostError::InvalidInput(
-            "M-competition seasonality must be positive".to_string(),
+            "competition seasonality must be positive".to_string(),
         ));
     }
     if actuals.is_empty() {
         return Err(CartoBoostError::InvalidInput(
-            "M-competition metrics require at least one actual value".to_string(),
+            "competition metrics require at least one actual value".to_string(),
         ));
     }
     if actuals.len() != forecasts.len() {
         return Err(CartoBoostError::InvalidInput(
-            "M-competition actual and forecast lengths must match".to_string(),
+            "competition actual and forecast lengths must match".to_string(),
         ));
     }
     if !actuals.iter().all(|value| value.is_finite())
         || !forecasts.iter().all(|value| value.is_finite())
     {
         return Err(CartoBoostError::InvalidInput(
-            "M-competition actual and forecast values must be finite".to_string(),
+            "competition actual and forecast values must be finite".to_string(),
         ));
     }
 
@@ -197,7 +197,7 @@ pub fn evaluate_m_competition_metrics(
         smape_sum / smape_count as f64
     };
     let mae = abs_error_sum / actuals.len() as f64;
-    let mase_scale = m_competition_mase_scale(training_series, seasonality)?;
+    let mase_scale = competition_mase_scale(training_series, seasonality)?;
     let mase = mae / mase_scale;
 
     let (smape_ratio_to_baseline, mase_ratio_to_baseline, owa) =
@@ -208,7 +208,7 @@ pub fn evaluate_m_competition_metrics(
                 || baseline_mase < 0.0
             {
                 return Err(CartoBoostError::InvalidInput(
-                    "M-competition baseline metrics must be finite and non-negative".to_string(),
+                    "competition baseline metrics must be finite and non-negative".to_string(),
                 ));
             }
             let smape_ratio = smape / baseline_smape.max(1.0e-12);
@@ -222,7 +222,7 @@ pub fn evaluate_m_competition_metrics(
             (None, None, None)
         };
 
-    Ok(MCompetitionMetricSet {
+    Ok(CompetitionMetricSet {
         smape,
         mase,
         smape_ratio_to_baseline,
@@ -231,15 +231,15 @@ pub fn evaluate_m_competition_metrics(
     })
 }
 
-pub fn m_competition_mase_scale(training_series: &[Vec<f64>], seasonality: usize) -> Result<f64> {
+pub fn competition_mase_scale(training_series: &[Vec<f64>], seasonality: usize) -> Result<f64> {
     if seasonality == 0 {
         return Err(CartoBoostError::InvalidInput(
-            "M-competition seasonality must be positive".to_string(),
+            "competition seasonality must be positive".to_string(),
         ));
     }
     if training_series.is_empty() {
         return Err(CartoBoostError::InvalidInput(
-            "M-competition MASE requires training series".to_string(),
+            "competition MASE requires training series".to_string(),
         ));
     }
     let mut total = 0.0;

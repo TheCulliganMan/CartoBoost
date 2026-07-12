@@ -56,8 +56,11 @@ or when the last point is an outlier.
 Seasonal naive assumes the last completed cycle is representative of the next
 cycle. It fails when the same point in the prior cycle is not comparable
 because of holidays, weather, event schedules, or a real regime change in the
-series. It also fails quietly when `season_length` does not match the data
-cadence.
+series. If a series does not contain a complete configured cycle, fitting fails
+explicitly; the season length is never shortened to make the model run. A
+season length that is numerically feasible but does not match the data cadence
+still produces the wrong comparison, so verify both the declared frequency and
+cycle definition.
 
 ## Single-Series Example
 

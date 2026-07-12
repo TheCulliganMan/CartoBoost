@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import inspect
+
 import pytest
-from cartoboost.forecasting.global_models import CartoBoostLagForecaster
+from cartoboost import BoosterConfig
+from cartoboost.forecasting import CartoBoostLagForecaster, LagConfig
 from cartoboost.forecasting.lag_features import (
     CalendarFeatureConfig,
     LagFeatureConfig,
@@ -9,6 +12,19 @@ from cartoboost.forecasting.lag_features import (
 )
 
 pd = pytest.importorskip("pandas")
+
+
+def test_lag_forecaster_uses_typed_configuration_without_generic_kwargs() -> None:
+    signature = inspect.signature(CartoBoostLagForecaster)
+    assert not any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in signature.parameters.values()
+    )
+    model = CartoBoostLagForecaster(
+        booster_config=BoosterConfig(n_estimators=8),
+        lag_config=LagConfig(lags=(1, 7)),
+    )
+    assert model.get_params()["n_estimators"] == 8
 
 
 def test_cartoboost_lag_converts_panel_and_delegates_to_native(install_fake_native):
@@ -97,13 +113,13 @@ def test_cartoboost_lag_passes_supported_regressor_params(install_fake_native):
         calendar_features=True,
         trend_features=True,
         target_mode="delta_from_last",
+        split_policy="axis_only",
         regressor_params={
             "n_estimators": 32,
             "learning_rate": 0.08,
             "max_depth": 3,
             "min_samples_leaf": 4,
             "min_gain": 0.0,
-            "splitters": ["axis"],
         },
     ).fit({"pickup_1": [10, 11, 12, 13, 15, 18, 21, 24]})
 

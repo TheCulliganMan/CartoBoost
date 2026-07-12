@@ -85,6 +85,8 @@ fuzz_target!(|data: &[u8]| {
         feature_schema: Some(dataset.feature_schema_or_default()),
         target_name: None,
         training_config: None,
+        training_history: Vec::new(),
+        prediction_transform: cartoboost_core::tree::PredictionTransform::Identity,
         trees: vec![Tree { root }],
     };
 

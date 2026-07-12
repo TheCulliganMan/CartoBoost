@@ -9,7 +9,7 @@ for decision selection after prediction, not for fitting the predictor itself.
 ## Public Contract
 
 ```python
-from cartoboost.deep import ConstrainedDecisionOptimizer
+from cartoboost.preview.deep import ConstrainedDecisionOptimizer
 
 candidate_rows = [
     {

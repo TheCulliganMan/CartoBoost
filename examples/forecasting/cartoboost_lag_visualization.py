@@ -58,7 +58,7 @@ def forecast_lag_model(table: pd.DataFrame, train_hours: int, horizon: int) -> p
         learning_rate=0.05,
         max_depth=4,
         min_samples_leaf=8,
-        splitters=["axis", "periodic:24"],
+        split_policy="structured",
     )
     model.fit(train)
     forecast = pd.DataFrame(

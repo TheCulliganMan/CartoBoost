@@ -23,6 +23,7 @@ from benchmarks.runners.manifest import (  # noqa: E402
 PYPROJECT = ROOT / "pyproject.toml"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 PUBLISH_WORKFLOW = ROOT / ".github" / "workflows" / "publish-pypi.yml"
+DOCS_VERSIONS = ROOT / "docs-versions.json"
 
 BASELINE_DEPENDENCIES = {
     "catboost": {"catboost"},
@@ -41,18 +42,35 @@ EXTERNAL_INSTALL_METADATA_BASELINES = {
 }
 
 REQUIRED_CI_COMMANDS = {
-    "uv run pre-commit run --all-files",
-    "uv run pytest --ignore=tests/python/test_full_validation_artifacts.py",
+    "cargo test --workspace",
+    'toolchain: ["1.85.0", "stable"]',
+    "npm run typecheck",
+    "npm run test:ui",
+    "cargo check --manifest-path fuzz/Cargo.toml --all-targets",
+    "EmbarkStudios/cargo-deny-action@v2",
+    "uv run --group dev pre-commit run --all-files",
+    "uv run pytest tests/forecasting tests/python/test_v03_contract.py",
+    "tests/python/test_private_shadow_gate.py",
     "uv run python scripts/check_release_gates.py",
     "uv run python scripts/check_public_api_contract.py",
     "uv run python scripts/check_artifact_compatibility.py",
     "uv run python scripts/check_docs_examples.py",
     "uv run python scripts/check_official_geo_evidence.py",
     "uv run python scripts/check_performance_thresholds.py",
-    "uv run python scripts/run_autogeo_benchmark_gate.py",
+    "uv run python scripts/check_import_performance.py",
+    "uv run python scripts/check_benchmark_freshness.py",
+    "uv run python scripts/check_forecasting_quality_gate.py",
+    "uv run python scripts/check_nyc_row_quality_gate.py",
+    "uv run python scripts/run_scale_performance_gate.py",
+    "uv run python scripts/check_scale_performance_gate.py",
     "uv run python scripts/run_full_validation.py",
     "uv run python scripts/run_v1_validation.py",
     "cargo bench --workspace --no-run",
+    "--cov-fail-under=35",
+    "target/package-smoke-venv",
+    "matrix.os",
+    "macos-latest",
+    "windows-latest",
 }
 
 REQUIRED_RELEASE_MARKERS = {
@@ -63,14 +81,17 @@ REQUIRED_RELEASE_MARKERS = {
     "id-token: write",
     "attestations: write",
     "twine check dist/*",
+    "gh release create",
 }
 
 
 def main() -> int:
     checks = {
         "manifest_contract": check_manifest_contract(),
+        "docs_version_manifest": check_docs_version_manifest(),
         "benchmark_dependencies": check_benchmark_dependencies(),
         "external_baseline_install_metadata": check_external_baseline_install_metadata(),
+        "stable_cpu_backend_policy": check_stable_cpu_backend_policy(),
         "ci_release_gates": check_ci_release_gates(),
         "publish_artifact_attestation": check_publish_artifact_attestation(),
     }
@@ -124,6 +145,34 @@ def check_benchmark_dependencies() -> dict[str, Any]:
     }
 
 
+def check_docs_version_manifest() -> dict[str, Any]:
+    """Validate retained documentation versions before a release."""
+
+    payload = json.loads(DOCS_VERSIONS.read_text(encoding="utf-8"))
+    if not isinstance(payload, list):
+        raise ValueError("docs-versions.json must contain a list")
+    errors: list[str] = []
+    versions: list[str] = []
+    for index, entry in enumerate(payload):
+        if not isinstance(entry, dict):
+            errors.append(f"entry {index} is not an object")
+            continue
+        version = str(entry.get("version", ""))
+        ref = str(entry.get("ref", ""))
+        if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+            errors.append(f"entry {index} has invalid version {version!r}")
+        if not ref:
+            errors.append(f"entry {index} is missing a git ref")
+        versions.append(version)
+    if len(versions) != len(set(versions)):
+        errors.append("docs version entries must be unique")
+    return {
+        "passed": not errors,
+        "versions": versions,
+        "errors": errors,
+    }
+
+
 def check_ci_release_gates() -> dict[str, Any]:
     text = CI_WORKFLOW.read_text(encoding="utf-8")
     missing = sorted(command for command in REQUIRED_CI_COMMANDS if command not in text)
@@ -153,9 +202,43 @@ def check_external_baseline_install_metadata() -> dict[str, Any]:
 def check_publish_artifact_attestation() -> dict[str, Any]:
     text = PUBLISH_WORKFLOW.read_text(encoding="utf-8")
     missing = sorted(marker for marker in REQUIRED_RELEASE_MARKERS if marker not in text)
+    protected_environment = bool(
+        re.search(r"(?ms)^  publish:.*?^    environment:\s*\n^      name: pypi\b", text)
+    )
+    if not protected_environment:
+        missing.append("publish environment: pypi")
     return {
         "passed": not missing,
         "missing": missing,
+        "protected_environment": protected_environment,
+    }
+
+
+def check_stable_cpu_backend_policy() -> dict[str, Any]:
+    """Ensure accelerator features cannot enter the published Python wheel implicitly."""
+
+    manifest = (ROOT / "crates" / "cartoboost-py" / "Cargo.toml").read_text(encoding="utf-8")
+    dependency_lines = [
+        line.strip()
+        for line in manifest.splitlines()
+        if line.strip().startswith("cartoboost-") and "path =" in line
+    ]
+    unconditional_accelerators = [
+        line
+        for line in dependency_lines
+        if any(name in line for name in ("cuda", "rocm", "metal", "webgpu")) and "features" in line
+    ]
+    preview_features = {
+        line.split(" = ", 1)[0].strip()
+        for line in manifest.splitlines()
+        if line.startswith("preview-")
+    }
+    expected_features = {"preview-cuda", "preview-rocm", "preview-metal", "preview-webgpu"}
+    missing_features = sorted(expected_features - preview_features)
+    return {
+        "passed": not unconditional_accelerators and not missing_features,
+        "unconditional_accelerator_dependencies": unconditional_accelerators,
+        "missing_preview_features": missing_features,
     }
 
 

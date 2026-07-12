@@ -40,49 +40,24 @@ attestation. The maintained family roster is:
 | Synthetic graph diffusion | Generator manifest hash, rolling graph splits, graph neural baselines, horizon and graph-distance diagnostics. |
 | Synthetic geo-causal lift panels | Generator manifest hash, rolling panel splits, placebo summaries, and known-effect error metrics. |
 
-## v0.2 Modeling Gates
+## v0.3 Acceptance Gates
 
-For the v0.2 spatial boosting release, the maintained benchmark set should
-include:
-
-- binary spatial classification versus dummy and tabular baselines;
-- grouped ranking versus baseline scoring;
-- native categorical versus one-hot preprocessing;
-- random CV versus buffered spatial CV leakage comparison;
-- regression benchmark showing no more than 5 percent slowdown on the existing
-  regressor workload.
-
-The deterministic smoke harness for these release gates is:
+The maintained beta evidence uses native validation and real comparable
+baselines. Stable structured regression claims require duration and fare
+out-of-time and spatial-holdout comparisons; lane-demand forecasting requires
+at least three leakage-safe rolling origins and an explicit comparison with the
+strongest completed external learned baseline. The forecasting artifact gate is
+run with:
 
 ```sh
-PYTHONPATH=python uv run --group dev python scripts/run_v02_modeling_benchmarks.py \
-  --output-dir target/v02-benchmarks \
-  --seed 42 \
-  --sample-size 240 \
-  --n-estimators 24
+PYTHONPATH=python uv run python scripts/check_forecasting_quality_gate.py \
+  --artifact docs/assets/nyc_taxi_benchmarks/forecasting_library_benchmark_real.json
 ```
 
-To turn the regression fit-speed guard from a current-code repeatability check
-into a before/after slowdown check, pass a prior artifact from the same harness:
-
-```sh
-PYTHONPATH=python uv run --group dev python scripts/run_v02_modeling_benchmarks.py \
-  --output-dir target/v02-benchmarks \
-  --regression-baseline-json target/v02-baseline/v02_modeling_benchmark.json
-```
-
-It writes:
-
-- `target/v02-benchmarks/v02_modeling_benchmark.json`
-- `target/v02-benchmarks/v02_modeling_benchmark.jsonl`
-- `target/v02-benchmarks/v02_modeling_benchmark.md`
-
-The output is synthetic taxi-shaped smoke evidence. It proves that the release
-gates execute and fail loudly when they should; it does not replace real NYC
-TLC benchmark artifacts for public quality claims. When no
-`--regression-baseline-json` is supplied, the regression guard records
-`evidence_kind=current_code_repeatability` and should not be interpreted as a
-historical slowdown comparison.
+The release firewall also checks wheel installation, artifact round trips,
+import and scale budgets, synchronized versions, benchmark provenance, and
+protected publishing. Synthetic smoke runs remain diagnostics for execution
+coverage only and cannot replace the maintained real-data artifacts.
 
 Classification reports should include logloss, ROC-AUC or PR-AUC, Brier score,
 ECE, fit time, prediction time, and save/load probability drift. Ranking
@@ -116,17 +91,16 @@ benchmark dependency coverage, external install metadata for PyTorch Geometric
 baselines, CI commands for public API/serialization/performance coverage, and
 distribution provenance attestation in the PyPI workflow.
 
-The stable model registry is audited separately:
+The stable root estimators are audited separately:
 
 ```sh
 uv run --group dev python scripts/check_public_api_contract.py
 ```
 
-That audit requires every registered stable model to expose `fit`, `predict`,
+That audit requires each stable root estimator to expose `fit`, `predict`,
 `score`, `save`, `load`, `get_params`, `set_params`, and typed metadata. It also
 runs save/load prediction-drift checks for representative registry entries
-covering boosters, AutoGeoModel, stacking, NNGP residuals, and conformal
-interval wrappers.
+covering the native booster, classifier, and ranker contracts.
 
 Model artifact compatibility is audited separately:
 
@@ -134,7 +108,7 @@ Model artifact compatibility is audited separately:
 uv run --group dev python scripts/check_artifact_compatibility.py
 ```
 
-That audit saves representative stable registry artifacts, checks explicit
+That audit saves representative stable estimator artifacts, checks explicit
 schema/version markers including nested artifacts, verifies save/load prediction
 drift, and mutates artifact versions to prove unsupported versions fail loudly.
 
@@ -153,18 +127,14 @@ Official geo evidence is classified separately:
 uv run --group dev python scripts/check_official_geo_evidence.py
 ```
 
-That audit distinguishes final AutoGeoModel acceptance evidence from synthetic
-gates, incomplete manifests, and real non-AutoGeo benchmark artifacts. The
-current audit is intentionally allowed to pass while `acceptance_passed` is
-false so CI can block evidence misclassification without pretending the final
-3-of-5 real benchmark claim is complete.
+That audit distinguishes deferred automatic-selector evidence from synthetic gates,
+incomplete manifests, and real non-selector benchmark artifacts. The current
+audit passes while the final selector evidence requirement remains explicitly
+deferred.
 
-The NYC TLC quality harness accepts `autogeo` in `--models` and records the
-selector's chosen family, candidate evaluations, and train-only inner validation
-metadata inside the same scorecard as the fixed CartoBoost and external
-baseline rows. Those rows count toward final acceptance only after the real TLC
-artifact is regenerated with leakage-safe split manifests and the official
-evidence audit recognizes the public result.
+The NYC TLC quality harness does not run an automatic geo selector in v0.3.
+The selector is not shipped in v0.3, so no selector benchmark is executed by
+the release gate.
 
 Low-level Rust performance thresholds are audited separately:
 
@@ -176,7 +146,8 @@ That audit reads `benches/benchmark_summary.json` and fails when a maintained
 training, prediction, serialization, or data-loading benchmark exceeds its
 recorded `max_mean_ns` threshold.
 
-CI also runs the deterministic AutoGeoModel benchmark gate:
+The deferred selector gate reports its status and is not part of the v0.3
+stable release gate:
 
 ```sh
 PYTHONPATH=python uv run --group dev python scripts/run_autogeo_benchmark_gate.py \
@@ -185,9 +156,6 @@ PYTHONPATH=python uv run --group dev python scripts/run_autogeo_benchmark_gate.p
   --n-splits 5
 ```
 
-That gate emits JSON, JSONL, and Markdown scorecards for official-style
-synthetic workloads. It requires leakage-safe split hashes, runtime, memory,
-baseline comparisons, residual Moran's I for spatial rows, interval coverage
-and width, regional diagnostics, and save/load prediction drift. It is a CI
-regression gate for benchmark plumbing and AutoGeoModel behavior; real public
-quality claims still require the maintained real-data artifacts.
+The command writes a small JSON status artifact and exits successfully to make
+the deferral explicit. Real public quality claims still require the maintained
+real-data artifacts and a future native selector.

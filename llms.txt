@@ -7,12 +7,13 @@ compare it against strong baselines on the same split.
 ## Primary Docs
 
 - README: ./README.md
+- CartoBoost 0.3 migration: ./docs/migration-v0.3.md
 - Docs home: ./docs/index.md
 - Versioned docs manifest: ./docs-versions.json
 - Getting started: ./docs/getting-started.md
 - Python estimator numeric input and missing-value contract: ./docs/user-guide/python-estimator.md
 - Choose a model: ./docs/user-guide/model-types.md
-- Unified model registry and AutoGeoModel: ./docs/user-guide/model-types.md
+- Unified model registry and model selection guidance: ./docs/user-guide/model-types.md
 - Geo-causal experiment models: ./docs/user-guide/geo-causal-models.md
 - Spatial econometrics models: ./docs/user-guide/spatial-econometrics.md
 - Scalable GP geostatistics models: ./docs/user-guide/geostatistics-models.md
@@ -38,13 +39,10 @@ compare it against strong baselines on the same split.
 - Deep claim benchmark JSONL artifact: ./docs/assets/deep_claim_benchmarks/results.jsonl
 - Deep claim benchmark Markdown artifact: ./docs/assets/deep_claim_benchmarks/results.md
 - Model capability artifact: ./docs/assets/capabilities/model_capabilities.json
-- Shared representation primitives: ./docs/user-guide/deep-models.md
-- Retrieval-augmented forecasting: ./docs/user-guide/deep-models.md
+- Source-only retrieval-augmented diagnostics: ./docs/user-guide/deep-models.md
 - Optional foundation model adapters: ./docs/user-guide/deep-models.md
-- Multi-view spatial attention: ./docs/user-guide/deep-models.md
-- Self-supervised representation pretraining: ./docs/user-guide/deep-models.md
+- Source-only multi-view spatial diagnostics: ./docs/user-guide/deep-models.md
 - Mixture-of-experts regime modeling: ./docs/user-guide/deep-models/cartoboost-regime-moe-forecaster.md
-- Selective state-space: ./docs/user-guide/deep-models/cartoboost-temporal-ssm-forecaster.md
 - Inverted temporal transformer: ./docs/user-guide/deep-models/cartoboost-inverted-temporal-transformer.md
 - Delay-aware graph transformer: ./docs/user-guide/deep-models/cartoboost-propagation-delay-graph-forecaster.md
 - Conditional flow uncertainty head: ./docs/user-guide/deep-models/cartoboost-conditional-flow-distribution-head.md
@@ -73,7 +71,7 @@ compare it against strong baselines on the same split.
 - Docs example audit: ./scripts/check_docs_examples.py
 - Official geo evidence audit: ./scripts/check_official_geo_evidence.py
 - Performance threshold audit: ./scripts/check_performance_thresholds.py
-- AutoGeo benchmark gate: ./scripts/run_autogeo_benchmark_gate.py
+- Historical AutoGeo benchmark gate (source checkout only): ./scripts/run_autogeo_benchmark_gate.py
 - NYC TLC quality benchmark harness: ./scripts/run_nyc_taxi_quality_benchmarks.py
 - NYC TLC Path C claim harness: ./scripts/run_nyc_taxi_path_c_claims.py
 - NYC TLC Path C gate audit: ./scripts/check_nyc_taxi_path_c_gates.py
@@ -85,57 +83,53 @@ compare it against strong baselines on the same split.
 - `cartoboost.CartoBoostRegressor`
 - `cartoboost.CartoBoostClassifier`
 - `cartoboost.CartoBoostRanker`
-- `cartoboost.AutoGeoModel`
-- `cartoboost.GeoModelStack`
-- `cartoboost.models.*`
-- `cartoboost.SpatialWeights`
-- `cartoboost.SpatialLagRegressor`
-- `cartoboost.SpatialErrorRegressor`
-- `cartoboost.SpatialDurbinRegressor`
-- `cartoboost.SpatialTwoStageLeastSquares`
-- `cartoboost.GeoCausalPanel`
-- `cartoboost.SyntheticDIDEstimator`
-- `cartoboost.GeoLiftEstimator`
-- `cartoboost.GeoExperimentDesigner`
-- `cartoboost.SpatialPlaceboTester`
-- `cartoboost.NearestNeighborGPRegressor`
-- `cartoboost.ResidualNNGPRegressor`
-- `cartoboost.SpatialGaussianProcessRegressor`
+- `cartoboost.preview.models.*`
+- `cartoboost.preview.spatial_econometrics.SpatialWeights`
+- `cartoboost.preview.spatial_econometrics.SpatialLagRegressor`
+- `cartoboost.preview.spatial_econometrics.SpatialErrorRegressor`
+- `cartoboost.preview.spatial_econometrics.SpatialDurbinRegressor`
+- `cartoboost.preview.spatial_econometrics.SpatialTwoStageLeastSquares`
+- `cartoboost.preview.geo_causal.GeoCausalPanel`
+- `cartoboost.preview.geo_causal.SyntheticDIDEstimator`
+- `cartoboost.preview.geo_causal.GeoLiftEstimator`
+- `cartoboost.preview.geo_causal.GeoExperimentDesigner`
+- `cartoboost.preview.geo_causal.SpatialPlaceboTester`
+- `cartoboost.preview.geostats.NearestNeighborGPRegressor`
+- `cartoboost.preview.geostats.ResidualNNGPRegressor`
+- `cartoboost.preview.geostats.SpatialGaussianProcessRegressor`
 - `cartoboost.forecasting.*`
-- `cartoboost.graph.*`
+- `cartoboost.preview.graph.*`
 - `cartoboost.geo`
-- `cartoboost.causal.*`
-- `cartoboost.prob.*`
-- `cartoboost.experimental.*`
-- `cartoboost.neural.*`
-- `cartoboost.deep.*`
-- `cartoboost.plotting`
-- `cartoboost.Prophet` (Prophet-compatible `ds`/`y` forecasting over the Rust core; accepts pandas and Polars)
+- `cartoboost.preview.causal.*`
+- `cartoboost.preview.prob.*`
+- `cartoboost.preview.experimental.*`
+- `cartoboost.preview.neural.*`
+- `cartoboost.preview.deep.*`
+- `cartoboost.preview.plotting`
+- `cartoboost.preview.Prophet` (Prophet-compatible `ds`/`y` forecasting over the Rust core; accepts pandas and Polars)
 - Prophet parity audit: `scripts/prophet_parity_audit.py`
 - Prophet speed benchmark: `scripts/prophet_surface_benchmark.py`
 
 ## Model Lists
 
-Stable `cartoboost.models.ModelRegistry.defaults()` models:
+Preview `cartoboost.preview.models.ModelRegistry.defaults()` models:
 
 - `models.cartoboost_regressor` / `cartoboost.CartoBoostRegressor`
 - `models.cartoboost_classifier` / `cartoboost.CartoBoostClassifier`
 - `models.cartoboost_ranker` / `cartoboost.CartoBoostRanker`
-- `models.auto_geo_model` / `cartoboost.AutoGeoModel`
-- `models.geo_model_stack` / `cartoboost.GeoModelStack`
 - `forecasting.auto_forecaster` / `cartoboost.forecasting.AutoForecaster`
 - `forecasting.cartoboost_lag` / `cartoboost.forecasting.CartoBoostLagForecaster`
-- `graph.dcrnn` / `cartoboost.forecasting.DCRNNForecaster`
-- `geo.nngp` / `cartoboost.NearestNeighborGPRegressor`
-- `geo.residual_nngp` / `cartoboost.ResidualNNGPRegressor`
-- `geo.spatial_lag` / `cartoboost.SpatialLagRegressor`
-- `geo.spatial_error` / `cartoboost.SpatialErrorRegressor`
-- `geo.spatial_durbin` / `cartoboost.SpatialDurbinRegressor`
-- `causal.synthetic_did` / `cartoboost.SyntheticDIDEstimator`
-- `causal.geo_lift_design` / `cartoboost.GeoExperimentDesigner`
-- `causal.spatial_placebo` / `cartoboost.SpatialPlaceboTester`
-- `prob.conformal_interval` / `cartoboost.prob.ConformalIntervalRegressor`
-- `prob.spatial_conformal` / `cartoboost.prob.SpatialConformalRegressor`
+- `graph.dcrnn` / `cartoboost.preview.forecasting.DCRNNForecaster`
+- `geo.nngp` / `cartoboost.preview.geostats.NearestNeighborGPRegressor`
+- `geo.residual_nngp` / `cartoboost.preview.geostats.ResidualNNGPRegressor`
+- `geo.spatial_lag` / `cartoboost.preview.spatial_econometrics.SpatialLagRegressor`
+- `geo.spatial_error` / `cartoboost.preview.spatial_econometrics.SpatialErrorRegressor`
+- `geo.spatial_durbin` / `cartoboost.preview.spatial_econometrics.SpatialDurbinRegressor`
+- `causal.synthetic_did` / `cartoboost.preview.geo_causal.SyntheticDIDEstimator`
+- `causal.geo_lift_design` / `cartoboost.preview.geo_causal.GeoExperimentDesigner`
+- `causal.spatial_placebo` / `cartoboost.preview.geo_causal.SpatialPlaceboTester`
+- `prob.conformal_interval` / `cartoboost.preview.prob.ConformalIntervalRegressor`
+- `prob.spatial_conformal` / `cartoboost.preview.prob.SpatialConformalRegressor`
 
 Forecasting model ids and classes:
 
@@ -206,11 +200,6 @@ Deep model classes and aliases:
 - `ServiceTimeResidualModel`
 - `SpatioTemporalGraphForecaster`
 - `ConstrainedDecisionOptimizer`
-- `TemporalSSMForecaster`
-- `SelectiveStateSpaceBlock`
-- `EntityTemporalSSM`
-- `PairTemporalSSM`
-- `GraphTemporalSSM`
 - `TemporalEntityTransformer`
 - `InvertedTemporalTransformer`
 - `InvertedEntityTransformer`
@@ -237,10 +226,6 @@ Deep model classes and aliases:
 
 Representation, foundation, geo, causal, and probabilistic model surfaces:
 
-- `EntityEmbedding`, `PairEmbedding`, `GraphContextEmbedding`, `SpatioTemporalAdaptiveEmbedding`
-- `HistoricalAnalogRetriever`, `KNNContextMemory`, `RetrievalAugmentedForecaster`, `RetrievalAugmentedPairModel`
-- `RegimeRouter`, `SelfSupervisedPretrainer`, `MultiViewSpatialAttention`
-- `LocalGlobalHubAttention`, `SpatialSemanticGraphTransformer`
 - `FoundationForecastFeatures`, `ChronosAdapter`, `TimesFMAdapter`, `MoiraiAdapter`, `TimeGPTAdapter`, `TabPFNAdapter`, `TabPFNFeatureGenerator`, `PriorFittedBaseline`
 - `SpatialLagRegressor`, `SpatialErrorRegressor`, `SpatialDurbinRegressor`, `SpatialTwoStageLeastSquares`
 - `NearestNeighborGPRegressor`, `ResidualNNGPRegressor`, `SpatialGaussianProcessRegressor`

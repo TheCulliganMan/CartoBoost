@@ -10,7 +10,7 @@ long-distance pair, and low-signal fallback.
 ## Public Contract
 
 ```python
-from cartoboost.deep import RegimeMoEForecaster
+from cartoboost.preview.deep import RegimeMoEForecaster
 
 model = RegimeMoEForecaster()
 model.fit(

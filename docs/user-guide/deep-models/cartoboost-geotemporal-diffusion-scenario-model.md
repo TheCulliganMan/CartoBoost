@@ -4,12 +4,12 @@ import {DeepModelWasmExample} from '@site/src/components/ModelingLabClient';
 
 Use `GeoTemporalDiffusionScenarioModel` for experimental graph-wide residual
 scenario generation around an existing point forecast. It is not a replacement
-for the point forecaster and is excluded from default AutoGeoModel selection.
+for the point forecaster and is excluded from stable model selection.
 
 ## Public Contract
 
 ```python
-from cartoboost.deep import GeoTemporalDiffusionScenarioModel
+from cartoboost.preview.deep import GeoTemporalDiffusionScenarioModel
 
 model = GeoTemporalDiffusionScenarioModel(
     scenario_count=64,

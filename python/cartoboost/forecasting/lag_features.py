@@ -26,6 +26,12 @@ class LagFeatureConfig:
     partial_rolling_mean_windows: Sequence[int] = ()
 
 
+# Stable naming used by the Rust-backed forecasting boundary.  The legacy
+# implementation name remains internal to this module; callers should use
+# ``LagConfig`` from ``cartoboost.forecasting``.
+LagConfig = LagFeatureConfig
+
+
 @dataclass(frozen=True)
 class RollingFeatureConfig:
     """Shifted rolling and expanding target summary configuration."""

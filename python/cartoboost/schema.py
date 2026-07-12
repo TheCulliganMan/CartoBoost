@@ -17,6 +17,53 @@ class FeatureKind(str, Enum):
     PERIODIC = "Periodic"
 
 
+@dataclass(frozen=True)
+class NumericSpec:
+    name: str
+    kind: FeatureKind = FeatureKind.NUMERIC
+
+
+@dataclass(frozen=True)
+class CategoricalSpec:
+    name: str
+    kind: FeatureKind = FeatureKind.CATEGORICAL
+
+
+@dataclass(frozen=True)
+class OrdinalSpec:
+    name: str
+    kind: FeatureKind = FeatureKind.ORDINAL
+
+
+@dataclass(frozen=True)
+class PeriodicSpec:
+    name: str
+    period: int
+    kind: FeatureKind = FeatureKind.PERIODIC
+
+    def __post_init__(self) -> None:
+        if int(self.period) != self.period or self.period <= 0:
+            raise ValueError("periodic feature specs require a positive integer period")
+
+
+@dataclass(frozen=True)
+class SpatialPairSpec:
+    name: str
+    other: str
+    kind: FeatureKind = FeatureKind.SPATIAL
+
+
+@dataclass(frozen=True)
+class SparseSetSpec:
+    name: str
+    kind: FeatureKind = FeatureKind.SPARSE_SET
+
+
+FeatureSpec = (
+    NumericSpec | CategoricalSpec | OrdinalSpec | PeriodicSpec | SpatialPairSpec | SparseSetSpec
+)
+
+
 _NUMERIC_KIND_ALIASES = frozenset({FeatureKind.NUMERIC, "numeric"})
 _CATEGORICAL_KIND_ALIASES = frozenset(
     {FeatureKind.CATEGORICAL, "categorical", "category", "nominal", "string", "object"}
@@ -63,6 +110,14 @@ class FeatureSchema:
     dense: list[Any] | tuple[Any, ...]
     sparse_sets: list[Any] | tuple[Any, ...] | None = None
 
+    @classmethod
+    def from_specs(
+        cls,
+        dense: list[FeatureSpec] | tuple[FeatureSpec, ...],
+        sparse_sets: list[SparseSetSpec] | tuple[SparseSetSpec, ...] = (),
+    ) -> FeatureSchema:
+        return cls(dense=dense, sparse_sets=sparse_sets)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "dense": list(self.dense),
@@ -74,6 +129,19 @@ class FeatureSchema:
         sparse_entries = list(self.sparse_sets or [])
         names = [_entry_name(entry, idx, "feature") for idx, entry in enumerate(dense_entries)]
         kinds = [_entry_kind(entry, FeatureKind.NUMERIC) for entry in dense_entries]
+        spatial_names = {
+            str(other)
+            for entry in dense_entries
+            if (other := _spatial_pair_other(entry)) is not None
+        }
+        # A spatial pair declares both coordinates as spatial features at the
+        # native boundary.  This keeps Rust's candidate search restricted to
+        # explicitly declared coordinate columns even when the second member
+        # was supplied as a plain NumericSpec for ergonomic convenience.
+        kinds = [
+            FeatureKind.SPATIAL if name in spatial_names else kind
+            for name, kind in zip(names, kinds, strict=True)
+        ]
         names.extend(
             _entry_name(entry, idx, "sparse_set") for idx, entry in enumerate(sparse_entries)
         )
@@ -82,7 +150,42 @@ class FeatureSchema:
         return {"names": names, "kinds": kinds}
 
     def to_json(self, dense_width: int, sparse_names: list[str]) -> str:
-        return json.dumps(self.to_rust_payload(dense_width, sparse_names))
+        payload = self.to_rust_payload(dense_width, sparse_names)
+        self.validate(dense_width, sparse_names, payload=payload)
+        return json.dumps(payload)
+
+    def validate(
+        self,
+        dense_width: int,
+        sparse_names: list[str],
+        *,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        """Validate this schema with the Rust-owned schema contract.
+
+        The Python spec classes provide construction ergonomics only.  Final
+        validation is deliberately delegated to the native extension so a
+        schema cannot be accepted by Python and rejected later by training,
+        artifact loading, or another runtime.
+        """
+
+        normalized = (
+            payload if payload is not None else self.to_rust_payload(dense_width, sparse_names)
+        )
+        try:
+            from . import _native
+        except ImportError as exc:  # pragma: no cover - exercised in source-only installs
+            raise RuntimeError(
+                "cartoboost._native is required to validate FeatureSchema; "
+                "install the built CartoBoost wheel or run maturin develop"
+            ) from exc
+        validator = getattr(_native, "validate_feature_schema_json", None)
+        if validator is None:  # pragma: no cover - protects mismatched native wheels
+            raise RuntimeError(
+                "cartoboost._native.validate_feature_schema_json is unavailable; "
+                "reinstall the CartoBoost native extension"
+            )
+        validator(json.dumps(normalized))
 
 
 def normalize_feature_kind(kind: Any, entry: dict[str, Any] | None = None) -> Any:
@@ -131,6 +234,8 @@ def _entry_name(entry: Any, idx: int, prefix: str) -> str:
         return str(entry.get("name", f"{prefix}_{idx}"))
     if isinstance(entry, tuple) and len(entry) == 2:
         return str(entry[0])
+    if hasattr(entry, "name"):
+        return str(entry.name)
     return str(entry)
 
 
@@ -140,10 +245,24 @@ def _entry_kind(entry: Any, default: FeatureKind) -> Any:
             return normalize_feature_kind(entry.get("kind", entry.get("role", default)), entry)
         case tuple() if len(entry) == 2:
             return normalize_feature_kind(entry[1])
+        case _ if hasattr(entry, "kind"):
+            return normalize_feature_kind(entry.kind, entry.__dict__)
         case _ if default is FeatureKind.SPARSE_SET:
             return FeatureKind.SPARSE_SET
         case _:
             return FeatureKind.NUMERIC
+
+
+def _spatial_pair_other(entry: Any) -> Any | None:
+    if isinstance(entry, dict):
+        kind = entry.get("kind", entry.get("role", ""))
+        other = entry.get("other")
+    else:
+        kind = getattr(entry, "kind", "")
+        other = getattr(entry, "other", None)
+    if getattr(kind, "value", kind) in _SPATIAL_KIND_ALIASES and other is not None:
+        return other
+    return None
 
 
 def _positive_period(period: Any) -> int:

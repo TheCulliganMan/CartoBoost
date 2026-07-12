@@ -11,6 +11,12 @@ smoothly instead of forcing abrupt step changes.
 
 <ForecastModelExample title="Auto ETS panel forecast" model="auto_ets" />
 
+The Rust/WASM `AutoETSForecaster` evaluates its smoothing grid on a real suffix
+holdout. Every candidate is fitted only on the earlier prefix, forecasts the
+same suffix, and is compared by mean squared error before the winner is refit
+on all observations. Full-sample fitted residuals are diagnostics, not the
+automatic selection score.
+
 ## When To Use
 
 Use ETS for hourly counts, fare totals, duration aggregates, or trip distance
@@ -54,7 +60,7 @@ CartoBoost lag/calendar features or a spatial model where appropriate.
 ## Example
 
 ```python
-from cartoboost.forecasting import ETSForecaster
+from cartoboost.preview.forecasting import ETSForecaster
 
 hourly_jfk_pickups = [
     64, 58, 52, 49, 55, 73, 98, 116, 121, 108, 95, 90,
@@ -86,7 +92,7 @@ panel data, prefer `ForecastFrame` so timestamps and series IDs stay explicit.
 ## ForecastFrame Example
 
 ```python
-from cartoboost.forecasting import ETSForecaster, ForecastFrame
+from cartoboost.preview.forecasting import ETSForecaster, ForecastFrame
 
 frame = ForecastFrame.from_pandas(
     hourly_zone_demand.query("series_id == '132'"),
@@ -121,6 +127,8 @@ forecast = model.predict(24)
 
 Seasonal ETS requires at least two full cycles per series. For `seasonal_periods=24`,
 each pickup zone needs at least 48 hourly observations before fitting.
+The configured seasonal period is not shortened or discarded when this
+requirement is not met.
 
 ## Smoothing Components
 
@@ -172,7 +180,7 @@ The plot is designed to answer three practical questions:
 The core pattern is:
 
 ```python
-from cartoboost.forecasting import ETSForecaster, ForecastFrame
+from cartoboost.preview.forecasting import ETSForecaster, ForecastFrame
 
 frame = ForecastFrame.from_pandas(
     hourly_zone_demand,

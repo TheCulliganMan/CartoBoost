@@ -13,12 +13,12 @@ const paths = [
   },
   {
     title: 'Choose a modeling path',
-    detail: 'Route between regression, forecasting, graph, neural, and utility APIs.',
+    detail: 'Start with structured regression, panel forecasting, or advanced relationship models.',
     href: '/docs/user-guide/model-types',
   },
   {
     title: 'Model in the browser',
-    detail: 'Drag in a taxi dataset and run forecasts, regression, graph, and neural modeling locally.',
+    detail: 'Load a bundled sample and inspect structured regression or forecasting locally.',
     href: '/modeling-lab',
   },
   {
@@ -32,8 +32,8 @@ const capabilities = [
   'Periodic time splitters',
   'Spatial and route-aware trees',
   'Sparse zone memberships',
-  'Forecasting models',
-  'Graph and neural surfaces',
+  'Leakage-aware validation',
+  'Panel forecasting',
   'Portable model artifacts',
 ];
 
@@ -46,9 +46,8 @@ function HomepageHeader() {
           CartoBoost
         </Heading>
         <p className={styles.heroSubtitle}>
-          Temporal, spatial, geotemporal, and graph-aware regression for
-          taxi-domain modeling, demand forecasting, and benchmark-backed
-          experiments.
+          Rust-backed Python modeling for structured tabular and panel data where
+          geometry, cyclic time, memberships, or direction matter.
         </p>
         <div className={styles.heroActions}>
           <Link className="button button--primary button--lg" to="/docs/installation">
@@ -108,29 +107,23 @@ function CodeAndEvidence() {
         <span className={styles.eyebrow}>First fit</span>
         <Heading as="h2">A small model before the deep dive</Heading>
         <pre className={styles.codeSample}>
-          <code>{`from cartoboost import CartoBoostRegressor
+          <code>{`# Run the complete dependency-free example:
+python examples/quickstart.py
 
-model = CartoBoostRegressor(
-    n_estimators=200,
-    learning_rate=0.04,
-    max_depth=5,
-    splitters=["axis", "periodic:24", "gaussian_2d"],
-)
-
+# Or start from the estimator directly:
+from cartoboost import CartoBoostRegressor
+model = CartoBoostRegressor(splitters=["axis", "periodic:24"])
 model.fit(X_train, y_train)
 predictions = model.predict(X_validation)`}</code>
         </pre>
-        <Link to="/docs/benchmarks">Read the benchmark reports</Link>
+        <Link to="/docs/getting-started">Run the complete quickstart</Link>
       </div>
       <div className={styles.benchmarkPanel}>
-        <img
-          src={require('@site/docs/assets/model_benchmarks/mae_by_model.png').default}
-          alt="Model benchmark MAE comparison chart"
-        />
         <p>
-          Benchmark pages connect plots to split design, model settings, and
-          what the result means for taxi-style modeling.
+          Benchmark pages connect current-code results to split design, model
+          settings, runtime, and what the result means for taxi-style modeling.
         </p>
+        <Link to="/docs/benchmarks">Read the benchmark reports</Link>
       </div>
     </section>
   );

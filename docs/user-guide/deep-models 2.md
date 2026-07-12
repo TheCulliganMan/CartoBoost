@@ -1,6 +1,6 @@
 # Generic Deep Models
 
-`cartoboost.deep` contains native-backed models for repeated entities, ordered
+`cartoboost.preview.deep` contains native-backed models for repeated entities, ordered
 pairs, graph sequences, response curves, event probabilities, residual
 correction, and constrained candidate selection. The public vocabulary is
 generic: entity, node, source, target, candidate, response, utility, risk, and
@@ -29,10 +29,10 @@ Deep model constructors default to `backend="cpu"`. Valid backend names are
 alias. Explicit accelerator requests hard-fail if that backend is not present
 in the build, so benchmark runs do not silently fall back to weaker hardware.
 
-Use `cartoboost.deep.available_deep_backends()` to inspect Python wheel support.
+Use `cartoboost.preview.deep.available_deep_backends()` to inspect Python wheel support.
 Wasm builds expose `availableDeepBackends()` and default browser runtimes to CPU.
 
-Use `cartoboost.deep.backend_dispatch_report("metal", len=1048576)` to verify
+Use `cartoboost.preview.deep.backend_dispatch_report("metal", len=1048576)` to verify
 that the local native extension can dispatch a Metal command buffer. The report
 includes the selected backend, operation name, checksum, elapsed milliseconds,
 and whether the operation ran on an accelerator. Treat this as backend runtime
@@ -47,7 +47,7 @@ scalar candidate value, and an observed response. When `monotone` is set, the
 native head enforces the candidate effect direction.
 
 ```python
-from cartoboost.deep import ResponseCurveFrame, ResponseCurveModel
+from cartoboost.preview.deep import ResponseCurveFrame, ResponseCurveModel
 
 frame = ResponseCurveFrame.from_pandas(
     df,
@@ -79,7 +79,7 @@ predictions.
 `target_id="A"`.
 
 ```python
-from cartoboost.deep import DirectionalPairForecaster, DirectionalPairFrame
+from cartoboost.preview.deep import DirectionalPairForecaster, DirectionalPairFrame
 
 frame = DirectionalPairFrame.from_pandas(
     df,
@@ -107,7 +107,7 @@ pre-collapse pairs unless the process is genuinely unordered.
 `EventOutcomeModel` provides a generic calibrated binary event model.
 
 ```python
-from cartoboost.deep import EventOutcomeModel
+from cartoboost.preview.deep import EventOutcomeModel
 
 model = EventOutcomeModel(calibration="temperature")
 model.fit(features_train, event_train)
@@ -125,7 +125,7 @@ replay calibrated probabilities.
 numeric estimate. The prediction is always `baseline_value + residual_mean`.
 
 ```python
-from cartoboost.deep import ServiceTimeResidualModel
+from cartoboost.preview.deep import ServiceTimeResidualModel
 
 rows = [
     {
@@ -158,7 +158,7 @@ candidates. It applies hard constraints first, then scores feasible candidates
 by the configured objective.
 
 ```python
-from cartoboost.deep import ConstrainedDecisionOptimizer
+from cartoboost.preview.deep import ConstrainedDecisionOptimizer
 
 optimizer = ConstrainedDecisionOptimizer(
     objective="risk_adjusted_utility",

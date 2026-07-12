@@ -22,6 +22,8 @@ pub use backend::{
     backend_pair_sigmoid_scores_f32, select_backend, BackendDispatchReport, BackendSelection,
     ComputeBackend,
 };
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+pub use backend::{webgpu_dense_layer_f32_async, webgpu_dispatch_report_async};
 pub use deep::{
     choice_set_transformer_report, choice_set_transformer_report_json, constrained_decision_select,
     constrained_decision_select_with_options, directional_pair_fit,

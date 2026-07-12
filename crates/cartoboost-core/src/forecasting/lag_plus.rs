@@ -93,13 +93,9 @@ impl LagPlusForecaster {
 impl Forecaster for LagPlusForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
         frame.require_regular_for_model(self.model_name())?;
-        let validation_window = effective_validation_window(frame, self.config.validation_window);
-        let calibration = if validation_window == 0 {
-            disabled_corrections(&self.config, 0)
-        } else {
-            let split = split_validation_frame(frame, validation_window)?;
-            calibrate_corrections(&self.config, &split)?
-        };
+        let validation_window = effective_validation_window(frame, self.config.validation_window)?;
+        let split = split_validation_frame(frame, validation_window)?;
+        let calibration = calibrate_corrections(&self.config, &split)?;
         self.base = build_base(&self.config)?;
         self.base.fit(frame)?;
         self.fitted = Some(calibration);
@@ -185,23 +181,6 @@ fn build_base(config: &LagPlusConfig) -> Result<CartoBoostLagForecaster> {
         config.booster_config.clone(),
         config.target_mode,
     )
-}
-
-fn disabled_corrections(config: &LagPlusConfig, validation_window: usize) -> FittedLagPlus {
-    FittedLagPlus {
-        corrections: BTreeMap::new(),
-        seasonal_corrections: BTreeMap::new(),
-        series_corrections: BTreeMap::new(),
-        validation_window,
-        base_rmse: 0.0,
-        corrected_rmse: 0.0,
-        base_wape: 0.0,
-        corrected_wape: 0.0,
-        objective: config.objective,
-        base_objective: 0.0,
-        corrected_objective: 0.0,
-        enabled: false,
-    }
 }
 
 fn calibrate_corrections(config: &LagPlusConfig, split: &ValidationSplit) -> Result<FittedLagPlus> {
@@ -514,19 +493,28 @@ fn validation_horizon(validation: &[ForecastRow]) -> usize {
         .unwrap_or(1)
 }
 
-fn effective_validation_window(frame: &ForecastFrame, configured: Option<usize>) -> usize {
-    if let Some(window) = configured {
-        return window;
-    }
+fn effective_validation_window(frame: &ForecastFrame, configured: Option<usize>) -> Result<usize> {
     let min_history = history_by_series(frame.rows())
         .values()
         .map(Vec::len)
         .min()
-        .unwrap_or(0);
-    if min_history < 3 {
-        return 0;
+        .ok_or_else(|| {
+            CartoBoostError::InvalidInput(
+                "LagPlus requires at least one series for validation".to_string(),
+            )
+        })?;
+    if min_history < 2 {
+        return Err(CartoBoostError::InvalidInput(
+            "LagPlus requires at least two rows per series for a real holdout".to_string(),
+        ));
     }
-    (min_history / 5).clamp(1, 8)
+    match configured {
+        Some(window) if window < min_history => Ok(window),
+        Some(window) => Err(CartoBoostError::InvalidInput(format!(
+            "LagPlus validation_window must be smaller than every series history; minimum history is {min_history}, got {window}"
+        ))),
+        None => Ok((min_history / 5).clamp(1, 8)),
+    }
 }
 
 fn validate_config(config: &LagPlusConfig) -> Result<()> {

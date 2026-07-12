@@ -1,6 +1,7 @@
 use crate::forecasting::lag_features::history_by_series;
 use crate::forecasting::{
-    ForecastFrame, ForecastPrediction, ForecastResult, ForecastRow, Forecaster,
+    ForecastFrame, ForecastIntervalPrediction, ForecastPrediction, ForecastPredictionDetail,
+    ForecastResult, ForecastRow, Forecaster,
 };
 use crate::{CartoBoostError, Result};
 use serde::{Deserialize, Serialize};
@@ -39,10 +40,11 @@ impl LocalStandardScaler {
             let stat = fit_stats(&history, self.min_scale)?;
             stats.insert(series_id.clone(), stat);
             rows.extend(history.into_iter().map(|row| {
-                ForecastRow::new(
+                ForecastRow::with_covariates(
                     row.series_id,
                     row.timestamp,
                     (row.target - stat.mean) / stat.scale,
+                    row.covariates,
                 )
             }));
         }
@@ -74,7 +76,61 @@ impl LocalStandardScaler {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        ForecastResult::new(predictions)
+        let intervals = result
+            .intervals()
+            .iter()
+            .map(|interval| {
+                let stat = self.stats.get(&interval.series_id).ok_or_else(|| {
+                    CartoBoostError::InvalidInput(format!(
+                        "missing local scale stats for series {}",
+                        interval.series_id
+                    ))
+                })?;
+                Ok(ForecastIntervalPrediction {
+                    series_id: interval.series_id.clone(),
+                    timestamp: interval.timestamp,
+                    horizon: interval.horizon,
+                    model: model_name.to_string(),
+                    level: interval.level,
+                    lower: interval.lower * stat.scale + stat.mean,
+                    upper: interval.upper * stat.scale + stat.mean,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let details = result
+            .details()
+            .iter()
+            .map(|detail| {
+                let stat = self.stats.get(&detail.series_id).ok_or_else(|| {
+                    CartoBoostError::InvalidInput(format!(
+                        "missing local scale stats for series {}",
+                        detail.series_id
+                    ))
+                })?;
+                Ok(ForecastPredictionDetail {
+                    series_id: detail.series_id.clone(),
+                    timestamp: detail.timestamp,
+                    horizon: detail.horizon,
+                    model: model_name.to_string(),
+                    base_mean: detail.base_mean.map(|value| value * stat.scale + stat.mean),
+                    spatial_correction: detail.spatial_correction.map(|value| value * stat.scale),
+                    kriging_variance: detail
+                        .kriging_variance
+                        .map(|value| value * stat.scale * stat.scale),
+                    selected_neighbors: detail.selected_neighbors.clone(),
+                    component_decomposition: wrapped_component_decomposition(
+                        detail.component_decomposition.as_ref(),
+                        "local_standard_scaler",
+                    ),
+                    metadata: Some(json!({
+                        "target_transform": "local_standard_scaler",
+                        "inner_model": detail.model,
+                        "inner_metadata": detail.metadata,
+                    })),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        ForecastResult::new_with_intervals_and_details(predictions, intervals, details)
     }
 
     pub fn stats(&self) -> &BTreeMap<String, LocalScaleStats> {
@@ -183,10 +239,11 @@ impl Forecaster for Log1pForecaster {
                         "log1p target transform requires nonnegative targets".to_string(),
                     ));
                 }
-                Ok(ForecastRow::new(
+                Ok(ForecastRow::with_covariates(
                     row.series_id.clone(),
                     row.timestamp,
                     row.target.ln_1p(),
+                    row.covariates.clone(),
                 ))
             })
             .collect::<Result<Vec<_>>>()?;
@@ -207,8 +264,65 @@ impl Forecaster for Log1pForecaster {
                 model: self.model_name.to_string(),
                 mean: prediction.mean.exp_m1().max(0.0),
             })
-            .collect();
-        ForecastResult::new(predictions)
+            .collect::<Vec<_>>();
+        let intervals = transformed
+            .intervals()
+            .iter()
+            .map(|interval| ForecastIntervalPrediction {
+                series_id: interval.series_id.clone(),
+                timestamp: interval.timestamp,
+                horizon: interval.horizon,
+                model: self.model_name.to_string(),
+                level: interval.level,
+                lower: inverse_log1p_nonnegative(interval.lower),
+                upper: inverse_log1p_nonnegative(interval.upper),
+            })
+            .collect::<Vec<_>>();
+        let details = transformed
+            .details()
+            .iter()
+            .map(|detail| {
+                let base_mean = detail.base_mean.map(inverse_log1p_nonnegative);
+                let spatial_correction = match (detail.base_mean, detail.spatial_correction) {
+                    (_, None) => None,
+                    (Some(base), Some(correction)) => Some(
+                        inverse_log1p_nonnegative(base + correction)
+                            - inverse_log1p_nonnegative(base),
+                    ),
+                    (None, Some(_)) => {
+                        return Err(CartoBoostError::InvalidInput(format!(
+                            "cannot invert log1p spatial correction without base_mean for series {} at {}",
+                            detail.series_id, detail.timestamp
+                        )))
+                    }
+                };
+                Ok(ForecastPredictionDetail {
+                    series_id: detail.series_id.clone(),
+                    timestamp: detail.timestamp,
+                    horizon: detail.horizon,
+                    model: self.model_name.to_string(),
+                    base_mean,
+                    spatial_correction,
+                    // A variance does not have an exact nonlinear inverse without
+                    // distributional assumptions. Keep the inner-scale value in
+                    // metadata instead of presenting a delta-method approximation
+                    // as an exact original-scale kriging variance.
+                    kriging_variance: None,
+                    selected_neighbors: detail.selected_neighbors.clone(),
+                    component_decomposition: wrapped_component_decomposition(
+                        detail.component_decomposition.as_ref(),
+                        "log1p",
+                    ),
+                    metadata: Some(json!({
+                        "target_transform": "log1p",
+                        "inner_model": detail.model,
+                        "inner_kriging_variance": detail.kriging_variance,
+                        "inner_metadata": detail.metadata,
+                    })),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        ForecastResult::new_with_intervals_and_details(predictions, intervals, details)
     }
 
     fn model_name(&self) -> &'static str {
@@ -224,5 +338,221 @@ impl Forecaster for Log1pForecaster {
             },
             "inner": self.inner.metadata(),
         })
+    }
+}
+
+fn inverse_log1p_nonnegative(value: f64) -> f64 {
+    value.exp_m1().max(0.0)
+}
+
+fn wrapped_component_decomposition(component: Option<&Value>, transform: &str) -> Option<Value> {
+    component.map(|value| {
+        json!({
+            "scale": "inner_transformed_target",
+            "target_transform": transform,
+            "value": value,
+        })
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::forecasting::{ForecastFrameMetadata, ForecastFrequency};
+    use chrono::NaiveDate;
+    use std::sync::{Arc, Mutex};
+
+    struct CapturingForecaster {
+        fitted_frame: Arc<Mutex<Option<ForecastFrame>>>,
+        result: ForecastResult,
+    }
+
+    impl Forecaster for CapturingForecaster {
+        fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
+            *self.fitted_frame.lock().expect("capture lock") = Some(frame.clone());
+            Ok(())
+        }
+
+        fn predict(&self, _horizon: usize) -> Result<ForecastResult> {
+            Ok(self.result.clone())
+        }
+
+        fn model_name(&self) -> &'static str {
+            "capturing"
+        }
+
+        fn metadata(&self) -> Value {
+            json!({"model": self.model_name()})
+        }
+    }
+
+    #[test]
+    fn local_standard_transform_preserves_covariates_and_inverts_rich_results() {
+        let captured = Arc::new(Mutex::new(None));
+        let inner = CapturingForecaster {
+            fitted_frame: captured.clone(),
+            result: rich_result("capturing", 1.0, 0.0, 2.0, Some(0.5), Some(0.5), Some(0.25)),
+        };
+        let mut wrapper =
+            LocalStandardScaledForecaster::new(Box::new(inner), 1.0e-9, "scaled").expect("wrapper");
+        let frame = frame_with_covariates(0.0, 4.0);
+
+        wrapper.fit(&frame).expect("fit");
+        let transformed = captured
+            .lock()
+            .expect("capture lock")
+            .clone()
+            .expect("captured frame");
+        assert_eq!(transformed.rows()[0].covariates["trip_distance"], 1.5);
+        assert_eq!(transformed.rows()[1].covariates["trip_distance"], 2.5);
+        assert_eq!(transformed.metadata(), frame.metadata());
+
+        let forecast = wrapper.predict(1).expect("predict");
+        assert_eq!(forecast.predictions()[0].mean, 4.0);
+        assert_eq!(forecast.intervals()[0].lower, 2.0);
+        assert_eq!(forecast.intervals()[0].upper, 6.0);
+        let detail = &forecast.details()[0];
+        assert_eq!(detail.base_mean, Some(3.0));
+        assert_eq!(detail.spatial_correction, Some(1.0));
+        assert_eq!(detail.kriging_variance, Some(1.0));
+        assert_eq!(detail.selected_neighbors, vec!["PU2->DO3"]);
+        assert_eq!(
+            detail.component_decomposition.as_ref().unwrap()["scale"],
+            "inner_transformed_target"
+        );
+    }
+
+    #[test]
+    fn log1p_transform_preserves_covariates_and_inverts_intervals_and_details() {
+        let captured = Arc::new(Mutex::new(None));
+        let base = 2.0_f64.ln_1p();
+        let corrected = 4.0_f64.ln_1p();
+        let inner = CapturingForecaster {
+            fitted_frame: captured.clone(),
+            result: rich_result(
+                "capturing",
+                3.0_f64.ln_1p(),
+                1.0_f64.ln_1p(),
+                5.0_f64.ln_1p(),
+                Some(base),
+                Some(corrected - base),
+                Some(0.4),
+            ),
+        };
+        let mut wrapper = Log1pForecaster::new(Box::new(inner), "log1p");
+        let frame = frame_with_covariates(0.0, 4.0);
+
+        wrapper.fit(&frame).expect("fit");
+        let transformed = captured
+            .lock()
+            .expect("capture lock")
+            .clone()
+            .expect("captured frame");
+        assert_eq!(transformed.rows()[0].covariates["trip_distance"], 1.5);
+        assert_eq!(transformed.rows()[1].covariates["trip_distance"], 2.5);
+
+        let forecast = wrapper.predict(1).expect("predict");
+        assert!((forecast.predictions()[0].mean - 3.0).abs() < 1.0e-12);
+        assert!((forecast.intervals()[0].lower - 1.0).abs() < 1.0e-12);
+        assert!((forecast.intervals()[0].upper - 5.0).abs() < 1.0e-12);
+        let detail = &forecast.details()[0];
+        assert!((detail.base_mean.unwrap() - 2.0).abs() < 1.0e-12);
+        assert!((detail.spatial_correction.unwrap() - 2.0).abs() < 1.0e-12);
+        assert_eq!(detail.kriging_variance, None);
+        assert_eq!(
+            detail.metadata.as_ref().unwrap()["inner_kriging_variance"],
+            0.4
+        );
+    }
+
+    #[test]
+    fn log1p_transform_rejects_uninvertible_spatial_detail() {
+        let inner = CapturingForecaster {
+            fitted_frame: Arc::new(Mutex::new(None)),
+            result: rich_result("capturing", 1.0, 0.5, 1.5, None, Some(0.25), None),
+        };
+        let wrapper = Log1pForecaster::new(Box::new(inner), "log1p");
+
+        let error = wrapper
+            .predict(1)
+            .expect_err("correction without its base cannot be inverted exactly");
+        assert!(error
+            .to_string()
+            .contains("cannot invert log1p spatial correction without base_mean"));
+    }
+
+    fn frame_with_covariates(first: f64, second: f64) -> ForecastFrame {
+        let metadata = ForecastFrameMetadata {
+            historical_covariates: vec!["trip_distance".to_string()],
+            ..ForecastFrameMetadata::default()
+        };
+        ForecastFrame::with_metadata(
+            vec![
+                ForecastRow::with_covariates(
+                    "PU1->DO2",
+                    ts(1),
+                    first,
+                    BTreeMap::from([("trip_distance".to_string(), 1.5)]),
+                ),
+                ForecastRow::with_covariates(
+                    "PU1->DO2",
+                    ts(2),
+                    second,
+                    BTreeMap::from([("trip_distance".to_string(), 2.5)]),
+                ),
+            ],
+            ForecastFrequency::Daily,
+            metadata,
+        )
+        .expect("frame")
+    }
+
+    fn rich_result(
+        model: &str,
+        mean: f64,
+        lower: f64,
+        upper: f64,
+        base_mean: Option<f64>,
+        spatial_correction: Option<f64>,
+        kriging_variance: Option<f64>,
+    ) -> ForecastResult {
+        ForecastResult::new_with_intervals_and_details(
+            vec![ForecastPrediction {
+                series_id: "PU1->DO2".to_string(),
+                timestamp: ts(3),
+                horizon: 1,
+                model: model.to_string(),
+                mean,
+            }],
+            vec![ForecastIntervalPrediction {
+                series_id: "PU1->DO2".to_string(),
+                timestamp: ts(3),
+                horizon: 1,
+                model: model.to_string(),
+                level: 0.8,
+                lower,
+                upper,
+            }],
+            vec![ForecastPredictionDetail {
+                series_id: "PU1->DO2".to_string(),
+                timestamp: ts(3),
+                horizon: 1,
+                model: model.to_string(),
+                base_mean,
+                spatial_correction,
+                kriging_variance,
+                selected_neighbors: vec!["PU2->DO3".to_string()],
+                component_decomposition: Some(json!({"trend": mean})),
+                metadata: Some(json!({"source": "inner"})),
+            }],
+        )
+        .expect("rich result")
+    }
+
+    fn ts(day: u32) -> chrono::NaiveDateTime {
+        NaiveDate::from_ymd_opt(2024, 1, day)
+            .expect("date")
+            .and_hms_opt(0, 0, 0)
+            .expect("time")
     }
 }
