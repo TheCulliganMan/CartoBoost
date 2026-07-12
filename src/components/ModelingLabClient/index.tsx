@@ -862,9 +862,12 @@ export function ForecastModelExample({
 
   const runExample = useCallback(async () => {
     setIsRunning(true);
-    setStatus('Loading real taxi forecast sample.');
+    const intermittent = isIntermittentDemandModel(selectedModel);
+    setStatus(intermittent ? 'Loading a zero-filled taxi route-demand sample.' : 'Loading real taxi forecast sample.');
     try {
-      const nextTable = await loadDocsForecastExampleTable(sample, taxiLaneSampleUrl, taxiVariedRouteSampleUrl);
+      const sourceSample = intermittent ? 'spatial' : sample;
+      const loadedTable = await loadDocsForecastExampleTable(sourceSample, taxiLaneSampleUrl, taxiVariedRouteSampleUrl);
+      const nextTable = intermittent ? intermittentRouteDemandTable(loadedTable) : loadedTable;
       const trainingTable = forecastExampleTrainingTable(nextTable, horizon, 'series_id');
       setTable(nextTable);
       setStatus('Running forecast in this page.');
@@ -905,7 +908,7 @@ export function ForecastModelExample({
         <div>
           <strong>{title}</strong>
           <p style={{margin: '0.25rem 0 0'}}>
-            Runs <code>{selectedModel}</code> against a bundled {sample === 'spatial' ? 'multi-location demand panel' : 'route-demand'} sample.
+            Runs <code>{selectedModel}</code> against a bundled {isIntermittentDemandModel(selectedModel) ? 'zero-filled intermittent taxi route-demand' : sample === 'spatial' ? 'multi-location demand panel' : 'route-demand'} sample.
           </p>
         </div>
         <button className="button button--primary" type="button" disabled={isRunning} onClick={() => void runExample()}>
@@ -914,11 +917,21 @@ export function ForecastModelExample({
       </div>
       <p style={{margin: '0.75rem 0'}}>{status}</p>
       {result &&
-        (isSpatialPiecewiseKrigingModel(selectedModel) ? (
+        (isSpatialForecastModel(selectedModel) ? (
           <SpatialForecastExampleDiagnostics records={result.forecast.records} />
         ) : (
           <ForecastExampleChart records={result.forecast.records} table={table} />
         ))}
+      {result && normalizedForecastModel(selectedModel) === 'kriging' && (
+        <p style={{margin: '0.25rem 0 0', color: 'var(--ifm-color-emphasis-700)'}}>
+          Kriging estimates a spatial surface at the forecast cutoff. With no temporal base model, that surface is intentionally stable across horizons, so this example shows the cross-series forecast range instead of a misleading flat time line.
+        </p>
+      )}
+      {result && isIntermittentDemandModel(selectedModel) && (
+        <p style={{margin: '0.25rem 0 0', color: 'var(--ifm-color-emphasis-700)'}}>
+          These methods estimate a constant expected demand rate. A flat forecast is expected; the chart now uses a route with true zero-demand hours so that rate is meaningful.
+        </p>
+      )}
       {records.length > 0 && (
         <div style={{overflowX: 'auto'}}>
           <table>
@@ -1597,7 +1610,17 @@ function ForecastExampleChart({records, table}: {records: ForecastRecord[]; tabl
   const padding = {top: 24, right: 18, bottom: 58, left: 58};
   const innerWidth = width - padding.left - padding.right;
   const innerHeight = height - padding.top - padding.bottom;
-  const values = points.map((point) => point.value);
+  const actualPoints = points.filter((point) => point.kind === 'actual');
+  const forecastPoints = points.filter((point) => point.kind === 'forecast');
+  const selectedSeries = selectForecastChartSeriesId(records, table);
+  const holdoutActuals = forecastPoints
+    .map((forecast) => {
+      const row = table.rows.find((candidate) => candidate.series_id === selectedSeries && candidate.timestamp === forecast.timestamp);
+      const value = Number(row?.target);
+      return Number.isFinite(value) ? {forecast, value} : null;
+    })
+    .filter((point): point is {forecast: ForecastChartPoint; value: number} => point !== null);
+  const values = [...points.map((point) => point.value), ...holdoutActuals.map((point) => point.value)];
   const minValue = Math.min(...values);
   const maxValue = Math.max(...values);
   const valuePadding = Math.max((maxValue - minValue) * 0.12, 1);
@@ -1605,11 +1628,12 @@ function ForecastExampleChart({records, table}: {records: ForecastRecord[]; tabl
   const yMax = maxValue + valuePadding;
   const xFor = (index: number) => padding.left + (points.length === 1 ? innerWidth / 2 : (index / (points.length - 1)) * innerWidth);
   const yFor = (value: number) => padding.top + (1 - (value - yMin) / (yMax - yMin)) * innerHeight;
-  const actualPoints = points.filter((point) => point.kind === 'actual');
-  const forecastPoints = points.filter((point) => point.kind === 'forecast');
   const pointIndex = new Map(points.map((point, index) => [point, index]));
   const actualPath = chartPath(actualPoints, pointIndex, xFor, yFor);
   const forecastPath = chartPath(forecastPoints, pointIndex, xFor, yFor);
+  const holdoutPath = holdoutActuals
+    .map(({forecast, value}, index) => `${index === 0 ? 'M' : 'L'} ${xFor(pointIndex.get(forecast) ?? 0)} ${yFor(value)}`)
+    .join(' ');
   const boundaryIndex = actualPoints.length - 0.5;
   const boundaryX = actualPoints.length > 0 && forecastPoints.length > 0 ? xFor(boundaryIndex) : null;
   const joinPath =
@@ -1651,7 +1675,11 @@ function ForecastExampleChart({records, table}: {records: ForecastRecord[]; tabl
           })}
           {actualPath && <path d={actualPath} fill="none" stroke="var(--ifm-color-primary)" strokeWidth="3" />}
           {joinPath && <path d={joinPath} fill="none" stroke="var(--ifm-color-primary)" strokeWidth="2" strokeDasharray="4 4" />}
+          {holdoutPath && <path d={holdoutPath} fill="none" stroke="#7dd3fc" strokeWidth="2" strokeDasharray="4 3" />}
           {forecastPath && <path d={forecastPath} fill="none" stroke="#c2410c" strokeWidth="3" />}
+          {holdoutActuals.map(({forecast, value}) => (
+            <circle key={`holdout-${forecast.timestamp}`} cx={xFor(pointIndex.get(forecast) ?? 0)} cy={yFor(value)} r="3" fill="#7dd3fc" stroke="white" strokeWidth="1" />
+          ))}
           {points.map((point, index) => {
             const isEndpoint = index === 0 || index === points.length - 1 || point.kind === 'forecast';
             return (
@@ -1688,6 +1716,14 @@ function ForecastExampleChart({records, table}: {records: ForecastRecord[]; tabl
             Forecast
           </text>
           <circle cx={padding.left + 120} cy={height - 24} r="4" fill="#c2410c" />
+          {holdoutActuals.length > 0 && (
+            <>
+              <text x={padding.left + 145} y={height - 20} fontSize="12" fill="var(--ifm-font-color-base)">
+                Holdout actual
+              </text>
+              <circle cx={padding.left + 230} cy={height - 24} r="4" fill="#7dd3fc" />
+            </>
+          )}
         </svg>
       </div>
       <p style={{margin: '0.35rem 0 0'}}>
@@ -1837,6 +1873,54 @@ function chartPath(
 
 function docsExampleSample(model: string): 'lane' | 'spatial' {
   return ['auto_forecast', 'cartoboost_lag', 'kriging', 'spatial_piecewise_kriging'].includes(model) ? 'spatial' : 'lane';
+}
+
+function isIntermittentDemandModel(model: string) {
+  return ['intermittent_demand', 'croston', 'sba', 'tsb'].includes(model);
+}
+
+function intermittentRouteDemandTable(table: ParsedTable): ParsedTable {
+  const rowsByRoute = new Map<string, Record<string, string>[]>();
+  for (const row of table.rows) {
+    const route = row.series_id?.trim();
+    const timestamp = Date.parse(row.timestamp ?? '');
+    const value = Number(row.target);
+    if (!route || !Number.isFinite(timestamp) || !Number.isFinite(value) || value < 0) {
+      continue;
+    }
+    const rows = rowsByRoute.get(route) ?? [];
+    rows.push(row);
+    rowsByRoute.set(route, rows);
+  }
+  const candidate = Array.from(rowsByRoute.entries())
+    .map(([route, rows]) => {
+      const timestamps = rows.map((row) => Date.parse(row.timestamp));
+      const start = Math.min(...timestamps);
+      const end = Math.max(...timestamps);
+      const hours = Math.floor((end - start) / 3_600_000) + 1;
+      const density = rows.length / Math.max(hours, 1);
+      return {route, rows, start, end, hours, density};
+    })
+    .filter((entry) => entry.hours >= 48 && entry.rows.length >= 6 && entry.density >= 0.03 && entry.density <= 0.5)
+    .sort((left, right) => right.hours - left.hours || left.density - right.density || left.route.localeCompare(right.route))[0];
+  if (!candidate) {
+    throw new Error('The bundled taxi panel does not contain a route with enough observed and zero-demand hours for an intermittent-demand example.');
+  }
+  const observed = new Map<string, number>();
+  for (const row of candidate.rows) {
+    const timestamp = new Date(Date.parse(row.timestamp)).toISOString().slice(0, 19);
+    observed.set(timestamp, (observed.get(timestamp) ?? 0) + Number(row.target));
+  }
+  const rows: Record<string, string>[] = [];
+  for (let timestamp = candidate.start; timestamp <= candidate.end; timestamp += 3_600_000) {
+    const key = new Date(timestamp).toISOString().slice(0, 19);
+    rows.push({timestamp: key, series_id: candidate.route, target: String(observed.get(key) ?? 0)});
+  }
+  return {
+    columns: ['timestamp', 'series_id', 'target'],
+    rows,
+    fileName: `zero-filled-${candidate.route}-hourly-demand.csv`,
+  };
 }
 
 function modelLabel(models: ModelOption[], value: string) {
@@ -6896,6 +6980,10 @@ function isPiecewiseForecastModel(model: string) {
 
 function isSpatialPiecewiseKrigingModel(model: string) {
   return normalizedForecastModel(model) === 'spatial_piecewise_kriging';
+}
+
+function isSpatialForecastModel(model: string) {
+  return normalizedForecastModel(model) === 'kriging' || isSpatialPiecewiseKrigingModel(model);
 }
 
 function isThetaForecastModel(model: string) {
