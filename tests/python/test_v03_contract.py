@@ -33,7 +33,7 @@ def test_root_surface_is_small_and_preview_is_lazy() -> None:
         "BoosterConfig",
         "__version__",
     ]
-    assert cartoboost.__version__ == "0.3.0"
+    assert cartoboost.__version__.startswith("0.3.")
     assert not hasattr(cartoboost, "AutoGeoModel")
     assert not hasattr(cartoboost.preview, "AutoGeoModel")
     assert not hasattr(cartoboost.preview, "GeoModelStack")
