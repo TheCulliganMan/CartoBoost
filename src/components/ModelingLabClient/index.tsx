@@ -84,6 +84,7 @@ type WasmModule = {
   runGeostatisticsModel?: (request: unknown) => GeostatisticsResponse;
   runGeoFeatureExamples?: (request: unknown) => GeoFeatureResponse;
   runGraphForecast?: (request: unknown) => unknown;
+  runMarketStructureExplorer?: (request: unknown) => unknown;
   deepResponseCurveFit?: (rows: unknown, responseType: string, monotone?: string, backend?: string) => unknown;
   deepResponseCurvePredict?: (artifact: unknown, rows: unknown) => unknown;
   deepEventOutcomeFit?: (features: unknown, labels: Float64Array, backend?: string) => unknown;

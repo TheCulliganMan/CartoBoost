@@ -2662,6 +2662,8 @@ def run_market_structure_taxi_suite(
     secondary_history = matrix(history, "loads", history_dates)
     primary_actual = matrix(holdout, "taxi_effective_fare_per_mile", holdout_dates)
     secondary_actual = matrix(holdout, "loads", holdout_dates)
+    primary_all = matrix(rows, "taxi_effective_fare_per_mile", dates)
+    secondary_all = matrix(rows, "loads", dates)
     static = history.drop_duplicates("lane_id").set_index("lane_id").loc[lane_ids]
     coordinates = static[["origin_x", "origin_y", "destination_x", "destination_y"]].to_numpy(
         dtype=float
@@ -2806,6 +2808,20 @@ def run_market_structure_taxi_suite(
         ],
         horizon=horizon,
     )
+    rolling_origin = evaluate_market_rolling_origins(
+        lane_ids=lane_ids,
+        primary=primary_all,
+        secondary=secondary_all,
+        origin_ids=static["pickup_zone"].astype(str).tolist(),
+        destination_ids=static["dropoff_zone"].astype(str).tolist(),
+        coordinates=coordinates,
+        hierarchy_groups=[
+            [f"pickup_borough:{int(code)}"]
+            for code in static["pickup_borough_code"].to_numpy(dtype=float)
+        ],
+        horizon=horizon,
+        folds=args.rolling_origin_folds,
+    )
     payload = {
         "created_at": datetime.now(timezone.utc).isoformat(),
         "cartoboost_version": __version__,
@@ -2834,6 +2850,7 @@ def run_market_structure_taxi_suite(
         "shift_counts": shifts,
         "controlled_mix_shock": controlled_mix_shock,
         "edge_stability": edge_stability,
+        "rolling_origin": rolling_origin,
         "comparability_note": (
             None
             if primary_baselines is not None
@@ -2966,6 +2983,70 @@ def evaluate_edge_stability(
         "edge_counts": [len(edges) for edges in edge_sets],
         "consecutive_jaccard": overlaps,
         "mean_consecutive_jaccard": float(np.mean(overlaps)) if overlaps else float("nan"),
+    }
+
+
+def evaluate_market_rolling_origins(
+    *,
+    lane_ids: list[str],
+    primary: np.ndarray,
+    secondary: np.ndarray,
+    origin_ids: list[str],
+    destination_ids: list[str],
+    coordinates: np.ndarray,
+    hierarchy_groups: list[list[str]],
+    horizon: int,
+    folds: int,
+) -> dict[str, Any]:
+    """Leakage-safe daily rolling origins for the native market forecaster."""
+    folds = max(1, folds)
+    minimum_train = horizon + 1
+    cutoffs = [
+        primary.shape[0] - horizon * offset
+        for offset in range(folds, 0, -1)
+        if primary.shape[0] - horizon * offset >= minimum_train
+    ]
+    if not cutoffs:
+        raise ValueError("market rolling-origin evaluation requires more training history")
+    rows = []
+    for cutoff in cutoffs:
+        model = MarketStructureForecaster().fit(
+            MarketPanelFrame(
+                lane_ids=lane_ids,
+                timestamps=list(range(cutoff)),
+                target_names=["taxi_effective_fare_per_mile", "taxi_trip_count"],
+                primary=primary[:cutoff],
+                secondary=secondary[:cutoff],
+                origin_ids=origin_ids,
+                destination_ids=destination_ids,
+                coordinates=coordinates,
+                hierarchy_groups=hierarchy_groups,
+                horizon=horizon,
+                frequency="daily",
+            )
+        )
+        predictions = model.predict(horizon)
+        predicted_primary = np.asarray(
+            [row["primary"] for row in predictions], dtype=float
+        ).reshape(horizon, len(lane_ids))
+        predicted_secondary = np.asarray(
+            [row["secondary"] for row in predictions], dtype=float
+        ).reshape(horizon, len(lane_ids))
+        rows.append(
+            {
+                "cutoff_day": cutoff,
+                "primary": market_metric_set(primary[cutoff : cutoff + horizon], predicted_primary),
+                "secondary": market_metric_set(
+                    secondary[cutoff : cutoff + horizon], predicted_secondary
+                ),
+            }
+        )
+    return {
+        "split_type": "rolling_origin_daily",
+        "fold_count": len(rows),
+        "folds": rows,
+        "mean_primary_mae": float(np.mean([row["primary"]["mae"] for row in rows])),
+        "mean_secondary_mae": float(np.mean([row["secondary"]["mae"] for row in rows])),
     }
 
 

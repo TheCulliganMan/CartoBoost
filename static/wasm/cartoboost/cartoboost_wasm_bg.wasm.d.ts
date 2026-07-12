@@ -33,6 +33,7 @@ export const runGeoFeatureExamples: (a: any) => [number, number, number];
 export const runGeostatisticsModel: (a: any) => [number, number, number];
 export const runGeotemporalDiagnostics: (a: any) => [number, number, number];
 export const runGraphForecast: (a: any) => [number, number, number];
+export const runMarketStructureExplorer: (a: any) => [number, number, number];
 export const runNeuralModel: (a: any) => [number, number, number];
 export const runRegressionModel: (a: any) => [number, number, number];
 export const runSequence: (a: any) => [number, number, number];

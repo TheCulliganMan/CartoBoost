@@ -206,6 +206,7 @@ model = MarketStructureForecaster(top_k=8).fit(frame)
 forecast_rows = model.predict(7)
 weekly_rows = model.weekly_rollups(7)
 current_explanations = model.nowcast()
+explorer_payload = model.explorer_payload(7)
 ```
 
 Predictions retain generic `primary` and `secondary` fields; a fitted
@@ -229,12 +230,25 @@ If neither lane nor an supplied parent has observations, fitting fails.
 separately fitted weekly model: it averages `primary` and its interval bounds,
 and sums `secondary`, with the number of contributing days on each row.
 
-Primary intervals use per-lane empirical residual radii and a train-only
-three-origin rolling calibration multiplier. Benchmark artifacts report
+`explorer_payload()` is the portable interpretability contract for analyst
+tools: it returns lane endpoint geometry, current explanations, forecast rows,
+and retained learned kernels in one native JSON-compatible payload. The browser
+export exposes the same behavior as `runMarketStructureExplorer(request)`, so a
+WASM app can render and evaluate the same evidence as a Python notebook.
+
+The supplied explorer includes `marketExplorerDataFromPayload(payload)`, which
+turns that contract into clickable endpoint markets without recreating model
+logic in the UI. Pass its `nodes` and `edges` directly to
+`MarketStructureExplorer`. This gives a Python-backed web notebook and a
+browser-only WASM app the same outbound/inbound measures, forecast-change map,
+and retained directed kernels.
+
+Primary intervals combine learned asymmetric quantile-head tails with a
+per-lane train-only residual-calibration floor. Benchmark artifacts report
 realized coverage and mean interval width. On the 36-lane taxi holdout, the
-resulting primary interval covered 84.52% of 252 observed values with mean
-width 3.2859; this is the observed evidence for the conservative interval
-setting, not a claim of universal calibration.
+resulting primary interval covered 96.83% of 252 observed values with mean
+width 2.5792; this is observed holdout evidence, not a claim of universal
+calibration.
 
 Run the maintained real-taxi structure benchmark with a local TLC cache (or
 allow the documented TLC inputs to be fetched):
@@ -258,13 +272,13 @@ On locally cached January–April 2024 Yellow Taxi records, this command used
 12,429,495 cleaned trips aggregated into 128 directional lanes, 109 training
 days, and a 14-day final holdout. Primary observations were available for
 99.10% of training lane-days and 92.91% of holdout lane-days. The native fit
-and forecast took 0.83 seconds; total data loading and evaluation time was
-100.47 seconds. The table shows the primary effective-fare-per-mile result on
+and forecast took 63.91 seconds; total data loading and evaluation time was
+255.13 seconds. The table shows the primary effective-fare-per-mile result on
 the 1,665 observed holdout values; lower is better.
 
 | Model | MAE | RMSE | WAPE |
 | --- | ---: | ---: | ---: |
-| `market_structure` | 0.9513 | 1.1974 | 0.0612 |
+| `market_structure` | 0.5301 | 0.6883 | 0.0341 |
 | `last_value` | 1.3678 | 1.9532 | 0.0880 |
 | `inverse_distance_last_value` | 3.1159 | 3.8419 | 0.2005 |
 | `fixed_graph_last_observed` | 3.1766 | 3.8815 | 0.2044 |
@@ -281,14 +295,15 @@ lane-days, allowing the dense panel models to remain in that comparison.
 | --- | ---: | ---: | ---: |
 | `cartoboost_lag` | 35.7115 | 74.2022 | 0.2103 |
 | `cartoboost_neural_panel` | 56.4735 | 86.8781 | 0.3325 |
-| `market_structure` | 60.8855 | 87.8150 | 0.3585 |
+| `market_structure` | 43.2418 | 80.8679 | 0.2546 |
 | `fixed_graph_last_observed` | 68.2106 | 119.4271 | 0.4016 |
 | `last_value` | 74.5993 | 108.3420 | 0.4392 |
 | `inverse_distance_last_value` | 103.4633 | 131.1571 | 0.6092 |
 
-For this supporting target, the learned structure again improves the spatial
-baselines but trails the lag and neural-panel models. That limitation is
-reported directly in the artifact rather than hidden by a blended score.
+For this supporting target, the learned structure improves the spatial and
+neural-panel baselines, while `cartoboost_lag` remains stronger. That
+limitation is reported directly in the artifact rather than hidden by a
+blended score.
 
 On the locally cached January–March 2024 Yellow Taxi records, the corresponding
 `--months 1,2,3 --lanes 36 --horizon 7` dense-panel run used 36 daily
@@ -299,15 +314,19 @@ effective-fare-per-mile result; lower is better.
 | --- | ---: | ---: | ---: |
 | `cartoboost_lag` | 0.4889 | 0.7209 | 0.0333 |
 | `cartoboost_neural_panel` | 0.8390 | 1.1162 | 0.0572 |
-| `market_structure` | 0.8675 | 1.1290 | 0.0591 |
+| `market_structure` | 0.4720 | 0.7068 | 0.0322 |
 | `fixed_graph_dcrnn` | 0.9256 | 1.1476 | 0.0631 |
 | `last_value` | 1.2883 | 1.7164 | 0.0878 |
 | `inverse_distance_last_value` | 2.8525 | 3.6585 | 0.1945 |
 
-The learned structure improves the distance-only and fixed-graph smoothers on
-this holdout, while `cartoboost_lag` is the stronger primary-target baseline.
-Treat that as a limitation of this initial model, not a reason to replace the
-lag model without further validation.
+The learned structure has the lowest primary-target MAE, RMSE, and WAPE in
+this dense holdout. This is one fixed taxi split, so it is evidence for this
+configuration rather than a universal replacement claim.
+
+With `--rolling-origin-folds 3`, the same 36-lane setup evaluates three
+leakage-safe daily cutoffs. The market model averaged primary MAE 0.4204 and
+supporting-target MAE 31.2169 across the 70-, 77-, and 84-day cutoffs. The
+artifact records the full per-cutoff metrics and learned-edge stability.
 
 The same 36-lane run includes a controlled composition-shift analogue: the
 final recorded primary value for `PU132->DO230` was multiplied by three and an

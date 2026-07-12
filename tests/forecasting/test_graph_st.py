@@ -46,6 +46,10 @@ def test_market_structure_wrappers_keep_targets_generic(monkeypatch):
         def relationships_json(self):
             return json.dumps([])
 
+        def explorer_json(self, horizon):
+            calls.append(("explorer", horizon))
+            return json.dumps({"lanes": [], "forecasts": [], "explanations": [], "kernels": []})
+
     import cartoboost
 
     monkeypatch.setattr(
@@ -68,14 +72,22 @@ def test_market_structure_wrappers_keep_targets_generic(monkeypatch):
         coordinates=[[0.0, 0.0, 1.0, 1.0], [0.0, 0.0, 2.0, 2.0]],
         hierarchy_groups=[["parent:a"], ["parent:a"]],
     )
-    model = MarketStructureForecaster().fit(frame)
+    model = MarketStructureForecaster(
+        head_epochs=12,
+        huber_delta=1.5,
+        quantile_levels=(0.1, 0.5, 0.9),
+    ).fit(frame)
 
     assert frame.target_names == ["benchmark", "supporting_measure"]
     assert model.predict(1) == [{"primary": 1.0, "secondary": 2.0}]
     assert model.nowcast() == [{"shift": "no_shift"}]
     assert model.weekly_rollups(2) == [{"days": 2, "primary": 1.1, "secondary": 4.0}]
+    assert model.explorer_payload(3)["kernels"] == []
     assert calls[0][1][2] == ["benchmark", "supporting_measure"]
     assert calls[0][1][9] == [["parent:a"], ["parent:a"]]
+    assert calls[1][1]["head_epochs"] == 12
+    assert calls[1][1]["huber_delta"] == 1.5
+    assert calls[1][1]["quantile_levels"] == [0.1, 0.5, 0.9]
 
 
 def test_graph_temporal_frame_and_dcrnn_delegate_to_native(monkeypatch):

@@ -28,6 +28,78 @@ export type MarketStructureExplorerProps = {
   edges: MarketExplorerEdge[];
 };
 
+/** The JSON-compatible contract returned by the Rust model in Python and WASM. */
+export type MarketStructureExplorerPayload = {
+  lanes: Array<{
+    lane_id: string;
+    origin_id: string;
+    destination_id: string;
+    origin_x: number;
+    origin_y: number;
+    destination_x: number;
+    destination_y: number;
+  }>;
+  forecasts: Array<{lane_id: string; horizon: number; primary: number; secondary: number}>;
+  explanations: Array<{
+    lane_id: string;
+    smoothed_primary: number;
+    observed_primary: number | null;
+    top_relationships: Array<{source_lane_id: string; target_lane_id: string; weight: number; kinds: string[]}>;
+  }>;
+  kernels: Array<{source_lane_id: string; target_lane_id: string; weight: number; kinds: string[]}>;
+};
+
+/**
+ * Converts the model's portable lane evidence into endpoint markets for the
+ * interactive view.  This is deliberately a display projection: the native
+ * lane-level payload remains the auditable source of truth.
+ */
+export function marketExplorerDataFromPayload(payload: MarketStructureExplorerPayload): MarketStructureExplorerProps {
+  type Accumulator = MarketExplorerNode & {primaryTotal: number; primaryCount: number; forecasts: Map<number, number[]>};
+  const laneById = new Map(payload.lanes.map((lane) => [lane.lane_id, lane]));
+  const explanationByLane = new Map(payload.explanations.map((row) => [row.lane_id, row]));
+  const forecastsByLane = new Map<string, Array<{horizon: number; primary: number; secondary: number}>>();
+  for (const row of payload.forecasts) forecastsByLane.set(row.lane_id, [...(forecastsByLane.get(row.lane_id) ?? []), row]);
+  const markets = new Map<string, Accumulator>();
+  const ensure = (id: string, longitude: number, latitude: number): Accumulator => {
+    const known = markets.get(id);
+    if (known) return known;
+    const next: Accumulator = {id, label: id, longitude, latitude, inbound: 0, outbound: 0, primary: 0, primaryChange: 0, secondary: 0, forecast: [], primaryTotal: 0, primaryCount: 0, forecasts: new Map()};
+    markets.set(id, next);
+    return next;
+  };
+  for (const lane of payload.lanes) {
+    const origin = ensure(lane.origin_id, lane.origin_x, lane.origin_y);
+    const destination = ensure(lane.destination_id, lane.destination_x, lane.destination_y);
+    const forecast = (forecastsByLane.get(lane.lane_id) ?? []).sort((a, b) => a.horizon - b.horizon);
+    const explanation = explanationByLane.get(lane.lane_id);
+    const current = explanation?.smoothed_primary ?? forecast[0]?.primary ?? 0;
+    const first = forecast[0]?.primary ?? current;
+    const final = forecast.at(-1)?.primary ?? first;
+    origin.primaryTotal += current;
+    origin.primaryCount += 1;
+    origin.primaryChange += current === 0 ? 0 : (final - current) / current * 100;
+    for (const item of forecast) {
+      origin.outbound += item.secondary;
+      destination.inbound += item.secondary;
+      origin.secondary += item.secondary;
+      origin.forecasts.set(item.horizon, [...(origin.forecasts.get(item.horizon) ?? []), item.primary]);
+    }
+  }
+  const nodes = [...markets.values()].map(({primaryTotal, primaryCount, forecasts, ...market}) => ({
+    ...market,
+    primary: primaryCount ? primaryTotal / primaryCount : 0,
+    primaryChange: primaryCount ? market.primaryChange / primaryCount : 0,
+    forecast: [...forecasts.entries()].sort(([a], [b]) => a - b).map(([, values]) => values.reduce((sum, value) => sum + value, 0) / values.length),
+  }));
+  const edges = payload.kernels.flatMap((edge) => {
+    const source = laneById.get(edge.source_lane_id);
+    const target = laneById.get(edge.target_lane_id);
+    return source && target ? [{source: source.origin_id, target: target.origin_id, weight: edge.weight, kinds: edge.kinds}] : [];
+  });
+  return {nodes, edges};
+}
+
 type Metric = 'outbound' | 'inbound' | 'forecast_change' | 'kernel';
 
 const metricLabel: Record<Metric, string> = {

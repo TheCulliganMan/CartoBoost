@@ -234,6 +234,11 @@ class MarketStructureForecaster:
         self._check_is_fitted()
         return list(json.loads(self._native_model.relationships_json()))
 
+    def explorer_payload(self, horizon: int = 7) -> dict[str, Any]:
+        """Return portable lanes, forecasts, explanations, and learned kernels."""
+        self._check_is_fitted()
+        return dict(json.loads(self._native_model.explorer_json(int(horizon))))
+
     def save(self, path: str | Path) -> None:
         self._check_is_fitted()
         self._native_model.save(str(path))

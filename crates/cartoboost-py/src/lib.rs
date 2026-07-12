@@ -3521,6 +3521,12 @@ impl NativeMarketStructureForecaster {
         serde_json::to_string(&self.model.relationships().map_err(to_py_geo_st_error)?)
             .map_err(|err| PyRuntimeError::new_err(err.to_string()))
     }
+    fn explorer_json(&self, py: Python<'_>, horizon: usize) -> PyResult<String> {
+        let payload = py
+            .allow_threads(|| self.model.explorer_payload(horizon))
+            .map_err(to_py_geo_st_error)?;
+        serde_json::to_string(&payload).map_err(|err| PyRuntimeError::new_err(err.to_string()))
+    }
     fn save(&self, path: PathBuf) -> PyResult<()> {
         self.model.save(path).map_err(to_py_geo_st_error)
     }

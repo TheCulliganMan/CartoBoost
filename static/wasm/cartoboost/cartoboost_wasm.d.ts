@@ -69,6 +69,12 @@ export function runGeotemporalDiagnostics(request: any): any;
 
 export function runGraphForecast(request: any): any;
 
+/**
+ * Fits the generic market structure model in-browser and returns the full
+ * analyst-facing payload: directional forecasts, explanations, and kernels.
+ */
+export function runMarketStructureExplorer(request: any): any;
+
 export function runNeuralModel(request: any): any;
 
 export function runRegressionModel(request: any): any;
@@ -120,6 +126,7 @@ export interface InitOutput {
     readonly runGeostatisticsModel: (a: any) => [number, number, number];
     readonly runGeotemporalDiagnostics: (a: any) => [number, number, number];
     readonly runGraphForecast: (a: any) => [number, number, number];
+    readonly runMarketStructureExplorer: (a: any) => [number, number, number];
     readonly runNeuralModel: (a: any) => [number, number, number];
     readonly runRegressionModel: (a: any) => [number, number, number];
     readonly runSequence: (a: any) => [number, number, number];

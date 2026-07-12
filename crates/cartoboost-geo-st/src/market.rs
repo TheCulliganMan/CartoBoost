@@ -7,6 +7,7 @@
 use crate::{GeoStError, Result};
 use cartoboost_neural::{GraphSageConfig, GraphSageEncoder, HomogeneousGraph};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -381,6 +382,12 @@ pub struct MarketExplanation {
 pub struct MarketStructureForecaster {
     pub config: MarketStructureConfig,
     lane_ids: Vec<String>,
+    #[serde(default)]
+    origin_ids: Vec<String>,
+    #[serde(default)]
+    destination_ids: Vec<String>,
+    #[serde(default)]
+    coordinates: Vec<[f64; 4]>,
     hierarchy_groups: Vec<Vec<String>>,
     timestamps: Vec<i64>,
     frequency: String,
@@ -439,6 +446,9 @@ impl MarketStructureForecaster {
         Ok(Self {
             config,
             lane_ids: Vec::new(),
+            origin_ids: Vec::new(),
+            destination_ids: Vec::new(),
+            coordinates: Vec::new(),
             hierarchy_groups: Vec::new(),
             timestamps: Vec::new(),
             frequency: String::new(),
@@ -541,6 +551,11 @@ impl MarketStructureForecaster {
             &log_secondary,
             &self.primary_means,
             &self.secondary_means,
+            &self.weekly_primary,
+            &self.weekly_secondary,
+            &self.primary_calendar_weights,
+            &self.secondary_calendar_weights,
+            &self.cross_target_couplings,
             &self.relationships,
             &self.neural_embeddings,
             &self.config,
@@ -563,6 +578,9 @@ impl MarketStructureForecaster {
             ));
         }
         self.lane_ids = frame.lane_ids.clone();
+        self.origin_ids = frame.origin_ids.clone();
+        self.destination_ids = frame.destination_ids.clone();
+        self.coordinates = frame.coordinates.clone();
         self.hierarchy_groups = frame.hierarchy_groups.clone();
         self.timestamps = frame.timestamps.clone();
         self.frequency = frame.frequency.clone();
@@ -680,12 +698,10 @@ impl MarketStructureForecaster {
                         self.last_mix.as_deref(),
                         &self.neural_embeddings,
                     );
-                    // Keep the decomposed smoother as an explicit prior while
-                    // allowing the supervised graph adapters to correct it.
-                    next_primary[lane] =
-                        0.5 * next_primary[lane] + 0.5 * dot(&heads.primary_huber, &features);
-                    next_secondary[lane] =
-                        0.5 * next_secondary[lane] + 0.5 * dot(&heads.secondary_huber, &features);
+                    // The robust adapters predict residual corrections to the
+                    // decomposed graph path, never a competing absolute level.
+                    next_primary[lane] += dot(&heads.primary_huber, &features);
+                    next_secondary[lane] += dot(&heads.secondary_huber, &features);
                 }
                 let primary_value = next_primary[lane].exp();
                 let spread =
@@ -709,7 +725,7 @@ impl MarketStructureForecaster {
                         let values = heads
                             .primary_quantiles
                             .iter()
-                            .map(|head| dot(head, &features))
+                            .map(|head| next_primary[lane] + dot(head, &features))
                             .collect::<Vec<_>>();
                         quantile_interval(
                             &self.config.quantile_levels,
@@ -744,6 +760,24 @@ impl MarketStructureForecaster {
             &self.primary_observed,
             &self.primary_means,
         );
+        // Remove the fitted lane-local mix contribution before passing a lane
+        // state through the market graph. A known composition event therefore
+        // remains local rather than becoming evidence for a neighbor alert.
+        let primary_without_mix = primary
+            .iter()
+            .enumerate()
+            .map(|(lane, value)| {
+                *value
+                    - self
+                        .last_mix
+                        .as_ref()
+                        .map_or(0.0, |mix| self.mix_coefficients[lane] * mix[lane])
+            })
+            .collect::<Vec<_>>();
+        let active_mix = self
+            .last_mix
+            .as_ref()
+            .is_some_and(|mix| mix.iter().any(|value| value.abs() > 1e-12));
         let mut rows = Vec::with_capacity(self.lane_ids.len());
         for lane in 0..self.lane_ids.len() {
             let observed_index = last_observed_index(&self.primary_observed, lane);
@@ -755,7 +789,7 @@ impl MarketStructureForecaster {
             let calendar = calendar_effect(&self.primary_calendar_weights, &self.last_calendar);
             let peer = peer_value(
                 lane,
-                &primary,
+                &primary_without_mix,
                 &self.primary_means,
                 &self.relationships,
                 &self.lane_ids,
@@ -782,6 +816,10 @@ impl MarketStructureForecaster {
                 MarketShiftKind::NoShift
             } else if peer.abs() / scale >= self.config.shift_zscore
                 && unexplained_local.abs() / scale < self.config.shift_zscore
+                // A current caller-supplied mix event contaminates the graph
+                // snapshot. Defer market classification until a clean cutoff
+                // rather than propagating that local evidence to neighbors.
+                && !active_mix
             {
                 MarketShiftKind::Market
             } else if local.abs() / scale >= self.config.shift_zscore
@@ -872,6 +910,38 @@ impl MarketStructureForecaster {
         } else {
             Ok(self.relationships.iter().flatten().cloned().collect())
         }
+    }
+
+    /// A portable analyst payload for Python notebooks and browser/WASM views.
+    /// It intentionally exposes model evidence instead of rendering policy.
+    pub fn explorer_payload(&self, horizon: usize) -> Result<serde_json::Value> {
+        if self.lane_ids.is_empty() {
+            return Err(GeoStError::NotFit);
+        }
+        let lanes = self
+            .lane_ids
+            .iter()
+            .enumerate()
+            .map(|(index, lane_id)| {
+                let coordinate = self.coordinates.get(index).copied().unwrap_or([0.0; 4]);
+                json!({
+                    "lane_id": lane_id,
+                    "origin_id": self.origin_ids.get(index),
+                    "destination_id": self.destination_ids.get(index),
+                    "origin_x": coordinate[0],
+                    "origin_y": coordinate[1],
+                    "destination_x": coordinate[2],
+                    "destination_y": coordinate[3],
+                })
+            })
+            .collect::<Vec<_>>();
+        Ok(json!({
+            "lanes": lanes,
+            "forecasts": self.predict(horizon, None)?,
+            "explanations": self.nowcast()?,
+            "kernels": self.relationships()?,
+            "target_names": self.target_names,
+        }))
     }
     pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
         fs::write(path, self.to_json_string()?).map_err(GeoStError::from)
@@ -1103,6 +1173,11 @@ fn fit_joint_heads(
     secondary: &[Vec<f64>],
     primary_means: &[f64],
     secondary_means: &[f64],
+    weekly_primary: &[Vec<f64>],
+    weekly_secondary: &[Vec<f64>],
+    primary_calendar_weights: &[f64],
+    secondary_calendar_weights: &[f64],
+    cross_target_couplings: &[f64],
     relationships: &[Vec<MarketRelationship>],
     embeddings: &[Vec<f32>],
     config: &MarketStructureConfig,
@@ -1110,7 +1185,7 @@ fn fit_joint_heads(
     let mut samples = Vec::new();
     for time in 1..primary.len() {
         for lane in 0..frame.lane_ids.len() {
-            if !observed[time][lane] {
+            if !observed[time][lane] || !observed[time - 1][lane] {
                 continue;
             }
             let calendar = frame.calendar[time].as_slice();
@@ -1120,22 +1195,51 @@ fn fit_joint_heads(
                     .map(|features| features[0])
                     .collect::<Vec<_>>()
             });
+            let features = head_features(
+                lane,
+                &primary[time - 1],
+                &secondary[time - 1],
+                primary_means,
+                secondary_means,
+                relationships,
+                &frame.lane_ids,
+                frame.timestamps[time],
+                calendar,
+                mix.as_deref(),
+                embeddings,
+            );
+            let timestamp = frame.timestamps[time];
+            let primary_peer = peer_value(
+                lane,
+                &primary[time - 1],
+                primary_means,
+                relationships,
+                &frame.lane_ids,
+                timestamp,
+            );
+            let secondary_peer = peer_value(
+                lane,
+                &secondary[time - 1],
+                secondary_means,
+                relationships,
+                &frame.lane_ids,
+                timestamp,
+            );
+            let primary_base = primary_means[lane]
+                + weekly_primary[timestamp.rem_euclid(7) as usize][lane]
+                + config.local_strength * (primary[time - 1][lane] - primary_means[lane])
+                + config.graph_strength * primary_peer
+                + calendar_effect(primary_calendar_weights, calendar);
+            let secondary_base = secondary_means[lane]
+                + weekly_secondary[timestamp.rem_euclid(7) as usize][lane]
+                + config.local_strength * (secondary[time - 1][lane] - secondary_means[lane])
+                + config.graph_strength * secondary_peer
+                + calendar_effect(secondary_calendar_weights, calendar)
+                + cross_target_couplings[lane] * (primary[time - 1][lane] - primary_means[lane]);
             samples.push((
-                head_features(
-                    lane,
-                    &primary[time - 1],
-                    &secondary[time - 1],
-                    primary_means,
-                    secondary_means,
-                    relationships,
-                    &frame.lane_ids,
-                    frame.timestamps[time],
-                    calendar,
-                    mix.as_deref(),
-                    embeddings,
-                ),
-                primary[time][lane],
-                secondary[time][lane],
+                features,
+                primary[time][lane] - primary_base,
+                secondary[time][lane] - secondary_base,
             ));
         }
     }
@@ -1152,25 +1256,6 @@ fn fit_joint_heads(
         primary_quantiles: vec![vec![0.0; width]; config.quantile_levels.len()],
         secondary_quantiles: vec![vec![0.0; width]; config.quantile_levels.len()],
     };
-    // Bias initialization gives every head a stable target-scale starting point.
-    heads.primary_huber[0] = primary
-        .iter()
-        .zip(observed)
-        .flat_map(|(row, mask)| {
-            row.iter()
-                .zip(mask)
-                .filter_map(|(value, seen)| seen.then_some(*value))
-        })
-        .sum::<f64>()
-        / samples.len() as f64;
-    heads.secondary_huber[0] =
-        secondary.iter().flatten().sum::<f64>() / (secondary.len() * secondary[0].len()) as f64;
-    for head in &mut heads.primary_quantiles {
-        head[0] = heads.primary_huber[0];
-    }
-    for head in &mut heads.secondary_quantiles {
-        head[0] = heads.secondary_huber[0];
-    }
     // Heads share the exact samples and update in one optimization loop. This
     // couples rate and supporting-target learning without allowing the latter
     // to overwrite the primary benchmark path.
@@ -1322,8 +1407,15 @@ fn quantile_interval(
         .iter()
         .rposition(|level| *level >= 0.9)
         .map(|idx| values[idx]);
-    let lower = lower.unwrap_or(point - fallback_spread).min(point);
-    let upper = upper.unwrap_or(point + fallback_spread).max(point);
+    // Quantile heads determine asymmetric tails. The train-only residual
+    // radius remains a calibration floor so a narrow fitted head cannot make
+    // the advertised interval spuriously overconfident on a new cutoff.
+    let lower = lower
+        .unwrap_or(point - fallback_spread)
+        .min(point - fallback_spread);
+    let upper = upper
+        .unwrap_or(point + fallback_spread)
+        .max(point + fallback_spread);
     (lower, upper)
 }
 
@@ -2033,6 +2125,42 @@ mod tests {
             .iter()
             .any(|edge| edge.kinds.contains(&RelationshipKind::ReverseLane)));
     }
+
+    #[test]
+    fn top_k_is_enforced_per_source_lane() {
+        let mut model = MarketStructureForecaster::new(MarketStructureConfig {
+            top_k: 1,
+            ..MarketStructureConfig::default()
+        })
+        .unwrap();
+        model.fit(&frame()).unwrap();
+        let edges = model.relationships().unwrap();
+        for lane in ["a:b", "a:c", "b:a"] {
+            assert!(
+                edges
+                    .iter()
+                    .filter(|edge| edge.source_lane_id == lane)
+                    .count()
+                    <= 1
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_missing_geography_and_unavailable_label_cutoff() {
+        let mut invalid_geo = frame();
+        invalid_geo.coordinates[0][0] = f64::NAN;
+        assert!(invalid_geo.validate().is_err());
+
+        let mut invalid_label = frame();
+        invalid_label.expert_labels.push(ExpertEventLabel {
+            lane_id: "a:b".into(),
+            timestamp: 999,
+            shift: MarketShiftKind::Market,
+            version: "review-1".into(),
+        });
+        assert!(invalid_label.validate().is_err());
+    }
     #[test]
     fn predicts_and_explains() {
         let mut model = MarketStructureForecaster::new(MarketStructureConfig::default()).unwrap();
@@ -2042,6 +2170,11 @@ mod tests {
         let weekly = model.weekly_rollups(2, None).unwrap();
         assert_eq!(weekly.len(), 3);
         assert_eq!(weekly[0].days, 2);
+        let explorer = model.explorer_payload(2).unwrap();
+        assert_eq!(explorer["lanes"].as_array().unwrap().len(), 3);
+        assert_eq!(explorer["forecasts"].as_array().unwrap().len(), 6);
+        assert_eq!(explorer["explanations"].as_array().unwrap().len(), 3);
+        assert!(explorer["kernels"].is_array());
     }
     #[test]
     fn rejects_unknown_expert_lane() {

@@ -45,6 +45,9 @@ use cartoboost_geo_st::{
     graph_metrics as graph_st_metrics, select_compute_backend as graph_st_select_backend,
     CsrAdjacency as GraphStCsrAdjacency, DcrnnConfig as GraphStDcrnnConfig,
     DcrnnForecaster as GraphStDcrnnForecaster, GraphTemporalFrame as GraphStTemporalFrame,
+    MarketPanelFrame as BrowserMarketPanelFrame,
+    MarketStructureConfig as BrowserMarketStructureConfig,
+    MarketStructureForecaster as BrowserMarketStructureForecaster,
 };
 use cartoboost_geostats::{
     Anisotropy as GeostatsAnisotropy, CovarianceKernel,
@@ -1015,6 +1018,31 @@ struct BrowserGraphForecastResponse {
     metadata: Value,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserMarketStructureRequest {
+    lane_ids: Vec<String>,
+    timestamps: Vec<i64>,
+    target_names: Vec<String>,
+    primary: Vec<Vec<f64>>,
+    secondary: Vec<Vec<f64>>,
+    origin_ids: Vec<String>,
+    destination_ids: Vec<String>,
+    coordinates: Vec<Vec<f64>>,
+    #[serde(default)]
+    hierarchy_groups: Vec<Vec<String>>,
+    #[serde(default)]
+    calendar: Vec<Vec<f64>>,
+    #[serde(default)]
+    horizon: usize,
+    #[serde(default = "default_market_frequency")]
+    frequency: String,
+}
+
+fn default_market_frequency() -> String {
+    "daily".to_string()
+}
+
 #[wasm_bindgen(js_name = runForecast)]
 pub fn run_forecast(request: JsValue) -> std::result::Result<JsValue, JsValue> {
     console_error_panic_hook::set_once();
@@ -1033,6 +1061,69 @@ pub fn run_graph_forecast(request: JsValue) -> std::result::Result<JsValue, JsVa
     let response = run_graph_forecast_request(request)
         .map_err(|error| JsValue::from_str(&error.to_string()))?;
     serialize_json_response(&response, "graph forecast response")
+}
+
+/// Fits the generic market structure model in-browser and returns the full
+/// analyst-facing payload: directional forecasts, explanations, and kernels.
+#[wasm_bindgen(js_name = runMarketStructureExplorer)]
+pub fn run_market_structure_explorer(request: JsValue) -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    let request: BrowserMarketStructureRequest =
+        serde_wasm_bindgen::from_value(request).map_err(|error| {
+            JsValue::from_str(&format!("invalid market structure request: {error}"))
+        })?;
+    let coordinates = request
+        .coordinates
+        .into_iter()
+        .map(|row| {
+            if row.len() != 4 {
+                return Err(CartoBoostError::InvalidInput(
+                    "market coordinates require [origin_x, origin_y, destination_x, destination_y]"
+                        .to_string(),
+                ));
+            }
+            Ok([row[0], row[1], row[2], row[3]])
+        })
+        .collect::<Result<Vec<_>>>()
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    let hierarchy_groups = if request.hierarchy_groups.is_empty() {
+        vec![Vec::new(); request.lane_ids.len()]
+    } else {
+        request.hierarchy_groups
+    };
+    let calendar = if request.calendar.is_empty() {
+        vec![Vec::new(); request.timestamps.len()]
+    } else {
+        request.calendar
+    };
+    let horizon = request.horizon.max(1);
+    let frame = BrowserMarketPanelFrame::new(
+        request.lane_ids.clone(),
+        request.timestamps,
+        request.target_names,
+        request.primary,
+        request.secondary,
+        request.origin_ids,
+        request.destination_ids,
+        hierarchy_groups,
+        coordinates,
+        calendar,
+        None,
+        Vec::new(),
+        Vec::new(),
+        horizon,
+        request.frequency,
+    )
+    .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    let mut model = BrowserMarketStructureForecaster::new(BrowserMarketStructureConfig::default())
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    model
+        .fit(&frame)
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    let response = model
+        .explorer_payload(horizon)
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    serialize_json_response(&response, "market structure explorer response")
 }
 
 #[wasm_bindgen(js_name = deepResponseCurveFit)]
