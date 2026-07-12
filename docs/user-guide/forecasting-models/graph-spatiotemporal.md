@@ -203,26 +203,96 @@ application can use the same interaction with its own selected targets and
 geography.
 
 ```python
+import math
+import numpy as np
+
 from cartoboost.preview.forecasting import MarketPanelFrame, MarketStructureForecaster
 
+# Twelve directional lanes across airport and Manhattan-style markets. The
+# caller owns the two target names; neither is assigned package semantics.
+markets = {
+    "132": (-73.7865, 40.6470),  # airport_a
+    "138": (-73.8729, 40.7738),  # airport_b
+    "161": (-73.9777, 40.7580),  # midtown
+    "230": (-73.9842, 40.7598),  # theatre_district
+    "48": (-73.9904, 40.7623),   # west_midtown
+    "79": (-73.9864, 40.7277),   # village
+}
+directions = [
+    ("132", "161"), ("161", "132"),
+    ("132", "230"), ("230", "132"),
+    ("138", "161"), ("161", "138"),
+    ("138", "230"), ("230", "138"),
+    ("161", "230"), ("230", "161"),
+    ("48", "79"), ("79", "48"),
+]
+lane_ids = [f"{origin}:{destination}" for origin, destination in directions]
+origin_ids = [origin for origin, _ in directions]
+destination_ids = [destination for _, destination in directions]
+coordinates = [
+    [*markets[origin], *markets[destination]]
+    for origin, destination in directions
+]
+
+def known_calendar(day: int) -> list[float]:
+    return [math.sin(2 * math.pi * day / 7), float(day % 28 == 0)]
+
+days = 84
+timestamps = list(range(days))
+calendar = np.array([known_calendar(day) for day in timestamps])
+lane_offset = np.linspace(-0.18, 0.18, len(lane_ids))
+airport_lane = np.array([origin in {"132", "138"} for origin in origin_ids], dtype=float)
+primary = np.array([
+    np.exp(1.25 + lane_offset + 0.24 * airport_lane
+           + 0.16 * math.sin(day / 9) + 0.09 * math.cos(day / 21))
+    for day in timestamps
+])
+secondary = np.array([
+    np.maximum(1, np.rint(22 + 44 * airport_lane + 9 * np.sin(day / 7 + lane_offset * 4)))
+    for day in timestamps
+])
+
 frame = MarketPanelFrame(
-    lane_ids=["132:138", "132:161", "138:132"],
-    timestamps=list(range(21)),
-    target_names=["benchmark", "supporting_measure"],
-    primary=daily_primary_matrix,
-    secondary=daily_secondary_matrix,
-    origin_ids=["132", "132", "138"],
-    destination_ids=["138", "161", "132"],
-    coordinates=lane_endpoint_coordinates,
+    lane_ids=lane_ids,
+    timestamps=timestamps,
+    target_names=["primary_measure", "supporting_measure"],
+    primary=primary,
+    secondary=secondary,
+    origin_ids=origin_ids,
+    destination_ids=destination_ids,
+    coordinates=coordinates,
+    calendar=calendar,
     # Ordered, caller-owned parent keys, from most specific to broadest.
-    hierarchy_groups=[["origin_parent:5:132"], ["origin_parent:5:132"], ["origin_parent:5:138"]],
+    hierarchy_groups=[
+        [f"origin_parent:5:{origin}", f"market_family:{'airport' if origin in {'132', '138'} else 'city'}"]
+        for origin in origin_ids
+    ],
+    horizon=7,
+    frequency="daily",
 )
 model = MarketStructureForecaster(top_k=8).fit(frame)
-forecast_rows = model.predict(7)
-weekly_rows = model.weekly_rollups(7)
+future_calendar = np.array([known_calendar(days + step) for step in range(1, 8)])
+forecast_rows = model.predict(7, future_calendar=future_calendar)
+weekly_rows = model.weekly_rollups(7, future_calendar=future_calendar)
 current_explanations = model.nowcast()
 explorer_payload = model.explorer_payload(7)
+
+# Analyst-facing evidence: one row per directional lane, then its sparse kernel.
+for row in current_explanations:
+    print(
+        row["lane_id"],
+        row["shift"],
+        round(row["smoothed_primary"], 3),
+        round(row["uncertainty"], 3),
+        [(edge["target_lane_id"], round(edge["weight"], 2)) for edge in row["top_relationships"][:3]],
+    )
 ```
+
+This is a 1,008-observation directional panel—not a two-lane toy. The browser
+example above uses the larger 7,056-observation panel. In either environment,
+select a lane in the explorer to see the current smoothed value, inbound and
+outbound supporting volume, its forecast path, component-based shift rationale,
+and the retained directed kernel edges.
 
 Predictions retain generic `primary` and `secondary` fields; a fitted
 lane-local coupling lets the supporting target consume primary co-movement
