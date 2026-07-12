@@ -33,6 +33,7 @@ const sidebars: SidebarsConfig = {
             'user-guide/geo-evaluation-standard',
             'user-guide/spatial-econometrics',
             'user-guide/geostatistics-models',
+            'user-guide/geo-causal-models',
             'user-guide/parameters',
             'objectives',
             'constraints',
@@ -60,7 +61,11 @@ const sidebars: SidebarsConfig = {
             'user-guide/forecasting-models/kriging',
             'user-guide/forecasting-models/spatial-piecewise-kriging',
             'user-guide/forecasting-models/cartoboost-lag',
-            'user-guide/forecasting-models/graph-spatiotemporal',
+            {
+              type: 'doc',
+              id: 'user-guide/forecasting-models/graph-spatiotemporal',
+              label: 'Market Structure Forecasting',
+            },
             'user-guide/forecasting-models/probabilistic-conformal',
             'user-guide/forecasting-models/beats-hits',
             'user-guide/forecasting-models/neural-panel',
@@ -120,6 +125,11 @@ const sidebars: SidebarsConfig = {
       type: 'link',
       label: 'Modeling Lab',
       href: '/modeling-lab',
+    },
+    {
+      type: 'link',
+      label: 'Market Structure Explorer',
+      href: '/docs/user-guide/forecasting-models/graph-spatiotemporal#market-structure-explorer',
     },
     {
       type: 'category',

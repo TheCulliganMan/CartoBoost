@@ -28,6 +28,7 @@ it on the same rolling-origin split as the simpler baselines.
 | [Spatial Piecewise Kriging](spatial-piecewise-kriging.md) | Combine interpretable temporal components with spatial borrowing. | Includes an interactive coordinate-panel example for `spatial_piecewise_kriging`. |
 | [CartoBoost Lag](cartoboost-lag.md) | Learn one supervised lag model across many related series. | Use when many aligned panels should share lag structure. |
 | [Graph Spatiotemporal Forecasting](graph-spatiotemporal.md) | Forecast sensor, route, road, or zone-flow panels on a directed graph. | Use when upstream/downstream graph structure should improve forecasts beyond panel-only baselines. |
+| [Market Structure Forecasting](graph-spatiotemporal.md) | Learn sparse directional relationships with hierarchy-aware smoothing and analyst-visible kernels. | Use when distance alone misses connected market structure and reviewers need shift explanations. |
 | [Probabilistic And Conformal](probabilistic-conformal.md) | Add calibrated uncertainty to regressors, spatial models, residual hybrids, and forecasts. | Use when interval coverage and width matter alongside point accuracy. |
 | [N-BEATS And N-HiTS](beats-hits.md) | Fit deterministic neural window experts for regular forecast windows. | Use as neural baselines against seasonal naive, local statistical models, and `CartoBoostLagForecaster`. |
 | [Neural Panel](neural-panel.md) | Fit a neural panel forecaster with direct multi-horizon output for related series. | Includes an interactive example for `neural_panel`. |

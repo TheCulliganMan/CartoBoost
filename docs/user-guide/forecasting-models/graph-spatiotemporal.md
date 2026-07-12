@@ -1,7 +1,14 @@
 import {ForecastModelExample, MarketStructureWasmExample} from '@site/src/components/ModelingLabClient';
 import {MarketStructureExplorerSample} from '@site/src/components/MarketStructureExplorer';
 
-# Graph Spatiotemporal Forecasting
+# Market Structure Forecasting
+
+`MarketStructureForecaster` is the learned sparse-kernel model for connected,
+directional markets. Open the [Modeling Lab](../../../modeling-lab), select
+**Deep**, then run **Learned market structure explorer** to inspect forecasts,
+inbound/outbound volume, components, and the retained kernels interactively.
+
+## Graph Spatiotemporal Forecasting
 
 Use `DCRNNForecaster`, `GraphWaveNetForecaster`, or `STAEformerForecaster`
 when each forecast series is a node in a known directed graph and neighboring
