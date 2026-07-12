@@ -66,7 +66,7 @@
     "prophet",
     "external_trees"
   ],
-  "created_at": "2026-07-12T01:15:20.786840+00:00",
+  "created_at": "2026-07-12T13:48:25.971418+00:00",
   "dataset": {
     "aggregated_rows": 2928,
     "clean_rows": 12429495,
@@ -108,7 +108,7 @@
       "functime_lightgbm"
     ]
   },
-  "git_commit": "bbc631801c40655e85866b1ff18d35f53f65d584",
+  "git_commit": "b88c38ec6c8080ef80502f1da5c9d81565fc8637",
   "invocation": {
     "argv": [
       "scripts/forecasting_library_benchmark.py",
@@ -133,10 +133,11 @@
       "48",
       "--cartoboost-auto-n-estimators",
       "48",
+      "--no-download",
       "--output",
       "docs/assets/nyc_taxi_benchmarks/forecasting_library_benchmark_real.json"
     ],
-    "command": "scripts/forecasting_library_benchmark.py --source nyc-taxi --year 2024 --months 1,2,3,4 --taxi-type yellow --lanes 24 --horizon 7 --rolling-origin-folds 3 --no-hyperopt --model-roster scalable --cartoboost-n-estimators 48 --cartoboost-auto-n-estimators 48 --output docs/assets/nyc_taxi_benchmarks/forecasting_library_benchmark_real.json"
+    "command": "scripts/forecasting_library_benchmark.py --source nyc-taxi --year 2024 --months 1,2,3,4 --taxi-type yellow --lanes 24 --horizon 7 --rolling-origin-folds 3 --no-hyperopt --model-roster scalable --cartoboost-n-estimators 48 --cartoboost-auto-n-estimators 48 --no-download --output docs/assets/nyc_taxi_benchmarks/forecasting_library_benchmark_real.json"
   },
   "metrics": {
     "cartoboost_auto_forecast": {
@@ -403,8 +404,8 @@
   },
   "requested_source": "nyc-taxi",
   "resource_usage": {
-    "peak_rss_mb": 6191.5,
-    "process_cpu_seconds": 182.338249
+    "peak_rss_mb": 5472.984375,
+    "process_cpu_seconds": 183.465516
   },
   "rolling_origin": {
     "folds": 3,
@@ -915,11 +916,11 @@
   },
   "source_file_hashes": {},
   "timing": {
-    "load_seconds": 8.655430291000812,
+    "load_seconds": 10.651218750004773,
     "splits": {
       "rolling_origin_1": {
         "candidate_selection": {
-          "calibration_seconds": 4.164639665999857,
+          "calibration_seconds": 4.484131332996185,
           "inner_candidate_losses": {
             "cartoboost_auto_forecast": {
               "cartoboost_auto_forecast": 200.90310887259673,
@@ -987,50 +988,50 @@
           },
           "cartoboost_lag": {
             "feature_count": 117.0,
-            "feature_seconds": 0.002540749999752734,
-            "fit_predict_seconds": 2.237256124994019,
-            "fit_seconds": 2.231682624995301,
-            "predict_seconds": 0.0055734999987180345,
-            "total_seconds": 2.239796874993772
+            "feature_seconds": 0.01809362499625422,
+            "fit_predict_seconds": 2.2528403750038706,
+            "fit_seconds": 2.2441995840054005,
+            "predict_seconds": 0.008640790998470038,
+            "total_seconds": 2.270934000000125
           },
           "functime_lightgbm": {
-            "fit_predict_seconds": 0.21890720800001873,
-            "fit_seconds": 0.1144633750009234,
-            "predict_seconds": 0.10444383299909532
+            "fit_predict_seconds": 0.17349204201309476,
+            "fit_seconds": 0.1420505420101108,
+            "predict_seconds": 0.03144150000298396
           },
           "functime_ridge": {
-            "fit_predict_seconds": 0.0666609160034568,
-            "fit_seconds": 0.01747458300087601,
-            "predict_seconds": 0.049186333002580795
+            "fit_predict_seconds": 0.2321801240032073,
+            "fit_seconds": 0.027260333008598536,
+            "predict_seconds": 0.20491979099460877
           },
           "functime_snaive": {
-            "fit_predict_seconds": 0.003063248994294554,
-            "fit_seconds": 0.0012984579952899367,
-            "predict_seconds": 0.0017647909990046173
+            "fit_predict_seconds": 0.010777249990496784,
+            "fit_seconds": 0.0057722919882507995,
+            "predict_seconds": 0.005004958002245985
           },
           "lightgbm_lag": {
             "feature_count": 29.0,
-            "feature_seconds": 0.0026806250025401823,
-            "fit_predict_seconds": 0.046934623998822644,
-            "fit_seconds": 0.015571582996926736,
-            "predict_seconds": 0.03136304100189591,
+            "feature_seconds": 0.0025666250003268942,
+            "fit_predict_seconds": 0.045869498993852176,
+            "fit_seconds": 0.015799540997250006,
+            "predict_seconds": 0.03006995799660217,
             "target_mode_delta": 0.0,
-            "total_seconds": 0.04961524900136283
+            "total_seconds": 0.04843612399417907
           },
           "xgboost_lag": {
             "feature_count": 29.0,
-            "feature_seconds": 0.0026877910058829,
-            "fit_predict_seconds": 0.06273866599804023,
-            "fit_seconds": 0.03243783299694769,
-            "predict_seconds": 0.030300833001092542,
+            "feature_seconds": 0.005237999997916631,
+            "fit_predict_seconds": 0.06392962501558941,
+            "fit_seconds": 0.03192375000799075,
+            "predict_seconds": 0.03200587500759866,
             "target_mode_delta": 0.0,
-            "total_seconds": 0.06542645700392313
+            "total_seconds": 0.06916762501350604
           }
         }
       },
       "rolling_origin_2": {
         "candidate_selection": {
-          "calibration_seconds": 4.415800959002809,
+          "calibration_seconds": 5.235511959006544,
           "inner_candidate_losses": {
             "cartoboost_auto_forecast": {
               "cartoboost_auto_forecast": 218.60190259256277,
@@ -1107,50 +1108,50 @@
           },
           "cartoboost_lag": {
             "feature_count": 117.0,
-            "feature_seconds": 0.002220499998657033,
-            "fit_predict_seconds": 2.289225916007126,
-            "fit_seconds": 2.2851232500033802,
-            "predict_seconds": 0.0041026660037459806,
-            "total_seconds": 2.2914464160057832
+            "feature_seconds": 0.027483875004691072,
+            "fit_predict_seconds": 2.409671123998123,
+            "fit_seconds": 2.4044705830019666,
+            "predict_seconds": 0.005200540996156633,
+            "total_seconds": 2.4371549990028143
           },
           "functime_lightgbm": {
-            "fit_predict_seconds": 0.16899016700335778,
-            "fit_seconds": 0.13480879200506024,
-            "predict_seconds": 0.03418137499829754
+            "fit_predict_seconds": 0.22694687501643784,
+            "fit_seconds": 0.1798150000104215,
+            "predict_seconds": 0.047131875006016344
           },
           "functime_ridge": {
-            "fit_predict_seconds": 0.05760754199582152,
-            "fit_seconds": 0.01317962499888381,
-            "predict_seconds": 0.04442791699693771
+            "fit_predict_seconds": 0.09166412499325816,
+            "fit_seconds": 0.017105124992667697,
+            "predict_seconds": 0.07455900000059046
           },
           "functime_snaive": {
-            "fit_predict_seconds": 0.004216831992380321,
-            "fit_seconds": 0.001614540997252334,
-            "predict_seconds": 0.002602290995127987
+            "fit_predict_seconds": 0.005230748996837065,
+            "fit_seconds": 0.0023049580049701035,
+            "predict_seconds": 0.002925790991866961
           },
           "lightgbm_lag": {
             "feature_count": 29.0,
-            "feature_seconds": 0.0030976249981904402,
-            "fit_predict_seconds": 0.06374474999756785,
-            "fit_seconds": 0.022727042000042275,
-            "predict_seconds": 0.041017707997525577,
+            "feature_seconds": 0.003324999997857958,
+            "fit_predict_seconds": 0.06927462399471551,
+            "fit_seconds": 0.02294445800362155,
+            "predict_seconds": 0.04633016599109396,
             "target_mode_delta": 0.0,
-            "total_seconds": 0.06684237499575829
+            "total_seconds": 0.07259962399257347
           },
           "xgboost_lag": {
             "feature_count": 29.0,
-            "feature_seconds": 0.004897541999525856,
-            "fit_predict_seconds": 0.09133754099457292,
-            "fit_seconds": 0.04440862499905052,
-            "predict_seconds": 0.0469289159955224,
+            "feature_seconds": 0.004148041000007652,
+            "fit_predict_seconds": 0.0910229589935625,
+            "fit_seconds": 0.04362441699777264,
+            "predict_seconds": 0.047398541995789856,
             "target_mode_delta": 0.0,
-            "total_seconds": 0.09623508299409878
+            "total_seconds": 0.09517099999357015
           }
         }
       },
       "rolling_origin_3": {
         "candidate_selection": {
-          "calibration_seconds": 4.95174775000487,
+          "calibration_seconds": 6.984186665999005,
           "inner_candidate_losses": {
             "cartoboost_auto_forecast": {
               "cartoboost_auto_forecast": 208.14052863940353,
@@ -1218,48 +1219,48 @@
           },
           "cartoboost_lag": {
             "feature_count": 117.0,
-            "feature_seconds": 0.0021388330060290173,
-            "fit_predict_seconds": 2.477746834003483,
-            "fit_seconds": 2.4725120840012096,
-            "predict_seconds": 0.005234750002273358,
-            "total_seconds": 2.479885667009512
+            "feature_seconds": 0.0026171249919570982,
+            "fit_predict_seconds": 2.8676953749964014,
+            "fit_seconds": 2.86269679099496,
+            "predict_seconds": 0.004998584001441486,
+            "total_seconds": 2.8703124999883585
           },
           "functime_lightgbm": {
-            "fit_predict_seconds": 0.16134466699440964,
-            "fit_seconds": 0.1242682079973747,
-            "predict_seconds": 0.03707645899703493
+            "fit_predict_seconds": 0.24985570900025778,
+            "fit_seconds": 0.19938945899775717,
+            "predict_seconds": 0.0504662500025006
           },
           "functime_ridge": {
-            "fit_predict_seconds": 0.06558804200176382,
-            "fit_seconds": 0.01437108399841236,
-            "predict_seconds": 0.051216958003351465
+            "fit_predict_seconds": 0.07321570899512153,
+            "fit_seconds": 0.017030167000484653,
+            "predict_seconds": 0.05618554199463688
           },
           "functime_snaive": {
-            "fit_predict_seconds": 0.004517832996498328,
-            "fit_seconds": 0.0017974579968722537,
-            "predict_seconds": 0.002720374999626074
+            "fit_predict_seconds": 0.004355416996986605,
+            "fit_seconds": 0.001644417003262788,
+            "predict_seconds": 0.002710999993723817
           },
           "lightgbm_lag": {
             "feature_count": 29.0,
-            "feature_seconds": 0.004081916995346546,
-            "fit_predict_seconds": 0.07767991599394009,
-            "fit_seconds": 0.028207874995132443,
-            "predict_seconds": 0.04947204099880764,
+            "feature_seconds": 0.0037408749922178686,
+            "fit_predict_seconds": 0.0683653339947341,
+            "fit_seconds": 0.024941209005191922,
+            "predict_seconds": 0.04342412498954218,
             "target_mode_delta": 0.0,
-            "total_seconds": 0.08176183298928663
+            "total_seconds": 0.07210620898695197
           },
           "xgboost_lag": {
             "feature_count": 29.0,
-            "feature_seconds": 0.003939000001992099,
-            "fit_predict_seconds": 0.09940429199923528,
-            "fit_seconds": 0.04969787500158418,
-            "predict_seconds": 0.049706416997651104,
+            "feature_seconds": 0.0034172500018030405,
+            "fit_predict_seconds": 0.09004495899716858,
+            "fit_seconds": 0.042331542004831135,
+            "predict_seconds": 0.04771341699233744,
             "target_mode_delta": 0.0,
-            "total_seconds": 0.10334329200122738
+            "total_seconds": 0.09346220899897162
           }
         }
       }
     },
-    "total_seconds": 33.595167916995706
+    "total_seconds": 39.65413195900328
   }
 }

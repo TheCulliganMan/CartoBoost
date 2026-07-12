@@ -12,15 +12,14 @@
       4
     ],
     "sample_size": 50000,
-    "dataset_hash": "8f6635f1c567a043982004c6bc26cf5be49a5f371d7e09f5e533bd7dcbb866aa",
+    "dataset_hash": "5110541e767f70aabdc8ee1eb158beaab347fb8d3fede1cd1a47e2637d3825f2",
     "task_rows": {
       "duration": 50000,
-      "fare": 50000,
-      "pickup_demand": 33705
+      "fare": 50000
     }
   },
-  "git_commit": "bbc631801c40655e85866b1ff18d35f53f65d584",
-  "dataset_hash": "8f6635f1c567a043982004c6bc26cf5be49a5f371d7e09f5e533bd7dcbb866aa",
+  "git_commit": "b88c38ec6c8080ef80502f1da5c9d81565fc8637",
+  "dataset_hash": "5110541e767f70aabdc8ee1eb158beaab347fb8d3fede1cd1a47e2637d3825f2",
   "source_file_hashes": {
     "/Users/ryanculligan/GitHub/CartoBoost/data/nyc_taxi/taxi_zone_lookup.csv": "1a99e105092230f8620f301edcca7f80d3080642ff404d28ed957d3fa222c8ed",
     "/Users/ryanculligan/GitHub/CartoBoost/data/nyc_taxi/taxi_zones.zip": "f6d711917bb4340f8f644d5366c51665489eb2d426dd1a4a55677721ae5adf17",
@@ -46,7 +45,7 @@
       "--cartoboost-n-estimators",
       "8",
       "--tasks",
-      "duration,fare,pickup_demand",
+      "duration,fare",
       "--model-workers",
       "1"
     ],
@@ -238,7 +237,7 @@
           "split_manifest": {
             "split_id": "duration_random",
             "split_kind": "seeded_row_shuffle",
-            "dataset_fingerprint": "8f6635f1c567a043982004c6bc26cf5be49a5f371d7e09f5e533bd7dcbb866aa",
+            "dataset_fingerprint": "5110541e767f70aabdc8ee1eb158beaab347fb8d3fede1cd1a47e2637d3825f2",
             "coordinate_crs_note": "No coordinate CRS applies to this random-row diagnostic split.",
             "model_version": "0.3.0",
             "dependency_versions": {
@@ -255,7 +254,7 @@
             "test_index_sha256": "sha256:bee73ca172c57c21b478d46bb81c1524faff5ec9465e8c98e26c07687ed49f32",
             "random_row_split_allowed_for_geo_claim": true,
             "leakage_safe": false,
-            "split_manifest_hash": "sha256:cd433b64601c41a908a05052a7734f0eb9fa14da1292d5a8f0d0a86c7adc02a5"
+            "split_manifest_hash": "sha256:c925c81ec67ed734883e447b0ed8cff585e6e3cf38e1e817725157ee58b9bf95"
           },
           "holdout_pickup_zones": [
             2,
@@ -401,17 +400,17 @@
             "cartoboost": {
               "status": "ok",
               "metrics": {
-                "rmse": 0.4574393159309033,
-                "mae": 0.3601767957460588,
-                "r2": 0.5710296729320681,
-                "wape": 0.05455233647675141
+                "rmse": 0.45743931593090353,
+                "mae": 0.36017679574605893,
+                "r2": 0.5710296729320676,
+                "wape": 0.05455233647675143
               },
               "timing": {
-                "train_seconds": 15.956272041003103,
-                "predict_seconds": 0.006181500000820961,
-                "fit_predict_seconds": 15.962453541003924,
+                "train_seconds": 18.663864499991178,
+                "predict_seconds": 0.008735333001823165,
+                "fit_predict_seconds": 18.672599832993,
                 "prediction_rows": 10000.0,
-                "predict_rows_per_second": 1617730.3241400803
+                "predict_rows_per_second": 1144776.0489397354
               },
               "backend": "rust",
               "config": {
@@ -451,18 +450,18 @@
                   "row_count_min": 1,
                   "row_count_max": 464,
                   "rmse_quantiles": {
-                    "p50": 0.45894011654986494,
-                    "p90": 0.9530788017004767,
+                    "p50": 0.458940116549865,
+                    "p90": 0.9530788017004772,
                     "max": 1.41156055575415
                   },
                   "mae_quantiles": {
-                    "p50": 0.36471118643740996,
-                    "p90": 0.9481398551095345,
+                    "p50": 0.3647111864374102,
+                    "p90": 0.9481398551095352,
                     "max": 1.41156055575415
                   },
                   "wape_quantiles": {
-                    "p50": 0.055325049500370926,
-                    "p90": 0.12463106201439443,
+                    "p50": 0.05532504950037094,
+                    "p90": 0.12463106201439447,
                     "max": 0.1731490588713921
                   },
                   "worst_rmse_segments": [
@@ -477,18 +476,18 @@
                     {
                       "pickup_zone": 71,
                       "rows": 1,
-                      "rmse": 1.3382150130896902,
-                      "mae": 1.3382150130896902,
-                      "bias": -1.3382150130896902,
-                      "wape": 0.15919264375510872
+                      "rmse": 1.338215013089691,
+                      "mae": 1.338215013089691,
+                      "bias": -1.338215013089691,
+                      "wape": 0.15919264375510883
                     },
                     {
                       "pickup_zone": 196,
                       "rows": 1,
-                      "rmse": 1.3082930307136529,
-                      "mae": 1.3082930307136529,
-                      "bias": -1.3082930307136529,
-                      "wape": 0.15838449425616496
+                      "rmse": 1.3082930307136538,
+                      "mae": 1.3082930307136538,
+                      "bias": -1.3082930307136538,
+                      "wape": 0.15838449425616508
                     },
                     {
                       "pickup_zone": 177,
@@ -519,18 +518,18 @@
                     {
                       "pickup_zone": 71,
                       "rows": 1,
-                      "rmse": 1.3382150130896902,
-                      "mae": 1.3382150130896902,
-                      "bias": -1.3382150130896902,
-                      "wape": 0.15919264375510872
+                      "rmse": 1.338215013089691,
+                      "mae": 1.338215013089691,
+                      "bias": -1.338215013089691,
+                      "wape": 0.15919264375510883
                     },
                     {
                       "pickup_zone": 196,
                       "rows": 1,
-                      "rmse": 1.3082930307136529,
-                      "mae": 1.3082930307136529,
-                      "bias": -1.3082930307136529,
-                      "wape": 0.15838449425616496
+                      "rmse": 1.3082930307136538,
+                      "mae": 1.3082930307136538,
+                      "bias": -1.3082930307136538,
+                      "wape": 0.15838449425616508
                     },
                     {
                       "pickup_zone": 177,
@@ -561,11 +560,11 @@
                 "wape": 0.040412188645479366
               },
               "timing": {
-                "train_seconds": 0.0744149579986697,
-                "predict_seconds": 0.0011040000026696362,
-                "fit_predict_seconds": 0.07551895800133934,
+                "train_seconds": 0.09351762500591576,
+                "predict_seconds": 0.0012855829991167411,
+                "fit_predict_seconds": 0.0948032080050325,
                 "prediction_rows": 10000.0,
-                "predict_rows_per_second": 9057970.992589233
+                "predict_rows_per_second": 7778572.0617575785
               },
               "config": {
                 "n_estimators": 24,
@@ -699,11 +698,11 @@
                 "wape": 0.04050574534028962
               },
               "timing": {
-                "train_seconds": 0.05174804199486971,
-                "predict_seconds": 0.0005145830000401475,
-                "fit_predict_seconds": 0.052262624994909856,
+                "train_seconds": 0.04751320900686551,
+                "predict_seconds": 0.0005310410051606596,
+                "fit_predict_seconds": 0.04804425001202617,
                 "prediction_rows": 10000.0,
-                "predict_rows_per_second": 19433210.967365433
+                "predict_rows_per_second": 18830937.54120669
               },
               "config": {
                 "n_estimators": 24,
@@ -840,11 +839,11 @@
                 "wape": 0.04239723982817317
               },
               "timing": {
-                "train_seconds": 0.1314794579957379,
-                "predict_seconds": 0.0005540839993045665,
-                "fit_predict_seconds": 0.13203354199504247,
+                "train_seconds": 0.12110645900247619,
+                "predict_seconds": 0.0006642920052399859,
+                "fit_predict_seconds": 0.12177075100771617,
                 "prediction_rows": 10000.0,
-                "predict_rows_per_second": 18047805.04860463
+                "predict_rows_per_second": 15053620.87925075
               },
               "config": {
                 "iterations": 24,
@@ -977,11 +976,11 @@
                 "wape": 0.039919164587188645
               },
               "timing": {
-                "train_seconds": 0.12365375000081258,
-                "predict_seconds": 0.0013971250009490177,
-                "fit_predict_seconds": 0.1250508750017616,
+                "train_seconds": 0.15395679100765847,
+                "predict_seconds": 0.0017138330003945157,
+                "fit_predict_seconds": 0.15567062400805298,
                 "prediction_rows": 10000.0,
-                "predict_rows_per_second": 7157555.689868375
+                "predict_rows_per_second": 5834874.225025455
               },
               "config": {
                 "n_estimators": 24,
@@ -1113,7 +1112,7 @@
           "split_manifest": {
             "split_id": "duration_spatial_holdout",
             "split_kind": "group_spatial_cv",
-            "dataset_fingerprint": "8f6635f1c567a043982004c6bc26cf5be49a5f371d7e09f5e533bd7dcbb866aa",
+            "dataset_fingerprint": "5110541e767f70aabdc8ee1eb158beaab347fb8d3fede1cd1a47e2637d3825f2",
             "coordinate_crs_note": "NYC TLC pickup/dropoff zone identifiers are treated as spatial groups; distance-buffered claims require projected taxi zone geometry.",
             "model_version": "0.3.0",
             "dependency_versions": {
@@ -1130,7 +1129,7 @@
             "test_index_sha256": "sha256:2cc5ef67dbed99aff0b6de977e3d150e32de539c1b72494d42b1a71c708dbb61",
             "random_row_split_allowed_for_geo_claim": false,
             "leakage_safe": true,
-            "split_manifest_hash": "sha256:c5514ace69e01872dc3f4b45a6614d18c5ba32bbb580b56ce2bd064ab208d691"
+            "split_manifest_hash": "sha256:69a310148327f58cf791c5df7765fa86ec8c8961aa88594fc63cf561ce37286a"
           },
           "holdout_pickup_zones": [
             2,
@@ -1180,17 +1179,17 @@
             "cartoboost": {
               "status": "ok",
               "metrics": {
-                "rmse": 0.5246542812282429,
-                "mae": 0.41825031641446103,
-                "r2": 0.5791875306707015,
-                "wape": 0.06163807314046031
+                "rmse": 0.5246542812282428,
+                "mae": 0.41825031641446087,
+                "r2": 0.5791875306707017,
+                "wape": 0.06163807314046029
               },
               "timing": {
-                "train_seconds": 16.310148709002533,
-                "predict_seconds": 0.005394875006459188,
-                "fit_predict_seconds": 16.315543584008992,
+                "train_seconds": 16.92142666700238,
+                "predict_seconds": 0.006318166997516528,
+                "fit_predict_seconds": 16.927744833999895,
                 "prediction_rows": 9228.0,
-                "predict_rows_per_second": 1710512.289710416
+                "predict_rows_per_second": 1460550.1886270551
               },
               "backend": "rust",
               "config": {
@@ -1230,17 +1229,17 @@
                   "row_count_min": 1,
                   "row_count_max": 2076,
                   "rmse_quantiles": {
-                    "p50": 0.6516957072568088,
+                    "p50": 0.651695707256809,
                     "p90": 1.1765964609685233,
                     "max": 1.5788776414940775
                   },
                   "mae_quantiles": {
-                    "p50": 0.5980952573000642,
-                    "p90": 1.0288543569669906,
+                    "p50": 0.5980952573000641,
+                    "p90": 1.028854356966991,
                     "max": 1.5787358234718152
                   },
                   "wape_quantiles": {
-                    "p50": 0.08499621191303769,
+                    "p50": 0.08499621191303766,
                     "p90": 0.1318816940230225,
                     "max": 0.18165617063782818
                   },
@@ -1264,26 +1263,26 @@
                     {
                       "pickup_zone": 254,
                       "rows": 2,
-                      "rmse": 1.3020546052858861,
-                      "mae": 1.3010482348717929,
-                      "bias": -1.3010482348717929,
-                      "wape": 0.15622602451252654
+                      "rmse": 1.3020546052858848,
+                      "mae": 1.3010482348717916,
+                      "bias": -1.3010482348717916,
+                      "wape": 0.15622602451252637
                     },
                     {
                       "pickup_zone": 171,
                       "rows": 2,
-                      "rmse": 1.3010059314590214,
-                      "mae": 0.9865875824017234,
-                      "bias": -0.9865875824017234,
-                      "wape": 0.12757468177026085
+                      "rmse": 1.301005931459022,
+                      "mae": 0.9865875824017238,
+                      "bias": -0.9865875824017238,
+                      "wape": 0.1275746817702609
                     },
                     {
                       "pickup_zone": 241,
                       "rows": 5,
-                      "rmse": 1.1880779898156237,
-                      "mae": 1.1291246059809326,
-                      "bias": -1.1291246059809326,
-                      "wape": 0.1369759868840866
+                      "rmse": 1.1880779898156235,
+                      "mae": 1.1291246059809323,
+                      "bias": -1.1291246059809323,
+                      "wape": 0.13697598688408658
                     }
                   ],
                   "largest_abs_bias_segments": [
@@ -1306,26 +1305,26 @@
                     {
                       "pickup_zone": 254,
                       "rows": 2,
-                      "rmse": 1.3020546052858861,
-                      "mae": 1.3010482348717929,
-                      "bias": -1.3010482348717929,
-                      "wape": 0.15622602451252654
+                      "rmse": 1.3020546052858848,
+                      "mae": 1.3010482348717916,
+                      "bias": -1.3010482348717916,
+                      "wape": 0.15622602451252637
                     },
                     {
                       "pickup_zone": 241,
                       "rows": 5,
-                      "rmse": 1.1880779898156237,
-                      "mae": 1.1291246059809326,
-                      "bias": -1.1291246059809326,
-                      "wape": 0.1369759868840866
+                      "rmse": 1.1880779898156235,
+                      "mae": 1.1291246059809323,
+                      "bias": -1.1291246059809323,
+                      "wape": 0.13697598688408658
                     },
                     {
                       "pickup_zone": 18,
                       "rows": 2,
-                      "rmse": 1.073262701344622,
-                      "mae": 1.032123578954414,
-                      "bias": -1.032123578954414,
-                      "wape": 0.12967443873077653
+                      "rmse": 1.0732627013446225,
+                      "mae": 1.0321235789544145,
+                      "bias": -1.0321235789544145,
+                      "wape": 0.12967443873077658
                     }
                   ]
                 }
@@ -1340,11 +1339,11 @@
                 "wape": 0.04125570460346566
               },
               "timing": {
-                "train_seconds": 0.09265637500357116,
-                "predict_seconds": 0.001443250002921559,
-                "fit_predict_seconds": 0.09409962500649272,
+                "train_seconds": 0.06821466700057499,
+                "predict_seconds": 0.0010865419899346307,
+                "fit_predict_seconds": 0.06930120899050962,
                 "prediction_rows": 9228.0,
-                "predict_rows_per_second": 6393902.637325368
+                "predict_rows_per_second": 8492998.968733074
               },
               "config": {
                 "n_estimators": 24,
@@ -1478,11 +1477,11 @@
                 "wape": 0.04049500054348085
               },
               "timing": {
-                "train_seconds": 0.041156166000291705,
-                "predict_seconds": 0.0004802089970326051,
-                "fit_predict_seconds": 0.04163637499732431,
+                "train_seconds": 0.04531666700495407,
+                "predict_seconds": 0.00047858299512881786,
+                "fit_predict_seconds": 0.04579525000008289,
                 "prediction_rows": 9228.0,
-                "predict_rows_per_second": 19216632.87656695
+                "predict_rows_per_second": 19281922.036356818
               },
               "config": {
                 "n_estimators": 24,
@@ -1619,11 +1618,11 @@
                 "wape": 0.04536883290009623
               },
               "timing": {
-                "train_seconds": 0.04187845800333889,
-                "predict_seconds": 0.0005757090038969181,
-                "fit_predict_seconds": 0.04245416700723581,
+                "train_seconds": 0.039847958003520034,
+                "predict_seconds": 0.0006824169977335259,
+                "fit_predict_seconds": 0.04053037500125356,
                 "prediction_rows": 9228.0,
-                "predict_rows_per_second": 16028931.174493654
+                "predict_rows_per_second": 13522523.663168486
               },
               "config": {
                 "iterations": 24,
@@ -1756,11 +1755,11 @@
                 "wape": 0.040022734305493156
               },
               "timing": {
-                "train_seconds": 0.1157237920051557,
-                "predict_seconds": 0.0015490000005229376,
-                "fit_predict_seconds": 0.11727279200567864,
+                "train_seconds": 0.11440116699668579,
+                "predict_seconds": 0.0012671250005951151,
+                "fit_predict_seconds": 0.1156682919972809,
                 "prediction_rows": 9228.0,
-                "predict_rows_per_second": 5957391.863708622
+                "predict_rows_per_second": 7282627.99302831
               },
               "config": {
                 "n_estimators": 24,
@@ -1892,7 +1891,7 @@
           "split_manifest": {
             "split_id": "duration_out_of_time",
             "split_kind": "chronological_timestamp_holdout",
-            "dataset_fingerprint": "8f6635f1c567a043982004c6bc26cf5be49a5f371d7e09f5e533bd7dcbb866aa",
+            "dataset_fingerprint": "5110541e767f70aabdc8ee1eb158beaab347fb8d3fede1cd1a47e2637d3825f2",
             "coordinate_crs_note": "No coordinate CRS applies to this chronological timestamp split.",
             "model_version": "0.3.0",
             "dependency_versions": {
@@ -1916,7 +1915,7 @@
             "test_timestamp_max": "2024-04-30T23:57:36.000000000",
             "temporal_boundary": "2024-04-08T13:48:01.000000000",
             "leakage_safe": true,
-            "split_manifest_hash": "sha256:fe30790ba2ceb9df23e5f63f56457de0005dc611060a08f57a68c1a990e066df"
+            "split_manifest_hash": "sha256:c68ad145848792a952729e58fe59e75d38affd822e29a7fe460f0ed0a67ae25f"
           },
           "holdout_pickup_zones": [
             3,
@@ -2070,17 +2069,17 @@
             "cartoboost": {
               "status": "ok",
               "metrics": {
-                "rmse": 0.4650972879158718,
-                "mae": 0.3673780025495791,
-                "r2": 0.5657704263065023,
+                "rmse": 0.46509728791587174,
+                "mae": 0.36737800254957903,
+                "r2": 0.5657704263065024,
                 "wape": 0.055404650163456186
               },
               "timing": {
-                "train_seconds": 16.65740862500388,
-                "predict_seconds": 0.006216708003194071,
-                "fit_predict_seconds": 16.663625333007076,
+                "train_seconds": 17.391089374999865,
+                "predict_seconds": 0.014716666002641432,
+                "fit_predict_seconds": 17.405806041002506,
                 "prediction_rows": 10000.0,
-                "predict_rows_per_second": 1608568.392606202
+                "predict_rows_per_second": 679501.7294137913
               },
               "backend": "rust",
               "config": {
@@ -2121,35 +2120,35 @@
                   "row_count_max": 464,
                   "rmse_quantiles": {
                     "p50": 0.45905464970063425,
-                    "p90": 0.890668974526073,
-                    "max": 1.4047611852372661
+                    "p90": 0.8906689745260723,
+                    "max": 1.4047611852372643
                   },
                   "mae_quantiles": {
-                    "p50": 0.36568971247723925,
-                    "p90": 0.8048288212826421,
-                    "max": 1.4047611852372661
+                    "p50": 0.36568971247723936,
+                    "p90": 0.8048288212826415,
+                    "max": 1.4047611852372643
                   },
                   "wape_quantiles": {
                     "p50": 0.05611363918703817,
-                    "p90": 0.109976056614247,
-                    "max": 0.16196947343854903
+                    "p90": 0.10997605661424695,
+                    "max": 0.1619694734385488
                   },
                   "worst_rmse_segments": [
                     {
                       "pickup_zone": 222,
                       "rows": 1,
-                      "rmse": 1.4047611852372661,
-                      "mae": 1.4047611852372661,
-                      "bias": -1.4047611852372661,
-                      "wape": 0.16196947343854903
+                      "rmse": 1.4047611852372643,
+                      "mae": 1.4047611852372643,
+                      "bias": -1.4047611852372643,
+                      "wape": 0.1619694734385488
                     },
                     {
                       "pickup_zone": 57,
                       "rows": 1,
-                      "rmse": 1.3397551363015143,
-                      "mae": 1.3397551363015143,
-                      "bias": -1.3397551363015143,
-                      "wape": 0.15798786518225064
+                      "rmse": 1.3397551363015126,
+                      "mae": 1.3397551363015126,
+                      "bias": -1.3397551363015126,
+                      "wape": 0.15798786518225041
                     },
                     {
                       "pickup_zone": 259,
@@ -2162,36 +2161,36 @@
                     {
                       "pickup_zone": 254,
                       "rows": 1,
-                      "rmse": 1.2365061422464585,
-                      "mae": 1.2365061422464585,
-                      "bias": -1.2365061422464585,
-                      "wape": 0.1527899300306988
+                      "rmse": 1.2365061422464576,
+                      "mae": 1.2365061422464576,
+                      "bias": -1.2365061422464576,
+                      "wape": 0.15278993003069868
                     },
                     {
                       "pickup_zone": 61,
                       "rows": 3,
-                      "rmse": 1.1780384240440978,
-                      "mae": 1.011265449558102,
-                      "bias": -1.011265449558102,
-                      "wape": 0.1266486433906109
+                      "rmse": 1.1780384240440973,
+                      "mae": 1.0112654495581015,
+                      "bias": -1.0112654495581015,
+                      "wape": 0.12664864339061083
                     }
                   ],
                   "largest_abs_bias_segments": [
                     {
                       "pickup_zone": 222,
                       "rows": 1,
-                      "rmse": 1.4047611852372661,
-                      "mae": 1.4047611852372661,
-                      "bias": -1.4047611852372661,
-                      "wape": 0.16196947343854903
+                      "rmse": 1.4047611852372643,
+                      "mae": 1.4047611852372643,
+                      "bias": -1.4047611852372643,
+                      "wape": 0.1619694734385488
                     },
                     {
                       "pickup_zone": 57,
                       "rows": 1,
-                      "rmse": 1.3397551363015143,
-                      "mae": 1.3397551363015143,
-                      "bias": -1.3397551363015143,
-                      "wape": 0.15798786518225064
+                      "rmse": 1.3397551363015126,
+                      "mae": 1.3397551363015126,
+                      "bias": -1.3397551363015126,
+                      "wape": 0.15798786518225041
                     },
                     {
                       "pickup_zone": 259,
@@ -2204,10 +2203,10 @@
                     {
                       "pickup_zone": 254,
                       "rows": 1,
-                      "rmse": 1.2365061422464585,
-                      "mae": 1.2365061422464585,
-                      "bias": -1.2365061422464585,
-                      "wape": 0.1527899300306988
+                      "rmse": 1.2365061422464576,
+                      "mae": 1.2365061422464576,
+                      "bias": -1.2365061422464576,
+                      "wape": 0.15278993003069868
                     },
                     {
                       "pickup_zone": 89,
@@ -2230,11 +2229,11 @@
                 "wape": 0.04095030204642859
               },
               "timing": {
-                "train_seconds": 0.0794592919992283,
-                "predict_seconds": 0.0012056249979650602,
-                "fit_predict_seconds": 0.08066491699719336,
+                "train_seconds": 0.08493054199789185,
+                "predict_seconds": 0.0011938340030610561,
+                "fit_predict_seconds": 0.0861243760009529,
                 "prediction_rows": 10000.0,
-                "predict_rows_per_second": 8294453.09849971
+                "predict_rows_per_second": 8376373.913257161
               },
               "config": {
                 "n_estimators": 24,
@@ -2368,11 +2367,11 @@
                 "wape": 0.04090186573107125
               },
               "timing": {
-                "train_seconds": 0.041153250000206754,
-                "predict_seconds": 0.0004502080046222545,
-                "fit_predict_seconds": 0.04160345800482901,
+                "train_seconds": 0.05886995801120065,
+                "predict_seconds": 0.0006050829979358241,
+                "fit_predict_seconds": 0.059475041009136476,
                 "prediction_rows": 10000.0,
-                "predict_rows_per_second": 22211955.134805888
+                "predict_rows_per_second": 16526658.382592024
               },
               "config": {
                 "n_estimators": 24,
@@ -2509,11 +2508,11 @@
                 "wape": 0.043046932031834115
               },
               "timing": {
-                "train_seconds": 0.035586999998486135,
-                "predict_seconds": 0.0006408340050256811,
-                "fit_predict_seconds": 0.036227834003511816,
+                "train_seconds": 0.04203308299474884,
+                "predict_seconds": 0.0006575419974979013,
+                "fit_predict_seconds": 0.04269062499224674,
                 "prediction_rows": 10000.0,
-                "predict_rows_per_second": 15604665.048321296
+                "predict_rows_per_second": 15208154.061721232
               },
               "config": {
                 "iterations": 24,
@@ -2646,11 +2645,11 @@
                 "wape": 0.040405635566092196
               },
               "timing": {
-                "train_seconds": 0.09633695799857378,
-                "predict_seconds": 0.0022831669994047843,
-                "fit_predict_seconds": 0.09862012499797856,
+                "train_seconds": 0.1089441249932861,
+                "predict_seconds": 0.002592125005321577,
+                "fit_predict_seconds": 0.11153624999860767,
                 "prediction_rows": 10000.0,
-                "predict_rows_per_second": 4379881.104889382
+                "predict_rows_per_second": 3857838.637978575
               },
               "config": {
                 "n_estimators": 24,
@@ -2799,7 +2798,7 @@
           "split_manifest": {
             "split_id": "fare_random",
             "split_kind": "seeded_row_shuffle",
-            "dataset_fingerprint": "8f6635f1c567a043982004c6bc26cf5be49a5f371d7e09f5e533bd7dcbb866aa",
+            "dataset_fingerprint": "5110541e767f70aabdc8ee1eb158beaab347fb8d3fede1cd1a47e2637d3825f2",
             "coordinate_crs_note": "No coordinate CRS applies to this random-row diagnostic split.",
             "model_version": "0.3.0",
             "dependency_versions": {
@@ -2816,7 +2815,7 @@
             "test_index_sha256": "sha256:bee73ca172c57c21b478d46bb81c1524faff5ec9465e8c98e26c07687ed49f32",
             "random_row_split_allowed_for_geo_claim": true,
             "leakage_safe": false,
-            "split_manifest_hash": "sha256:4939270673000cf2459671dc078d7c5bd56d6ae4aa8dda0fef1fa502976b32b0"
+            "split_manifest_hash": "sha256:ed57b397be0b8074fcec43717f8f1b4e040f671b61a31e64e38e58ab92c19d78"
           },
           "holdout_pickup_zones": [
             2,
@@ -2962,17 +2961,17 @@
             "cartoboost": {
               "status": "ok",
               "metrics": {
-                "rmse": 0.30077877278292564,
+                "rmse": 0.3007787727829256,
                 "mae": 0.23214883084756993,
                 "r2": 0.658512236286999,
                 "wape": 0.07294154821483405
               },
               "timing": {
-                "train_seconds": 17.892972415997065,
-                "predict_seconds": 0.006071374999010004,
-                "fit_predict_seconds": 17.899043790996075,
+                "train_seconds": 17.169358541999827,
+                "predict_seconds": 0.007688458004849963,
+                "fit_predict_seconds": 17.177047000004677,
                 "prediction_rows": 10000.0,
-                "predict_rows_per_second": 1647073.3567981876
+                "predict_rows_per_second": 1300650.922940841
               },
               "backend": "rust",
               "config": {
@@ -3012,17 +3011,17 @@
                   "row_count_min": 1,
                   "row_count_max": 464,
                   "rmse_quantiles": {
-                    "p50": 0.2650960497861618,
-                    "p90": 0.5222781827661527,
+                    "p50": 0.26509604978616197,
+                    "p90": 0.522278182766153,
                     "max": 1.0045972491640156
                   },
                   "mae_quantiles": {
-                    "p50": 0.20903082201968445,
-                    "p90": 0.49084786176989037,
+                    "p50": 0.20903082201968443,
+                    "p90": 0.4908478617698902,
                     "max": 1.0045972491640156
                   },
                   "wape_quantiles": {
-                    "p50": 0.06657379721050105,
+                    "p50": 0.06657379721050102,
                     "p90": 0.14132654484756477,
                     "max": 0.2397804380124455
                   },
@@ -3038,26 +3037,26 @@
                     {
                       "pickup_zone": 92,
                       "rows": 1,
-                      "rmse": 0.796673394772426,
-                      "mae": 0.796673394772426,
-                      "bias": -0.796673394772426,
-                      "wape": 0.17707226320447997
+                      "rmse": 0.7966733947724269,
+                      "mae": 0.7966733947724269,
+                      "bias": -0.7966733947724269,
+                      "wape": 0.17707226320448016
                     },
                     {
                       "pickup_zone": 215,
                       "rows": 3,
-                      "rmse": 0.7241005923233057,
-                      "mae": 0.5923631144579051,
-                      "bias": -0.58997253909305,
-                      "wape": 0.1416488477244359
+                      "rmse": 0.7241005923233064,
+                      "mae": 0.5923631144579056,
+                      "bias": -0.5899725390930507,
+                      "wape": 0.141648847724436
                     },
                     {
                       "pickup_zone": 216,
                       "rows": 5,
                       "rmse": 0.7077149905165758,
-                      "mae": 0.5795647106128656,
-                      "bias": -0.17396082091246168,
-                      "wape": 0.1599626438286167
+                      "mae": 0.5795647106128657,
+                      "bias": -0.1739608209124623,
+                      "wape": 0.15996264382861672
                     },
                     {
                       "pickup_zone": 61,
@@ -3080,10 +3079,10 @@
                     {
                       "pickup_zone": 92,
                       "rows": 1,
-                      "rmse": 0.796673394772426,
-                      "mae": 0.796673394772426,
-                      "bias": -0.796673394772426,
-                      "wape": 0.17707226320447997
+                      "rmse": 0.7966733947724269,
+                      "mae": 0.7966733947724269,
+                      "bias": -0.7966733947724269,
+                      "wape": 0.17707226320448016
                     },
                     {
                       "pickup_zone": 61,
@@ -3096,18 +3095,18 @@
                     {
                       "pickup_zone": 247,
                       "rows": 1,
-                      "rmse": 0.6340264742052564,
-                      "mae": 0.6340264742052564,
-                      "bias": -0.6340264742052564,
-                      "wape": 0.1493562771237614
+                      "rmse": 0.6340264742052568,
+                      "mae": 0.6340264742052568,
+                      "bias": -0.6340264742052568,
+                      "wape": 0.1493562771237615
                     },
                     {
                       "pickup_zone": 10,
                       "rows": 4,
-                      "rmse": 0.6425608592023052,
-                      "mae": 0.6242441450563286,
-                      "bias": -0.6242441450563286,
-                      "wape": 0.1472829839799075
+                      "rmse": 0.6425608592023053,
+                      "mae": 0.6242441450563287,
+                      "bias": -0.6242441450563287,
+                      "wape": 0.14728298397990752
                     }
                   ]
                 }
@@ -3122,11 +3121,11 @@
                 "wape": 0.04385469079037379
               },
               "timing": {
-                "train_seconds": 0.07620608299475862,
-                "predict_seconds": 0.001364707997709047,
-                "fit_predict_seconds": 0.07757079099246766,
+                "train_seconds": 0.08110250000027008,
+                "predict_seconds": 0.0013739999994868413,
+                "fit_predict_seconds": 0.08247649999975692,
                 "prediction_rows": 10000.0,
-                "predict_rows_per_second": 7327574.8488227
+                "predict_rows_per_second": 7278020.38117524
               },
               "config": {
                 "n_estimators": 24,
@@ -3260,11 +3259,11 @@
                 "wape": 0.0438051706717067
               },
               "timing": {
-                "train_seconds": 0.041221999999834225,
-                "predict_seconds": 0.0005019589953008108,
-                "fit_predict_seconds": 0.041723958995135035,
+                "train_seconds": 0.04155312500370201,
+                "predict_seconds": 0.0004909580020466819,
+                "fit_predict_seconds": 0.04204408300574869,
                 "prediction_rows": 10000.0,
-                "predict_rows_per_second": 19921946.002795037
+                "predict_rows_per_second": 20368340.995181836
               },
               "config": {
                 "n_estimators": 24,
@@ -3401,11 +3400,11 @@
                 "wape": 0.04666561723286377
               },
               "timing": {
-                "train_seconds": 0.036825208000664134,
-                "predict_seconds": 0.0007411660044454038,
-                "fit_predict_seconds": 0.03756637400510954,
+                "train_seconds": 0.03684104199055582,
+                "predict_seconds": 0.0005816249904455617,
+                "fit_predict_seconds": 0.037422666981001385,
                 "prediction_rows": 10000.0,
-                "predict_rows_per_second": 13492254.015998418
+                "predict_rows_per_second": 17193208.965005726
               },
               "config": {
                 "iterations": 24,
@@ -3538,11 +3537,11 @@
                 "wape": 0.04296125066500347
               },
               "timing": {
-                "train_seconds": 0.11233062499377411,
-                "predict_seconds": 0.00202454200189095,
-                "fit_predict_seconds": 0.11435516699566506,
+                "train_seconds": 0.11682420798751991,
+                "predict_seconds": 0.002613459000713192,
+                "fit_predict_seconds": 0.1194376669882331,
                 "prediction_rows": 10000.0,
-                "predict_rows_per_second": 4939388.755906207
+                "predict_rows_per_second": 3826346.6146861613
               },
               "config": {
                 "n_estimators": 24,
@@ -3674,7 +3673,7 @@
           "split_manifest": {
             "split_id": "fare_spatial_holdout",
             "split_kind": "group_spatial_cv",
-            "dataset_fingerprint": "8f6635f1c567a043982004c6bc26cf5be49a5f371d7e09f5e533bd7dcbb866aa",
+            "dataset_fingerprint": "5110541e767f70aabdc8ee1eb158beaab347fb8d3fede1cd1a47e2637d3825f2",
             "coordinate_crs_note": "NYC TLC pickup/dropoff zone identifiers are treated as spatial groups; distance-buffered claims require projected taxi zone geometry.",
             "model_version": "0.3.0",
             "dependency_versions": {
@@ -3691,7 +3690,7 @@
             "test_index_sha256": "sha256:2cc5ef67dbed99aff0b6de977e3d150e32de539c1b72494d42b1a71c708dbb61",
             "random_row_split_allowed_for_geo_claim": false,
             "leakage_safe": true,
-            "split_manifest_hash": "sha256:eb6df77ba99a3fe44ea54b21fd972ea26d7c12f68ac9d120c6ecd14e8c99a6e0"
+            "split_manifest_hash": "sha256:27f918c994550d46489b2daa0df7ac5f2c3c4a99cb9b97675e3039fddc42c74a"
           },
           "holdout_pickup_zones": [
             2,
@@ -3741,17 +3740,17 @@
             "cartoboost": {
               "status": "ok",
               "metrics": {
-                "rmse": 0.4595589864991833,
-                "mae": 0.33377286555599256,
-                "r2": 0.5353842774739501,
-                "wape": 0.09882774208419597
+                "rmse": 0.45955898649918314,
+                "mae": 0.3337728655559925,
+                "r2": 0.5353842774739506,
+                "wape": 0.09882774208419595
               },
               "timing": {
-                "train_seconds": 19.985160790994996,
-                "predict_seconds": 0.007182332999946084,
-                "fit_predict_seconds": 19.992343123994942,
+                "train_seconds": 23.87865216600767,
+                "predict_seconds": 0.00841400001081638,
+                "fit_predict_seconds": 23.887066166018485,
                 "prediction_rows": 9228.0,
-                "predict_rows_per_second": 1284819.2920140673
+                "predict_rows_per_second": 1096743.5212903738
               },
               "backend": "rust",
               "config": {
@@ -3791,28 +3790,28 @@
                   "row_count_min": 1,
                   "row_count_max": 2076,
                   "rmse_quantiles": {
-                    "p50": 0.3136999719054913,
-                    "p90": 0.5463178934671188,
-                    "max": 0.8337279277918933
+                    "p50": 0.31369997190549104,
+                    "p90": 0.5463178934671183,
+                    "max": 0.8337279277918929
                   },
                   "mae_quantiles": {
-                    "p50": 0.2728886403753807,
-                    "p90": 0.5078368289015188,
-                    "max": 0.779854794831035
+                    "p50": 0.2728886403753804,
+                    "p90": 0.5078368289015187,
+                    "max": 0.7798547948310346
                   },
                   "wape_quantiles": {
-                    "p50": 0.07697764064548027,
-                    "p90": 0.13110508951635533,
+                    "p50": 0.07697764064548025,
+                    "p90": 0.13110508951635522,
                     "max": 0.19743803693758968
                   },
                   "worst_rmse_segments": [
                     {
                       "pickup_zone": 132,
                       "rows": 2076,
-                      "rmse": 0.8337279277918933,
-                      "mae": 0.779854794831035,
-                      "bias": -0.763151733891505,
-                      "wape": 0.1798403648575264
+                      "rmse": 0.8337279277918929,
+                      "mae": 0.7798547948310346,
+                      "bias": -0.7631517338915046,
+                      "wape": 0.17984036485752633
                     },
                     {
                       "pickup_zone": 106,
@@ -3825,68 +3824,68 @@
                     {
                       "pickup_zone": 197,
                       "rows": 3,
-                      "rmse": 0.7004742608805974,
-                      "mae": 0.5186895283290971,
-                      "bias": -0.4765878670079961,
-                      "wape": 0.13936880249011813
+                      "rmse": 0.7004742608805973,
+                      "mae": 0.518689528329097,
+                      "bias": -0.47658786700799594,
+                      "wape": 0.13936880249011807
                     },
                     {
                       "pickup_zone": 191,
                       "rows": 3,
-                      "rmse": 0.5912135167913385,
-                      "mae": 0.5448279711917524,
-                      "bias": -0.5448279711917524,
-                      "wape": 0.13922777974890335
+                      "rmse": 0.5912135167913382,
+                      "mae": 0.544827971191752,
+                      "bias": -0.544827971191752,
+                      "wape": 0.13922777974890324
                     },
                     {
                       "pickup_zone": 178,
                       "rows": 1,
-                      "rmse": 0.5473154470828736,
-                      "mae": 0.5473154470828736,
-                      "bias": -0.5473154470828736,
-                      "wape": 0.13161638491780928
+                      "rmse": 0.5473154470828732,
+                      "mae": 0.5473154470828732,
+                      "bias": -0.5473154470828732,
+                      "wape": 0.13161638491780916
                     }
                   ],
                   "largest_abs_bias_segments": [
                     {
                       "pickup_zone": 132,
                       "rows": 2076,
-                      "rmse": 0.8337279277918933,
-                      "mae": 0.779854794831035,
-                      "bias": -0.763151733891505,
-                      "wape": 0.1798403648575264
+                      "rmse": 0.8337279277918929,
+                      "mae": 0.7798547948310346,
+                      "bias": -0.7631517338915046,
+                      "wape": 0.17984036485752633
                     },
                     {
                       "pickup_zone": 178,
                       "rows": 1,
-                      "rmse": 0.5473154470828736,
-                      "mae": 0.5473154470828736,
-                      "bias": -0.5473154470828736,
-                      "wape": 0.13161638491780928
+                      "rmse": 0.5473154470828732,
+                      "mae": 0.5473154470828732,
+                      "bias": -0.5473154470828732,
+                      "wape": 0.13161638491780916
                     },
                     {
                       "pickup_zone": 191,
                       "rows": 3,
-                      "rmse": 0.5912135167913385,
-                      "mae": 0.5448279711917524,
-                      "bias": -0.5448279711917524,
-                      "wape": 0.13922777974890335
+                      "rmse": 0.5912135167913382,
+                      "mae": 0.544827971191752,
+                      "bias": -0.544827971191752,
+                      "wape": 0.13922777974890324
                     },
                     {
                       "pickup_zone": 197,
                       "rows": 3,
-                      "rmse": 0.7004742608805974,
-                      "mae": 0.5186895283290971,
-                      "bias": -0.4765878670079961,
-                      "wape": 0.13936880249011813
+                      "rmse": 0.7004742608805973,
+                      "mae": 0.518689528329097,
+                      "bias": -0.47658786700799594,
+                      "wape": 0.13936880249011807
                     },
                     {
                       "pickup_zone": 219,
                       "rows": 4,
-                      "rmse": 0.5373399109253258,
-                      "mae": 0.4057611512097197,
-                      "bias": -0.4057611512097197,
-                      "wape": 0.10216655322217126
+                      "rmse": 0.5373399109253254,
+                      "mae": 0.4057611512097189,
+                      "bias": -0.4057611512097189,
+                      "wape": 0.10216655322217107
                     }
                   ]
                 }
@@ -3901,11 +3900,11 @@
                 "wape": 0.05727022380593955
               },
               "timing": {
-                "train_seconds": 0.08140375000220956,
-                "predict_seconds": 0.0011605830004555173,
-                "fit_predict_seconds": 0.08256433300266508,
+                "train_seconds": 0.09584758299752139,
+                "predict_seconds": 0.0013399589952314273,
+                "fit_predict_seconds": 0.09718754199275281,
                 "prediction_rows": 9228.0,
-                "predict_rows_per_second": 7951176.259154323
+                "predict_rows_per_second": 6886777.903532945
               },
               "config": {
                 "n_estimators": 24,
@@ -4039,11 +4038,11 @@
                 "wape": 0.057443135620551825
               },
               "timing": {
-                "train_seconds": 0.04363004100014223,
-                "predict_seconds": 0.00046358300460269675,
-                "fit_predict_seconds": 0.044093624004744925,
+                "train_seconds": 0.07386124999902677,
+                "predict_seconds": 0.0010163330007344484,
+                "fit_predict_seconds": 0.07487758299976122,
                 "prediction_rows": 9228.0,
-                "predict_rows_per_second": 19905820.335041504
+                "predict_rows_per_second": 9079701.233091347
               },
               "config": {
                 "n_estimators": 24,
@@ -4180,11 +4179,11 @@
                 "wape": 0.05554708857306956
               },
               "timing": {
-                "train_seconds": 0.03775891700206557,
-                "predict_seconds": 0.0006276669955695979,
-                "fit_predict_seconds": 0.03838658399763517,
+                "train_seconds": 0.1372340000089025,
+                "predict_seconds": 0.0015489170036744326,
+                "fit_predict_seconds": 0.13878291701257695,
                 "prediction_rows": 9228.0,
-                "predict_rows_per_second": 14702063.45902533
+                "predict_rows_per_second": 5957711.083362628
               },
               "config": {
                 "iterations": 24,
@@ -4317,11 +4316,11 @@
                 "wape": 0.05375711144831535
               },
               "timing": {
-                "train_seconds": 0.10463899999740534,
-                "predict_seconds": 0.0016413750054198317,
-                "fit_predict_seconds": 0.10628037500282517,
+                "train_seconds": 1.4700093749997905,
+                "predict_seconds": 0.011213332996703684,
+                "fit_predict_seconds": 1.4812227079964941,
                 "prediction_rows": 9228.0,
-                "predict_rows_per_second": 5622115.585730914
+                "predict_rows_per_second": 822948.8950977109
               },
               "config": {
                 "n_estimators": 24,
@@ -4453,7 +4452,7 @@
           "split_manifest": {
             "split_id": "fare_out_of_time",
             "split_kind": "chronological_timestamp_holdout",
-            "dataset_fingerprint": "8f6635f1c567a043982004c6bc26cf5be49a5f371d7e09f5e533bd7dcbb866aa",
+            "dataset_fingerprint": "5110541e767f70aabdc8ee1eb158beaab347fb8d3fede1cd1a47e2637d3825f2",
             "coordinate_crs_note": "No coordinate CRS applies to this chronological timestamp split.",
             "model_version": "0.3.0",
             "dependency_versions": {
@@ -4477,7 +4476,7 @@
             "test_timestamp_max": "2024-04-30T23:57:36.000000000",
             "temporal_boundary": "2024-04-08T13:48:01.000000000",
             "leakage_safe": true,
-            "split_manifest_hash": "sha256:9e1ebb96da97baa82c907f7a52fafdd533eedb30bb188115c7df2581ec65db50"
+            "split_manifest_hash": "sha256:35f1b4539497448393eb1e98daa23782145e79eac800f622f740048c8db4214e"
           },
           "holdout_pickup_zones": [
             3,
@@ -4631,17 +4630,17 @@
             "cartoboost": {
               "status": "ok",
               "metrics": {
-                "rmse": 0.30749370986838426,
-                "mae": 0.23640114012474542,
-                "r2": 0.6519359266689793,
-                "wape": 0.07394763597475351
+                "rmse": 0.3074937098683842,
+                "mae": 0.23640114012474533,
+                "r2": 0.6519359266689794,
+                "wape": 0.07394763597475348
               },
               "timing": {
-                "train_seconds": 21.218105749998358,
-                "predict_seconds": 0.005915583002206404,
-                "fit_predict_seconds": 21.224021333000564,
+                "train_seconds": 23.971488499999396,
+                "predict_seconds": 0.009548374990117736,
+                "fit_predict_seconds": 23.981036874989513,
                 "prediction_rows": 10000.0,
-                "predict_rows_per_second": 1690450.4587747622
+                "predict_rows_per_second": 1047298.6251953533
               },
               "backend": "rust",
               "config": {
@@ -4681,36 +4680,36 @@
                   "row_count_min": 1,
                   "row_count_max": 464,
                   "rmse_quantiles": {
-                    "p50": 0.26708945647109095,
-                    "p90": 0.5562737896577628,
-                    "max": 1.1282486353143448
+                    "p50": 0.2670894564710908,
+                    "p90": 0.5562737896577624,
+                    "max": 1.1282486353143453
                   },
                   "mae_quantiles": {
-                    "p50": 0.2171334230626189,
-                    "p90": 0.5193963335354888,
-                    "max": 1.1282486353143448
+                    "p50": 0.2171334230626188,
+                    "p90": 0.519396333535489,
+                    "max": 1.1282486353143453
                   },
                   "wape_quantiles": {
-                    "p50": 0.0682036687129493,
-                    "p90": 0.1412007324620635,
-                    "max": 0.3269728619690885
+                    "p50": 0.06820366871294929,
+                    "p90": 0.14120073246206355,
+                    "max": 0.32697286196908865
                   },
                   "worst_rmse_segments": [
                     {
                       "pickup_zone": 197,
                       "rows": 1,
-                      "rmse": 1.1282486353143448,
-                      "mae": 1.1282486353143448,
-                      "bias": -1.1282486353143448,
-                      "wape": 0.25085654668193175
+                      "rmse": 1.1282486353143453,
+                      "mae": 1.1282486353143453,
+                      "bias": -1.1282486353143453,
+                      "wape": 0.25085654668193186
                     },
                     {
                       "pickup_zone": 207,
                       "rows": 1,
-                      "rmse": 1.0557023835032773,
-                      "mae": 1.0557023835032773,
-                      "bias": -1.0557023835032773,
-                      "wape": 0.23339720509122186
+                      "rmse": 1.0557023835032777,
+                      "mae": 1.0557023835032777,
+                      "bias": -1.0557023835032777,
+                      "wape": 0.23339720509122194
                     },
                     {
                       "pickup_zone": 215,
@@ -4724,35 +4723,35 @@
                       "pickup_zone": 28,
                       "rows": 3,
                       "rmse": 0.8231274752963262,
-                      "mae": 0.7050220066423476,
-                      "bias": -0.26860873324708984,
-                      "wape": 0.1959712082676317
+                      "mae": 0.7050220066423475,
+                      "bias": -0.26860873324708967,
+                      "wape": 0.19597120826763167
                     },
                     {
                       "pickup_zone": 198,
                       "rows": 1,
-                      "rmse": 0.7522282372407232,
-                      "mae": 0.7522282372407232,
-                      "bias": 0.7522282372407232,
-                      "wape": 0.3269728619690885
+                      "rmse": 0.7522282372407236,
+                      "mae": 0.7522282372407236,
+                      "bias": 0.7522282372407236,
+                      "wape": 0.32697286196908865
                     }
                   ],
                   "largest_abs_bias_segments": [
                     {
                       "pickup_zone": 197,
                       "rows": 1,
-                      "rmse": 1.1282486353143448,
-                      "mae": 1.1282486353143448,
-                      "bias": -1.1282486353143448,
-                      "wape": 0.25085654668193175
+                      "rmse": 1.1282486353143453,
+                      "mae": 1.1282486353143453,
+                      "bias": -1.1282486353143453,
+                      "wape": 0.25085654668193186
                     },
                     {
                       "pickup_zone": 207,
                       "rows": 1,
-                      "rmse": 1.0557023835032773,
-                      "mae": 1.0557023835032773,
-                      "bias": -1.0557023835032773,
-                      "wape": 0.23339720509122186
+                      "rmse": 1.0557023835032777,
+                      "mae": 1.0557023835032777,
+                      "bias": -1.0557023835032777,
+                      "wape": 0.23339720509122194
                     },
                     {
                       "pickup_zone": 215,
@@ -4765,18 +4764,18 @@
                     {
                       "pickup_zone": 198,
                       "rows": 1,
-                      "rmse": 0.7522282372407232,
-                      "mae": 0.7522282372407232,
-                      "bias": 0.7522282372407232,
-                      "wape": 0.3269728619690885
+                      "rmse": 0.7522282372407236,
+                      "mae": 0.7522282372407236,
+                      "bias": 0.7522282372407236,
+                      "wape": 0.32697286196908865
                     },
                     {
                       "pickup_zone": 219,
                       "rows": 1,
-                      "rmse": 0.7457497431185174,
-                      "mae": 0.7457497431185174,
-                      "bias": -0.7457497431185174,
-                      "wape": 0.16260402942953722
+                      "rmse": 0.7457497431185169,
+                      "mae": 0.7457497431185169,
+                      "bias": -0.7457497431185169,
+                      "wape": 0.1626040294295371
                     }
                   ]
                 }
@@ -4791,11 +4790,11 @@
                 "wape": 0.04476105450560239
               },
               "timing": {
-                "train_seconds": 0.07825116599997273,
-                "predict_seconds": 0.001237000004039146,
-                "fit_predict_seconds": 0.07948816600401187,
+                "train_seconds": 0.09342962500522844,
+                "predict_seconds": 0.0017543750000186265,
+                "fit_predict_seconds": 0.09518400000524707,
                 "prediction_rows": 10000.0,
-                "predict_rows_per_second": 8084074.347087504
+                "predict_rows_per_second": 5700035.62516214
               },
               "config": {
                 "n_estimators": 24,
@@ -4929,11 +4928,11 @@
                 "wape": 0.04483267223952331
               },
               "timing": {
-                "train_seconds": 0.04242629199870862,
-                "predict_seconds": 0.0004853749996982515,
-                "fit_predict_seconds": 0.04291166699840687,
+                "train_seconds": 0.05421841700444929,
+                "predict_seconds": 0.000498207999044098,
+                "fit_predict_seconds": 0.05471662500349339,
                 "prediction_rows": 10000.0,
-                "predict_rows_per_second": 20602626.84772972
+                "predict_rows_per_second": 20071937.863677032
               },
               "config": {
                 "n_estimators": 24,
@@ -5070,11 +5069,11 @@
                 "wape": 0.047825791663025266
               },
               "timing": {
-                "train_seconds": 0.03663491699990118,
-                "predict_seconds": 0.0007160410023061559,
-                "fit_predict_seconds": 0.037350958002207335,
+                "train_seconds": 0.036966374987969175,
+                "predict_seconds": 0.0005924169963691384,
+                "fit_predict_seconds": 0.03755879198433831,
                 "prediction_rows": 10000.0,
-                "predict_rows_per_second": 13965680.691179644
+                "predict_rows_per_second": 16880001.858975943
               },
               "config": {
                 "iterations": 24,
@@ -5207,11 +5206,11 @@
                 "wape": 0.044032542416601206
               },
               "timing": {
-                "train_seconds": 0.10824049999791896,
-                "predict_seconds": 0.0017742499985615723,
-                "fit_predict_seconds": 0.11001474999648053,
+                "train_seconds": 0.21590374999505002,
+                "predict_seconds": 0.003506583991111256,
+                "fit_predict_seconds": 0.21941033398616128,
                 "prediction_rows": 10000.0,
-                "predict_rows_per_second": 5636184.307796108
+                "predict_rows_per_second": 2851778.262077488
               },
               "config": {
                 "n_estimators": 24,
@@ -5338,1112 +5337,6 @@
           }
         }
       }
-    },
-    "pickup_demand": {
-      "display_name": "Pickup-zone demand",
-      "description": "Predict log pickup trip count for a pickup zone, hour, and weekday bucket.",
-      "row_count": 33705,
-      "feature_names": [
-        "PULocationID",
-        "hour",
-        "dayofweek"
-      ],
-      "zone_treatment": "target_mean",
-      "splits": {
-        "random": {
-          "train_rows": 26964,
-          "test_rows": 6741,
-          "split_manifest": {
-            "split_id": "pickup_demand_random",
-            "split_kind": "seeded_row_shuffle",
-            "dataset_fingerprint": "8f6635f1c567a043982004c6bc26cf5be49a5f371d7e09f5e533bd7dcbb866aa",
-            "coordinate_crs_note": "No coordinate CRS applies to this random-row diagnostic split.",
-            "model_version": "0.3.0",
-            "dependency_versions": {
-              "cartoboost": "0.3.0",
-              "numpy": "1.26.4",
-              "scikit-learn": "1.9.0",
-              "xgboost": "3.2.0",
-              "lightgbm": "4.6.0",
-              "catboost": "1.2.10"
-            },
-            "random_seed": 42,
-            "row_count": 33705,
-            "train_index_sha256": "sha256:17744927ddf9fee431e672bebf5802373bbfcb1f53456f02e64e600a50605f9f",
-            "test_index_sha256": "sha256:2081f877d94a9fc8b2dcc9884f2b06d558847bae10cae56a8c62a02cd0e61b18",
-            "random_row_split_allowed_for_geo_claim": true,
-            "leakage_safe": false,
-            "split_manifest_hash": "sha256:7da82ee4f5eff3154557591b9f2780437a88eef5da42913a1e6a79433c6a2ce5"
-          },
-          "holdout_pickup_zones": [
-            1,
-            2,
-            3,
-            4,
-            6,
-            7,
-            8,
-            9,
-            10,
-            11,
-            12,
-            13,
-            14,
-            15,
-            16,
-            17,
-            18,
-            19,
-            20,
-            21,
-            22,
-            23,
-            24,
-            25,
-            26,
-            27,
-            28,
-            29,
-            30,
-            31,
-            32,
-            33,
-            34,
-            35,
-            36,
-            37,
-            38,
-            39,
-            40,
-            41,
-            42,
-            43,
-            45,
-            46,
-            47,
-            48,
-            49,
-            50,
-            51,
-            52,
-            53,
-            54,
-            55,
-            56,
-            57,
-            58,
-            59,
-            60,
-            61,
-            62,
-            63,
-            64,
-            65,
-            66,
-            67,
-            68,
-            69,
-            70,
-            71,
-            72,
-            73,
-            74,
-            75,
-            76,
-            77,
-            78,
-            79,
-            80,
-            81,
-            82,
-            83,
-            85,
-            86,
-            87,
-            88,
-            89,
-            90,
-            91,
-            92,
-            93,
-            94,
-            95,
-            96,
-            97,
-            98,
-            100,
-            101,
-            102,
-            106,
-            107,
-            108,
-            109,
-            111,
-            112,
-            113,
-            114,
-            115,
-            116,
-            117,
-            118,
-            119,
-            120,
-            121,
-            122,
-            123,
-            124,
-            125,
-            126,
-            127,
-            128,
-            129,
-            130,
-            131,
-            132,
-            133,
-            134,
-            135,
-            136,
-            137,
-            138,
-            139,
-            140,
-            141,
-            142,
-            143,
-            144,
-            145,
-            146,
-            147,
-            148,
-            149,
-            150,
-            151,
-            152,
-            153,
-            154,
-            155,
-            156,
-            157,
-            158,
-            159,
-            160,
-            161,
-            162,
-            163,
-            164,
-            165,
-            166,
-            167,
-            168,
-            169,
-            170,
-            171,
-            172,
-            173,
-            174,
-            175,
-            176,
-            177,
-            178,
-            179,
-            180,
-            181,
-            182,
-            183,
-            184,
-            185,
-            186,
-            187,
-            188,
-            189,
-            190,
-            191,
-            192,
-            193,
-            194,
-            195,
-            196,
-            197,
-            198,
-            199,
-            200,
-            201,
-            202,
-            203,
-            205,
-            206,
-            207,
-            208,
-            209,
-            210,
-            211,
-            212,
-            213,
-            214,
-            215,
-            216,
-            217,
-            218,
-            219,
-            220,
-            221,
-            222,
-            223,
-            224,
-            225,
-            226,
-            227,
-            228,
-            229,
-            230,
-            231,
-            232,
-            233,
-            234,
-            235,
-            236,
-            237,
-            238,
-            239,
-            240,
-            241,
-            242,
-            243,
-            244,
-            245,
-            246,
-            247,
-            248,
-            249,
-            250,
-            251,
-            252,
-            253,
-            254,
-            255,
-            256,
-            257,
-            258,
-            259,
-            260,
-            261,
-            262,
-            263
-          ],
-          "models": {
-            "cartoboost": {
-              "status": "ok",
-              "metrics": {
-                "rmse": 1.2954070663609563,
-                "mae": 1.0542462295261414,
-                "r2": 0.6781695064681424,
-                "wape": 0.3267389220459047
-              },
-              "timing": {
-                "train_seconds": 3.9940394169971114,
-                "predict_seconds": 0.0038444999954663217,
-                "fit_predict_seconds": 3.9978839169925777,
-                "prediction_rows": 6741.0,
-                "predict_rows_per_second": 1753413.9700739796
-              },
-              "backend": "rust",
-              "config": {
-                "n_estimators": 8,
-                "learning_rate": 0.08,
-                "max_depth": 5,
-                "min_samples_leaf": 20,
-                "constant_l2_regularization": 0.0,
-                "leaf_predictor": "constant",
-                "init": "constant",
-                "calibration": "none",
-                "splitters": [
-                  "axis_histogram:512",
-                  "diagonal_2d",
-                  "gaussian_2d",
-                  "periodic:24",
-                  "periodic:7",
-                  "sparse_set"
-                ],
-                "sparse_sets": false,
-                "zone_treatment": "target_mean",
-                "feature_count": 9,
-                "preset": "candidate",
-                "predict_path": "model.predict"
-              },
-              "calibration_report_fields": {
-                "status": "not_computed",
-                "coverage_by_horizon": {},
-                "coverage_by_spatial_block": {},
-                "width_by_horizon": {},
-                "residual_morans_i_after_calibration": null
-              },
-              "segment_diagnostics": {
-                "pickup_zone": {
-                  "segment_key": "pickup_zone",
-                  "segment_count": 254,
-                  "row_count_min": 1,
-                  "row_count_max": 48,
-                  "rmse_quantiles": {
-                    "p50": 1.0853099755488,
-                    "p90": 2.003549930924254,
-                    "max": 2.6760694323328384
-                  },
-                  "mae_quantiles": {
-                    "p50": 0.9662339270644822,
-                    "p90": 1.9034025873119045,
-                    "max": 2.6508248712982643
-                  },
-                  "wape_quantiles": {
-                    "p50": 0.37895500491494916,
-                    "p90": 2.0150282031909708,
-                    "max": 3.3974312129993147
-                  },
-                  "worst_rmse_segments": [
-                    {
-                      "pickup_zone": 132,
-                      "rows": 24,
-                      "rmse": 2.6760694323328384,
-                      "mae": 2.6508248712982643,
-                      "bias": -2.6508248712982643,
-                      "wape": 0.33201617588476773
-                    },
-                    {
-                      "pickup_zone": 236,
-                      "rows": 31,
-                      "rmse": 2.661353096495449,
-                      "mae": 2.524250053456193,
-                      "bias": -2.4850111365051624,
-                      "wape": 0.32309771326837955
-                    },
-                    {
-                      "pickup_zone": 161,
-                      "rows": 32,
-                      "rmse": 2.6577957166645523,
-                      "mae": 2.5377448842303805,
-                      "bias": -2.5377448842303805,
-                      "wape": 0.32335224276411734
-                    },
-                    {
-                      "pickup_zone": 186,
-                      "rows": 29,
-                      "rmse": 2.4752604220564947,
-                      "mae": 2.400957002583385,
-                      "bias": -2.400957002583385,
-                      "wape": 0.3162123562075326
-                    },
-                    {
-                      "pickup_zone": 79,
-                      "rows": 34,
-                      "rmse": 2.432692238748028,
-                      "mae": 2.2618228199824357,
-                      "bias": -2.2618228199824357,
-                      "wape": 0.30811539763471874
-                    }
-                  ],
-                  "largest_abs_bias_segments": [
-                    {
-                      "pickup_zone": 132,
-                      "rows": 24,
-                      "rmse": 2.6760694323328384,
-                      "mae": 2.6508248712982643,
-                      "bias": -2.6508248712982643,
-                      "wape": 0.33201617588476773
-                    },
-                    {
-                      "pickup_zone": 161,
-                      "rows": 32,
-                      "rmse": 2.6577957166645523,
-                      "mae": 2.5377448842303805,
-                      "bias": -2.5377448842303805,
-                      "wape": 0.32335224276411734
-                    },
-                    {
-                      "pickup_zone": 236,
-                      "rows": 31,
-                      "rmse": 2.661353096495449,
-                      "mae": 2.524250053456193,
-                      "bias": -2.4850111365051624,
-                      "wape": 0.32309771326837955
-                    },
-                    {
-                      "pickup_zone": 186,
-                      "rows": 29,
-                      "rmse": 2.4752604220564947,
-                      "mae": 2.400957002583385,
-                      "bias": -2.400957002583385,
-                      "wape": 0.3162123562075326
-                    },
-                    {
-                      "pickup_zone": 199,
-                      "rows": 1,
-                      "rmse": 2.35491986643683,
-                      "mae": 2.35491986643683,
-                      "bias": 2.35491986643683,
-                      "wape": 3.3974312129993147
-                    }
-                  ]
-                }
-              }
-            },
-            "lightgbm": {
-              "status": "ok",
-              "metrics": {
-                "rmse": 0.7168798701232113,
-                "mae": 0.5762162063978516,
-                "r2": 0.9014384694532278,
-                "wape": 0.17858471471929138
-              },
-              "timing": {
-                "train_seconds": 0.057416458999796305,
-                "predict_seconds": 0.0008784169986029156,
-                "fit_predict_seconds": 0.05829487599839922,
-                "prediction_rows": 6741.0,
-                "predict_rows_per_second": 7674031.821698886
-              },
-              "config": {
-                "n_estimators": 24,
-                "learning_rate": 0.08,
-                "max_depth": 4,
-                "num_leaves": 16,
-                "zone_treatment": "target_mean",
-                "feature_count": 9
-              },
-              "calibration_report_fields": {
-                "status": "not_computed",
-                "coverage_by_horizon": {},
-                "coverage_by_spatial_block": {},
-                "width_by_horizon": {},
-                "residual_morans_i_after_calibration": null
-              },
-              "segment_diagnostics": {
-                "pickup_zone": {
-                  "segment_key": "pickup_zone",
-                  "segment_count": 254,
-                  "row_count_min": 1,
-                  "row_count_max": 48,
-                  "rmse_quantiles": {
-                    "p50": 0.6518177249479619,
-                    "p90": 1.0842758096262337,
-                    "max": 2.198077066244943
-                  },
-                  "mae_quantiles": {
-                    "p50": 0.5552784209042578,
-                    "p90": 0.9788691067058383,
-                    "max": 2.198077066244943
-                  },
-                  "wape_quantiles": {
-                    "p50": 0.2698731340384194,
-                    "p90": 1.1824608085056802,
-                    "max": 3.1711548829633407
-                  },
-                  "worst_rmse_segments": [
-                    {
-                      "pickup_zone": 199,
-                      "rows": 1,
-                      "rmse": 2.198077066244943,
-                      "mae": 2.198077066244943,
-                      "bias": 2.198077066244943,
-                      "wape": 3.1711548829633407
-                    },
-                    {
-                      "pickup_zone": 59,
-                      "rows": 1,
-                      "rmse": 1.605991295782379,
-                      "mae": 1.605991295782379,
-                      "bias": 1.605991295782379,
-                      "wape": 2.3169556781360785
-                    },
-                    {
-                      "pickup_zone": 184,
-                      "rows": 5,
-                      "rmse": 1.5133939440811752,
-                      "mae": 1.5042924747698811,
-                      "bias": 1.5042924747698811,
-                      "wape": 2.1702352933970936
-                    },
-                    {
-                      "pickup_zone": 2,
-                      "rows": 3,
-                      "rmse": 1.4895292505734168,
-                      "mae": 1.4849278013150988,
-                      "bias": 1.4849278013150988,
-                      "wape": 2.1422979750354454
-                    },
-                    {
-                      "pickup_zone": 255,
-                      "rows": 32,
-                      "rmse": 1.4841090786540148,
-                      "mae": 1.206728943378467,
-                      "bias": -0.14787556818236797,
-                      "wape": 0.42112285285925516
-                    }
-                  ],
-                  "largest_abs_bias_segments": [
-                    {
-                      "pickup_zone": 199,
-                      "rows": 1,
-                      "rmse": 2.198077066244943,
-                      "mae": 2.198077066244943,
-                      "bias": 2.198077066244943,
-                      "wape": 3.1711548829633407
-                    },
-                    {
-                      "pickup_zone": 59,
-                      "rows": 1,
-                      "rmse": 1.605991295782379,
-                      "mae": 1.605991295782379,
-                      "bias": 1.605991295782379,
-                      "wape": 2.3169556781360785
-                    },
-                    {
-                      "pickup_zone": 184,
-                      "rows": 5,
-                      "rmse": 1.5133939440811752,
-                      "mae": 1.5042924747698811,
-                      "bias": 1.5042924747698811,
-                      "wape": 2.1702352933970936
-                    },
-                    {
-                      "pickup_zone": 2,
-                      "rows": 3,
-                      "rmse": 1.4895292505734168,
-                      "mae": 1.4849278013150988,
-                      "bias": 1.4849278013150988,
-                      "wape": 2.1422979750354454
-                    },
-                    {
-                      "pickup_zone": 27,
-                      "rows": 5,
-                      "rmse": 1.423742920661539,
-                      "mae": 1.4156893044559251,
-                      "bias": 1.4156893044559251,
-                      "wape": 1.8284884981003755
-                    }
-                  ]
-                }
-              }
-            },
-            "xgboost": {
-              "status": "ok",
-              "metrics": {
-                "rmse": 0.7170919765550885,
-                "mae": 0.576274541197072,
-                "r2": 0.90138013714919,
-                "wape": 0.17860279422375744
-              },
-              "timing": {
-                "train_seconds": 0.03231220900488552,
-                "predict_seconds": 0.0004261249996488914,
-                "fit_predict_seconds": 0.03273833400453441,
-                "prediction_rows": 6741.0,
-                "predict_rows_per_second": 15819301.861083703
-              },
-              "config": {
-                "n_estimators": 24,
-                "learning_rate": 0.08,
-                "max_depth": 4,
-                "tree_method": "hist",
-                "max_bin": 256,
-                "subsample": 1.0,
-                "colsample_bytree": 1.0,
-                "zone_treatment": "target_mean",
-                "feature_count": 9
-              },
-              "calibration_report_fields": {
-                "status": "not_computed",
-                "coverage_by_horizon": {},
-                "coverage_by_spatial_block": {},
-                "width_by_horizon": {},
-                "residual_morans_i_after_calibration": null
-              },
-              "segment_diagnostics": {
-                "pickup_zone": {
-                  "segment_key": "pickup_zone",
-                  "segment_count": 254,
-                  "row_count_min": 1,
-                  "row_count_max": 48,
-                  "rmse_quantiles": {
-                    "p50": 0.6523807184167931,
-                    "p90": 1.096730849675236,
-                    "max": 2.2017383594485995
-                  },
-                  "mae_quantiles": {
-                    "p50": 0.5529908448700351,
-                    "p90": 1.0073303616349403,
-                    "max": 2.2017383594485995
-                  },
-                  "wape_quantiles": {
-                    "p50": 0.26877092020127147,
-                    "p90": 1.1827447420224069,
-                    "max": 3.1764370125114967
-                  },
-                  "worst_rmse_segments": [
-                    {
-                      "pickup_zone": 199,
-                      "rows": 1,
-                      "rmse": 2.2017383594485995,
-                      "mae": 2.2017383594485995,
-                      "bias": 2.2017383594485995,
-                      "wape": 3.1764370125114967
-                    },
-                    {
-                      "pickup_zone": 59,
-                      "rows": 1,
-                      "rmse": 1.6100580711337802,
-                      "mae": 1.6100580711337802,
-                      "bias": 1.6100580711337802,
-                      "wape": 2.3228227947679545
-                    },
-                    {
-                      "pickup_zone": 184,
-                      "rows": 5,
-                      "rmse": 1.516707385310156,
-                      "mae": 1.5074140567752596,
-                      "bias": 1.5074140567752596,
-                      "wape": 2.1747387842759816
-                    },
-                    {
-                      "pickup_zone": 2,
-                      "rows": 3,
-                      "rmse": 1.492915213225092,
-                      "mae": 1.4884233493777987,
-                      "bias": 1.4884233493777987,
-                      "wape": 2.1473409848906915
-                    },
-                    {
-                      "pickup_zone": 255,
-                      "rows": 32,
-                      "rmse": 1.463819717868497,
-                      "mae": 1.1991415363029172,
-                      "bias": -0.1287046558847473,
-                      "wape": 0.41847500842741914
-                    }
-                  ],
-                  "largest_abs_bias_segments": [
-                    {
-                      "pickup_zone": 199,
-                      "rows": 1,
-                      "rmse": 2.2017383594485995,
-                      "mae": 2.2017383594485995,
-                      "bias": 2.2017383594485995,
-                      "wape": 3.1764370125114967
-                    },
-                    {
-                      "pickup_zone": 59,
-                      "rows": 1,
-                      "rmse": 1.6100580711337802,
-                      "mae": 1.6100580711337802,
-                      "bias": 1.6100580711337802,
-                      "wape": 2.3228227947679545
-                    },
-                    {
-                      "pickup_zone": 184,
-                      "rows": 5,
-                      "rmse": 1.516707385310156,
-                      "mae": 1.5074140567752596,
-                      "bias": 1.5074140567752596,
-                      "wape": 2.1747387842759816
-                    },
-                    {
-                      "pickup_zone": 2,
-                      "rows": 3,
-                      "rmse": 1.492915213225092,
-                      "mae": 1.4884233493777987,
-                      "bias": 1.4884233493777987,
-                      "wape": 2.1473409848906915
-                    },
-                    {
-                      "pickup_zone": 187,
-                      "rows": 1,
-                      "rmse": 1.441816331860709,
-                      "mae": 1.441816331860709,
-                      "bias": 1.441816331860709,
-                      "wape": 2.080101271848161
-                    }
-                  ]
-                }
-              }
-            },
-            "catboost": {
-              "status": "ok",
-              "metrics": {
-                "rmse": 0.7921254428864815,
-                "mae": 0.635068458232057,
-                "r2": 0.8796620542275598,
-                "wape": 0.19682459150113724
-              },
-              "timing": {
-                "train_seconds": 0.025001249996421393,
-                "predict_seconds": 0.00043937499867752194,
-                "fit_predict_seconds": 0.025440624995098915,
-                "prediction_rows": 6741.0,
-                "predict_rows_per_second": 15342247.556847308
-              },
-              "config": {
-                "iterations": 24,
-                "learning_rate": 0.08,
-                "depth": 4,
-                "zone_treatment": "target_mean",
-                "feature_count": 9
-              },
-              "calibration_report_fields": {
-                "status": "not_computed",
-                "coverage_by_horizon": {},
-                "coverage_by_spatial_block": {},
-                "width_by_horizon": {},
-                "residual_morans_i_after_calibration": null
-              },
-              "segment_diagnostics": {
-                "pickup_zone": {
-                  "segment_key": "pickup_zone",
-                  "segment_count": 254,
-                  "row_count_min": 1,
-                  "row_count_max": 48,
-                  "rmse_quantiles": {
-                    "p50": 0.7325189489232594,
-                    "p90": 1.3294317769083395,
-                    "max": 2.2862676257153587
-                  },
-                  "mae_quantiles": {
-                    "p50": 0.6071796073565328,
-                    "p90": 1.1971424780633955,
-                    "max": 2.2862676257153587
-                  },
-                  "wape_quantiles": {
-                    "p50": 0.291321870225389,
-                    "p90": 1.2937245556048245,
-                    "max": 3.2983869657645326
-                  },
-                  "worst_rmse_segments": [
-                    {
-                      "pickup_zone": 187,
-                      "rows": 1,
-                      "rmse": 2.2862676257153587,
-                      "mae": 2.2862676257153587,
-                      "bias": 2.2862676257153587,
-                      "wape": 3.2983869657645326
-                    },
-                    {
-                      "pickup_zone": 176,
-                      "rows": 1,
-                      "rmse": 2.156498369963675,
-                      "mae": 2.156498369963675,
-                      "bias": 2.156498369963675,
-                      "wape": 3.111169504031727
-                    },
-                    {
-                      "pickup_zone": 199,
-                      "rows": 1,
-                      "rmse": 2.140894691094383,
-                      "mae": 2.140894691094383,
-                      "bias": 2.140894691094383,
-                      "wape": 3.0886581539073754
-                    },
-                    {
-                      "pickup_zone": 245,
-                      "rows": 1,
-                      "rmse": 2.107933543456299,
-                      "mae": 2.107933543456299,
-                      "bias": 2.107933543456299,
-                      "wape": 3.041105269667903
-                    },
-                    {
-                      "pickup_zone": 156,
-                      "rows": 2,
-                      "rmse": 1.986750878338599,
-                      "mae": 1.9597332325189116,
-                      "bias": 1.9597332325189116,
-                      "wape": 2.8272974160203317
-                    }
-                  ],
-                  "largest_abs_bias_segments": [
-                    {
-                      "pickup_zone": 187,
-                      "rows": 1,
-                      "rmse": 2.2862676257153587,
-                      "mae": 2.2862676257153587,
-                      "bias": 2.2862676257153587,
-                      "wape": 3.2983869657645326
-                    },
-                    {
-                      "pickup_zone": 176,
-                      "rows": 1,
-                      "rmse": 2.156498369963675,
-                      "mae": 2.156498369963675,
-                      "bias": 2.156498369963675,
-                      "wape": 3.111169504031727
-                    },
-                    {
-                      "pickup_zone": 199,
-                      "rows": 1,
-                      "rmse": 2.140894691094383,
-                      "mae": 2.140894691094383,
-                      "bias": 2.140894691094383,
-                      "wape": 3.0886581539073754
-                    },
-                    {
-                      "pickup_zone": 245,
-                      "rows": 1,
-                      "rmse": 2.107933543456299,
-                      "mae": 2.107933543456299,
-                      "bias": 2.107933543456299,
-                      "wape": 3.041105269667903
-                    },
-                    {
-                      "pickup_zone": 251,
-                      "rows": 1,
-                      "rmse": 1.964162340630332,
-                      "mae": 1.964162340630332,
-                      "bias": 1.964162340630332,
-                      "wape": 2.833687268328239
-                    }
-                  ]
-                }
-              }
-            },
-            "hist_gradient_boosting": {
-              "status": "ok",
-              "metrics": {
-                "rmse": 0.699186772248661,
-                "mae": 0.5592365963658905,
-                "r2": 0.906243567348523,
-                "wape": 0.17332228235460895
-              },
-              "timing": {
-                "train_seconds": 0.08370470799854957,
-                "predict_seconds": 0.0015286249981727451,
-                "fit_predict_seconds": 0.08523333299672231,
-                "prediction_rows": 6741.0,
-                "predict_rows_per_second": 4409845.454613075
-              },
-              "config": {
-                "n_estimators": 24,
-                "learning_rate": 0.08,
-                "max_leaf_nodes": 16,
-                "zone_treatment": "target_mean",
-                "feature_count": 9
-              },
-              "calibration_report_fields": {
-                "status": "not_computed",
-                "coverage_by_horizon": {},
-                "coverage_by_spatial_block": {},
-                "width_by_horizon": {},
-                "residual_morans_i_after_calibration": null
-              },
-              "segment_diagnostics": {
-                "pickup_zone": {
-                  "segment_key": "pickup_zone",
-                  "segment_count": 254,
-                  "row_count_min": 1,
-                  "row_count_max": 48,
-                  "rmse_quantiles": {
-                    "p50": 0.628229403282437,
-                    "p90": 1.078463324417563,
-                    "max": 2.243237938580626
-                  },
-                  "mae_quantiles": {
-                    "p50": 0.5352490091232265,
-                    "p90": 0.9516990878493139,
-                    "max": 2.243237938580626
-                  },
-                  "wape_quantiles": {
-                    "p50": 0.2499410742731775,
-                    "p90": 0.9900899651100924,
-                    "max": 3.23630824952425
-                  },
-                  "worst_rmse_segments": [
-                    {
-                      "pickup_zone": 199,
-                      "rows": 1,
-                      "rmse": 2.243237938580626,
-                      "mae": 2.243237938580626,
-                      "bias": 2.243237938580626,
-                      "wape": 3.23630824952425
-                    },
-                    {
-                      "pickup_zone": 187,
-                      "rows": 1,
-                      "rmse": 1.8561001402288526,
-                      "mae": 1.8561001402288526,
-                      "bias": 1.8561001402288526,
-                      "wape": 2.677786467701475
-                    },
-                    {
-                      "pickup_zone": 245,
-                      "rows": 1,
-                      "rmse": 1.8417389078867799,
-                      "mae": 1.8417389078867799,
-                      "bias": 1.8417389078867799,
-                      "wape": 2.657067589020513
-                    },
-                    {
-                      "pickup_zone": 59,
-                      "rows": 1,
-                      "rmse": 1.6072592934492929,
-                      "mae": 1.6072592934492929,
-                      "bias": 1.6072592934492929,
-                      "wape": 2.318785012081994
-                    },
-                    {
-                      "pickup_zone": 156,
-                      "rows": 2,
-                      "rmse": 1.6018902135526611,
-                      "mae": 1.5774722713814477,
-                      "bias": 1.5774722713814477,
-                      "wape": 2.275811423061864
-                    }
-                  ],
-                  "largest_abs_bias_segments": [
-                    {
-                      "pickup_zone": 199,
-                      "rows": 1,
-                      "rmse": 2.243237938580626,
-                      "mae": 2.243237938580626,
-                      "bias": 2.243237938580626,
-                      "wape": 3.23630824952425
-                    },
-                    {
-                      "pickup_zone": 187,
-                      "rows": 1,
-                      "rmse": 1.8561001402288526,
-                      "mae": 1.8561001402288526,
-                      "bias": 1.8561001402288526,
-                      "wape": 2.677786467701475
-                    },
-                    {
-                      "pickup_zone": 245,
-                      "rows": 1,
-                      "rmse": 1.8417389078867799,
-                      "mae": 1.8417389078867799,
-                      "bias": 1.8417389078867799,
-                      "wape": 2.657067589020513
-                    },
-                    {
-                      "pickup_zone": 59,
-                      "rows": 1,
-                      "rmse": 1.6072592934492929,
-                      "mae": 1.6072592934492929,
-                      "bias": 1.6072592934492929,
-                      "wape": 2.318785012081994
-                    },
-                    {
-                      "pickup_zone": 156,
-                      "rows": 2,
-                      "rmse": 1.6018902135526611,
-                      "mae": 1.5774722713814477,
-                      "bias": 1.5774722713814477,
-                      "wape": 2.275811423061864
-                    }
-                  ]
-                }
-              }
-            }
-          }
-        },
-        "spatial_holdout": {
-          "train_rows": 27109,
-          "test_rows": 6596,
-          "split_manifest": {
-            "split_id": "pickup_demand_spatial_holdout",
-            "split_kind": "group_spatial_cv",
-            "dataset_fingerprint": "8f6635f1c567a043982004c6bc26cf5be49a5f371d7e09f5e533bd7dcbb866aa",
-            "coordinate_crs_note": "NYC TLC pickup/dropoff zone identifiers are treated as spatial groups; distance-buffered claims require projected taxi zone geometry.",
-            "model_version": "0.3.0",
-            "dependency_versions": {
-              "cartoboost": "0.3.0",
-              "numpy": "1.26.4",
-              "scikit-learn": "1.9.0",
-              "xgboost": "3.2.0",
-              "lightgbm": "4.6.0",
-              "catboost": "1.2.10"
-            },
-            "random_seed": 42,
-            "row_count": 33705,
-            "train_index_sha256": "sha256:79e7348566b046cdf1f763d896733217ac6502022b907ee39b2d60b114afa1c2",
-            "test_index_sha256": "sha256:9d7df89aee4b9fc90356a787186ddf23ee8c60b5db6773b9159d46b32ade4860",
-            "random_row_split_allowed_for_geo_claim": false,
-            "leakage_safe": true,
-            "split_manifest_hash": "sha256:0165869a86c2713c37b3ae036a953141b769f3b999e1d3cea9d06a37711420e5"
-          },
-          "holdout_pickup_zones": [
-            1,
-            7,
-            12,
-            17,
-            22,
-            27,
-            32,
-            37,
-            42,
-            47,
-            52,
-            57,
-            62,
-            67,
-            72,
-            77,
-            82,
-            87,
-            92,
-            97,
-            105,
-            111,
-            116,
-            121,
-            126,
-            131,
-            136,
-            141,
-            146,
-            151,
-            156,
-            161,
-            166,
-            171,
-            176,
-            181,
-            186,
-            191,
-            196,
-            201,
-            206,
-            211,
-            216,
-            221,
-            226,
-            231,
-            236,
-            241,
-            246,
-            251,
-            256,
-            261
-          ],
-          "models": {
-            "cartoboost": {
-              "status": "skipped",
-              "reason": "learned models are not valid for pickup_demand cold-zone spatial holdout; the split removes all zone demand history, so predictions collapse to priors"
-            },
-            "lightgbm": {
-              "status": "skipped",
-              "reason": "learned models are not valid for pickup_demand cold-zone spatial holdout; the split removes all zone demand history, so predictions collapse to priors"
-            },
-            "xgboost": {
-              "status": "skipped",
-              "reason": "learned models are not valid for pickup_demand cold-zone spatial holdout; the split removes all zone demand history, so predictions collapse to priors"
-            },
-            "catboost": {
-              "status": "skipped",
-              "reason": "learned models are not valid for pickup_demand cold-zone spatial holdout; the split removes all zone demand history, so predictions collapse to priors"
-            },
-            "hist_gradient_boosting": {
-              "status": "skipped",
-              "reason": "learned models are not valid for pickup_demand cold-zone spatial holdout; the split removes all zone demand history, so predictions collapse to priors"
-            }
-          }
-        }
-      }
     }
   },
   "external_baseline_comparison": [
@@ -6451,59 +5344,59 @@
       "task": "duration",
       "split": "random",
       "cartoboost_model": "cartoboost",
-      "cartoboost_rmse": 0.4574393159309033,
-      "cartoboost_wape": 0.05455233647675141,
-      "cartoboost_r2": 0.5710296729320681,
+      "cartoboost_rmse": 0.45743931593090353,
+      "cartoboost_wape": 0.05455233647675143,
+      "cartoboost_r2": 0.5710296729320676,
       "best_external_baseline": "hist_gradient_boosting",
       "best_external_rmse": 0.3418852385950508,
       "best_external_wape": 0.039919164587188645,
       "best_external_r2": 0.7603811526807877,
-      "rmse_delta_vs_external": 0.11555407733585249,
-      "r2_delta_vs_external": -0.18935147974871958,
+      "rmse_delta_vs_external": 0.11555407733585271,
+      "r2_delta_vs_external": -0.18935147974872002,
       "status": "external_lower_or_tied_rmse"
     },
     {
       "task": "duration",
       "split": "spatial_holdout",
       "cartoboost_model": "cartoboost",
-      "cartoboost_rmse": 0.5246542812282429,
-      "cartoboost_wape": 0.06163807314046031,
-      "cartoboost_r2": 0.5791875306707015,
+      "cartoboost_rmse": 0.5246542812282428,
+      "cartoboost_wape": 0.06163807314046029,
+      "cartoboost_r2": 0.5791875306707017,
       "best_external_baseline": "hist_gradient_boosting",
       "best_external_rmse": 0.352825943273662,
       "best_external_wape": 0.040022734305493156,
       "best_external_r2": 0.8096893114571468,
-      "rmse_delta_vs_external": 0.17182833795458086,
-      "r2_delta_vs_external": -0.23050178078644534,
+      "rmse_delta_vs_external": 0.17182833795458075,
+      "r2_delta_vs_external": -0.23050178078644512,
       "status": "external_lower_or_tied_rmse"
     },
     {
       "task": "duration",
       "split": "out_of_time",
       "cartoboost_model": "cartoboost",
-      "cartoboost_rmse": 0.4650972879158718,
+      "cartoboost_rmse": 0.46509728791587174,
       "cartoboost_wape": 0.055404650163456186,
-      "cartoboost_r2": 0.5657704263065023,
+      "cartoboost_r2": 0.5657704263065024,
       "best_external_baseline": "hist_gradient_boosting",
       "best_external_rmse": 0.34577174947338457,
       "best_external_wape": 0.040405635566092196,
       "best_external_r2": 0.7600002447937049,
-      "rmse_delta_vs_external": 0.11932553844248722,
-      "r2_delta_vs_external": -0.19422981848720255,
+      "rmse_delta_vs_external": 0.11932553844248717,
+      "r2_delta_vs_external": -0.19422981848720244,
       "status": "external_lower_or_tied_rmse"
     },
     {
       "task": "fare",
       "split": "random",
       "cartoboost_model": "cartoboost",
-      "cartoboost_rmse": 0.30077877278292564,
+      "cartoboost_rmse": 0.3007787727829256,
       "cartoboost_wape": 0.07294154821483405,
       "cartoboost_r2": 0.658512236286999,
       "best_external_baseline": "hist_gradient_boosting",
       "best_external_rmse": 0.17915465884646392,
       "best_external_wape": 0.04296125066500347,
       "best_external_r2": 0.8788462131871305,
-      "rmse_delta_vs_external": 0.12162411393646172,
+      "rmse_delta_vs_external": 0.12162411393646166,
       "r2_delta_vs_external": -0.22033397690013157,
       "status": "external_lower_or_tied_rmse"
     },
@@ -6511,84 +5404,59 @@
       "task": "fare",
       "split": "spatial_holdout",
       "cartoboost_model": "cartoboost",
-      "cartoboost_rmse": 0.4595589864991833,
-      "cartoboost_wape": 0.09882774208419597,
-      "cartoboost_r2": 0.5353842774739501,
+      "cartoboost_rmse": 0.45955898649918314,
+      "cartoboost_wape": 0.09882774208419595,
+      "cartoboost_r2": 0.5353842774739506,
       "best_external_baseline": "hist_gradient_boosting",
       "best_external_rmse": 0.2411672224353955,
       "best_external_wape": 0.05375711144831535,
       "best_external_r2": 0.8720477464308415,
-      "rmse_delta_vs_external": 0.2183917640637878,
-      "r2_delta_vs_external": -0.33666346895689137,
+      "rmse_delta_vs_external": 0.21839176406378763,
+      "r2_delta_vs_external": -0.3366634689568909,
       "status": "external_lower_or_tied_rmse"
     },
     {
       "task": "fare",
       "split": "out_of_time",
       "cartoboost_model": "cartoboost",
-      "cartoboost_rmse": 0.30749370986838426,
-      "cartoboost_wape": 0.07394763597475351,
-      "cartoboost_r2": 0.6519359266689793,
+      "cartoboost_rmse": 0.3074937098683842,
+      "cartoboost_wape": 0.07394763597475348,
+      "cartoboost_r2": 0.6519359266689794,
       "best_external_baseline": "hist_gradient_boosting",
       "best_external_rmse": 0.18605638580603123,
       "best_external_wape": 0.044032542416601206,
       "best_external_r2": 0.8725687665665424,
-      "rmse_delta_vs_external": 0.12143732406235302,
-      "r2_delta_vs_external": -0.2206328398975631,
-      "status": "external_lower_or_tied_rmse"
-    },
-    {
-      "task": "pickup_demand",
-      "split": "random",
-      "cartoboost_model": "cartoboost",
-      "cartoboost_rmse": 1.2954070663609563,
-      "cartoboost_wape": 0.3267389220459047,
-      "cartoboost_r2": 0.6781695064681424,
-      "best_external_baseline": "hist_gradient_boosting",
-      "best_external_rmse": 0.699186772248661,
-      "best_external_wape": 0.17332228235460895,
-      "best_external_r2": 0.906243567348523,
-      "rmse_delta_vs_external": 0.5962202941122953,
-      "r2_delta_vs_external": -0.2280740608803805,
+      "rmse_delta_vs_external": 0.12143732406235297,
+      "r2_delta_vs_external": -0.220632839897563,
       "status": "external_lower_or_tied_rmse"
     }
   ],
   "model_status_summary": {
     "models": {
       "cartoboost": {
-        "ok": 7,
-        "skipped": 1,
-        "skip_reasons": [
-          "learned models are not valid for pickup_demand cold-zone spatial holdout; the split removes all zone demand history, so predictions collapse to priors"
-        ]
+        "ok": 6,
+        "skipped": 0,
+        "skip_reasons": []
       },
       "lightgbm": {
-        "ok": 7,
-        "skipped": 1,
-        "skip_reasons": [
-          "learned models are not valid for pickup_demand cold-zone spatial holdout; the split removes all zone demand history, so predictions collapse to priors"
-        ]
+        "ok": 6,
+        "skipped": 0,
+        "skip_reasons": []
       },
       "xgboost": {
-        "ok": 7,
-        "skipped": 1,
-        "skip_reasons": [
-          "learned models are not valid for pickup_demand cold-zone spatial holdout; the split removes all zone demand history, so predictions collapse to priors"
-        ]
+        "ok": 6,
+        "skipped": 0,
+        "skip_reasons": []
       },
       "catboost": {
-        "ok": 7,
-        "skipped": 1,
-        "skip_reasons": [
-          "learned models are not valid for pickup_demand cold-zone spatial holdout; the split removes all zone demand history, so predictions collapse to priors"
-        ]
+        "ok": 6,
+        "skipped": 0,
+        "skip_reasons": []
       },
       "hist_gradient_boosting": {
-        "ok": 7,
-        "skipped": 1,
-        "skip_reasons": [
-          "learned models are not valid for pickup_demand cold-zone spatial holdout; the split removes all zone demand history, so predictions collapse to priors"
-        ]
+        "ok": 6,
+        "skipped": 0,
+        "skip_reasons": []
       }
     },
     "completed_external_baselines": [
@@ -6628,54 +5496,44 @@
       "cartoboost"
     ],
     "skipped_cartoboost_family_models": [],
-    "cartoboost_external_comparison_count": 7,
+    "cartoboost_external_comparison_count": 6,
     "status_summary": {
       "cartoboost": {
-        "ok": 7,
-        "skipped": 1,
-        "skip_reasons": [
-          "learned models are not valid for pickup_demand cold-zone spatial holdout; the split removes all zone demand history, so predictions collapse to priors"
-        ]
+        "ok": 6,
+        "skipped": 0,
+        "skip_reasons": []
       },
       "lightgbm": {
-        "ok": 7,
-        "skipped": 1,
-        "skip_reasons": [
-          "learned models are not valid for pickup_demand cold-zone spatial holdout; the split removes all zone demand history, so predictions collapse to priors"
-        ]
+        "ok": 6,
+        "skipped": 0,
+        "skip_reasons": []
       },
       "xgboost": {
-        "ok": 7,
-        "skipped": 1,
-        "skip_reasons": [
-          "learned models are not valid for pickup_demand cold-zone spatial holdout; the split removes all zone demand history, so predictions collapse to priors"
-        ]
+        "ok": 6,
+        "skipped": 0,
+        "skip_reasons": []
       },
       "catboost": {
-        "ok": 7,
-        "skipped": 1,
-        "skip_reasons": [
-          "learned models are not valid for pickup_demand cold-zone spatial holdout; the split removes all zone demand history, so predictions collapse to priors"
-        ]
+        "ok": 6,
+        "skipped": 0,
+        "skip_reasons": []
       },
       "hist_gradient_boosting": {
-        "ok": 7,
-        "skipped": 1,
-        "skip_reasons": [
-          "learned models are not valid for pickup_demand cold-zone spatial holdout; the split removes all zone demand history, so predictions collapse to priors"
-        ]
+        "ok": 6,
+        "skipped": 0,
+        "skip_reasons": []
       }
     }
   },
   "output_artifacts": {
     "results.json": {
-      "size_bytes": 237669
+      "size_bytes": 198599
     },
     "results.jsonl": {
-      "size_bytes": 37517
+      "size_bytes": 32104
     },
     "results.md": {
-      "size_bytes": 14303
+      "size_bytes": 11461
     }
   }
 }
