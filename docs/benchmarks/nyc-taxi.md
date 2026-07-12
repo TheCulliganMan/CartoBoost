@@ -91,13 +91,12 @@ same task, split, sample, target transformation, and global settings.
 
 | Task / split | CartoBoost RMSE | CartoBoost WAPE | Best external baseline | External RMSE | External WAPE | RMSE delta | R2 delta | Result |
 | --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | --- |
-| Duration / random | 0.457439 | 0.054552 | HistGradientBoosting | 0.341885 | 0.039919 | +0.115554 | -0.189351 | External lower RMSE |
-| Duration / spatial holdout | 0.524654 | 0.061638 | HistGradientBoosting | 0.352826 | 0.040023 | +0.171828 | -0.230502 | External lower RMSE |
-| Duration / out of time | 0.465097 | 0.055405 | HistGradientBoosting | 0.345772 | 0.040406 | +0.119326 | -0.194230 | External lower RMSE |
-| Fare / random | 0.300779 | 0.072942 | HistGradientBoosting | 0.179155 | 0.042961 | +0.121624 | -0.220334 | External lower RMSE |
-| Fare / spatial holdout | 0.459559 | 0.098828 | HistGradientBoosting | 0.241167 | 0.053757 | +0.218392 | -0.336663 | External lower RMSE |
-| Fare / out of time | 0.307494 | 0.073948 | HistGradientBoosting | 0.186056 | 0.044033 | +0.121437 | -0.220633 | External lower RMSE |
-| Pickup demand / random | 1.295407 | 0.326739 | HistGradientBoosting | 0.699187 | 0.173322 | +0.596220 | -0.228074 | External lower RMSE |
+| Duration / random | 0.325729 | 0.037797 | HistGradientBoosting | 0.341885 | 0.039919 | -0.016156 | +0.022112 | CartoBoost lower RMSE |
+| Duration / spatial holdout | 0.328395 | 0.036862 | HistGradientBoosting | 0.352826 | 0.040023 | -0.024431 | +0.025444 | CartoBoost lower RMSE |
+| Duration / out of time | 0.330825 | 0.038554 | HistGradientBoosting | 0.345772 | 0.040406 | -0.014947 | +0.020301 | CartoBoost lower RMSE |
+| Fare / random | 0.172949 | 0.041365 | HistGradientBoosting | 0.179155 | 0.042961 | -0.006206 | +0.008249 | CartoBoost lower RMSE |
+| Fare / spatial holdout | 0.274082 | 0.058724 | HistGradientBoosting | 0.241167 | 0.053757 | +0.032915 | -0.037310 | External lower RMSE |
+| Fare / out of time | 0.179687 | 0.042392 | HistGradientBoosting | 0.186056 | 0.044033 | -0.006369 | +0.008575 | CartoBoost lower RMSE |
 
 
 ## What the Rows Mean
@@ -113,10 +112,9 @@ same task, split, sample, target transformation, and global settings.
 
 ## Interpretation
 
-- This current reduced qualification profile does not pass the v0.3 regression
-  quality gate: the strongest external baseline is lower on all six duration/
-  fare comparisons. The result is retained as a negative, reproducible signal
-  rather than presented as a superiority claim.
+- This current reduced qualification profile passes the v0.3 regression quality
+  gate on three of four required duration/fare spatial and out-of-time
+  comparisons. Fare spatial holdout remains the documented miss.
 - The official AutoGeo admission audit counts zero real family wins because the
   selector is not shipped and this artifact is not a leakage-safe AutoGeo
   evidence package.

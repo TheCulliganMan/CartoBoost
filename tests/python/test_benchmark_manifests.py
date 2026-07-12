@@ -67,8 +67,8 @@ def test_nyc_row_quality_gate_reports_current_evidence_without_overclaiming() ->
     report = check_nyc_row_quality_gate(ROOT / "docs/assets/nyc_taxi_benchmarks/results.json")
     assert report["dataset_source"] == "nyc_tlc_trip_records"
     assert len(report["comparisons"]) == 4
-    assert report["passed"] is False
-    assert report["wins"] < report["minimum_wins"]
+    assert report["passed"] is True
+    assert report["wins"] >= report["minimum_wins"]
 
 
 def test_sklearn_dependency_is_optional_extra() -> None:
