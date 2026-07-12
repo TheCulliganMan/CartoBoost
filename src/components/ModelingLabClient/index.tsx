@@ -5,6 +5,7 @@ import {contourDensity, geoGraticule, geoMercator, geoPath, interpolateTurbo, sc
 import 'maplibre-gl/dist/maplibre-gl.css';
 
 import {assertForecastResponseRecords, coerceFiniteNumber, formatFixed, formatPercent} from './numberFormat';
+import MarketStructureExplorer, {marketExplorerDataFromPayload, type MarketStructureExplorerPayload} from '../MarketStructureExplorer';
 import styles from './styles.module.css';
 
 type ParsedTable = {
@@ -527,6 +528,53 @@ export function DeepModelWasmExample({model}: {model: string}): React.ReactEleme
   );
 }
 
+/** A substantial in-browser panel that renders the actual native graph evidence. */
+export function MarketStructureWasmExample(): React.ReactElement {
+  const wasmJsUrl = useBaseUrl('/wasm/cartoboost/cartoboost_wasm.js');
+  const wasmBinaryUrl = useBaseUrl('/wasm/cartoboost/cartoboost_wasm_bg.wasm');
+  const [status, setStatus] = useState('Ready: 56 directional taxi-shaped lanes × 126 daily observations.');
+  const [isRunning, setIsRunning] = useState(false);
+  const [payload, setPayload] = useState<MarketStructureExplorerPayload | null>(null);
+
+  const runExample = useCallback(async () => {
+    setIsRunning(true);
+    setStatus('Fitting the native learned relationship graph in this browser.');
+    try {
+      const wasmModule = await getInitializedWasmModule(wasmJsUrl, wasmBinaryUrl);
+      if (!wasmModule.runMarketStructureExplorer) {
+        throw new Error('The market structure Wasm export is not available from this bundle.');
+      }
+      const response = wasmModule.runMarketStructureExplorer(marketStructureExampleRequest()) as MarketStructureExplorerPayload;
+      if (!Array.isArray(response.lanes) || !Array.isArray(response.forecasts) || !Array.isArray(response.kernels)) {
+        throw new Error('The browser model returned an invalid market explorer payload.');
+      }
+      setPayload(response);
+      setStatus(`Complete: ${response.lanes.length} lanes, ${response.kernels.length} retained directed kernels.`);
+    } catch (error) {
+      setPayload(null);
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsRunning(false);
+    }
+  }, [wasmBinaryUrl, wasmJsUrl]);
+
+  return (
+    <section style={{border: '1px solid var(--ifm-color-emphasis-300)', borderRadius: 8, padding: '1rem', margin: '1rem 0'}}>
+      <div style={{display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap'}}>
+        <div>
+          <strong>Learned market structure explorer</strong>
+          <p style={{margin: '0.25rem 0 0'}}>Fits the Rust model on a 7,056-observation taxi-shaped panel, then exposes its actual forecasts, components, and kernels.</p>
+        </div>
+        <button className="button button--primary" type="button" disabled={isRunning} onClick={() => void runExample()}>
+          {isRunning ? 'Fitting graph' : 'Run market explorer'}
+        </button>
+      </div>
+      <p style={{margin: '0.75rem 0'}}>{status}</p>
+      {payload && <MarketStructureExplorer {...marketExplorerDataFromPayload(payload)} />}
+    </section>
+  );
+}
+
 function DeepModelWasmResult({result}: {result: unknown}) {
   const rows = deepExampleResultRows(result);
   return (
@@ -724,6 +772,45 @@ function runDeepModelWasmExample(wasmModule: WasmModule, model: string): unknown
     default:
       throw new Error(`Unknown deep model example: ${model}`);
   }
+}
+
+function marketStructureExampleRequest() {
+  // A deliberately substantial, deterministic taxi-shaped panel. It is a
+  // browser exercise fixture, not a claim that its composition effect occurred
+  // in the TLC records; the maintained benchmark carries that real-data claim.
+  const zones = ['132', '138', '161', '230', '48', '79', '142', '234'];
+  const lanes = zones.flatMap((origin) => zones.filter((destination) => destination !== origin).map((destination) => ({origin, destination})));
+  const days = 126;
+  const coordinates = lanes.map(({origin, destination}) => {
+    const source = TAXI_ZONE_CENTROIDS[origin];
+    const target = TAXI_ZONE_CENTROIDS[destination];
+    return [source.lon, source.lat, target.lon, target.lat];
+  });
+  const primary = Array.from({length: days}, (_, day) => lanes.map(({origin, destination}, index) => {
+    const weekend = day % 7 >= 5 ? 0.16 : 0;
+    const airport = origin === '132' || origin === '138' || destination === '132' || destination === '138' ? 0.38 : 0;
+    const sharedMovement = 0.32 * Math.sin(day / 9) + 0.18 * Math.cos(day / 21);
+    const localMovement = 0.12 * Math.sin(day / 5 + index * 0.6);
+    return Math.exp(1.28 + airport + weekend + sharedMovement + localMovement);
+  }));
+  const secondary = Array.from({length: days}, (_, day) => lanes.map(({origin, destination}, index) => {
+    const airport = origin === '132' || origin === '138' ? 62 : destination === '132' || destination === '138' ? 44 : 18;
+    return Math.max(1, Math.round(airport + 11 * Math.sin(day / 7 + index * 0.4) + 8 * Math.cos(day / 17)));
+  }));
+  return {
+    laneIds: lanes.map(({origin, destination}) => `${origin}:${destination}`),
+    timestamps: Array.from({length: days}, (_, day) => day),
+    targetNames: ['primary_measure', 'supporting_measure'],
+    primary,
+    secondary,
+    originIds: lanes.map(({origin}) => origin),
+    destinationIds: lanes.map(({destination}) => destination),
+    coordinates,
+    hierarchyGroups: lanes.map(({origin}) => [`borough_proxy:${origin === '132' || origin === '138' ? 'airport' : 'city'}`]),
+    calendar: Array.from({length: days}, (_, day) => [Math.sin(2 * Math.PI * day / 7), day % 28 === 0 ? 1 : 0]),
+    horizon: 7,
+    frequency: 'daily',
+  };
 }
 
 function deepTemporalPanel() {
@@ -2970,6 +3057,7 @@ export default function ModelingLabClient(): React.ReactElement {
                   <DeepModelWasmExample model="EventOutcomeModel" />
                   <DeepModelWasmExample model="ServiceTimeResidualModel" />
                   <DeepModelWasmExample model="SpatioTemporalGraphForecaster" />
+                  <MarketStructureWasmExample />
                   <DeepModelWasmExample model="ConditionalFlowDistributionHead" />
                   <DeepModelWasmExample model="GeoTemporalDiffusionScenarioModel" />
                   <DeepModelWasmExample model="GraphNeuralOperator" />

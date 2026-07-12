@@ -937,7 +937,14 @@ impl MarketStructureForecaster {
             .collect::<Vec<_>>();
         Ok(json!({
             "lanes": lanes,
-            "forecasts": self.predict(horizon, None)?,
+            // Explorer callers request an immediately inspectable current-state
+            // view. Reuse the final known calendar state here; explicit
+            // `predict` calls still require caller-supplied future calendar
+            // values when calendar features were fitted.
+            "forecasts": self.predict(
+                horizon,
+                (!self.last_calendar.is_empty()).then(|| vec![self.last_calendar.clone(); horizon]).as_deref(),
+            )?,
             "explanations": self.nowcast()?,
             "kernels": self.relationships()?,
             "target_names": self.target_names,
@@ -2286,6 +2293,7 @@ mod tests {
         let mut model = MarketStructureForecaster::new(MarketStructureConfig::default()).unwrap();
         model.fit(&input).unwrap();
         assert!(model.predict(1, None).is_err());
+        assert!(model.explorer_payload(1).is_ok());
         let inactive = model.predict(1, Some(&[vec![0.0]])).unwrap();
         let active = model.predict(1, Some(&[vec![1.0]])).unwrap();
         assert_ne!(inactive[0].primary, active[0].primary);

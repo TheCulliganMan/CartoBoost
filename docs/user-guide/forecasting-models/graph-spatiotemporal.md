@@ -1,4 +1,4 @@
-import {ForecastModelExample} from '@site/src/components/ModelingLabClient';
+import {ForecastModelExample, MarketStructureWasmExample} from '@site/src/components/ModelingLabClient';
 import {MarketStructureExplorerSample} from '@site/src/components/MarketStructureExplorer';
 
 # Graph Spatiotemporal Forecasting
@@ -21,6 +21,14 @@ The embedded browser example uses the same panel forecasting surface and a
 multi-location demand panel. Use it as a quick shape check for panel behavior.
 Evaluate graph-specific quality in Python with your own adjacency and the
 same rolling-origin split used by the baselines.
+
+<MarketStructureWasmExample />
+
+This browser exercise uses 56 directed taxi-shaped lanes over 126 daily dates
+(7,056 lane-day observations) and runs the native relationship learner in
+WASM. It is intentionally separate from the real TLC benchmark evidence below:
+the fixture is an interactive scale check, while the maintained taxi benchmark
+uses real records and reports the quality claim.
 
 ## Public Contract
 
