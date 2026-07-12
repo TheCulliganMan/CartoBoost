@@ -12,7 +12,6 @@ import argparse
 import json
 import os
 import platform
-import resource
 import subprocess
 import time
 from pathlib import Path
@@ -29,6 +28,11 @@ from cartoboost.schema import (
     SpatialPairSpec,
 )
 
+try:
+    import resource
+except ImportError:  # pragma: no cover - Windows has no resource module.
+    resource = None
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -40,6 +44,8 @@ def _commit() -> str | None:
 
 
 def _peak_rss_mb() -> float:
+    if resource is None:
+        return 0.0
     value = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     # macOS reports bytes; Linux reports KiB.
     return float(value / (1024 * 1024) if platform.system() == "Darwin" else value / 1024)
