@@ -4,6 +4,13 @@ use std::collections::VecDeque;
 use std::fs;
 use std::path::Path;
 
+pub mod market;
+pub use market::{
+    ExpertEventLabel, ExpertRelationshipPrior, MarketExplanation, MarketPanelFrame,
+    MarketPrediction, MarketRelationship, MarketShiftKind, MarketStructureConfig,
+    MarketStructureForecaster, MarketSupportKind, RelationshipKind, WeeklyMarketPrediction,
+};
+
 pub type Result<T> = std::result::Result<T, GeoStError>;
 
 pub fn available_compute_backends() -> Vec<String> {

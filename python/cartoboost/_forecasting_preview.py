@@ -103,6 +103,11 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "TsbForecaster": ("cartoboost.forecasting.local", "TsbForecaster"),
     "DCRNNForecaster": ("cartoboost.forecasting.graph_st", "DCRNNForecaster"),
     "GraphTemporalFrame": ("cartoboost.forecasting.graph_st", "GraphTemporalFrame"),
+    "MarketPanelFrame": ("cartoboost.forecasting.graph_st", "MarketPanelFrame"),
+    "MarketStructureForecaster": (
+        "cartoboost.forecasting.graph_st",
+        "MarketStructureForecaster",
+    ),
     "GraphWaveNetForecaster": ("cartoboost.forecasting.graph_st", "GraphWaveNetForecaster"),
     "STAEformerForecaster": ("cartoboost.forecasting.graph_st", "STAEformerForecaster"),
     "available_graph_st_backends": (

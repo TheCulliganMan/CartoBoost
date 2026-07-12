@@ -8,10 +8,74 @@ from cartoboost.preview.forecasting import (
     DCRNNForecaster,
     GraphTemporalFrame,
     GraphWaveNetForecaster,
+    MarketPanelFrame,
+    MarketStructureForecaster,
     RollingOriginSplitter,
     STAEformerForecaster,
     available_graph_st_backends,
 )
+
+
+def test_market_structure_wrappers_keep_targets_generic(monkeypatch):
+    calls = []
+
+    class NativeMarketPanelFrame:
+        def __init__(self, *args):
+            calls.append(("frame", args))
+            self.lane_ids = args[0]
+            self.target_names = args[2]
+
+    class NativeMarketStructureForecaster:
+        def __init__(self, **params):
+            calls.append(("init", params))
+
+        def fit(self, frame):
+            calls.append(("fit", frame))
+
+        def predict_json(self, horizon, calendar):
+            calls.append(("predict", horizon, calendar))
+            return json.dumps([{"primary": 1.0, "secondary": 2.0}])
+
+        def nowcast_json(self):
+            return json.dumps([{"shift": "no_shift"}])
+
+        def weekly_rollups_json(self, horizon, calendar):
+            calls.append(("weekly_rollups", horizon, calendar))
+            return json.dumps([{"days": 2, "primary": 1.1, "secondary": 4.0}])
+
+        def relationships_json(self):
+            return json.dumps([])
+
+    import cartoboost
+
+    monkeypatch.setattr(
+        cartoboost,
+        "_native",
+        SimpleNamespace(
+            MarketPanelFrame=NativeMarketPanelFrame,
+            MarketStructureForecaster=NativeMarketStructureForecaster,
+        ),
+        raising=False,
+    )
+    frame = MarketPanelFrame(
+        lane_ids=["a:b", "a:c"],
+        timestamps=[0, 1, 2],
+        target_names=["benchmark", "supporting_measure"],
+        primary=[[1.0, 2.0], [1.1, 2.1], [1.2, 2.2]],
+        secondary=[[3.0, 4.0], [3.1, 4.1], [3.2, 4.2]],
+        origin_ids=["a", "a"],
+        destination_ids=["b", "c"],
+        coordinates=[[0.0, 0.0, 1.0, 1.0], [0.0, 0.0, 2.0, 2.0]],
+        hierarchy_groups=[["parent:a"], ["parent:a"]],
+    )
+    model = MarketStructureForecaster().fit(frame)
+
+    assert frame.target_names == ["benchmark", "supporting_measure"]
+    assert model.predict(1) == [{"primary": 1.0, "secondary": 2.0}]
+    assert model.nowcast() == [{"shift": "no_shift"}]
+    assert model.weekly_rollups(2) == [{"days": 2, "primary": 1.1, "secondary": 4.0}]
+    assert calls[0][1][2] == ["benchmark", "supporting_measure"]
+    assert calls[0][1][9] == [["parent:a"], ["parent:a"]]
 
 
 def test_graph_temporal_frame_and_dcrnn_delegate_to_native(monkeypatch):

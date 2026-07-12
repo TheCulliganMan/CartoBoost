@@ -1,0 +1,23 @@
+.explorer { display: grid; gap: 0.8rem; margin: 1.5rem 0; }
+.controls { align-items: end; display: flex; gap: 1rem; justify-content: space-between; }
+.controls label { color: var(--ifm-font-color-base); display: grid; font-weight: 600; gap: 0.25rem; }
+.controls select { border: 1px solid var(--ifm-color-emphasis-300); border-radius: 0.35rem; color: inherit; font: inherit; padding: 0.35rem; }
+.hint, .eyebrow { color: var(--ifm-color-emphasis-700); font-size: 0.78rem; }
+.map { border-radius: 0.65rem; height: 440px; overflow: hidden; }
+.detail { align-items: center; background: var(--ifm-color-emphasis-100); display: flex; gap: 1.2rem; justify-content: space-between; padding: 0.85rem 1rem; }
+.detail > div:first-child { display: grid; gap: 0.2rem; }
+.detail strong { font-size: 1.1rem; }
+.metricGrid { display: flex; gap: 1.2rem; }
+.metricGrid span { display: grid; gap: 0.15rem; }
+.metricGrid small { color: var(--ifm-color-emphasis-700); }
+.bottomGrid { display: grid; gap: 1.2rem; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.bottomGrid > div { display: grid; gap: 0.4rem; }
+.forecast { height: 94px; overflow: visible; width: 100%; }
+.forecast polyline { fill: none; stroke: var(--ifm-color-primary); stroke-width: 2.5; vector-effect: non-scaling-stroke; }
+.forecast circle { fill: var(--ifm-color-primary); }
+.relationships { display: grid; gap: 0.38rem; list-style: none; margin: 0; padding: 0; }
+.relationships li { align-items: baseline; display: flex; gap: 0.55rem; justify-content: space-between; }
+.relationships button { background: none; border: 0; color: var(--ifm-color-primary); cursor: pointer; font: inherit; padding: 0; text-align: left; }
+.relationships span { color: var(--ifm-color-emphasis-700); font-size: 0.78rem; text-align: right; }
+.empty { color: var(--ifm-color-emphasis-700); }
+@media (max-width: 640px) { .map { height: 330px; } .detail, .bottomGrid { align-items: stretch; grid-template-columns: 1fr; } .detail { display: grid; } .metricGrid { justify-content: space-between; } .controls { align-items: start; flex-direction: column; } }

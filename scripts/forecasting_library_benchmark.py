@@ -49,7 +49,11 @@ from cartoboost.preview import croston_forecast, sba_forecast, tsb_forecast  # n
 from cartoboost.forecasting.global_models import CartoBoostLagForecaster  # noqa: E402
 from cartoboost.preview.forecasting import (  # noqa: E402
     AutoStatsBank,
+    DCRNNForecaster,
+    GraphTemporalFrame,
     LaneNeuralPanelForecaster,
+    MarketPanelFrame,
+    MarketStructureForecaster,
     PiecewiseLinearSeasonalForecaster,
 )
 from cartoboost.forecasting.schema import ForecastFrame  # noqa: E402
@@ -387,6 +391,14 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--market-structure-splits",
+        action="store_true",
+        help=(
+            "Run the learned market-structure taxi lane suite. Requires real NYC taxi data "
+            "with daily effective-fare and zone geometry inputs."
+        ),
+    )
+    parser.add_argument(
         "--allow-full-m5-roster",
         action="store_true",
         help=(
@@ -416,7 +428,9 @@ def main() -> int:
     args = parser.parse_args()
     normalize_competition_source(args)
     validate_args(args)
-    if "prophet" in forecasting_library_models_for_roster(args.model_roster):
+    if not args.market_structure_splits and "prophet" in forecasting_library_models_for_roster(
+        args.model_roster
+    ):
         ensure_prophet_class()
 
     cartoboost_config = {
@@ -445,6 +459,16 @@ def main() -> int:
     load_seconds = perf_counter() - load_start
     if args.neural_panel_splits:
         return run_neural_panel_split_suite(
+            args,
+            table=table,
+            dataset=dataset,
+            source_file_hashes=dataset_source_hashes,
+            load_seconds=load_seconds,
+            cartoboost_config=cartoboost_config,
+            benchmark_start=benchmark_start,
+        )
+    if args.market_structure_splits:
+        return run_market_structure_taxi_suite(
             args,
             table=table,
             dataset=dataset,
@@ -1534,6 +1558,7 @@ def load_nyc_taxi_fixture(args: argparse.Namespace) -> tuple[Any, dict[str, Any]
         TLC_TRIP_RECORD_PAGE,
         clean_tlc_frame,
         ensure_parquet_files,
+        ensure_zone_centroids,
         ensure_zone_lookup,
         load_tlc_frame,
         parse_months,
@@ -1548,6 +1573,11 @@ def load_nyc_taxi_fixture(args: argparse.Namespace) -> tuple[Any, dict[str, Any]
         no_download=args.no_download,
     )
     zone_lookup = ensure_zone_lookup(cache_dir=args.cache_dir, no_download=args.no_download)
+    zone_centroids = (
+        ensure_zone_centroids(cache_dir=args.cache_dir, no_download=args.no_download)
+        if args.market_structure_splits
+        else None
+    )
     raw = load_tlc_frame(paths)
     clean = clean_tlc_frame(raw)
     pickup_time = pd.to_datetime(clean["tpep_pickup_datetime"])
@@ -1562,6 +1592,9 @@ def load_nyc_taxi_fixture(args: argparse.Namespace) -> tuple[Any, dict[str, Any]
     )
     lane_counts = frame.groupby("lane_id").size().sort_values(ascending=False).head(args.lanes)
     selected = frame[frame["lane_id"].isin(lane_counts.index)].copy()
+    selected["effective_fare_per_mile"] = selected["total_amount"].astype(float) / selected[
+        "trip_distance"
+    ].astype(float)
     static = (
         selected.groupby("lane_id", as_index=False)
         .agg(
@@ -1581,10 +1614,28 @@ def load_nyc_taxi_fixture(args: argparse.Namespace) -> tuple[Any, dict[str, Any]
             ),
         )
     )
-    counts = (
+    if zone_centroids is not None:
+        static = static.assign(
+            origin_x=lambda data: data["pickup_zone"].map(
+                lambda zone: float(zone_centroids[int(zone)][0])
+            ),
+            origin_y=lambda data: data["pickup_zone"].map(
+                lambda zone: float(zone_centroids[int(zone)][1])
+            ),
+            destination_x=lambda data: data["dropoff_zone"].map(
+                lambda zone: float(zone_centroids[int(zone)][0])
+            ),
+            destination_y=lambda data: data["dropoff_zone"].map(
+                lambda zone: float(zone_centroids[int(zone)][1])
+            ),
+        )
+    daily = (
         selected.groupby(["lane_id", "pickup_date"], as_index=False)
-        .size()
-        .rename(columns={"pickup_date": "date", "size": "loads"})
+        .agg(
+            loads=("effective_fare_per_mile", "size"),
+            taxi_effective_fare_per_mile=("effective_fare_per_mile", "median"),
+        )
+        .rename(columns={"pickup_date": "date"})
     )
     dates = pd.DataFrame(
         {
@@ -1597,7 +1648,7 @@ def load_nyc_taxi_fixture(args: argparse.Namespace) -> tuple[Any, dict[str, Any]
     )
     full_index = static[["lane_id"]].merge(dates, how="cross")
     table = (
-        full_index.merge(counts, on=["lane_id", "date"], how="left")
+        full_index.merge(daily, on=["lane_id", "date"], how="left")
         .merge(static, on="lane_id", how="left")
         .assign(loads=lambda data: data["loads"].fillna(0.0).astype(float))
         .sort_values(["lane_id", "date"])
@@ -2551,6 +2602,568 @@ def run_neural_panel_split_suite(
         )
     )
     return 0
+
+
+def run_market_structure_taxi_suite(
+    args: argparse.Namespace,
+    *,
+    table: Any,
+    dataset: dict[str, Any],
+    source_file_hashes: dict[str, str],
+    load_seconds: float,
+    cartoboost_config: dict[str, Any],
+    benchmark_start: float,
+) -> int:
+    """Evaluate generic structure learning on real daily taxi lane targets.
+
+    The benchmark deliberately keeps taxi-specific aggregation here and sends
+    only caller-named generic targets to the native model.
+    """
+    if args.source != "nyc-taxi":
+        raise ValueError("--market-structure-splits requires --source nyc-taxi")
+    pd = require_pandas_for_benchmark()
+    required = {
+        "lane_id",
+        "date",
+        "loads",
+        "taxi_effective_fare_per_mile",
+        "pickup_zone",
+        "dropoff_zone",
+        "origin_x",
+        "origin_y",
+        "destination_x",
+        "destination_y",
+    }
+    missing = sorted(required.difference(table.columns))
+    if missing:
+        raise ValueError(f"market structure taxi suite is missing required columns: {missing}")
+    rows = table.to_pandas().sort_values(["date", "lane_id"])
+    lane_ids = sorted(rows["lane_id"].unique())
+    dates = sorted(pd.to_datetime(rows["date"]).unique())
+    horizon = int(dataset.get("horizon", args.horizon))
+    if len(dates) <= horizon:
+        raise ValueError("market structure taxi suite requires a full holdout horizon")
+    history_dates, holdout_dates = dates[:-horizon], dates[-horizon:]
+    history = rows[rows["date"].isin(history_dates)]
+    holdout = rows[rows["date"].isin(holdout_dates)]
+    expected_history = len(history_dates) * len(lane_ids)
+    expected_holdout = len(holdout_dates) * len(lane_ids)
+    if len(history) != expected_history or len(holdout) != expected_holdout:
+        raise ValueError("market structure taxi suite requires a complete lane-by-day panel")
+
+    def matrix(frame: Any, column: str, ordered_dates: list[Any]) -> np.ndarray:
+        return (
+            frame.pivot(index="date", columns="lane_id", values=column)
+            .reindex(index=ordered_dates, columns=lane_ids)
+            .to_numpy(dtype=float)
+        )
+
+    primary_history = matrix(history, "taxi_effective_fare_per_mile", history_dates)
+    secondary_history = matrix(history, "loads", history_dates)
+    primary_actual = matrix(holdout, "taxi_effective_fare_per_mile", holdout_dates)
+    secondary_actual = matrix(holdout, "loads", holdout_dates)
+    static = history.drop_duplicates("lane_id").set_index("lane_id").loc[lane_ids]
+    coordinates = static[["origin_x", "origin_y", "destination_x", "destination_y"]].to_numpy(
+        dtype=float
+    )
+    frame = MarketPanelFrame(
+        lane_ids=lane_ids,
+        timestamps=list(range(len(history_dates))),
+        target_names=["taxi_effective_fare_per_mile", "taxi_trip_count"],
+        primary=primary_history,
+        secondary=secondary_history,
+        origin_ids=static["pickup_zone"].astype(str).tolist(),
+        destination_ids=static["dropoff_zone"].astype(str).tolist(),
+        coordinates=coordinates,
+        # Taxi-only proxy hierarchy: production callers supply their own
+        # multi-resolution spatial parent keys (for example, paired cell
+        # parents followed by endpoint parents).
+        hierarchy_groups=[
+            [f"pickup_borough:{int(code)}"]
+            for code in static["pickup_borough_code"].to_numpy(dtype=float)
+        ],
+        horizon=horizon,
+        frequency="daily",
+    )
+    start = perf_counter()
+    model = MarketStructureForecaster().fit(frame)
+    forecast_rows = model.predict(horizon)
+    model_seconds = perf_counter() - start
+    predicted_primary = np.asarray([row["primary"] for row in forecast_rows], dtype=float).reshape(
+        horizon, len(lane_ids)
+    )
+    predicted_primary_lower = np.asarray(
+        [row["primary_lower"] for row in forecast_rows], dtype=float
+    ).reshape(horizon, len(lane_ids))
+    predicted_primary_upper = np.asarray(
+        [row["primary_upper"] for row in forecast_rows], dtype=float
+    ).reshape(horizon, len(lane_ids))
+    predicted_secondary = np.asarray(
+        [row["secondary"] for row in forecast_rows], dtype=float
+    ).reshape(horizon, len(lane_ids))
+    distance_primary = inverse_distance_last_value(primary_history, coordinates, horizon)
+    distance_secondary = inverse_distance_last_value(secondary_history, coordinates, horizon)
+    naive_primary = np.repeat(last_observed_panel_values(primary_history)[None, :], horizon, axis=0)
+    naive_secondary = np.repeat(secondary_history[-1:, :], horizon, axis=0)
+    indptr, indices, weights = distance_csr_adjacency(coordinates)
+    if np.isfinite(primary_history).all():
+        fixed_primary = fixed_graph_market_forecast(
+            lane_ids, primary_history, indptr, indices, weights, horizon
+        )
+        fixed_primary_name = "fixed_graph_dcrnn"
+    else:
+        # This deliberately operates on each lane's last *observed* state. It
+        # does not fill the missing daily panel required by a DCRNN baseline.
+        fixed_primary = fixed_graph_last_observed_forecast(
+            primary_history, indptr, indices, weights, horizon
+        )
+        fixed_primary_name = "fixed_graph_last_observed"
+    fixed_secondary = fixed_graph_market_forecast(
+        lane_ids, secondary_history, indptr, indices, weights, horizon
+    )
+    baseline_names = ["cartoboost_lag", NEURAL_PANEL_BENCHMARK_MODEL]
+    primary_baselines = (
+        market_panel_baseline_forecasts(
+            history,
+            "taxi_effective_fare_per_mile",
+            holdout_dates,
+            horizon,
+            cartoboost_config,
+            baseline_names,
+        )
+        if np.isfinite(primary_history).all()
+        else None
+    )
+    secondary_baselines = market_panel_baseline_forecasts(
+        history,
+        "loads",
+        holdout_dates,
+        horizon,
+        cartoboost_config,
+        baseline_names,
+    )
+    metrics = {
+        "market_structure": {
+            "primary": market_metric_set(
+                primary_actual,
+                predicted_primary,
+                lower=predicted_primary_lower,
+                upper=predicted_primary_upper,
+            ),
+            "secondary": market_metric_set(secondary_actual, predicted_secondary),
+        },
+        "inverse_distance_last_value": {
+            "primary": market_metric_set(primary_actual, distance_primary),
+            "secondary": market_metric_set(secondary_actual, distance_secondary),
+        },
+        fixed_primary_name: {
+            "primary": market_metric_set(primary_actual, fixed_primary),
+            "secondary": market_metric_set(secondary_actual, fixed_secondary),
+        },
+        **{
+            name: {
+                **(
+                    {"primary": market_metric_set(primary_actual, primary_baselines[name])}
+                    if primary_baselines is not None
+                    else {}
+                ),
+                "secondary": market_metric_set(secondary_actual, secondary_baselines[name]),
+            }
+            for name in baseline_names
+        },
+        "last_value": {
+            "primary": market_metric_set(primary_actual, naive_primary),
+            "secondary": market_metric_set(secondary_actual, naive_secondary),
+        },
+    }
+    explanations = model.nowcast()
+    shifts: dict[str, int] = {}
+    for row in explanations:
+        shifts[row["shift"]] = shifts.get(row["shift"], 0) + 1
+    controlled_mix_shock = evaluate_controlled_mix_shock(
+        lane_ids=lane_ids,
+        primary_history=primary_history,
+        secondary_history=secondary_history,
+        origin_ids=static["pickup_zone"].astype(str).tolist(),
+        destination_ids=static["dropoff_zone"].astype(str).tolist(),
+        coordinates=coordinates,
+        hierarchy_groups=[
+            [f"pickup_borough:{int(code)}"]
+            for code in static["pickup_borough_code"].to_numpy(dtype=float)
+        ],
+        horizon=horizon,
+    )
+    edge_stability = evaluate_edge_stability(
+        lane_ids=lane_ids,
+        primary_history=primary_history,
+        secondary_history=secondary_history,
+        origin_ids=static["pickup_zone"].astype(str).tolist(),
+        destination_ids=static["dropoff_zone"].astype(str).tolist(),
+        coordinates=coordinates,
+        hierarchy_groups=[
+            [f"pickup_borough:{int(code)}"]
+            for code in static["pickup_borough_code"].to_numpy(dtype=float)
+        ],
+        horizon=horizon,
+    )
+    payload = {
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "cartoboost_version": __version__,
+        "git_commit": read_git_commit(),
+        "invocation": invocation_metadata(),
+        "benchmark": "nyc_taxi_market_structure_daily_lane",
+        "fixture_source": args.source,
+        "dataset": {
+            **dataset,
+            "target_names": ["taxi_effective_fare_per_mile", "taxi_trip_count"],
+            "train_days": len(history_dates),
+            "holdout_days": len(holdout_dates),
+            "split_type": "last_daily_horizon",
+            "primary_observed_history_fraction": float(np.isfinite(primary_history).mean()),
+            "primary_observed_holdout_fraction": float(np.isfinite(primary_actual).mean()),
+        },
+        "metrics": metrics,
+        "timing": {
+            "load_seconds": load_seconds,
+            "fit_predict_seconds": model_seconds,
+            "total_seconds": perf_counter() - benchmark_start,
+        },
+        "relationship_count": len(model.relationships()),
+        "relationships": model.relationships(),
+        "explanations": explanations,
+        "shift_counts": shifts,
+        "controlled_mix_shock": controlled_mix_shock,
+        "edge_stability": edge_stability,
+        "comparability_note": (
+            None
+            if primary_baselines is not None
+            else "Primary CartoBoostLagForecaster, LaneNeuralPanelForecaster, and DCRNN "
+            "require a complete panel and were not evaluated. The sparse-panel fixed graph "
+            "baseline uses only each lane's last observed state; no historical primary values "
+            "were filled."
+        ),
+        "source_file_hashes": source_file_hashes,
+        "artifact_paths": {"json": str(Path(args.output))},
+    }
+    output = Path(args.output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(json.dumps({"metrics": metrics, "artifact_paths": payload["artifact_paths"]}, indent=2))
+    return 0
+
+
+def evaluate_controlled_mix_shock(
+    *,
+    lane_ids: list[str],
+    primary_history: np.ndarray,
+    secondary_history: np.ndarray,
+    origin_ids: list[str],
+    destination_ids: list[str],
+    coordinates: np.ndarray,
+    hierarchy_groups: list[list[str]],
+    horizon: int,
+) -> dict[str, Any]:
+    """Inject a documented local-composition analogue into the taxi panel.
+
+    Taxi trips do not encode a provider mix, so this is intentionally a
+    counterfactual intervention rather than a claim about a real taxi field.
+    The shock affects one lane's final observed primary value and an aligned
+    historical mix feature. A useful structure model should call that lane
+    local-or-mix and avoid propagating market alerts to untouched lanes.
+    """
+    candidates = [
+        lane
+        for lane in range(primary_history.shape[1])
+        if np.isfinite(primary_history[:, lane]).any()
+    ]
+    if not candidates:
+        raise ValueError("controlled mix shock requires at least one observed primary lane")
+    lane = candidates[0]
+    observed_rows = np.flatnonzero(np.isfinite(primary_history[:, lane]))
+    shock_time = int(observed_rows[-1])
+    primary = primary_history.copy()
+    primary[shock_time, lane] *= 3.0
+    mix = np.zeros((primary.shape[0], primary.shape[1], 1), dtype=float)
+    mix[shock_time, lane, 0] = 1.0
+    model = MarketStructureForecaster().fit(
+        MarketPanelFrame(
+            lane_ids=lane_ids,
+            timestamps=list(range(primary.shape[0])),
+            target_names=["taxi_effective_fare_per_mile", "taxi_trip_count"],
+            primary=primary,
+            secondary=secondary_history,
+            origin_ids=origin_ids,
+            destination_ids=destination_ids,
+            coordinates=coordinates,
+            hierarchy_groups=hierarchy_groups,
+            mix=mix,
+            horizon=horizon,
+            frequency="daily",
+        )
+    )
+    explanations = model.nowcast()
+    affected = next(row for row in explanations if row["lane_id"] == lane_ids[lane])
+    other_market_alerts = sum(
+        row["shift"] == "market" for row in explanations if row["lane_id"] != lane_ids[lane]
+    )
+    return {
+        "kind": "synthetic_local_composition_shock",
+        "lane_id": lane_ids[lane],
+        "timestamp": shock_time,
+        "multiplier": 3.0,
+        "affected_shift": affected["shift"],
+        "false_market_alerts_on_untouched_lanes": int(other_market_alerts),
+        "passes": affected["shift"] == "local_or_mix" and other_market_alerts == 0,
+    }
+
+
+def evaluate_edge_stability(
+    *,
+    lane_ids: list[str],
+    primary_history: np.ndarray,
+    secondary_history: np.ndarray,
+    origin_ids: list[str],
+    destination_ids: list[str],
+    coordinates: np.ndarray,
+    hierarchy_groups: list[list[str]],
+    horizon: int,
+) -> dict[str, Any]:
+    """Measure learned-edge overlap across train-only rolling cutoffs."""
+    minimum = horizon + 1
+    cutoffs = sorted(
+        {
+            primary_history.shape[0] - multiplier * horizon
+            for multiplier in (3, 2, 1)
+            if primary_history.shape[0] - multiplier * horizon >= minimum
+        }
+    )
+    edge_sets: list[set[tuple[str, str]]] = []
+    for cutoff in cutoffs:
+        model = MarketStructureForecaster(calibrate_intervals=False).fit(
+            MarketPanelFrame(
+                lane_ids=lane_ids,
+                timestamps=list(range(cutoff)),
+                target_names=["taxi_effective_fare_per_mile", "taxi_trip_count"],
+                primary=primary_history[:cutoff],
+                secondary=secondary_history[:cutoff],
+                origin_ids=origin_ids,
+                destination_ids=destination_ids,
+                coordinates=coordinates,
+                hierarchy_groups=hierarchy_groups,
+                horizon=horizon,
+                frequency="daily",
+            )
+        )
+        edge_sets.append(
+            {(edge["source_lane_id"], edge["target_lane_id"]) for edge in model.relationships()}
+        )
+    overlaps = []
+    for left, right in zip(edge_sets, edge_sets[1:], strict=False):
+        union = left | right
+        overlaps.append(float(len(left & right) / len(union)) if union else 1.0)
+    return {
+        "cutoffs": cutoffs,
+        "edge_counts": [len(edges) for edges in edge_sets],
+        "consecutive_jaccard": overlaps,
+        "mean_consecutive_jaccard": float(np.mean(overlaps)) if overlaps else float("nan"),
+    }
+
+
+def inverse_distance_last_value(
+    history: np.ndarray, coordinates: np.ndarray, horizon: int
+) -> np.ndarray:
+    last = last_observed_panel_values(history)
+    prediction = np.empty_like(last)
+    for target in range(len(last)):
+        deltas = coordinates - coordinates[target]
+        distances = np.sqrt(np.sum(deltas * deltas, axis=1))
+        mask = distances > 0.0
+        if not np.any(mask):
+            prediction[target] = last[target]
+            continue
+        weights = 1.0 / distances[mask]
+        prediction[target] = float(np.dot(weights, last[mask]) / weights.sum())
+    return np.repeat(prediction[None, :], horizon, axis=0)
+
+
+def last_observed_panel_values(history: np.ndarray) -> np.ndarray:
+    """Return the final recorded state per lane without imputing the panel."""
+    values = np.empty(history.shape[1], dtype=float)
+    missing: list[int] = []
+    for lane in range(history.shape[1]):
+        observed = np.flatnonzero(np.isfinite(history[:, lane]))
+        if observed.size == 0:
+            missing.append(lane)
+        else:
+            values[lane] = history[observed[-1], lane]
+    if missing:
+        raise ValueError(
+            "last-observed baseline requires one recorded primary value per lane; "
+            f"missing lane columns: {missing[:10]}"
+        )
+    return values
+
+
+def market_panel_baseline_forecasts(
+    history: Any,
+    target_column: str,
+    holdout_dates: list[Any],
+    horizon: int,
+    cartoboost_config: dict[str, Any],
+    model_names: list[str],
+) -> dict[str, np.ndarray]:
+    pl = require_polars()
+    lane_ids = sorted(history["lane_id"].unique())
+    train = pl.from_pandas(
+        history[["lane_id", "date", target_column]].rename(columns={target_column: "loads"})
+    ).with_columns(pl.col("date").cast(pl.Datetime("us")))
+    forecasts, _timing = forecast_model_roster(
+        train,
+        horizon,
+        season_length=7,
+        cartoboost_config=cartoboost_config,
+        model_names=model_names,
+        source="market",
+        neural_panel_epochs=24,
+    )
+    results: dict[str, np.ndarray] = {}
+    for name in model_names:
+        pivot = (
+            forecasts.select("series_id", "timestamp", name)
+            .to_pandas()
+            .pivot(index="timestamp", columns="series_id", values=name)
+            .reindex(index=holdout_dates, columns=lane_ids)
+        )
+        values = pivot.to_numpy(dtype=float)
+        if values.shape != (horizon, len(lane_ids)) or not np.isfinite(values).all():
+            raise ValueError(f"{name} produced incomplete market-panel predictions")
+        results[name] = values
+    return results
+
+
+def distance_csr_adjacency(
+    coordinates: np.ndarray, *, max_neighbors: int = 8
+) -> tuple[list[int], list[int], list[float]]:
+    if max_neighbors <= 0:
+        raise ValueError("fixed graph max_neighbors must be positive")
+    indptr = [0]
+    indices: list[int] = []
+    weights: list[float] = []
+    for source in range(len(coordinates)):
+        deltas = coordinates - coordinates[source]
+        distances = np.sqrt(np.sum(deltas * deltas, axis=1))
+        candidates = sorted(
+            (
+                (float(distance), target)
+                for target, distance in enumerate(distances)
+                if source != target and distance > 0.0
+            ),
+            key=lambda pair: pair[0],
+        )[:max_neighbors]
+        for distance, target in candidates:
+            indices.append(target)
+            weights.append(1.0 / distance)
+        indptr.append(len(indices))
+    if not indices:
+        raise ValueError("fixed graph baseline requires distinct lane coordinates")
+    return indptr, indices, weights
+
+
+def fixed_graph_market_forecast(
+    lane_ids: list[str],
+    values: np.ndarray,
+    indptr: list[int],
+    indices: list[int],
+    weights: list[float],
+    horizon: int,
+) -> np.ndarray:
+    frame = GraphTemporalFrame(
+        node_ids=lane_ids,
+        timestamps=list(range(values.shape[0])),
+        target=values,
+        indptr=indptr,
+        indices=indices,
+        data=weights,
+        horizon=horizon,
+        frequency="daily",
+    )
+    return (
+        DCRNNForecaster(epochs=80, hidden_size=16, learning_rate=0.02).fit(frame).predict(horizon)
+    )
+
+
+def fixed_graph_last_observed_forecast(
+    history: np.ndarray,
+    indptr: list[int],
+    indices: list[int],
+    weights: list[float],
+    horizon: int,
+) -> np.ndarray:
+    """Fixed-adjacency forecast for sparse panels using only observed states.
+
+    This is intentionally a distinct baseline from DCRNN: it starts from the
+    most recent recorded value of each lane and diffuses that state through a
+    fixed graph. It neither interpolates nor treats missing daily values as
+    zero.
+    """
+    state = last_observed_panel_values(history)
+    forecast = np.empty((horizon, len(state)), dtype=float)
+    for step in range(horizon):
+        next_state = np.empty_like(state)
+        for lane in range(len(state)):
+            start, end = indptr[lane], indptr[lane + 1]
+            neighbor_indices = indices[start:end]
+            neighbor_weights = np.asarray(weights[start:end], dtype=float)
+            if neighbor_weights.size == 0:
+                next_state[lane] = state[lane]
+            else:
+                neighbor_value = float(
+                    np.dot(neighbor_weights, state[neighbor_indices]) / neighbor_weights.sum()
+                )
+                next_state[lane] = 0.5 * state[lane] + 0.5 * neighbor_value
+        forecast[step] = next_state
+        state = next_state
+    return forecast
+
+
+def market_metric_set(
+    actual: np.ndarray,
+    predicted: np.ndarray,
+    *,
+    lower: np.ndarray | None = None,
+    upper: np.ndarray | None = None,
+) -> dict[str, float]:
+    mask = np.isfinite(actual) & np.isfinite(predicted)
+    if not np.any(mask):
+        raise ValueError(
+            "market metrics require at least one observed actual and finite prediction"
+        )
+    actual = actual[mask]
+    predicted = predicted[mask]
+    error = actual - predicted
+    denominator = float(np.abs(actual).sum())
+    result: dict[str, float] = {
+        "mae": float(np.abs(error).mean()),
+        "rmse": float(np.sqrt(np.mean(error * error))),
+        "wape": float(np.abs(error).sum() / denominator) if denominator > 0.0 else float("nan"),
+        "observations": int(mask.sum()),
+    }
+    if lower is not None or upper is not None:
+        if lower is None or upper is None or lower.shape != mask.shape or upper.shape != mask.shape:
+            raise ValueError(
+                "market interval metrics require lower and upper arrays matching actual"
+            )
+        interval_mask = mask & np.isfinite(lower) & np.isfinite(upper)
+        if not np.any(interval_mask):
+            raise ValueError("market interval metrics require finite interval bounds")
+        result["interval_coverage"] = float(
+            np.mean(
+                (actual[interval_mask[mask]] >= lower[interval_mask])
+                & (actual[interval_mask[mask]] <= upper[interval_mask])
+            )
+        )
+        result["interval_mean_width"] = float(np.mean(upper[interval_mask] - lower[interval_mask]))
+    return result
 
 
 def neural_panel_split_frames(table: Any, *, horizon: int, folds: int) -> dict[str, Any]:
@@ -3705,6 +4318,7 @@ def forecast_model_roster(
     skip_m5_raw_auto_candidate: bool = False,
     skip_m6_raw_auto_candidate: bool = False,
     skip_non_m_raw_auto_candidate: bool = False,
+    neural_panel_epochs: int | None = None,
 ) -> tuple[Any, dict[str, Any]]:
     forecast_frames = []
     model_timing: dict[str, Any] = {}
@@ -3882,6 +4496,7 @@ def forecast_model_roster(
             horizon,
             season_length=season_length,
             known_future=known_future,
+            epochs=neural_panel_epochs or 80,
         )
         forecast_frames.append(neural_predictions)
         model_timing[NEURAL_PANEL_BENCHMARK_MODEL] = neural_timing
@@ -5766,6 +6381,7 @@ def cartoboost_neural_panel_forecast(
     *,
     season_length: int,
     known_future: Any | None = None,
+    epochs: int = 80,
 ) -> tuple[Any, dict[str, float]]:
     pl = require_polars()
     pd = require_pandas_for_benchmark()
@@ -5857,6 +6473,7 @@ def cartoboost_neural_panel_forecast(
         trend_mode="glocal",
         local_l2=0.1,
         embedding_dim=8,
+        epochs=epochs,
         seed=42,
     )
     feature_seconds = perf_counter() - feature_start

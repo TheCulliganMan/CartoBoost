@@ -26,7 +26,7 @@ compare it against strong baselines on the same split.
 - Croston forecasting: ./docs/user-guide/forecasting-models/croston.md
 - SBA forecasting: ./docs/user-guide/forecasting-models/sba.md
 - TSB forecasting: ./docs/user-guide/forecasting-models/tsb.md
-- Graph spatiotemporal forecasting, DCRNN, GraphWaveNet, and STAEformer: ./docs/user-guide/forecasting-models/graph-spatiotemporal.md
+- Graph spatiotemporal forecasting, learned sparse market structure, DCRNN, GraphWaveNet, and STAEformer: ./docs/user-guide/forecasting-models/graph-spatiotemporal.md
 - N-BEATS and N-HiTS neural forecasting: ./docs/user-guide/forecasting-models/beats-hits.md
 - Neural panel forecasting: ./docs/user-guide/forecasting-models/neural-panel.md
 - Probabilistic and conformal forecasting guide: ./docs/user-guide/forecasting-models/probabilistic-conformal.md
