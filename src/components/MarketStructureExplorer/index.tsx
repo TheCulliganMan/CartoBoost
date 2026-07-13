@@ -171,7 +171,7 @@ const metricLabel: Record<Metric, string> = {
 export default function MarketStructureExplorer({nodes, edges, targetNames}: MarketStructureExplorerProps): React.ReactElement {
   const mapContainer = useRef<HTMLDivElement | null>(null);
   const overlayRef = useRef<{setProps: (props: unknown) => void; finalize: () => void} | null>(null);
-  const mapRef = useRef<{remove: () => void; fitBounds: (bounds: unknown, options: unknown) => void; setMaxBounds: (bounds: unknown) => void; setMinZoom: (zoom: number) => void; setMaxZoom: (zoom: number) => void; getZoom: () => number} | null>(null);
+  const mapRef = useRef<any>(null);
   const [h3Nodes, setH3Nodes] = useState<H3MarketNode[]>([]);
   const [metric, setMetric] = useState<Metric>('demand');
   const [surfaceMode, setSurfaceMode] = useState<SurfaceMode>('kernel');
@@ -199,11 +199,10 @@ export default function MarketStructureExplorer({nodes, edges, targetNames}: Mar
     if (!mapContainer.current || h3Nodes.length === 0) return undefined;
     let cancelled = false;
     void (async () => {
-      const [{default: maplibregl}, {MapboxOverlay}, {ArcLayer, TextLayer}, {H3HexagonLayer}] = await Promise.all([
+      const [{default: maplibregl}, {MapboxOverlay}, {ArcLayer, TextLayer}] = await Promise.all([
         import('maplibre-gl'),
         import('@deck.gl/mapbox'),
         import('@deck.gl/layers'),
-        import('@deck.gl/geo-layers'),
       ]);
       if (cancelled || !mapContainer.current) return;
       const center = h3Nodes.reduce<[number, number]>((sum, node) => [sum[0] + node.longitude / h3Nodes.length, sum[1] + node.latitude / h3Nodes.length], [0, 0]);
@@ -216,7 +215,7 @@ export default function MarketStructureExplorer({nodes, edges, targetNames}: Mar
         zoom: 10,
       });
       const byId = new Map(h3Nodes.map((node) => [node.id, node]));
-      const overlay = new MapboxOverlay({interleaved: false, layers: buildLayers({ArcLayer, H3HexagonLayer, TextLayer, byId, edges, metric, surfaceMode, selectedId, onSelect: setSelectedId})});
+      const overlay = new MapboxOverlay({interleaved: false, layers: buildLayers({ArcLayer, TextLayer, byId, edges, selectedId, onSelect: setSelectedId})});
       map.addControl(overlay);
       map.once('load', () => {
         const points = h3Nodes.flatMap((node) => node.boundary);
@@ -225,6 +224,13 @@ export default function MarketStructureExplorer({nodes, edges, targetNames}: Mar
         map.setMaxBounds(bounds);
         map.setMinZoom(Math.max(7, map.getZoom() - 1));
         map.setMaxZoom(Math.min(14, map.getZoom() + 3));
+        renderMarketH3Cells(map, h3Nodes, edges, metric, surfaceMode, selectedId);
+        map.on('click', 'market-h3-prediction-cells', (event: {features?: Array<{properties?: {id?: string}}>}) => {
+          const id = event.features?.[0]?.properties?.id;
+          if (id) setSelectedId(id);
+        });
+        map.on('mouseenter', 'market-h3-prediction-cells', () => { map.getCanvas().style.cursor = 'pointer'; });
+        map.on('mouseleave', 'market-h3-prediction-cells', () => { map.getCanvas().style.cursor = ''; });
         if (!cancelled) setMapReady(true);
       });
       overlayRef.current = overlay;
@@ -242,9 +248,10 @@ export default function MarketStructureExplorer({nodes, edges, targetNames}: Mar
   useEffect(() => {
     if (!overlayRef.current) return;
     void (async () => {
-      const [{ArcLayer, TextLayer}, {H3HexagonLayer}] = await Promise.all([import('@deck.gl/layers'), import('@deck.gl/geo-layers')]);
+      const {ArcLayer, TextLayer} = await import('@deck.gl/layers');
       const byId = new Map(h3Nodes.map((node) => [node.id, node]));
-      overlayRef.current?.setProps({layers: buildLayers({ArcLayer, H3HexagonLayer, TextLayer, byId, edges, metric, surfaceMode, selectedId, onSelect: setSelectedId})});
+      overlayRef.current?.setProps({layers: buildLayers({ArcLayer, TextLayer, byId, edges, selectedId, onSelect: setSelectedId})});
+      renderMarketH3Cells(mapRef.current, h3Nodes, edges, metric, surfaceMode, selectedId);
     })();
   }, [edges, h3Nodes, metric, selectedId, surfaceMode]);
 
@@ -273,7 +280,7 @@ export default function MarketStructureExplorer({nodes, edges, targetNames}: Mar
         <div className={styles.legend} aria-label={`${labels[metric]} color scale`}>
           <span>{surfaceMode === 'kernel' ? 'Low' : 'Low volume'}</span><i /><span>{surfaceMode === 'kernel' ? 'High' : 'High volume'}</span>
         </div>
-        <div className={styles.surfaceNote}><strong>{labels[metric]}</strong><span>{surfaceMode === 'kernel' ? 'Model prediction, assigned to H3 resolution 9 cells' : 'Model prediction, H3 cell height = signal'}</span></div>
+        <div className={styles.surfaceNote}><strong>{labels[metric]}</strong><span>{surfaceMode === 'kernel' ? 'Model prediction, assigned to H3 resolution 7 cells' : 'Model prediction, H3 cell height = signal'}</span></div>
       </div>
       <div className={styles.detail}>
         <div>
@@ -458,7 +465,7 @@ function weightedMean(values: Array<{value: number; weight: number}>): number {
 }
 
 function h3MarketNode(node: MarketExplorerNode, h3: typeof import('h3-js')): H3MarketNode {
-  const h3Cell = h3.latLngToCell(node.latitude, node.longitude, 9);
+  const h3Cell = h3.latLngToCell(node.latitude, node.longitude, 7);
   const rawBoundary = h3.cellToBoundary(h3Cell, true) as [number, number][];
   const first = rawBoundary[0];
   const last = rawBoundary.at(-1);
@@ -571,23 +578,56 @@ function buildH3TaxiLayers({ArcLayer, PolygonLayer, ScatterplotLayer, cells, lan
   ];
 }
 
-function buildLayers({ArcLayer, H3HexagonLayer, TextLayer, byId, edges, metric, surfaceMode, selectedId, onSelect}: any): any[] {
+function buildLayers({ArcLayer, TextLayer, byId, edges, selectedId, onSelect}: any): any[] {
   const nodes = [...byId.values()] as H3MarketNode[];
   const selectedEdges = edges.filter((edge: MarketExplorerEdge) => edge.source === selectedId || edge.target === selectedId);
   const weights = selectedEdges.map((edge: MarketExplorerEdge) => edge.weight);
   const maxWeight = Math.max(...weights, 1);
-  const value = (node: MarketExplorerNode): number => marketSignal(node, edges, metric);
-  const maxValue = Math.max(...nodes.map(value), 1);
-  const fill = (node: H3MarketNode): [number, number, number, number] => {
-    if (node.id === selectedId) return [255, 138, 77, 245];
-    const intensity = Math.min(1, Math.max(0, value(node) / maxValue));
-    return intensity < 0.5
-      ? [24, Math.round(112 + intensity * 94), Math.round(154 + intensity * 55), 190]
-      : [Math.round(29 + (intensity - .5) * 442), Math.round(159 + (intensity - .5) * 88), Math.round(190 - (intensity - .5) * 244), 215];
-  };
   return [
     new ArcLayer({id: 'market-kernels', data: selectedEdges, getSourcePosition: (edge: MarketExplorerEdge) => [byId.get(edge.source).longitude, byId.get(edge.source).latitude], getTargetPosition: (edge: MarketExplorerEdge) => [byId.get(edge.target).longitude, byId.get(edge.target).latitude], getSourceColor: [58, 182, 220, 220], getTargetColor: [244, 154, 77, 200], getWidth: (edge: MarketExplorerEdge) => 1 + edge.weight / maxWeight * 7, getHeight: 0.22, pickable: true, onClick: ({object}: any) => onSelect(byEdgePeer(object, selectedId))}),
-    new H3HexagonLayer({id: 'market-h3-prediction-cells', data: nodes, getHexagon: (node: H3MarketNode) => node.h3Cell, extruded: surfaceMode === 'grid', getElevation: (node: H3MarketNode) => surfaceMode === 'grid' ? 120 + value(node) / maxValue * 1600 : 0, getFillColor: fill, getLineColor: (node: H3MarketNode) => node.id === selectedId ? [255, 247, 210, 255] : [151, 229, 225, 205], getLineWidth: (node: H3MarketNode) => node.id === selectedId ? 3 : 1, lineWidthUnits: 'pixels', stroked: true, filled: true, pickable: true, onClick: ({object}: {object?: H3MarketNode}) => object && onSelect(object.id)}),
     new TextLayer({id: 'market-h3-labels', data: nodes, getPosition: (node: H3MarketNode) => [node.longitude, node.latitude], getText: (node: H3MarketNode) => node?.h3Cell?.slice(0, 8) ?? '', getColor: [235, 243, 248, 245], getSize: 11, getTextAnchor: 'middle', getAlignmentBaseline: 'center', fontFamily: 'system-ui'}),
   ];
+}
+
+function renderMarketH3Cells(map: any, nodes: H3MarketNode[], edges: MarketExplorerEdge[], metric: Metric, surfaceMode: SurfaceMode, selectedId: string) {
+  if (!map || !map.isStyleLoaded?.()) return;
+  const value = (node: MarketExplorerNode) => marketSignal(node, edges, metric);
+  const maxValue = Math.max(...nodes.map(value), 1);
+  const data = {
+    type: 'FeatureCollection' as const,
+    features: nodes.map((node) => {
+      const intensity = Math.min(1, Math.max(0, value(node) / maxValue));
+      const color = node.id === selectedId ? '#ff8a4d' : intensity < .5
+        ? `rgb(24 ${Math.round(112 + intensity * 94)} ${Math.round(154 + intensity * 55)})`
+        : `rgb(${Math.round(29 + (intensity - .5) * 442)} ${Math.round(159 + (intensity - .5) * 88)} ${Math.round(190 - (intensity - .5) * 244)})`;
+      return {type: 'Feature' as const, properties: {id: node.id, color, elevation: 120 + value(node) / maxValue * 1600, selected: node.id === selectedId}, geometry: {type: 'Polygon' as const, coordinates: [node.boundary]}};
+    }),
+  };
+  const source = map.getSource('market-h3-prediction-source');
+  if (source) source.setData(data);
+  else {
+    map.addSource('market-h3-prediction-source', {type: 'geojson', data});
+    map.addLayer({id: 'market-h3-prediction-cells', type: 'fill', source: 'market-h3-prediction-source', paint: {'fill-color': ['get', 'color'], 'fill-opacity': .78, 'fill-outline-color': '#97e5e1'}});
+    map.addLayer({id: 'market-h3-prediction-extrusions', type: 'fill-extrusion', source: 'market-h3-prediction-source', paint: {'fill-extrusion-color': ['get', 'color'], 'fill-extrusion-height': ['get', 'elevation'], 'fill-extrusion-opacity': .8}});
+  }
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const selectedEdges = edges.filter((edge) => edge.source === selectedId || edge.target === selectedId);
+  const maxWeight = Math.max(...selectedEdges.map((edge) => edge.weight), 1);
+  const relationshipData = {
+    type: 'FeatureCollection' as const,
+    features: selectedEdges.flatMap((edge) => {
+      const sourceNode = byId.get(edge.source);
+      const targetNode = byId.get(edge.target);
+      if (!sourceNode || !targetNode) return [];
+      return [{type: 'Feature' as const, properties: {width: 1.5 + edge.weight / maxWeight * 7}, geometry: {type: 'LineString' as const, coordinates: [[sourceNode.longitude, sourceNode.latitude], [targetNode.longitude, targetNode.latitude]]}}];
+    }),
+  };
+  const relationshipSource = map.getSource('market-h3-relationships');
+  if (relationshipSource) relationshipSource.setData(relationshipData);
+  else {
+    map.addSource('market-h3-relationships', {type: 'geojson', data: relationshipData});
+    map.addLayer({id: 'market-h3-relationships', type: 'line', source: 'market-h3-relationships', paint: {'line-color': '#70dfdc', 'line-opacity': .82, 'line-width': ['get', 'width'], 'line-blur': .35}});
+  }
+  map.setLayoutProperty('market-h3-prediction-cells', 'visibility', surfaceMode === 'kernel' ? 'visible' : 'none');
+  map.setLayoutProperty('market-h3-prediction-extrusions', 'visibility', surfaceMode === 'grid' ? 'visible' : 'none');
 }

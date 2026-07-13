@@ -17,7 +17,6 @@
   "dependencies": {
     "@deck.gl/aggregation-layers": "^9.3.4",
     "@deck.gl/core": "^9.3.4",
-    "@deck.gl/geo-layers": "^9.3.6",
     "@deck.gl/layers": "^9.3.4",
     "@deck.gl/mapbox": "^9.3.4",
     "@docusaurus/core": "3.10.1",
