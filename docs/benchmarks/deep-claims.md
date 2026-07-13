@@ -21,12 +21,10 @@ Artifacts:
 
 | Claim | Architecture | Metric | Model | Baseline | Improvement | Result |
 | --- | --- | --- | ---: | ---: | ---: | --- |
-| `pair_embedding_mlp_nonlinear_directional_pair` | `pair_embedding_mlp` | RMSE | 0.526011 | 22.372103 | 97.65% | passed |
-| `selective_ssm_lite_long_memory_panel` | `selective_ssm_lite` | rolling-origin RMSE | 0.503747 | 0.871346 | 42.19% | passed |
-| `inverted_transformer_cross_entity_panel` | `inverted_transformer` | holdout RMSE | 0.507959 | 1.461201 | 65.24% | passed |
+| `pair_embedding_mlp_nonlinear_directional_pair` | `pair_embedding_mlp` | RMSE | 0.515210 | 1.710122 | 69.87% | passed |
+| `inverted_transformer_cross_entity_panel` | `inverted_transformer` | holdout RMSE | 0.557217 | 1.461201 | 61.87% | passed |
 | `delay_aware_graph_transformer_directional_delay` | `delay_aware_graph_transformer` | holdout RMSE | 0.486446 | 0.545256 | 10.79% | passed |
-| `regime_moe_mixed_regime_data` | `regime_moe` | RMSE | 0.000042 | 0.583261 | 99.99% | passed |
-| `retrieval_augmented_forecaster_rare_pattern` | `retrieval_augmented_forecaster` | RMSE | 0.522673 | 7.444953 | 92.98% | passed |
+| `regime_moe_mixed_regime_data` | `regime_moe` | RMSE | 0.000003 | 0.583261 | 100.00% | passed |
 | `conditional_flow_distribution_head_calibration_sharpness` | `conditional_residual_sampler` | calibration/sharpness gate | 0.000000 | 0.269389 | 100.00% | passed |
 | `choice_set_utility_softmax_candidate_competition` | `choice_set_utility_softmax` | choice log loss | 0.022234 | 0.693147 | 96.79% | passed |
 

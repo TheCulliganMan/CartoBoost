@@ -66,9 +66,23 @@ def main() -> int:
         ]
         if len(jsonl_rows) != len(rows):
             errors.append("results.jsonl row count does not match results.json")
+        elif jsonl_rows != rows:
+            errors.append("results.jsonl rows do not exactly match results.json")
     present = {str(row.get("claim_id", "")) for row in rows}
     for claim_id in sorted(REQUIRED_CLAIMS - present):
         errors.append(f"missing deep claim result: {claim_id}")
+    for claim_id in sorted(present - REQUIRED_CLAIMS):
+        errors.append(f"unexpected deep claim result: {claim_id}")
+    required_architectures = {
+        str(capability["architecture"])
+        for capability in capability_by_architecture.values()
+        if capability.get("benchmark_evidence") == "synthetic claim evidence"
+    }
+    benchmarked_architectures = {str(row.get("architecture", "")) for row in rows}
+    for architecture in sorted(required_architectures - benchmarked_architectures):
+        errors.append(f"missing synthetic-evidence architecture: {architecture}")
+    for architecture in sorted(benchmarked_architectures - required_architectures):
+        errors.append(f"unexpected benchmarked architecture: {architecture}")
     for row in rows:
         claim_id = str(row.get("claim_id", "<missing>"))
         missing = REQUIRED_FIELDS - set(row)
@@ -118,6 +132,11 @@ def main() -> int:
                 errors.append(f"{claim_id} uncertainty claim lacks width")
     if not payload.get("all_passed"):
         errors.append("all_passed is false")
+    if RESULTS_MD.exists():
+        report = RESULTS_MD.read_text(encoding="utf-8")
+        for claim_id in sorted(REQUIRED_CLAIMS):
+            if claim_id not in report:
+                errors.append(f"results.md missing deep claim result: {claim_id}")
     if errors:
         for error in errors:
             print(error, file=sys.stderr)
