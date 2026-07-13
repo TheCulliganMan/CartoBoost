@@ -9,6 +9,7 @@ import types
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 
@@ -113,6 +114,40 @@ def test_model_benchmark_suite_smoke(tmp_path):
     assert "Normal dense" in report.read_text(encoding="utf-8")
     first_row = json.loads(jsonl.read_text(encoding="utf-8").splitlines()[0])
     assert first_row["track"] == "diagnostic"
+
+
+def test_traffic_graph_runner_requires_explicit_ordered_origins_and_graph_edges(tmp_path):
+    repo_root = Path(__file__).resolve().parents[2]
+    module_path = repo_root / "benchmarks" / "runners" / "traffic_graph_forecasting.py"
+    spec = importlib.util.spec_from_file_location("traffic_graph_forecasting", module_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    adjacency_csr = module.adjacency_csr
+    parse_cutoffs = module.parse_cutoffs
+
+    assert parse_cutoffs("120,240,360") == [120, 240, 360]
+    with pytest.raises(argparse.ArgumentTypeError):
+        parse_cutoffs("240,120")
+    with pytest.raises(argparse.ArgumentTypeError):
+        parse_cutoffs("")
+    indptr, indices, data = adjacency_csr(np.array([[0.0, 0.5], [1.0, 0.0]]))
+    assert (indptr, indices, data) == ([0, 1, 2], [1, 0], [0.5, 1.0])
+    with pytest.raises(ValueError, match="at least one non-zero edge"):
+        adjacency_csr(np.zeros((2, 2)))
+    values_path = tmp_path / "traffic.npy"
+    np.save(
+        values_path,
+        np.array(
+            [
+                [[1.0, 10.0], [2.0, 20.0]],
+                [[3.0, 30.0], [4.0, 40.0]],
+            ]
+        ),
+    )
+    np.testing.assert_allclose(module.read_npy_values(values_path, 0), [[1.0, 2.0], [3.0, 4.0]])
+    with pytest.raises(ValueError, match="outside the available feature range"):
+        module.read_npy_values(values_path, 2)
 
 
 def test_scale_performance_gate_structured_workload_smoke(tmp_path):

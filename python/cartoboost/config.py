@@ -159,6 +159,11 @@ class GraphBackbone(ChoiceStrEnum):
     GRAPH_WAVENET = "graph_wavenet"
     TEMPORAL_GRAPH_ATTENTION = "temporal_graph_attention"
     DELAY_AWARE_GRAPH_TRANSFORMER = "delay_aware_graph_transformer"
+    STGORMER = "stgormer"
+    STGFORMER = "stgformer"
+    LSTTN = "lsttn"
+    SPATIAL_TEMPORAL_GRAPH_GATED_TRANSFORMER = "spatial_temporal_graph_gated_transformer"
+    SPATIAL_SHIFT_GRAPHON_MOE = "spatial_shift_graphon_moe"
 
 
 class OverlayKernel(ChoiceStrEnum):

@@ -8,10 +8,15 @@ from cartoboost.preview.forecasting import (
     DCRNNForecaster,
     GraphTemporalFrame,
     GraphWaveNetForecaster,
+    LSTTNForecaster,
     MarketPanelFrame,
     MarketStructureForecaster,
     RollingOriginSplitter,
+    SpatialShiftGraphonMoEForecaster,
+    SpatialTemporalGraphGatedTransformerForecaster,
     STAEformerForecaster,
+    STGformerForecaster,
+    STGormerForecaster,
     available_graph_st_backends,
 )
 
@@ -88,6 +93,111 @@ def test_market_structure_wrappers_keep_targets_generic(monkeypatch):
     assert calls[1][1]["head_epochs"] == 12
     assert calls[1][1]["huber_delta"] == 1.5
     assert calls[1][1]["quantile_levels"] == [0.1, 0.5, 0.9]
+
+
+def test_market_panel_graph_adapter_requires_explicit_complete_inputs(monkeypatch):
+    class NativeMarketPanelFrame:
+        def __init__(self, *args):
+            self.lane_ids = args[0]
+            self.target_names = args[2]
+
+    class NativeGraphTemporalFrame:
+        def __init__(
+            self,
+            node_ids,
+            timestamps,
+            target,
+            indptr,
+            indices,
+            data,
+            horizon,
+            frequency,
+            covariates,
+        ):
+            self.node_ids = node_ids
+            self.horizon = horizon
+            self.frequency = frequency
+
+    import cartoboost
+
+    monkeypatch.setattr(
+        cartoboost,
+        "_native",
+        SimpleNamespace(
+            MarketPanelFrame=NativeMarketPanelFrame,
+            GraphTemporalFrame=NativeGraphTemporalFrame,
+        ),
+        raising=False,
+    )
+    frame = MarketPanelFrame(
+        lane_ids=["a:b", "a:c"],
+        timestamps=[0, 1, 2],
+        target_names=["fare", "duration"],
+        primary=[[1.0, 2.0], [1.1, 2.1], [1.2, 2.2]],
+        secondary=[[3.0, 4.0], [3.1, 4.1], [3.2, 4.2]],
+        origin_ids=["a", "a"],
+        destination_ids=["b", "c"],
+        coordinates=[[0.0, 0.0, 1.0, 1.0], [0.0, 0.0, 2.0, 2.0]],
+    )
+    graph_frame = frame.as_graph_temporal_frame(indptr=[0, 1, 2], indices=[1, 0], data=[1.0, 1.0])
+    assert graph_frame.node_ids == ["a:b", "a:c"]
+
+    missing = MarketPanelFrame(
+        lane_ids=["a:b", "a:c"],
+        timestamps=[0, 1, 2],
+        target_names=["fare", "duration"],
+        primary=[[1.0, 2.0], [np.nan, 2.1], [1.2, 2.2]],
+        secondary=[[3.0, 4.0], [3.1, 4.1], [3.2, 4.2]],
+        origin_ids=["a", "a"],
+        destination_ids=["b", "c"],
+        coordinates=[[0.0, 0.0, 1.0, 1.0], [0.0, 0.0, 2.0, 2.0]],
+    )
+    with np.testing.assert_raises_regex(ValueError, "complete observed target"):
+        missing.as_graph_temporal_frame(indptr=[0, 1, 2], indices=[1, 0], data=[1.0, 1.0])
+
+
+def test_paper_graph_transformers_fit_a_complete_market_lane_panel_through_native_adapter():
+    timestamps = list(range(24))
+    primary = [[10.0 + np.sin(time / 3.0), 12.0 + np.cos(time / 4.0)] for time in timestamps]
+    secondary = [[20.0 + np.cos(time / 5.0), 18.0 + np.sin(time / 6.0)] for time in timestamps]
+    market_frame = MarketPanelFrame(
+        lane_ids=["pickup_a:dropoff_b", "pickup_b:dropoff_a"],
+        timestamps=timestamps,
+        target_names=["fare", "trip_duration"],
+        primary=primary,
+        secondary=secondary,
+        origin_ids=["pickup_a", "pickup_b"],
+        destination_ids=["dropoff_b", "dropoff_a"],
+        coordinates=[[-73.99, 40.75, -73.97, 40.73], [-73.97, 40.73, -73.99, 40.75]],
+        horizon=2,
+        frequency="hourly",
+    )
+    # The adapter owns only explicit market-to-graph conversion. Every paper
+    # profile must then consume that same native graph frame without Python
+    # model logic or a profile-specific market fallback.
+    for target in ("primary", "secondary"):
+        graph_frame = market_frame.as_graph_temporal_frame(
+            indptr=[0, 1, 2], indices=[1, 0], data=[1.0, 1.0], target=target
+        )
+        for model_type in (
+            STGormerForecaster,
+            STGformerForecaster,
+            LSTTNForecaster,
+            SpatialTemporalGraphGatedTransformerForecaster,
+            SpatialShiftGraphonMoEForecaster,
+        ):
+            model = model_type(
+                lookback=8,
+                hidden_size=4,
+                attention_heads=2,
+                graph_order=1,
+                experts=2,
+                periodicity=6,
+                epochs=1,
+            ).fit(graph_frame)
+            prediction = model.predict(2)
+            assert prediction.shape == (2, 2)
+            assert np.isfinite(prediction).all()
 
 
 def test_graph_temporal_frame_and_dcrnn_delegate_to_native(monkeypatch):
@@ -317,3 +427,58 @@ def test_graph_wavenet_native_fit_predict_and_save_load(tmp_path):
     model.save(path)
     loaded = GraphWaveNetForecaster.load(path)
     assert loaded.predict(3).shape == (3, 3)
+
+
+def test_paper_graph_transformers_are_native_backed_and_persistent(tmp_path):
+    target = np.asarray(
+        [
+            [10.0 + np.sin(t / 3.0), 12.0 + np.sin((t - 1) / 3.0), 14.0 + np.sin((t - 2) / 3.0)]
+            for t in range(36)
+        ],
+        dtype=float,
+    )
+    frame = GraphTemporalFrame(
+        node_ids=["pickup", "midtown", "dropoff"],
+        timestamps=list(range(36)),
+        target=target,
+        indptr=[0, 1, 2, 3],
+        indices=[1, 2, 0],
+        data=[1.0, 1.0, 1.0],
+        horizon=3,
+        frequency="hourly",
+    )
+    models = [
+        STGormerForecaster,
+        STGformerForecaster,
+        LSTTNForecaster,
+        SpatialTemporalGraphGatedTransformerForecaster,
+        SpatialShiftGraphonMoEForecaster,
+    ]
+    for model_type in models:
+        model = model_type(
+            lookback=8,
+            hidden_size=8,
+            attention_heads=2,
+            graph_order=2,
+            experts=3,
+            periodicity=6,
+            epochs=8,
+        ).fit(frame)
+        prediction = model.predict(3)
+        assert prediction.shape == (3, 3)
+        assert np.isfinite(prediction).all()
+        assert np.isfinite(model.score(target[-3:]))
+        assert model.metadata_["fitted"] is True
+        report = model.metadata_["architecture_report"]
+        assert report["direct_multi_horizon"] is True
+        assert report["trainable_forecast_head"] is True
+        path = tmp_path / f"{model_type.__name__}.json"
+        model.save(path)
+        np.testing.assert_allclose(model_type.load(path).predict(3), prediction, atol=1e-12)
+
+
+def test_lsttn_uses_long_history_defaults():
+    model = LSTTNForecaster()
+
+    assert model.get_params()["lookback"] == 4032
+    assert model.get_params()["periodicity"] == 288

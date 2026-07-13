@@ -66,6 +66,16 @@ const sidebars: SidebarsConfig = {
               id: 'user-guide/forecasting-models/graph-spatiotemporal',
               label: 'Market Structure Forecasting',
             },
+            {
+              type: 'doc',
+              id: 'user-guide/forecasting-models/graph-spatiotemporal',
+              label: 'STGormer / STGformer / LSTTN Graph Transformers',
+            },
+            {
+              type: 'doc',
+              id: 'user-guide/forecasting-models/graph-spatiotemporal',
+              label: 'Graph-Gated and Spatial-Shift Transformers',
+            },
             'user-guide/forecasting-models/probabilistic-conformal',
             'user-guide/forecasting-models/beats-hits',
             'user-guide/forecasting-models/neural-panel',

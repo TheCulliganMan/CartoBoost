@@ -10,7 +10,16 @@ import numpy as np
 from cartoboost.forecasting.graph_st import DCRNNForecaster as _DCRNNForecaster
 from cartoboost.forecasting.graph_st import GraphTemporalFrame as _NativeGraphTemporalFrame
 from cartoboost.forecasting.graph_st import GraphWaveNetForecaster as _GraphWaveNetForecaster
+from cartoboost.forecasting.graph_st import LSTTNForecaster as _LSTTNForecaster
+from cartoboost.forecasting.graph_st import (
+    SpatialShiftGraphonMoEForecaster as _SpatialShiftGraphonMoEForecaster,
+)
+from cartoboost.forecasting.graph_st import (
+    SpatialTemporalGraphGatedTransformerForecaster as _STGGTForecaster,
+)
 from cartoboost.forecasting.graph_st import STAEformerForecaster as _STAEformerForecaster
+from cartoboost.forecasting.graph_st import STGformerForecaster as _STGformerForecaster
+from cartoboost.forecasting.graph_st import STGormerForecaster as _STGormerForecaster
 
 from ..config import Backend, GraphBackbone
 from .flow import flow_uncertainty_report
@@ -40,6 +49,16 @@ class SpatioTemporalGraphForecaster:
         self.multi_view_views = None
         if backbone is GraphBackbone.DELAY_AWARE_GRAPH_TRANSFORMER:
             self._model = PropagationDelayGraphForecaster(**params)
+        elif backbone is GraphBackbone.STGORMER:
+            self._model = _STGormerForecaster(**params)
+        elif backbone is GraphBackbone.STGFORMER:
+            self._model = _STGformerForecaster(**params)
+        elif backbone is GraphBackbone.LSTTN:
+            self._model = _LSTTNForecaster(**params)
+        elif backbone is GraphBackbone.SPATIAL_TEMPORAL_GRAPH_GATED_TRANSFORMER:
+            self._model = _STGGTForecaster(**params)
+        elif backbone is GraphBackbone.SPATIAL_SHIFT_GRAPHON_MOE:
+            self._model = _SpatialShiftGraphonMoEForecaster(**params)
         elif backbone is GraphBackbone.DCRNN:
             self._model = _DCRNNForecaster(
                 **{k: v for k, v in params.items() if k in _DCRNN_PARAMS}
@@ -54,7 +73,17 @@ class SpatioTemporalGraphForecaster:
             )
 
     def fit(self, *args: Any, **kwargs: Any) -> Any:
-        self._model.fit(*args, **kwargs)
+        if (
+            args
+            and hasattr(args[0], "y")
+            and hasattr(args[0], "edges")
+            and not isinstance(self._model, PropagationDelayGraphForecaster)
+        ):
+            frame = args[0]
+            horizon = int(self._model.get_params().get("horizon", 1))
+            self._model.fit(_native_public_graph_frame(frame, horizon))
+        else:
+            self._model.fit(*args, **kwargs)
         return self
 
     def predict(self, *args: Any, **kwargs: Any) -> Any:
@@ -526,6 +555,39 @@ def _graph_flow_report(y: np.ndarray, node_similarity: np.ndarray) -> dict[str, 
 
 DynamicAdjacencyTransformer = DelayAwareGraphTransformer
 PropagationDelayGraphForecaster = DelayAwareGraphTransformer
+
+
+def _native_public_graph_frame(
+    frame: GraphTemporalFrame, horizon: int
+) -> _NativeGraphTemporalFrame:
+    node_count = len(frame.node_ids)
+    if not frame.directed:
+        raise ValueError("paper graph transformers require directed graph edges")
+    if len(frame.edges) != len(frame.edge_weights):
+        raise ValueError("edge_weights must match edges")
+    by_source: list[list[tuple[int, float]]] = [[] for _ in range(node_count)]
+    for (source, target), weight in zip(frame.edges, frame.edge_weights, strict=True):
+        if source < 0 or source >= node_count or target < 0 or target >= node_count:
+            raise ValueError("edge index exceeds node count")
+        by_source[source].append((target, float(weight)))
+    indptr = [0]
+    indices: list[int] = []
+    data: list[float] = []
+    for edges in by_source:
+        for target, weight in edges:
+            indices.append(target)
+            data.append(weight)
+        indptr.append(len(indices))
+    return _NativeGraphTemporalFrame(
+        node_ids=list(frame.node_ids),
+        timestamps=[int(value) for value in frame.timestamps],
+        target=np.asarray(frame.y, dtype=float),
+        indptr=indptr,
+        indices=indices,
+        data=data,
+        horizon=horizon,
+        frequency="unknown",
+    )
 
 
 def _native_model_class() -> Any:

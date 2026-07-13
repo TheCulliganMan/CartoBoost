@@ -369,6 +369,15 @@ type GeoDemandPoint = {
   routeKey?: string;
 };
 
+type SpatialRegion = {
+  id: string;
+  kind: 'h3' | 's2' | 'geojson';
+  label: string;
+  geometry?: {type: 'Polygon' | 'MultiPolygon'; coordinates: number[][][] | number[][][][]};
+  target: number;
+  count: number;
+};
+
 type WasmModelMetadata = {
   name: string;
   label: string;
@@ -410,6 +419,36 @@ const fallbackModelOptions: ModelOption[] = [
   {value: 'spatial_piecewise_kriging', label: 'Spatial Piecewise Kriging', group: 'spatial'},
   {value: 'optimized_theta', label: 'Optimized Theta', group: 'local'},
   {value: 'naive', label: 'Naive', group: 'local'},
+];
+
+type DeepModelDefinition = {
+  id: string;
+  label: string;
+  family: string;
+  description: string;
+  input: string;
+  output: string;
+  docsPath: string;
+};
+
+const deepModelCatalog: DeepModelDefinition[] = [
+  {id: 'DirectionalPairForecaster', label: 'Directional pair forecaster', family: 'Forecasting', description: 'Models directed pickup-to-dropoff lanes without collapsing A→B into B→A.', input: 'Directional lane rows', output: 'Lane forecasts', docsPath: '/docs/user-guide/deep-models/cartoboost-directional-pair-forecaster'},
+  {id: 'SpatioTemporalGraphForecaster', label: 'Spatiotemporal graph forecaster', family: 'Forecasting', description: 'Forecasts connected regional or lane signals with directed graph context.', input: 'Panel + graph edges', output: 'Node-horizon forecast', docsPath: '/docs/user-guide/deep-models/cartoboost-spatiotemporal-graph-forecaster'},
+  {id: 'STGormerForecaster', label: 'STGormer graph transformer', family: 'Forecasting', description: 'Routes heterogeneous spatial-temporal graph states through learned experts.', input: 'Panel + directed graph', output: 'Node-horizon forecast', docsPath: '/docs/user-guide/forecasting-models/graph-spatiotemporal'},
+  {id: 'STGformerForecaster', label: 'STGformer graph transformer', family: 'Forecasting', description: 'Uses retained high-order propagation and linear space-time attention.', input: 'Panel + directed graph', output: 'Node-horizon forecast', docsPath: '/docs/user-guide/forecasting-models/graph-spatiotemporal'},
+  {id: 'LSTTNForecaster', label: 'LSTTN graph transformer', family: 'Forecasting', description: 'Fuses long-history periodic graph state with short-term dynamics.', input: 'Panel + directed graph', output: 'Node-horizon forecast', docsPath: '/docs/user-guide/forecasting-models/graph-spatiotemporal'},
+  {id: 'SpatialTemporalGraphGatedTransformerForecaster', label: 'Spatial-temporal graph gated transformer', family: 'Forecasting', description: 'Combines graph context, causal attention, and stable recurrent gates.', input: 'Panel + directed graph', output: 'Node-horizon forecast', docsPath: '/docs/user-guide/forecasting-models/graph-spatiotemporal'},
+  {id: 'SpatialShiftGraphonMoEForecaster', label: 'Spatial-shift graphon MoE', family: 'Forecasting', description: 'Adapts a routed expert graphon model to changing graph relationships.', input: 'Panel + directed graph', output: 'Node-horizon forecast', docsPath: '/docs/user-guide/forecasting-models/graph-spatiotemporal'},
+  {id: 'MarketStructureExplorer', label: 'Market structure explorer', family: 'Forecasting', description: 'Fits a learned directed taxi-lane graph and exposes forecasts, components, and retained kernels.', input: 'Directional panel', output: 'Forecasts + kernels', docsPath: '/docs/user-guide/forecasting-models/graph-spatiotemporal#market-structure-explorer'},
+  {id: 'ConditionalFlowDistributionHead', label: 'Conditional flow uncertainty', family: 'Uncertainty', description: 'Calibrates residual distributions into quantiles and joint scenario paths.', input: 'Hidden states + residuals', output: 'Quantiles + samples', docsPath: '/docs/user-guide/deep-models/cartoboost-conditional-flow-distribution-head'},
+  {id: 'GeoTemporalDiffusionScenarioModel', label: 'Geotemporal diffusion scenarios', family: 'Scenarios', description: 'Generates graph-aware future shock scenarios around a point forecast.', input: 'Forecast field + edges', output: 'Scenario panel', docsPath: '/docs/user-guide/deep-models/cartoboost-geotemporal-diffusion-scenario-model'},
+  {id: 'GraphNeuralOperator', label: 'Graph neural operator', family: 'Scenarios', description: 'Propagates spatial fields across coordinates, graph edges, and exogenous signals.', input: 'Fields + coordinates', output: 'Future field', docsPath: '/docs/user-guide/deep-models/cartoboost-graph-neural-operator'},
+  {id: 'ResponseCurveModel', label: 'Response curve model', family: 'Decision', description: 'Learns a monotone response curve for service or pricing decisions.', input: 'Candidate rows', output: 'Response predictions', docsPath: '/docs/user-guide/deep-models/cartoboost-response-curve-model'},
+  {id: 'EventOutcomeModel', label: 'Event outcome model', family: 'Decision', description: 'Scores event likelihood from structured operational features.', input: 'Feature rows + labels', output: 'Outcome probabilities', docsPath: '/docs/user-guide/deep-models/cartoboost-event-outcome-model'},
+  {id: 'ServiceTimeResidualModel', label: 'Service-time residual model', family: 'Decision', description: 'Estimates residual service-time adjustments from route context.', input: 'Service rows', output: 'Residual corrections', docsPath: '/docs/user-guide/deep-models/cartoboost-service-time-residual-model'},
+  {id: 'ChoiceSetTransformer', label: 'Choice-set transformer', family: 'Decision', description: 'Scores competing candidate actions within each decision set.', input: 'Candidate sets', output: 'Choice probabilities', docsPath: '/docs/user-guide/deep-models/cartoboost-choice-set-transformer'},
+  {id: 'RegimeMoEForecaster', label: 'Regime MoE forecaster', family: 'Forecasting', description: 'Routes observations across recurring, sparse, volatile, and hub-like regimes.', input: 'Context features + target', output: 'Expert mixture forecast', docsPath: '/docs/user-guide/deep-models/cartoboost-regime-moe-forecaster'},
+  {id: 'ConstrainedDecisionOptimizer', label: 'Constrained decision optimizer', family: 'Decision', description: 'Selects candidates subject to declared operational constraints.', input: 'Candidates + constraints', output: 'Selected actions', docsPath: '/docs/user-guide/deep-models/cartoboost-constrained-decision-optimizer'},
 ];
 
 export function RegressionModelExample({
@@ -593,6 +632,68 @@ function DeepModelWasmResult({result}: {result: unknown}) {
   );
 }
 
+function DeepModelCatalog({selectedId, onSelect}: {selectedId: string; onSelect: (id: string) => void}): React.ReactElement {
+  const families = ['Forecasting', 'Uncertainty', 'Scenarios', 'Decision'];
+  return (
+    <div className={styles.deepCatalog} aria-label="Deep model catalog">
+      {families.map((family) => (
+        <section key={family} className={styles.deepCatalogGroup} aria-labelledby={`deep-family-${family}`}>
+          <h3 id={`deep-family-${family}`}>{family}</h3>
+          <div className={styles.deepModelGrid}>
+            {deepModelCatalog.filter((item) => item.family === family).map((item) => {
+              const isSelected = item.id === selectedId;
+              return (
+                <button
+                  key={item.id}
+                  className={`${styles.deepModelCard} ${isSelected ? styles.deepModelCardActive : ''}`}
+                  type="button"
+                  aria-pressed={isSelected}
+                  onClick={() => onSelect(item.id)}
+                >
+                  <strong>{item.label}</strong>
+                  <span>{item.description}</span>
+                  <small>{item.input} → {item.output}</small>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}
+
+function DeepModelResultCanvas({model, result}: {model: DeepModelDefinition; result: unknown}): React.ReactElement {
+  const rows = deepExampleResultRows(result);
+  return (
+    <>
+      <div className={styles.resultHeader}>
+        <div>
+          <span className={styles.eyebrow}>Deep model result</span>
+          <h2>{model.label}</h2>
+        </div>
+        <dl>
+          <div><dt>Family</dt><dd>{model.family}</dd></div>
+          <div><dt>Runtime</dt><dd>Wasm</dd></div>
+        </dl>
+      </div>
+      <section className={styles.deepResultPanel}>
+        <div>
+          <h3>Native browser run</h3>
+          <p>{model.description} This run uses the Rust browser export and a compact taxi-shaped example.</p>
+        </div>
+        <a className={styles.deepDocsLink} href={model.docsPath}>Read model guide</a>
+      </section>
+      <section className={styles.deepResultPanel}>
+        <h3>Output summary</h3>
+        <dl className={styles.deepResultGrid}>
+          {rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}
+        </dl>
+      </section>
+    </>
+  );
+}
+
 function deepExampleResultRows(result: unknown): [string, string][] {
   if (typeof result !== 'object' || result === null) {
     return [['Result', String(result)]];
@@ -625,6 +726,12 @@ function deepExampleResultRows(result: unknown): [string, string][] {
 
 function runDeepModelWasmExample(wasmModule: WasmModule, model: string): unknown {
   switch (model) {
+    case 'MarketStructureExplorer': {
+      if (!wasmModule.runMarketStructureExplorer) {
+        throw new Error('The market structure Wasm export is not available from this bundle.');
+      }
+      return wasmModule.runMarketStructureExplorer(marketStructureExampleRequest());
+    }
     case 'DirectionalPairForecaster': {
       if (!wasmModule.deepDirectionalPairPredict) {
         throw new Error('CartoBoost directional pair Wasm export is not available from this bundle.');
@@ -660,6 +767,23 @@ function runDeepModelWasmExample(wasmModule: WasmModule, model: string): unknown
         throw new Error('CartoBoost graph forecast Wasm export is not available from this bundle.');
       }
       return wasmModule.runGraphForecast(deepGraphForecastRequest());
+    }
+    case 'STGormerForecaster':
+    case 'STGformerForecaster':
+    case 'LSTTNForecaster':
+    case 'SpatialTemporalGraphGatedTransformerForecaster':
+    case 'SpatialShiftGraphonMoEForecaster': {
+      if (!wasmModule.runGraphForecast) {
+        throw new Error('The paper graph transformer Wasm export is not available from this bundle.');
+      }
+      const profile = {
+        STGormerForecaster: 'heterogeneous_moe',
+        STGformerForecaster: 'efficient_high_order',
+        LSTTNForecaster: 'long_short_fusion',
+        SpatialTemporalGraphGatedTransformerForecaster: 'gated_graph_temporal',
+        SpatialShiftGraphonMoEForecaster: 'spatial_shift_graphon_moe',
+      }[model];
+      return wasmModule.runGraphForecast(deepGraphForecastRequest(profile));
     }
     case 'DelayAwareGraphTransformer':
     case 'PropagationDelayGraphForecaster':
@@ -800,7 +924,7 @@ function marketStructureExampleRequest() {
   return {
     laneIds: lanes.map(({origin, destination}) => `${origin}:${destination}`),
     timestamps: Array.from({length: days}, (_, day) => day),
-    targetNames: ['primary_measure', 'supporting_measure'],
+    targetNames: ['Fare / price index', 'Trip demand'],
     primary,
     secondary,
     originIds: lanes.map(({origin}) => origin),
@@ -900,7 +1024,7 @@ function deepServiceResidualRows() {
   ];
 }
 
-function deepGraphForecastRequest() {
+function deepGraphForecastRequest(profile?: string) {
   return {
     frame: {
       nodeIds: ['PULocationID:161', 'PULocationID:236', 'PULocationID:132'],
@@ -917,7 +1041,9 @@ function deepGraphForecastRequest() {
       horizon: 2,
       frequency: 'hourly',
     },
-    options: {diffusionSteps: 1, hiddenSize: 4, epochs: 5, backend: 'cpu'},
+    options: profile
+      ? {profile, lookback: 3, hiddenSize: 4, attentionHeads: 2, graphOrder: 2, experts: 2, periodicity: 3, epochs: 5, backend: 'cpu'}
+      : {diffusionSteps: 1, hiddenSize: 4, epochs: 5, backend: 'cpu'},
   };
 }
 
@@ -996,7 +1122,7 @@ export function ForecastModelExample({
         <div>
           <strong>{title}</strong>
           <p style={{margin: '0.25rem 0 0'}}>
-            Runs <code>{selectedModel}</code> against a bundled {isIntermittentDemandModel(selectedModel) ? 'zero-filled intermittent taxi route-demand' : sample === 'spatial' ? 'multi-location demand panel' : 'route-demand'} sample.
+            Runs <code>{selectedModel}</code> against a bundled {isIntermittentDemandModel(selectedModel) ? 'taxi route-demand' : sample === 'spatial' ? 'multi-location demand panel' : 'route-demand'} sample.
           </p>
         </div>
         <button className="button button--primary" type="button" disabled={isRunning} onClick={() => void runExample()}>
@@ -1017,7 +1143,7 @@ export function ForecastModelExample({
       )}
       {result && isIntermittentDemandModel(selectedModel) && (
         <p style={{margin: '0.25rem 0 0', color: 'var(--ifm-color-emphasis-700)'}}>
-          These methods estimate a constant expected demand rate. A flat forecast is expected; the chart now uses a route with true zero-demand hours so that rate is meaningful.
+          These methods estimate a constant expected demand rate. A flat forecast is expected. When the bundled panel has missing route-hours, they are represented as zero demand; dense bundled routes still run without inventing zero-demand periods.
         </p>
       )}
       {records.length > 0 && (
@@ -1986,13 +2112,25 @@ function intermittentRouteDemandTable(table: ParsedTable): ParsedTable {
       const start = Math.min(...timestamps);
       const end = Math.max(...timestamps);
       const hours = Math.floor((end - start) / 3_600_000) + 1;
-      const density = rows.length / Math.max(hours, 1);
-      return {route, rows, start, end, hours, density};
+      const observedHours = new Set(timestamps).size;
+      const density = observedHours / Math.max(hours, 1);
+      const zeroDemandHours = Math.max(0, hours - observedHours);
+      return {route, rows, start, end, hours, density, observedHours, zeroDemandHours};
     })
-    .filter((entry) => entry.hours >= 48 && entry.rows.length >= 6 && entry.density >= 0.03 && entry.density <= 0.5)
-    .sort((left, right) => right.hours - left.hours || left.density - right.density || left.route.localeCompare(right.route))[0];
+    // Prefer a route with real gaps, but retain a valid dense route when this
+    // intentionally compact panel contains no intermittent route. Fabricating
+    // zero-demand periods from a dense series would misrepresent the data and
+    // make the browser example less useful than simply running the model.
+    .filter((entry) => entry.hours >= 48 && entry.observedHours >= 6)
+    .sort(
+      (left, right) =>
+        right.zeroDemandHours - left.zeroDemandHours ||
+        right.hours - left.hours ||
+        left.density - right.density ||
+        left.route.localeCompare(right.route),
+    )[0];
   if (!candidate) {
-    throw new Error('The bundled taxi panel does not contain a route with enough observed and zero-demand hours for an intermittent-demand example.');
+    throw new Error('The bundled taxi panel does not contain a valid route history for this forecast example.');
   }
   const observed = new Map<string, number>();
   for (const row of candidate.rows) {
@@ -2142,6 +2280,8 @@ export default function ModelingLabClient(): React.ReactElement {
   const [modelingMode, setModelingMode] = useState('full');
   const [modelingLoss, setModelingLoss] = useState('l2');
   const [activeModelingSurface, setActiveModelingSurface] = useState<ActiveModelingSurface>('forecast');
+  const [deepModelId, setDeepModelId] = useState(deepModelCatalog[0].id);
+  const [deepResult, setDeepResult] = useState<unknown>(null);
   const [neuralPipeline, setNeuralPipeline] = useState('embedding');
   const [neuralIdCol, setNeuralIdCol] = useState('');
   const [graphSourceCol, setGraphSourceCol] = useState('');
@@ -2160,6 +2300,7 @@ export default function ModelingLabClient(): React.ReactElement {
 
   const previewRows = table?.rows.slice(0, 6) ?? [];
   const selectedForecastModel = modelOptions.find((option) => option.value === model) ?? modelOptions[0];
+  const selectedDeepModel = deepModelCatalog.find((item) => item.id === deepModelId) ?? deepModelCatalog[0];
   const isLoadingTaxiSample = isLoadingTaxiLane || isLoadingTaxiVariedRoutes;
   const selectedColumnsReady =
     table !== null && timestampCol !== '' && targetCol !== '' && table.columns.includes(timestampCol) && table.columns.includes(targetCol);
@@ -2406,6 +2547,7 @@ export default function ModelingLabClient(): React.ReactElement {
     }
     setIsRunning(true);
     setRunProgress({label: 'Fitting forecast'});
+    setDeepResult(null);
     setStatus('Fitting the forecast in this page.');
     try {
       const response = await runBrowserForecast({
@@ -2458,6 +2600,7 @@ export default function ModelingLabClient(): React.ReactElement {
     setResult(null);
     setRegressionResult(null);
     setNeuralResult(null);
+    setDeepResult(null);
     setRunLog([]);
     setStatus('Running model roster benchmark.');
     const roster = modelOptions.filter((option) => forecastModelCanRun(option, table.columns));
@@ -2544,6 +2687,7 @@ export default function ModelingLabClient(): React.ReactElement {
     setResult(null);
     setRegressionResult(null);
     setNeuralResult(null);
+    setDeepResult(null);
     setRunLog([]);
     setStatus('Running holdout benchmark across the model roster.');
     try {
@@ -2671,6 +2815,7 @@ export default function ModelingLabClient(): React.ReactElement {
     setHiddenBenchmarkSeries([]);
     setRegressionResult(null);
     setNeuralResult(null);
+    setDeepResult(null);
     setStatus('Fitting CartoBoost regression in this page.');
     try {
       await waitForBrowserPaint();
@@ -2715,6 +2860,7 @@ export default function ModelingLabClient(): React.ReactElement {
     setHiddenBenchmarkSeries([]);
     setRegressionResult(null);
     setNeuralResult(null);
+    setDeepResult(null);
     setStatus(`Fitting ${neuralPipelineLabels[neuralPipeline] ?? neuralPipeline} in this page.`);
     try {
       await waitForBrowserPaint();
@@ -2751,6 +2897,31 @@ export default function ModelingLabClient(): React.ReactElement {
     wasmBinaryUrl,
     wasmJsUrl,
   ]);
+
+  const runDeepModel = useCallback(async () => {
+    setIsRunning(true);
+    setRunProgress({label: `Running ${selectedDeepModel.label}`});
+    setResult(null);
+    setComparisonResults([]);
+    setBacktestResults([]);
+    setHiddenBenchmarkSeries([]);
+    setRegressionResult(null);
+    setNeuralResult(null);
+    setDeepResult(null);
+    setStatus(`Loading the Rust browser export for ${selectedDeepModel.label}.`);
+    try {
+      await waitForBrowserPaint();
+      const wasmModule = await getInitializedWasmModule(wasmJsUrl, wasmBinaryUrl);
+      const response = runDeepModelWasmExample(wasmModule, selectedDeepModel.id);
+      setDeepResult(response);
+      setStatus(`${selectedDeepModel.label} completed in this browser.`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsRunning(false);
+      setRunProgress(null);
+    }
+  }, [selectedDeepModel, wasmBinaryUrl, wasmJsUrl]);
 
   const exportSuggestedConfig = useCallback(() => {
     if (!table) {
@@ -2825,6 +2996,14 @@ export default function ModelingLabClient(): React.ReactElement {
     setHiddenBenchmarkSeries((current) =>
       current.includes(key) ? current.filter((item) => item !== key) : [...current, key],
     );
+  }, []);
+  const selectDeepModel = useCallback((id: string) => {
+    setDeepModelId(id);
+    setDeepResult(null);
+    const nextModel = deepModelCatalog.find((item) => item.id === id);
+    if (nextModel) {
+      setStatus(`${nextModel.label} selected. Run it to inspect the native browser output.`);
+    }
   }, []);
 
   return (
@@ -3046,25 +3225,12 @@ export default function ModelingLabClient(): React.ReactElement {
             )}
 
             {activeModelingSurface === 'deep' && (
-              <ControlSection title="Deep model Wasm examples" step="3">
+              <ControlSection title="Choose a deep model" step="3">
                 <div className={styles.neuralSummary}>
-                  <strong>Browser-native deep models</strong>
-                  <span>Run the Rust-backed deep-model examples directly in this page with tiny synthetic taxi-shaped samples.</span>
+                  <strong>{selectedDeepModel.label}</strong>
+                  <span>Pick a workflow, then run it in the main results canvas. No upload is required for these compact native examples.</span>
                 </div>
-                <div className={styles.controlsGrid}>
-                  <DeepModelWasmExample model="DirectionalPairForecaster" />
-                  <DeepModelWasmExample model="ResponseCurveModel" />
-                  <DeepModelWasmExample model="EventOutcomeModel" />
-                  <DeepModelWasmExample model="ServiceTimeResidualModel" />
-                  <DeepModelWasmExample model="SpatioTemporalGraphForecaster" />
-                  <MarketStructureWasmExample />
-                  <DeepModelWasmExample model="ConditionalFlowDistributionHead" />
-                  <DeepModelWasmExample model="GeoTemporalDiffusionScenarioModel" />
-                  <DeepModelWasmExample model="GraphNeuralOperator" />
-                  <DeepModelWasmExample model="ChoiceSetTransformer" />
-                  <DeepModelWasmExample model="RegimeMoEForecaster" />
-                  <DeepModelWasmExample model="ConstrainedDecisionOptimizer" />
-                </div>
+                <DeepModelCatalog selectedId={deepModelId} onSelect={selectDeepModel} />
               </ControlSection>
             )}
 
@@ -3097,7 +3263,9 @@ export default function ModelingLabClient(): React.ReactElement {
               </button>
             )}
             {activeModelingSurface === 'deep' && (
-              <div className={styles.settingHint}>These examples run directly in the browser and do not require uploaded data.</div>
+              <button className={styles.primaryButton} type="button" disabled={isRunning} onClick={() => scheduleRun(runDeepModel)}>
+                {isRunning ? `Running ${selectedDeepModel.label}` : `Run ${selectedDeepModel.label}`}
+              </button>
             )}
             <button className={styles.secondaryActionButton} type="button" disabled={!table || isRunning || isLoadingTaxiSample} onClick={exportSuggestedConfig}>
               Export config
@@ -3121,7 +3289,9 @@ export default function ModelingLabClient(): React.ReactElement {
         </div>
 
         <div className={styles.outputPanel}>
-          {neuralResult ? (
+          {deepResult ? (
+            <DeepModelResultCanvas model={selectedDeepModel} result={deepResult} />
+          ) : neuralResult ? (
             <>
               <div className={styles.resultHeader}>
                 <div>
@@ -4533,6 +4703,9 @@ function LineChart({caption, series, showForecastBoundary = true}: {caption: str
           const points = item.points
             .map((point) => `${point.x},${point.y}`)
             .join(' ');
+          const areaPoints = item.points.length > 1
+            ? `${item.points[0].x},${topPadding + plotHeight} ${points} ${item.points[item.points.length - 1].x},${topPadding + plotHeight}`
+            : '';
           const normalizedLabel = item.label.toLowerCase();
           const lineClassName = seriesIndex === 0
             ? styles.actualLine
@@ -4540,12 +4713,10 @@ function LineChart({caption, series, showForecastBoundary = true}: {caption: str
               ? styles.trendLine
               : styles.fittedLine;
           return (
-            <polyline
-              className={lineClassName}
-              points={points}
-              style={{stroke: item.color}}
-              key={item.label}
-            />
+            <g key={item.label}>
+              {areaPoints && <polygon className={styles.chartArea} points={areaPoints} style={{fill: item.color}} />}
+              <polyline className={lineClassName} points={points} style={{stroke: item.color}} />
+            </g>
           );
         })}
         {plotSeries.flatMap((item, seriesIndex) =>
@@ -5066,6 +5237,7 @@ function WebGlGeoMap({
 }) {
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const [status, setStatus] = useState('Loading route map');
+  const [surfaceMode, setSurfaceMode] = useState<'kernel' | 'grid'>('kernel');
 
   useEffect(() => {
     if (!mapContainerRef.current || points.length === 0) {
@@ -5075,7 +5247,7 @@ function WebGlGeoMap({
     let cancelled = false;
     void (async () => {
       try {
-        const [{default: maplibregl}, {MapboxOverlay}, {ScatterplotLayer, ArcLayer}, {HeatmapLayer}] = await Promise.all([
+        const [{default: maplibregl}, {MapboxOverlay}, {ScatterplotLayer, ArcLayer}, {HeatmapLayer, ContourLayer, GridLayer}] = await Promise.all([
           import('maplibre-gl'),
           import('@deck.gl/mapbox'),
           import('@deck.gl/layers'),
@@ -5102,7 +5274,7 @@ function WebGlGeoMap({
           center,
           container: mapContainerRef.current,
           cooperativeGestures: true,
-          style: 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
+          style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
           zoom: 10,
         });
         map.addControl(new maplibregl.NavigationControl({showCompass: false}), 'top-right');
@@ -5110,15 +5282,43 @@ function WebGlGeoMap({
         const overlay = new MapboxOverlay({
           interleaved: false,
           layers: [
-            new HeatmapLayer<GeoDemandPoint>({
+            surfaceMode === 'kernel'
+              ? new HeatmapLayer<GeoDemandPoint>({
               id: 'target-heatmap',
               data: points,
               getPosition: (point) => [point.lon, point.lat],
               getWeight: (point) => point.target,
-              intensity: 1.1,
-              radiusPixels: 42,
-              threshold: 0.025,
-            }),
+              colorRange: [[15, 32, 54], [24, 96, 139], [26, 164, 177], [108, 218, 178], [250, 213, 94], [244, 119, 63]],
+              intensity: 1.35,
+              radiusPixels: 64,
+              threshold: 0.015,
+            })
+              : new GridLayer<GeoDemandPoint>({
+                id: 'target-3d-grid',
+                data: points,
+                getPosition: (point) => [point.lon, point.lat],
+                getColorWeight: (point) => point.target,
+                getElevationWeight: (point) => point.target,
+                cellSize: 360,
+                colorRange: [[21, 63, 94], [24, 129, 157], [59, 187, 175], [239, 204, 80], [242, 112, 64]],
+                elevationRange: [0, 1800],
+                elevationScale: 5,
+                extruded: true,
+                opacity: 0.86,
+                pickable: true,
+              }),
+            ...(surfaceMode === 'kernel' ? [new ContourLayer<GeoDemandPoint>({
+              id: 'target-contours',
+              data: points,
+              getPosition: (point) => [point.lon, point.lat],
+              getWeight: (point) => point.target,
+              cellSize: 180,
+              contours: [
+                {threshold: 0.22, color: [109, 225, 200, 110], strokeWidth: 1},
+                {threshold: 0.5, color: [255, 228, 119, 190], strokeWidth: 1.5},
+                {threshold: 0.78, color: [255, 130, 73, 235], strokeWidth: 2},
+              ],
+            })] : []),
             new ArcLayer<GeoDemandPoint>({
               id: 'route-arcs',
               data: routePoints,
@@ -5166,7 +5366,7 @@ function WebGlGeoMap({
             const bounds = allCoordinates.reduce((nextBounds, coordinate) => nextBounds.extend(coordinate), new maplibregl.LngLatBounds(allCoordinates[0], allCoordinates[0]));
             map.fitBounds(bounds, {duration: 0, padding: 42});
           }
-          setStatus('Pickup demand and route paths');
+          setStatus(surfaceMode === 'kernel' ? 'Smoothed pickup demand and route paths' : 'Extruded demand grid and route paths');
         });
         cleanup = () => {
           overlay.finalize();
@@ -5182,15 +5382,115 @@ function WebGlGeoMap({
       cancelled = true;
       cleanup?.();
     };
-  }, [hasDropoff, maxTarget, minTarget, onSelectRoute, points, selectedRouteKey]);
+  }, [hasDropoff, maxTarget, minTarget, onSelectRoute, points, selectedRouteKey, surfaceMode]);
 
   return (
     <div className={styles.webglMapShell}>
+      <div className={styles.geoMapToolbar}>
+        <div>
+          <span>Spatial signal</span>
+          <strong>{surfaceMode === 'kernel' ? '2D kernel density' : '3D demand grid'}</strong>
+        </div>
+        <div role="group" aria-label="Spatial geometry">
+          <button className={surfaceMode === 'kernel' ? styles.geoMapModeActive : undefined} type="button" onClick={() => setSurfaceMode('kernel')}>2D kernel</button>
+          <button className={surfaceMode === 'grid' ? styles.geoMapModeActive : undefined} type="button" onClick={() => setSurfaceMode('grid')}>3D grid</button>
+        </div>
+      </div>
       <div className={styles.webglMap} ref={mapContainerRef} />
       <div className={styles.webglMapOverlay}>
         <span>{status}</span>
-        <strong>{selectedRouteKey ?? (hasDropoff ? 'Pickup demand, hotspots, and dropoff paths' : 'Pickup demand and hotspots')}</strong>
+        <strong>{selectedRouteKey ?? (hasDropoff ? 'Demand field, hotspots, and dropoff paths' : 'Demand field and hotspots')}</strong>
       </div>
+      <div className={styles.geoMapLegend} aria-label="Demand intensity color scale"><span>Low</span><i /><span>High</span></div>
+    </div>
+  );
+}
+
+/** Renders supplied H3/S2 cells or GeoJSON polygons as their actual geographic regions. */
+function DirectSpatialRegionMap({regions, targetName}: {regions: SpatialRegion[]; targetName: string}) {
+  const mapContainerRef = useRef<HTMLDivElement | null>(null);
+  const [surfaceMode, setSurfaceMode] = useState<'flat' | 'extruded'>('flat');
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [renderError, setRenderError] = useState<string | null>(null);
+  const values = regions.map((region) => region.target);
+  const minTarget = Math.min(...values);
+  const maxTarget = Math.max(...values);
+  const selected = regions.find((region) => region.id === selectedId);
+
+  useEffect(() => {
+    if (!mapContainerRef.current || regions.length === 0) return undefined;
+    let cancelled = false;
+    let map: any = null;
+    void (async () => {
+      const [{default: maplibregl}, h3Module, s2Module] = await Promise.all([
+        import('maplibre-gl'),
+        import('h3-js'),
+        import('s2-geometry'),
+      ]);
+      if (cancelled || !mapContainerRef.current) return;
+      const resolvedRegions = regions.map((region) => ({
+        ...region,
+        geometry: region.geometry
+          ?? (region.kind === 'h3' ? h3CellGeometry(region.label, h3Module) : undefined)
+          ?? (region.kind === 's2' ? s2CellGeometry(region.label, s2Module.default) : undefined),
+      }));
+      const unresolved = resolvedRegions.find((region) => !region.geometry);
+      if (unresolved) throw new Error(`unable to resolve ${unresolved.kind.toUpperCase()} region ${unresolved.label}`);
+      const features = resolvedRegions.map((region) => ({
+        type: 'Feature' as const,
+        geometry: region.geometry!,
+        properties: {
+          id: region.id,
+          label: region.label,
+          kind: region.kind.toUpperCase(),
+          count: region.count,
+          target: region.target,
+          color: targetColor(region.target, minTarget, maxTarget),
+          height: 180 + ((region.target - minTarget) / (maxTarget - minTarget || 1)) * 1200,
+        },
+      }));
+      const featureCollection = {type: 'FeatureCollection' as const, features};
+      const bounds = new maplibregl.LngLatBounds();
+      features.forEach((feature) => geometryCoordinates(feature.geometry).forEach((coordinate) => bounds.extend(coordinate)));
+      map = new maplibregl.Map({
+        attributionControl: false,
+        container: mapContainerRef.current,
+        style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+        center: bounds.getCenter(),
+        cooperativeGestures: true,
+        zoom: 10,
+      });
+      map.once('load', () => {
+        if (cancelled || !map) return;
+        map.addSource('direct-spatial-regions', {type: 'geojson', data: featureCollection as any});
+        if (surfaceMode === 'flat') {
+          map.addLayer({id: 'direct-spatial-fill', type: 'fill', source: 'direct-spatial-regions', paint: {'fill-color': ['get', 'color'], 'fill-opacity': 0.66}});
+        } else {
+          map.addLayer({id: 'direct-spatial-fill', type: 'fill-extrusion', source: 'direct-spatial-regions', paint: {'fill-extrusion-color': ['get', 'color'], 'fill-extrusion-height': ['get', 'height'], 'fill-extrusion-opacity': 0.84}});
+        }
+        map.addLayer({id: 'direct-spatial-outline', type: 'line', source: 'direct-spatial-regions', paint: {'line-color': '#e9fff9', 'line-width': 1.25, 'line-opacity': 0.9}});
+        map.on('click', 'direct-spatial-fill', (event: any) => setSelectedId(String(event.features?.[0]?.properties?.id ?? '')));
+        if (!bounds.isEmpty()) map.fitBounds(bounds, {duration: 0, padding: 52, maxZoom: 13});
+      });
+    })().catch((error) => { if (!cancelled) setRenderError(errorMessage(error)); });
+    return () => { cancelled = true; map?.remove(); };
+  }, [maxTarget, minTarget, regions, surfaceMode]);
+
+  return (
+    <div className={styles.webglMapShell}>
+      <div className={styles.geoMapToolbar}>
+        <div><span>Direct spatial cells</span><strong>{surfaceMode === 'flat' ? '2D cell surface' : '3D cell extrusion'}</strong></div>
+        <div role="group" aria-label="Direct cell geometry">
+          <button className={surfaceMode === 'flat' ? styles.geoMapModeActive : undefined} type="button" onClick={() => setSurfaceMode('flat')}>2D cells</button>
+          <button className={surfaceMode === 'extruded' ? styles.geoMapModeActive : undefined} type="button" onClick={() => setSurfaceMode('extruded')}>3D cells</button>
+        </div>
+      </div>
+      <div className={styles.webglMap} ref={mapContainerRef} />
+      <div className={styles.webglMapOverlay}>
+        <span>{renderError ?? (selected ? `${selected.kind.toUpperCase()} cell · ${selected.count.toLocaleString()} rows` : `${regions.length.toLocaleString()} direct cells or polygons`)}</span>
+        <strong>{selected ? `${selected.label}: ${formatCompact(selected.target)} ${targetName}` : `${targetName} by direct H3, S2, or GeoJSON region`}</strong>
+      </div>
+      <div className={styles.geoMapLegend} aria-label={`${targetName} intensity color scale`}><span>Low</span><i /><span>High</span></div>
     </div>
   );
 }
@@ -5201,9 +5501,18 @@ function GeoDatasetVisualization({table, targetCol, seriesCol}: {table: ParsedTa
   const dropoff = coordinatePair(table.columns, ['dropoff', 'do', 'destination']);
   const h3Columns = table.columns.filter((column) => {
     const normalized = column.toLowerCase();
-    return normalized.includes('h3') || table.rows.some((row) => isH3Like(row[column] ?? ''));
+    return !normalized.includes('s2') && (normalized.includes('h3') || table.rows.some((row) => isH3Like(row[column] ?? '')));
   });
-  if (!pickup && h3Columns.length === 0) {
+  const s2Columns = table.columns.filter((column) => column.toLowerCase().includes('s2'));
+  const geoJsonColumns = table.columns.filter((column) => {
+    const normalized = column.toLowerCase();
+    return normalized.includes('geojson') || table.rows.some((row) => isGeoJsonValue(row[column] ?? ''));
+  });
+  const {regions: directRegions, errors: directRegionErrors} = useMemo(
+    () => buildDirectSpatialRegions(table, targetCol, h3Columns, s2Columns, geoJsonColumns),
+    [geoJsonColumns, h3Columns, s2Columns, table, targetCol],
+  );
+  if (!pickup && directRegions.length === 0 && directRegionErrors.length === 0) {
     return null;
   }
   const points: GeoDemandPoint[] = pickup
@@ -5350,6 +5659,10 @@ function GeoDatasetVisualization({table, targetCol, seriesCol}: {table: ParsedTa
           onSelectRoute={setSelectedRouteKey}
         />
       )}
+      {directRegionErrors.length > 0 && (
+        <p className={styles.geoRegionError}>Unable to render direct spatial input: {directRegionErrors[0]}</p>
+      )}
+      {directRegions.length > 0 && <DirectSpatialRegionMap regions={directRegions} targetName={targetCol} />}
       {points.length > 0 && (
         <svg className={styles.geoSvg} viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Geographic dataset preview">
           <rect x="0" y="0" width={width} height={height} />
@@ -6673,6 +6986,103 @@ function h3Summary(table: ParsedTable, column: string) {
     .slice(0, 8)
     .map(([cell, count]) => ({cell, count}));
 }
+
+function buildDirectSpatialRegions(table: ParsedTable, targetCol: string, h3Columns: string[], s2Columns: string[], geoJsonColumns: string[]) {
+  const grouped = new Map<string, {kind: SpatialRegion['kind']; label: string; geometry?: SpatialRegion['geometry']; sum: number; count: number}>();
+  const errors: string[] = [];
+  const add = (kind: SpatialRegion['kind'], label: string, geometry: SpatialRegion['geometry'] | undefined, value: number) => {
+    const id = `${kind}:${label}`;
+    const current = grouped.get(id) ?? {kind, label, geometry, sum: 0, count: 0};
+    current.sum += value;
+    current.count += 1;
+    grouped.set(id, current);
+  };
+  const valuesFor = (row: Record<string, string>, column: string) => textValue(row[column]).split(/[|;,\s]+/).map((value) => value.trim()).filter(Boolean);
+  for (const row of table.rows) {
+    const target = Number(row[targetCol]);
+    if (!Number.isFinite(target)) continue;
+    for (const column of h3Columns) {
+      for (const value of valuesFor(row, column)) {
+        add('h3', value, undefined, target);
+      }
+    }
+    for (const column of s2Columns) {
+      for (const value of valuesFor(row, column)) {
+        add('s2', value, undefined, target);
+      }
+    }
+    for (const column of geoJsonColumns) {
+      const value = textValue(row[column]).trim();
+      if (!value) continue;
+      try {
+        const geometries = geoJsonPolygonGeometries(value);
+        geometries.forEach((geometry, index) => add('geojson', `${column} #${index + 1}`, geometry, target));
+      } catch (error) { errors.push(`${column}: ${errorMessage(error)}`); }
+    }
+  }
+  return {
+    regions: [...grouped.entries()].map(([id, value]) => ({id, kind: value.kind, label: value.label, geometry: value.geometry, target: value.sum / value.count, count: value.count})).slice(0, 500),
+    errors: [...new Set(errors)].slice(0, 3),
+  };
+}
+
+function h3CellGeometry(value: string, h3: typeof import('h3-js')): SpatialRegion['geometry'] {
+  const cell = normalizeH3Cell(value);
+  if (!h3.isValidCell(cell)) throw new Error('not a valid H3 cell');
+  const boundary = h3.cellToBoundary(cell, true) as [number, number][];
+  return {type: 'Polygon', coordinates: [closedRing(boundary)]};
+}
+
+function normalizeH3Cell(value: string): string {
+  const trimmed = value.trim().toLowerCase();
+  if (/^\d+$/.test(trimmed)) return BigInt(trimmed).toString(16);
+  return trimmed.replace(/^0x/, '');
+}
+
+function s2CellGeometry(value: string, s2Geometry: typeof import('s2-geometry').default): SpatialRegion['geometry'] {
+  const trimmed = value.trim().toLowerCase().replace(/^0x/, '');
+  if (!trimmed || !(/^[0-9]+$/.test(trimmed) || /^[0-9a-f]{1,16}$/.test(trimmed))) {
+    throw new Error('not a valid S2 cell ID or token');
+  }
+  const cellId = /^\d+$/.test(trimmed)
+    ? trimmed
+    : BigInt(`0x${trimmed.padEnd(16, '0')}`).toString(10);
+  const S2 = s2Geometry.S2;
+  const key = S2.idToKey(cellId);
+  const [face, position = ''] = key.split('/');
+  if (!/^[0-5]$/.test(face) || position.length > 30) throw new Error('not a valid S2 cell');
+  const cell = S2.S2Cell.FromHilbertQuadKey(key);
+  const boundary = cell.getCornerLatLngs().map(({lat, lng}: {lat: number; lng: number}) => [lng, lat] as [number, number]);
+  return {type: 'Polygon', coordinates: [closedRing(boundary)]};
+}
+
+function closedRing(boundary: [number, number][]): [number, number][] {
+  const first = boundary[0];
+  const last = boundary.at(-1);
+  return first && last && first[0] === last[0] && first[1] === last[1] ? boundary : [...boundary, first];
+}
+
+function geoJsonPolygonGeometries(value: string): SpatialRegion['geometry'][] {
+  const parsed = JSON.parse(value) as {type?: string; geometry?: unknown; features?: Array<{geometry?: unknown}>};
+  const geometries = parsed.type === 'FeatureCollection'
+    ? parsed.features?.map((feature) => feature.geometry).filter(Boolean) ?? []
+    : parsed.type === 'Feature' ? [parsed.geometry] : [parsed];
+  const polygons = geometries.filter((geometry): geometry is SpatialRegion['geometry'] => Boolean(geometry) && typeof geometry === 'object' && ((geometry as {type?: string}).type === 'Polygon' || (geometry as {type?: string}).type === 'MultiPolygon'));
+  if (polygons.length === 0) throw new Error('expected a GeoJSON Polygon, MultiPolygon, Feature, or FeatureCollection');
+  return polygons;
+}
+
+function isGeoJsonValue(value: unknown): boolean {
+  const text = textValue(value).trim();
+  return text.startsWith('{') && /"type"\s*:\s*"(?:Feature|FeatureCollection|Polygon|MultiPolygon)"/.test(text);
+}
+
+function geometryCoordinates(geometry: SpatialRegion['geometry']): [number, number][] {
+  if (geometry.type === 'Polygon') return (geometry.coordinates as number[][][]).flat() as [number, number][];
+  return (geometry.coordinates as number[][][][]).flat(2) as [number, number][];
+}
+
+function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 
 function h3CellLabel(row: {cell?: string; count?: number; 0?: string; 1?: number}) {
   return row.cell ?? row[0] ?? '';

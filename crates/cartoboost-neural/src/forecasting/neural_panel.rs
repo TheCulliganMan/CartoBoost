@@ -2616,7 +2616,9 @@ impl MlpState {
         Ok(activation)
     }
 
-    fn forward_cpu(&self, input: &[f64]) -> Vec<f64> {
+    /// Evaluate the fitted dense network on CPU. This is intentionally public
+    /// so native model families can share the same Rust-only training primitive.
+    pub fn forward_cpu(&self, input: &[f64]) -> Vec<f64> {
         let mut activation = padded_input(input, self.input_width);
         for (layer_idx, layer) in self.layers.iter().enumerate() {
             let is_last = layer_idx + 1 == self.layers.len();
@@ -2634,6 +2636,65 @@ impl MlpState {
         }
         activation
     }
+}
+
+/// Fit a small fully-connected regressor with AdamW and ReLU hidden layers.
+///
+/// This is the reusable native primitive for models whose feature extractors
+/// live in another CartoBoost crate. It never accepts Python callbacks or
+/// performs a Python-side training fallback.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DenseRegressorConfig {
+    pub input_width: usize,
+    pub output_width: usize,
+    pub hidden_layers: Vec<usize>,
+    pub epochs: usize,
+    pub learning_rate: f64,
+    pub weight_decay: f64,
+    pub seed: u64,
+}
+
+pub fn fit_dense_regressor(
+    config: &DenseRegressorConfig,
+    examples: Vec<(Vec<f64>, Vec<f64>)>,
+) -> Result<MlpState> {
+    if config.input_width == 0 || config.output_width == 0 || config.hidden_layers.contains(&0) {
+        return Err(NeuralError::InvalidArgument(
+            "dense regressor widths must be positive".to_string(),
+        ));
+    }
+    if config.epochs == 0 || !config.learning_rate.is_finite() || config.learning_rate <= 0.0 {
+        return Err(NeuralError::InvalidArgument(
+            "dense regressor epochs and learning_rate must be positive".to_string(),
+        ));
+    }
+    if !config.weight_decay.is_finite() || config.weight_decay < 0.0 {
+        return Err(NeuralError::InvalidArgument(
+            "dense regressor weight_decay must be finite and non-negative".to_string(),
+        ));
+    }
+    let panel_config = NeuralPanelConfig {
+        epochs: config.epochs,
+        learning_rate: config.learning_rate,
+        weight_decay: config.weight_decay,
+        loss: NeuralPanelLoss::Mse,
+        ..NeuralPanelConfig::default()
+    };
+    Ok(train_mlp(
+        config.input_width,
+        config.output_width,
+        &config.hidden_layers,
+        examples
+            .into_iter()
+            .map(|(input, target)| TrainingExample {
+                input,
+                target,
+                weight: 1.0,
+            })
+            .collect(),
+        &panel_config,
+        config.seed,
+    ))
 }
 
 fn train_mlp(

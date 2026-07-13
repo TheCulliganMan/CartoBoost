@@ -110,6 +110,17 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     ),
     "GraphWaveNetForecaster": ("cartoboost.forecasting.graph_st", "GraphWaveNetForecaster"),
     "STAEformerForecaster": ("cartoboost.forecasting.graph_st", "STAEformerForecaster"),
+    "STGormerForecaster": ("cartoboost.forecasting.graph_st", "STGormerForecaster"),
+    "STGformerForecaster": ("cartoboost.forecasting.graph_st", "STGformerForecaster"),
+    "LSTTNForecaster": ("cartoboost.forecasting.graph_st", "LSTTNForecaster"),
+    "SpatialTemporalGraphGatedTransformerForecaster": (
+        "cartoboost.forecasting.graph_st",
+        "SpatialTemporalGraphGatedTransformerForecaster",
+    ),
+    "SpatialShiftGraphonMoEForecaster": (
+        "cartoboost.forecasting.graph_st",
+        "SpatialShiftGraphonMoEForecaster",
+    ),
     "available_graph_st_backends": (
         "cartoboost.forecasting.graph_st",
         "available_graph_st_backends",

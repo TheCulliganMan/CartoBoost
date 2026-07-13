@@ -42,10 +42,11 @@ pub use encoder::{EmbeddingTableEncoder, NeuralEncoder};
 pub use error::{NeuralError, Result};
 pub use features::NeuralFeatureBlock;
 pub use forecasting::{
-    ComponentMode, ForecastWindow, LaneNeuralPanelConfig, LaneNeuralPanelForecaster, NBeatsConfig,
-    NBeatsForecaster, NHiTSConfig, NHiTSForecaster, NeuralPanelConfig, NeuralPanelForecaster,
-    NeuralPanelLoss, NeuralPanelMode, NeuralPanelWindow, NeuralPanelWindowDataset, StandardScaler,
-    TrendMode, WindowDataset,
+    fit_dense_regressor, ComponentMode, DenseRegressorConfig, ForecastWindow,
+    LaneNeuralPanelConfig, LaneNeuralPanelForecaster, MlpState, NBeatsConfig, NBeatsForecaster,
+    NHiTSConfig, NHiTSForecaster, NeuralPanelConfig, NeuralPanelForecaster, NeuralPanelLoss,
+    NeuralPanelMode, NeuralPanelWindow, NeuralPanelWindowDataset, StandardScaler, TrendMode,
+    WindowDataset,
 };
 pub use graph_features::{
     compute_directional_features, materialize_source_target_pair_nodes, validate_directed_metapath,

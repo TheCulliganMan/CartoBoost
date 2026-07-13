@@ -211,7 +211,7 @@ body:has(.shell) :global(.footer) {
   border-radius: 8px;
   display: grid;
   gap: 0.25rem;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   padding: 0.25rem;
   position: sticky;
   top: 0;
@@ -265,6 +265,132 @@ body:has(.shell) :global(.footer) {
   font-weight: 800;
   line-height: 1.25;
   text-transform: uppercase;
+}
+
+.deepCatalog {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.deepCatalogGroup {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.deepCatalogGroup h3 {
+  color: var(--lab-muted);
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.07em;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.deepModelGrid {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.deepModelCard {
+  background: var(--lab-panel-tint);
+  border: 1px solid var(--lab-border-strong);
+  border-radius: 8px;
+  color: var(--lab-text);
+  cursor: pointer;
+  display: grid;
+  gap: 0.22rem;
+  padding: 0.5rem 0.55rem;
+  text-align: left;
+}
+
+.deepModelCard strong {
+  font-size: 0.78rem;
+  line-height: 1.2;
+}
+
+.deepModelCard span {
+  color: var(--lab-muted);
+  font-size: 0.72rem;
+  line-height: 1.3;
+}
+
+.deepModelCard small {
+  color: #0b6f68;
+  font-size: 0.65rem;
+  font-weight: 800;
+}
+
+.deepModelCard:hover,
+.deepModelCard:focus-visible,
+.deepModelCardActive {
+  background: #e0f5f3;
+  border-color: #168f86;
+  box-shadow: 0 0 0 2px rgba(22, 143, 134, 0.14);
+  outline: 0;
+}
+
+.deepResultPanel {
+  background: var(--lab-panel-elevated);
+  border: 1px solid var(--lab-border);
+  border-radius: 8px;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  padding: 0.85rem;
+}
+
+.deepResultPanel h3 {
+  color: var(--lab-heading);
+  font-size: 0.95rem;
+  margin: 0 0 0.25rem;
+}
+
+.deepResultPanel p {
+  color: var(--lab-muted);
+  font-size: 0.86rem;
+  line-height: 1.45;
+  margin: 0;
+  max-width: 52rem;
+}
+
+.deepDocsLink {
+  align-self: start;
+  border: 1px solid var(--lab-control-border);
+  border-radius: 7px;
+  color: #0b6f68;
+  flex: 0 0 auto;
+  font-size: 0.8rem;
+  font-weight: 800;
+  padding: 0.42rem 0.55rem;
+}
+
+.deepResultGrid {
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(165px, 1fr));
+  margin: 0;
+}
+
+.deepResultGrid div {
+  background: var(--lab-panel-soft);
+  border: 1px solid var(--lab-border);
+  border-radius: 7px;
+  padding: 0.55rem;
+}
+
+.deepResultGrid dt {
+  color: var(--lab-muted);
+  font-size: 0.68rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.deepResultGrid dd {
+  color: var(--lab-heading);
+  font-size: 0.84rem;
+  font-weight: 700;
+  margin: 0.18rem 0 0;
+  overflow-wrap: anywhere;
 }
 
 .modelPicker {
@@ -777,6 +903,11 @@ body:has(.shell) :global(.footer) {
   fill: none;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.chartArea {
+  opacity: 0.09;
+  pointer-events: none;
 }
 
 .chart circle {
@@ -1999,9 +2130,11 @@ body:has(.shell) :global(.footer) {
 }
 
 .webglMapShell {
-  background: #eef2f7;
-  border-radius: 8px;
-  height: 360px;
+  background: #101b2c;
+  border: 1px solid rgba(111, 181, 205, 0.28);
+  border-radius: 10px;
+  box-shadow: 0 16px 34px rgba(11, 18, 32, 0.12);
+  height: 420px;
   margin-bottom: 0.75rem;
   overflow: hidden;
   position: relative;
@@ -2012,12 +2145,42 @@ body:has(.shell) :global(.footer) {
   width: 100%;
 }
 
+.geoMapToolbar {
+  align-items: center;
+  backdrop-filter: blur(10px);
+  background: rgba(10, 24, 42, 0.82);
+  border: 1px solid rgba(204, 234, 240, 0.2);
+  border-radius: 7px;
+  color: #eaf5f7;
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+  left: 0.65rem;
+  max-width: calc(100% - 1.3rem);
+  padding: 0.42rem 0.48rem 0.42rem 0.6rem;
+  position: absolute;
+  right: 0.65rem;
+  top: 0.65rem;
+  z-index: 2;
+}
+
+.geoMapToolbar > div:first-child { display: grid; gap: 0.08rem; }
+.geoMapToolbar span { color: #9ebbc6; font-size: 0.65rem; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; }
+.geoMapToolbar strong { font-size: 0.78rem; }
+.geoMapToolbar > div:last-child { background: rgba(255, 255, 255, 0.1); border-radius: 6px; display: flex; gap: 0.18rem; padding: 0.18rem; }
+.geoMapToolbar button { background: transparent; border: 0; border-radius: 4px; color: #c8dce3; cursor: pointer; font: inherit; font-size: 0.72rem; font-weight: 800; padding: 0.3rem 0.42rem; }
+.geoMapToolbar button:hover, .geoMapToolbar button:focus-visible, .geoMapToolbar .geoMapModeActive { background: #dff6f0; color: #075e5b; outline: 0; }
+
+.geoMapLegend { align-items: center; backdrop-filter: blur(8px); background: rgba(10, 24, 42, 0.8); border: 1px solid rgba(204, 234, 240, 0.2); border-radius: 5px; bottom: 0.65rem; color: #eaf5f7; display: flex; font-size: 0.65rem; gap: 0.35rem; padding: 0.38rem 0.45rem; pointer-events: none; position: absolute; right: 0.65rem; z-index: 2; }
+.geoMapLegend i { background: linear-gradient(90deg, #18608b, #1aa4b1, #6cdab2, #fad55e, #f4773f); height: 0.42rem; width: 4rem; }
+
 .webglMapOverlay {
-  background: rgba(255, 255, 255, 0.88);
-  border: 1px solid rgba(216, 224, 234, 0.9);
-  border-radius: 8px;
+  backdrop-filter: blur(8px);
+  background: rgba(10, 24, 42, 0.8);
+  border: 1px solid rgba(204, 234, 240, 0.2);
+  border-radius: 6px;
   bottom: 0.65rem;
-  color: #122033;
+  color: #eaf5f7;
   left: 0.65rem;
   max-width: min(24rem, calc(100% - 1.3rem));
   padding: 0.45rem 0.55rem;
@@ -2025,7 +2188,7 @@ body:has(.shell) :global(.footer) {
 }
 
 .webglMapOverlay span {
-  color: #526274;
+  color: #9ebbc6;
   display: block;
   font-size: 0.72rem;
   font-weight: 800;
@@ -2037,6 +2200,17 @@ body:has(.shell) :global(.footer) {
   display: block;
   font-size: 0.82rem;
   overflow-wrap: anywhere;
+}
+
+.geoRegionError {
+  background: #fff3ed;
+  border: 1px solid #f2c4ae;
+  border-radius: 8px;
+  color: #8b3218;
+  font-size: 0.8rem;
+  font-weight: 700;
+  margin: 0 0 0.75rem;
+  padding: 0.55rem 0.65rem;
 }
 
 .geoSvg {
@@ -2547,6 +2721,8 @@ body:has(.shell) :global(.footer) {
 :global([data-theme='dark']) .featureRoleRow div,
 :global([data-theme='dark']) .histogram,
 :global([data-theme='dark']) .neuralSummary,
+:global([data-theme='dark']) .deepResultPanel,
+:global([data-theme='dark']) .deepResultGrid div,
 :global([data-theme='dark']) .surfaceTabs {
   background: #0b1220;
   color: #dce6f4;
@@ -2598,6 +2774,8 @@ body:has(.shell) :global(.footer) {
 }
 
 :global([data-theme='dark']) .neuralSummary span,
+:global([data-theme='dark']) .deepResultPanel p,
+:global([data-theme='dark']) .deepResultGrid dt,
 :global([data-theme='dark']) .settingHint,
 :global([data-theme='dark']) .progressMeta strong,
 :global([data-theme='dark']) .runLog li {
@@ -2618,6 +2796,33 @@ body:has(.shell) :global(.footer) {
 :global([data-theme='dark']) .seasonalityButtons .seasonalityButtonActive {
   background: rgba(39, 194, 181, 0.16);
   border-color: #27c2b5;
+}
+
+:global([data-theme='dark']) .deepModelCard {
+  background: rgba(157, 176, 201, 0.1);
+  border-color: rgba(157, 176, 201, 0.28);
+  color: #e8eef8;
+}
+
+:global([data-theme='dark']) .deepModelCard span {
+  color: #9db0c9;
+}
+
+:global([data-theme='dark']) .deepModelCard small,
+:global([data-theme='dark']) .deepDocsLink {
+  color: #b9fff8;
+}
+
+:global([data-theme='dark']) .deepModelCard:hover,
+:global([data-theme='dark']) .deepModelCard:focus-visible,
+:global([data-theme='dark']) .deepModelCardActive {
+  background: rgba(39, 194, 181, 0.16);
+  border-color: #27c2b5;
+}
+
+:global([data-theme='dark']) .deepResultPanel h3,
+:global([data-theme='dark']) .deepResultGrid dd {
+  color: #e8eef8;
 }
 
 :global([data-theme='dark']) .readinessReady {
@@ -2773,6 +2978,7 @@ body:has(.shell) :global(.footer) {
   .header,
   .emptyState,
   .resultHeader,
+  .deepResultPanel,
   .componentHeader {
     align-items: stretch;
     flex-direction: column;
@@ -2818,5 +3024,10 @@ body:has(.shell) :global(.footer) {
   .actionGrid,
   .datasetProfile dl {
     grid-template-columns: 1fr;
+  }
+
+  .surfaceTabs button {
+    font-size: 0.7rem;
+    padding-inline: 0.2rem;
   }
 }

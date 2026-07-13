@@ -47,6 +47,15 @@ changing the forecast task into a panel problem. The 2,500-row varied-route
 sample keeps many coordinates and IDs for spatial, graph, neural, and
 splitter-visualization checks.
 
+The Lab also renders direct spatial regions from uploaded data. A column named
+for H3 or S2 is decoded into its cell boundary, while a `geojson` column accepts
+Polygon, MultiPolygon, Feature, or FeatureCollection values. Each distinct
+region is aggregated against the selected numeric target and can be inspected
+as a flat colored surface or a 3D extrusion. H3 values may be standard hex or
+decimal cell IDs; S2 values may be canonical decimal IDs, `0x`-prefixed IDs, or
+compact hexadecimal tokens. Invalid spatial values are reported instead of
+being replaced with approximate point markers.
+
 Visualization metadata is requested only by the Modeling Lab. Main browser
 forecasting, regression, and neural prediction calls continue without historical
 component payloads or tree traversal unless a caller explicitly asks for those

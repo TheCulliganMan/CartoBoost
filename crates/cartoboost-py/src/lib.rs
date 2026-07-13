@@ -112,10 +112,14 @@ use cartoboost_geo_st::{
     DelayAwareGraphTransformer as CoreDelayAwareGraphTransformer,
     ExpertEventLabel as CoreExpertEventLabel,
     ExpertRelationshipPrior as CoreExpertRelationshipPrior,
-    GraphTemporalFrame as CoreGraphTemporalFrame, GraphWaveNetConfig as CoreGraphWaveNetConfig,
+    GraphTemporalFrame as CoreGraphTemporalFrame,
+    GraphTransformerProfile as CoreGraphTransformerProfile,
+    GraphWaveNetConfig as CoreGraphWaveNetConfig,
     GraphWaveNetForecaster as CoreGraphWaveNetForecaster, MarketPanelFrame as CoreMarketPanelFrame,
     MarketStructureConfig as CoreMarketStructureConfig,
     MarketStructureForecaster as CoreMarketStructureForecaster,
+    PaperGraphTransformerConfig as CorePaperGraphTransformerConfig,
+    PaperGraphTransformerForecaster as CorePaperGraphTransformerForecaster,
     STAEformerConfig as CoreSTAEformerConfig, STAEformerForecaster as CoreSTAEformerForecaster,
 };
 use cartoboost_geostats::{
@@ -3702,6 +3706,12 @@ struct NativePropagationDelayGraphForecaster {
     model: CoreDelayAwareGraphTransformer,
 }
 
+#[pyclass(name = "PaperGraphTransformerForecaster")]
+#[derive(Clone, Debug)]
+struct NativePaperGraphTransformerForecaster {
+    model: CorePaperGraphTransformerForecaster,
+}
+
 #[pymethods]
 impl NativeSTAEformerForecaster {
     #[new]
@@ -3925,6 +3935,90 @@ impl NativePropagationDelayGraphForecaster {
 
     fn backend(&self) -> PyResult<String> {
         Ok(self.model.backend())
+    }
+}
+
+#[pymethods]
+impl NativePaperGraphTransformerForecaster {
+    #[new]
+    #[pyo3(signature = (profile, lookback=12, hidden_size=16, attention_heads=4, graph_order=2, experts=4, periodicity=24, epochs=80, learning_rate=0.01, weight_decay=0.00001, backend=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        profile: &str,
+        lookback: usize,
+        hidden_size: usize,
+        attention_heads: usize,
+        graph_order: usize,
+        experts: usize,
+        periodicity: usize,
+        epochs: usize,
+        learning_rate: f64,
+        weight_decay: f64,
+        backend: Option<&str>,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            model: CorePaperGraphTransformerForecaster::new(CorePaperGraphTransformerConfig {
+                profile: parse_graph_transformer_profile(profile)?,
+                lookback,
+                hidden_size,
+                attention_heads,
+                graph_order,
+                experts,
+                periodicity,
+                epochs,
+                learning_rate,
+                weight_decay,
+                backend: graph_st_select_compute_backend(backend).map_err(to_py_geo_st_error)?,
+            })
+            .map_err(to_py_geo_st_error)?,
+        })
+    }
+
+    fn fit(&mut self, py: Python<'_>, frame: &NativeGraphTemporalFrame) -> PyResult<()> {
+        py.allow_threads(|| self.model.fit(&frame.frame))
+            .map_err(to_py_geo_st_error)
+    }
+
+    fn predict(&self, py: Python<'_>, horizon: usize) -> PyResult<Vec<Vec<f64>>> {
+        py.allow_threads(|| self.model.predict(horizon))
+            .map_err(to_py_geo_st_error)
+    }
+
+    fn score(&self, py: Python<'_>, actual: Vec<Vec<f64>>) -> PyResult<f64> {
+        py.allow_threads(|| self.model.score(&actual))
+            .map_err(to_py_geo_st_error)
+    }
+
+    fn save(&self, path: PathBuf) -> PyResult<()> {
+        self.model.save(path).map_err(to_py_geo_st_error)
+    }
+
+    #[classmethod]
+    fn load(_cls: &Bound<'_, PyType>, path: PathBuf) -> PyResult<Self> {
+        Ok(Self {
+            model: CorePaperGraphTransformerForecaster::load(path).map_err(to_py_geo_st_error)?,
+        })
+    }
+
+    fn to_json(&self) -> PyResult<String> {
+        self.model.to_json_string().map_err(to_py_geo_st_error)
+    }
+
+    #[classmethod]
+    fn from_json(_cls: &Bound<'_, PyType>, value: &str) -> PyResult<Self> {
+        Ok(Self {
+            model: CorePaperGraphTransformerForecaster::from_json_string(value)
+                .map_err(to_py_geo_st_error)?,
+        })
+    }
+
+    fn backend(&self) -> PyResult<String> {
+        Ok(self.model.backend())
+    }
+
+    fn architecture_json(&self) -> PyResult<String> {
+        serde_json::to_string(&self.model.architecture_report())
+            .map_err(|err| PyRuntimeError::new_err(err.to_string()))
     }
 }
 
@@ -11595,6 +11689,19 @@ fn parse_neural_panel_global_local_mode(value: &str) -> PyResult<CoreNeuralPanel
     }
 }
 
+fn parse_graph_transformer_profile(value: &str) -> PyResult<CoreGraphTransformerProfile> {
+    match value {
+        "heterogeneous_moe" => Ok(CoreGraphTransformerProfile::HeterogeneousMoE),
+        "efficient_high_order" => Ok(CoreGraphTransformerProfile::EfficientHighOrder),
+        "long_short_fusion" => Ok(CoreGraphTransformerProfile::LongShortFusion),
+        "gated_graph_temporal" => Ok(CoreGraphTransformerProfile::GatedGraphTemporal),
+        "spatial_shift_graphon_moe" => Ok(CoreGraphTransformerProfile::SpatialShiftGraphonMoE),
+        other => Err(PyValueError::new_err(format!(
+            "unknown graph transformer profile {other:?}"
+        ))),
+    }
+}
+
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(model_manifest_json, m)?)?;
@@ -11653,6 +11760,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<NativeSTAEformerForecaster>()?;
     m.add_class::<NativeGraphWaveNetForecaster>()?;
     m.add_class::<NativePropagationDelayGraphForecaster>()?;
+    m.add_class::<NativePaperGraphTransformerForecaster>()?;
     m.add_class::<NativeNBeatsForecaster>()?;
     m.add_class::<NativeNHiTSForecaster>()?;
     m.add_class::<NativeNeuralPanelForecaster>()?;

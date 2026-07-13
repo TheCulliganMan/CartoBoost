@@ -45,9 +45,12 @@ use cartoboost_geo_st::{
     graph_metrics as graph_st_metrics, select_compute_backend as graph_st_select_backend,
     CsrAdjacency as GraphStCsrAdjacency, DcrnnConfig as GraphStDcrnnConfig,
     DcrnnForecaster as GraphStDcrnnForecaster, GraphTemporalFrame as GraphStTemporalFrame,
+    GraphTransformerProfile as BrowserGraphTransformerProfile,
     MarketPanelFrame as BrowserMarketPanelFrame,
     MarketStructureConfig as BrowserMarketStructureConfig,
     MarketStructureForecaster as BrowserMarketStructureForecaster,
+    PaperGraphTransformerConfig as BrowserPaperGraphTransformerConfig,
+    PaperGraphTransformerForecaster as BrowserPaperGraphTransformerForecaster,
 };
 use cartoboost_geostats::{
     Anisotropy as GeostatsAnisotropy, CovarianceKernel,
@@ -975,6 +978,10 @@ struct BrowserCsrAdjacency {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct BrowserGraphForecastOptions {
+    #[serde(default)]
+    profile: Option<String>,
+    #[serde(default)]
+    lookback: Option<usize>,
     #[serde(default = "default_graph_diffusion_steps")]
     diffusion_steps: usize,
     #[serde(default = "default_graph_hidden_size")]
@@ -983,6 +990,16 @@ struct BrowserGraphForecastOptions {
     epochs: usize,
     #[serde(default = "default_graph_learning_rate")]
     learning_rate: f64,
+    #[serde(default)]
+    attention_heads: Option<usize>,
+    #[serde(default)]
+    graph_order: Option<usize>,
+    #[serde(default)]
+    experts: Option<usize>,
+    #[serde(default)]
+    periodicity: Option<usize>,
+    #[serde(default)]
+    weight_decay: Option<f64>,
     #[serde(default = "default_graph_teacher_forcing_start")]
     teacher_forcing_start: f64,
     #[serde(default = "default_graph_teacher_forcing_end")]
@@ -996,10 +1013,17 @@ struct BrowserGraphForecastOptions {
 impl Default for BrowserGraphForecastOptions {
     fn default() -> Self {
         Self {
+            profile: None,
+            lookback: None,
             diffusion_steps: default_graph_diffusion_steps(),
             hidden_size: default_graph_hidden_size(),
             epochs: default_graph_epochs(),
             learning_rate: default_graph_learning_rate(),
+            attention_heads: None,
+            graph_order: None,
+            experts: None,
+            periodicity: None,
+            weight_decay: None,
             teacher_forcing_start: default_graph_teacher_forcing_start(),
             teacher_forcing_end: default_graph_teacher_forcing_end(),
             ridge: default_graph_ridge(),
@@ -3219,25 +3243,78 @@ fn run_graph_forecast_request(
         request.frame.frequency.clone(),
     )
     .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
-    let config = GraphStDcrnnConfig {
-        diffusion_steps: request.options.diffusion_steps,
-        hidden_size: request.options.hidden_size,
-        epochs: request.options.epochs,
-        learning_rate: request.options.learning_rate,
-        teacher_forcing_start: request.options.teacher_forcing_start,
-        teacher_forcing_end: request.options.teacher_forcing_end,
-        ridge: request.options.ridge,
-        backend: graph_st_select_backend(Some(&request.options.backend))
-            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?,
+    let (predictions, model_metadata) = if let Some(profile) = request.options.profile.as_deref() {
+        let profile_kind = parse_browser_graph_transformer_profile(profile)?;
+        let (default_lookback, default_periodicity) =
+            if profile_kind == BrowserGraphTransformerProfile::LongShortFusion {
+                (4032, 288)
+            } else {
+                (3, 24)
+            };
+        let config = BrowserPaperGraphTransformerConfig {
+            profile: profile_kind,
+            lookback: request.options.lookback.unwrap_or(default_lookback),
+            hidden_size: request.options.hidden_size,
+            attention_heads: request.options.attention_heads.unwrap_or(2),
+            graph_order: request.options.graph_order.unwrap_or(2),
+            experts: request.options.experts.unwrap_or(2),
+            periodicity: request.options.periodicity.unwrap_or(default_periodicity),
+            epochs: request.options.epochs,
+            learning_rate: request.options.learning_rate,
+            weight_decay: request.options.weight_decay.unwrap_or(1e-5),
+            backend: graph_st_select_backend(Some(&request.options.backend))
+                .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?,
+        };
+        let mut model = BrowserPaperGraphTransformerForecaster::new(config)
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+        model
+            .fit(&frame)
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+        let predictions = model
+            .predict(frame.horizon)
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+        let report = model.architecture_report();
+        (
+            predictions,
+            json!({
+                "model": profile,
+                "frequency": frame.frequency,
+                "architectureReport": report,
+            }),
+        )
+    } else {
+        let config = GraphStDcrnnConfig {
+            diffusion_steps: request.options.diffusion_steps,
+            hidden_size: request.options.hidden_size,
+            epochs: request.options.epochs,
+            learning_rate: request.options.learning_rate,
+            teacher_forcing_start: request.options.teacher_forcing_start,
+            teacher_forcing_end: request.options.teacher_forcing_end,
+            ridge: request.options.ridge,
+            backend: graph_st_select_backend(Some(&request.options.backend))
+                .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?,
+        };
+        let mut model = GraphStDcrnnForecaster::new(config.clone())
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+        model
+            .fit(&frame)
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+        let predictions = model
+            .predict(frame.horizon)
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+        (
+            predictions,
+            json!({
+                "model": "dcrnn",
+                "frequency": frame.frequency,
+                "diffusionSteps": config.diffusion_steps,
+                "hiddenSize": config.hidden_size,
+                "epochs": config.epochs,
+                "teacherForcingStart": config.teacher_forcing_start,
+                "teacherForcingEnd": config.teacher_forcing_end,
+            }),
+        )
     };
-    let mut model = GraphStDcrnnForecaster::new(config.clone())
-        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
-    model
-        .fit(&frame)
-        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
-    let predictions = model
-        .predict(frame.horizon)
-        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
     let metrics = request.actual.map(|actual| {
         serde_json::to_value(graph_st_metrics(
             &predictions,
@@ -3252,16 +3329,21 @@ fn run_graph_forecast_request(
         node_ids: frame.node_ids,
         horizon: frame.horizon,
         metrics,
-        metadata: json!({
-            "model": "dcrnn",
-            "frequency": frame.frequency,
-            "diffusionSteps": config.diffusion_steps,
-            "hiddenSize": config.hidden_size,
-            "epochs": config.epochs,
-            "teacherForcingStart": config.teacher_forcing_start,
-            "teacherForcingEnd": config.teacher_forcing_end,
-        }),
+        metadata: model_metadata,
     })
+}
+
+fn parse_browser_graph_transformer_profile(value: &str) -> Result<BrowserGraphTransformerProfile> {
+    match value {
+        "heterogeneous_moe" => Ok(BrowserGraphTransformerProfile::HeterogeneousMoE),
+        "efficient_high_order" => Ok(BrowserGraphTransformerProfile::EfficientHighOrder),
+        "long_short_fusion" => Ok(BrowserGraphTransformerProfile::LongShortFusion),
+        "gated_graph_temporal" => Ok(BrowserGraphTransformerProfile::GatedGraphTemporal),
+        "spatial_shift_graphon_moe" => Ok(BrowserGraphTransformerProfile::SpatialShiftGraphonMoE),
+        other => Err(CartoBoostError::InvalidInput(format!(
+            "unknown paper graph transformer profile {other:?}"
+        ))),
+    }
 }
 
 fn run_regression_request(request: BrowserRegressionRequest) -> Result<BrowserRegressionResponse> {
@@ -7902,6 +7984,94 @@ mod tests {
             .and_then(Value::as_array)
             .expect("forecast records");
         assert_eq!(records.len(), 14);
+    }
+
+    #[test]
+    fn browser_graph_forecast_runs_each_paper_transformer_profile() {
+        for profile in [
+            "heterogeneous_moe",
+            "efficient_high_order",
+            "long_short_fusion",
+            "gated_graph_temporal",
+            "spatial_shift_graphon_moe",
+        ] {
+            let target = (0..12)
+                .map(|step| {
+                    let value = step as f64;
+                    vec![20.0 + value, 16.0 + value * 0.7, 12.0 + value * 0.4]
+                })
+                .collect();
+            let response = run_graph_forecast_request(BrowserGraphForecastRequest {
+                frame: BrowserGraphTemporalFrame {
+                    node_ids: vec![
+                        "PULocationID:161".into(),
+                        "PULocationID:236".into(),
+                        "PULocationID:132".into(),
+                    ],
+                    timestamps: (0..12).map(i64::from).collect(),
+                    target,
+                    adjacency: BrowserCsrAdjacency {
+                        indptr: vec![0, 2, 3, 3],
+                        indices: vec![1, 2, 2],
+                        data: vec![0.7, 0.3, 1.0],
+                    },
+                    horizon: 2,
+                    frequency: "hourly".into(),
+                    covariates: None,
+                },
+                options: BrowserGraphForecastOptions {
+                    profile: Some(profile.into()),
+                    lookback: Some(3),
+                    hidden_size: 4,
+                    attention_heads: Some(2),
+                    graph_order: Some(2),
+                    experts: Some(2),
+                    periodicity: Some(3),
+                    epochs: 2,
+                    learning_rate: 0.01,
+                    ..BrowserGraphForecastOptions::default()
+                },
+                actual: None,
+            })
+            .expect("browser paper graph transformer run");
+            assert_eq!(response.predictions.len(), 2, "{profile}");
+            assert!(response
+                .predictions
+                .iter()
+                .flatten()
+                .all(|value| value.is_finite()));
+            assert_eq!(response.metadata["model"].as_str(), Some(profile));
+            assert!(response.metadata["architectureReport"].is_object());
+        }
+    }
+
+    #[test]
+    fn browser_lsttn_default_requires_reference_length_history() {
+        let error = run_graph_forecast_request(BrowserGraphForecastRequest {
+            frame: BrowserGraphTemporalFrame {
+                node_ids: vec!["PULocationID:161".into()],
+                timestamps: (0..12).map(i64::from).collect(),
+                target: (0..12).map(|step| vec![step as f64]).collect(),
+                adjacency: BrowserCsrAdjacency {
+                    indptr: vec![0, 0],
+                    indices: vec![],
+                    data: vec![],
+                },
+                horizon: 2,
+                frequency: "hourly".into(),
+                covariates: None,
+            },
+            options: BrowserGraphForecastOptions {
+                profile: Some("long_short_fusion".into()),
+                hidden_size: 2,
+                epochs: 1,
+                learning_rate: 0.01,
+                ..BrowserGraphForecastOptions::default()
+            },
+            actual: None,
+        })
+        .expect_err("LSTTN browser defaults must not shorten its long history");
+        assert!(error.to_string().contains("lookback plus horizon"));
     }
 
     #[test]

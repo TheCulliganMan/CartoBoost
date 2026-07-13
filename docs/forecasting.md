@@ -217,6 +217,7 @@ Use the model guides for modeling decisions:
 | Temporal components plus spatial residual or regressor kriging | [Spatial Piecewise Kriging](user-guide/forecasting-models/spatial-piecewise-kriging.md) |
 | Shared supervised lag features across many panels | [CartoBoost Lag](user-guide/forecasting-models/cartoboost-lag.md) |
 | Directed graph sequence forecasting for roads, lanes, sensors, and zone flows | [Graph Spatiotemporal Forecasting](user-guide/forecasting-models/graph-spatiotemporal.md) |
+| Heterogeneous, high-order, long-short, gated, or spatial-shift graph Transformer forecasting | [Paper Graph Transformers](user-guide/forecasting-models/graph-spatiotemporal.md#paper-graph-transformer-profiles) |
 | Learned sparse relationships, hierarchy-aware smoothing, and analyst-visible kernels for directional markets | [Market Structure Forecasting](user-guide/forecasting-models/graph-spatiotemporal.md) |
 | Compact neural window experts | [N-BEATS And N-HiTS](user-guide/forecasting-models/beats-hits.md) |
 | Neural panel forecasting with directional ids | [Neural Panel](user-guide/forecasting-models/neural-panel.md) |

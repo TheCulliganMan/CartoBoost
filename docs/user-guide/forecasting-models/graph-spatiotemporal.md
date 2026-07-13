@@ -1,5 +1,5 @@
-import {ForecastModelExample, MarketStructureWasmExample} from '@site/src/components/ModelingLabClient';
-import {MarketStructureExplorerSample} from '@site/src/components/MarketStructureExplorer';
+import {DeepModelWasmExample, ForecastModelExample, MarketStructureWasmExample} from '@site/src/components/ModelingLabClient';
+import {H3TaxiFlowDemo, MarketStructureExplorerSample} from '@site/src/components/MarketStructureExplorer';
 
 # Market Structure Forecasting
 
@@ -20,6 +20,109 @@ Do not use a graph forecaster only because node ids exist. The edges should
 represent known movement, influence, adjacency, or dependency available at the
 forecast cutoff.
 
+## Paper Graph Transformer Profiles
+
+Five native graph-transformer profiles extend the directed graph surface. They
+all fit in Rust, make direct multi-horizon predictions, and save/load as native
+JSON artifacts. Choose the mechanism you need, then compare it with DCRNN,
+GraphWaveNet, STAEformer, and seasonal-naive baselines on the identical
+time-ordered split.
+
+| Model | Use when | Native components |
+| --- | --- | --- |
+| `STGormerForecaster` | Spatial and temporal behavior differs by node or time regime. | Time2Vec-style temporal features, in/out-degree and path features, three causal spatial-temporal attention stages, and independent spatial/temporal routed MoE states. |
+| `STGformerForecaster` | A large graph needs retained high-order propagation in one efficient block. | Retained propagation orders, shared-QKV scaling-normalized linear space-time interaction at every order, recursive pointwise interaction. |
+| `LSTTNForecaster` | Long history, recurring periods, and immediate dynamics all matter. | Masked-subseries context, pooled dilated long trend, forward/backward/adaptive day/week graph periodicity, and a gated temporal adaptive-graph short branch. |
+| `SpatialTemporalGraphGatedTransformerForecaster` | Graph signal should be filtered through stable temporal gates. | Graph convolution, causal temporal attention, GRU reset/update gates. |
+| `SpatialShiftGraphonMoEForecaster` | Graph relationships may change between the training and deployment periods. | Input-conditioned graphon experts and softmax graphon mixing. |
+
+`LSTTNForecaster` defaults to the reference five-minute traffic history: 4,032
+observations (14 days) with a daily period of 288. Its native pretraining stage
+reconstructs randomly withheld whole patches from the remaining patch context
+before supervised forecast fitting; the long-trend and periodic branches then
+operate on those learned patch-level representations. For another sampling frequency, set both
+`lookback` and `periodicity` explicitly while preserving a two-week history
+when evaluating the long-history architecture.
+
+The Modeling Lab uses an explicitly reduced toy configuration for its in-page
+WASM smoke example; it is a wiring check, not a long-history benchmark.
+
+`SpatialShiftGraphonMoEForecaster` derives recurring source environments by
+partitioning a traffic cycle into contiguous rank-coherent graph relations. Its
+episodic training pass holds out the environment's expert, freezes expert
+graphon gradients, trains the mixup router against the remaining experts, and
+uses binary Gumbel-Softmax graphon sampling during native fitting.
+
+```python
+from cartoboost.preview.forecasting import GraphTemporalFrame, STGormerForecaster
+
+model = STGormerForecaster(
+    lookback=12,
+    attention_heads=4,
+    experts=4,
+    horizon=3,
+).fit(frame)
+forecast = model.predict(3)
+report = model.metadata_["architecture_report"]
+```
+
+`STGformerForecaster`, `LSTTNForecaster`,
+`SpatialTemporalGraphGatedTransformerForecaster`, and
+`SpatialShiftGraphonMoEForecaster` use the same `GraphTemporalFrame` contract.
+The generic deep facade also routes these profiles through
+`SpatioTemporalGraphForecaster(backbone=...)`.
+
+For a directional market lane panel, call
+`MarketPanelFrame.as_graph_temporal_frame(...)` with an explicit CSR adjacency,
+then fit any of these native graph profiles. The adapter preserves the observed
+target exactly and rejects unavailable lane values; it never invents a graph or
+imputes targets.
+
+<DeepModelWasmExample model="STGormerForecaster" />
+
+The Modeling Lab exposes separate runnable Rust/WASM entries for
+`STGormerForecaster`, `STGformerForecaster`, `LSTTNForecaster`,
+`SpatialTemporalGraphGatedTransformerForecaster`, and
+`SpatialShiftGraphonMoEForecaster`. Select **Deep** and choose the model by
+name to run the same native profile against the directed taxi-shaped graph.
+
+These profiles are implementation surfaces, not a claim that the included
+synthetic checks reproduce published benchmark rankings. Validate any accuracy
+claim with your production or real traffic data and a leakage-safe temporal
+holdout. The original papers are [STGormer](https://arxiv.org/abs/2408.10822),
+[STGformer](https://arxiv.org/abs/2410.00385),
+[LSTTN](https://arxiv.org/abs/2403.16495),
+[STGGT](https://doi.org/10.1002/ett.5021), and
+[spatial-shift graphon MoE](https://arxiv.org/abs/2410.00373).
+
+For a fixed-origin traffic-graph evaluation on real DCRNN-format inputs, use
+the maintained runner. It requires both the original HDF5 time series and its
+matching adjacency pickle, records SHA-256 source hashes in the output, and
+does not synthesize missing sensors or graph edges.
+
+```bash
+uv run --with h5py -- python -m benchmarks.runners.traffic_graph_forecasting \
+  --data-h5 /path/to/metr-la.h5 \
+  --adjacency-pickle /path/to/adj_mx.pkl \
+  --source-url https://github.com/liyaguang/DCRNN \
+  --output target/metr-la-stgformer.json \
+  --model stgformer \
+  --cutoffs 10000,15000,20000,25000,30000 \
+  --horizon 12 --lookback 3456 --periodicity 288
+```
+
+Use the same input files, origins, horizon, and estimator budget for every
+model in a comparison. For `lsttn`, set `lookback` to at least seven periods;
+the runner rejects a shorter context rather than silently disabling its
+long-history branch.
+
+The runner also accepts the established PEMS-BAY layout used by the PyTorch
+Geometric Temporal loader: `--node-values-npy` for a `[time, node, feature]`
+array and `--adjacency-npy` for its matching dense adjacency. Its default
+`--target-feature 0` matches that loader's speed target; select another source
+feature only when the dataset definition explicitly identifies it as the
+forecast target.
+
 ## Interactive Example
 
 <ForecastModelExample title="Graph-style panel forecast sanity check" model="neural_panel" sample="spatial" />
@@ -36,6 +139,17 @@ This browser exercise uses 56 directed taxi-shaped lanes over 126 daily dates
 WASM. It is intentionally separate from the real TLC benchmark evidence below:
 the fixture is an interactive scale check, while the maintained taxi benchmark
 uses real records and reports the quality claim.
+
+## NYC H3 Point-to-Point Flow Demo
+
+<H3TaxiFlowDemo />
+
+Use the hour and lane-volume controls to reveal the strongest directed routes
+across a city-scale H3 network, then select a hex to inspect all retained
+pickup and dropoff lanes for that location. This is a rendering and interaction
+scenario, clearly separate from the real-data benchmark: it demonstrates how a
+large artifact-backed H3 origin/destination table is presented without claiming
+that the displayed volumes came from TLC records.
 
 ## Public Contract
 
@@ -196,11 +310,16 @@ known-future calendar components.
 
 <MarketStructureExplorerSample />
 
-Click a point to inspect inbound/outbound volume, the forecast path, and its
-strongest learned relationships. Select a kernel arc to follow the connected
-market. The component accepts artifact-backed nodes and relationships, so an
-application can use the same interaction with its own selected targets and
-geography.
+The explorer uses the two caller-supplied target names directly: a fare,
+price, cost, demand, or another named measure appears with that exact label in
+the signal selector. It aggregates directional lanes into their pickup market,
+so each surface shows the spatial shape of a market rather than repeated lane
+markers. Switch between a smoothed 2D kernel with contour rings and an
+extruded 3D grid. Click a market to inspect its inbound/outbound volume,
+forecast path, and strongest learned relationships; select a kernel arc to
+follow a connected market. The component accepts artifact-backed nodes and
+relationships, so an application can use the same interaction with its own
+selected targets and geography.
 
 ```python
 import math
