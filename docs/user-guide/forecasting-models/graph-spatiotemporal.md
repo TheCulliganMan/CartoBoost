@@ -1,5 +1,5 @@
 import {DeepModelWasmExample, ForecastModelExample, MarketStructureWasmExample} from '@site/src/components/ModelingLabClient';
-import {H3TaxiFlowDemo, MarketStructureExplorerSample} from '@site/src/components/MarketStructureExplorer';
+import {MarketStructureExplorerSample} from '@site/src/components/MarketStructureExplorer';
 
 # Market Structure Forecasting
 
@@ -106,13 +106,13 @@ uv run --with h5py -- python -m benchmarks.runners.traffic_graph_forecasting \
   --adjacency-pickle /path/to/adj_mx.pkl \
   --source-url https://github.com/liyaguang/DCRNN \
   --output target/metr-la-stgformer.json \
-  --model stgformer \
+  --models dcrnn,graph_wavenet,staeformer,stgormer,stgformer,lsttn,spatial_temporal_graph_gated_transformer,spatial_shift_graphon_moe \
   --cutoffs 10000,15000,20000,25000,30000 \
-  --horizon 12 --lookback 3456 --periodicity 288
+  --horizon 12 --lookback 4032 --periodicity 288
 ```
 
 Use the same input files, origins, horizon, and estimator budget for every
-model in a comparison. For `lsttn`, set `lookback` to at least seven periods;
+model in a comparison. For `lsttn`, set `lookback` to at least fourteen periods;
 the runner rejects a shorter context rather than silently disabling its
 long-history branch.
 
@@ -139,17 +139,6 @@ This browser exercise uses 56 directed taxi-shaped lanes over 126 daily dates
 WASM. It is intentionally separate from the real TLC benchmark evidence below:
 the fixture is an interactive scale check, while the maintained taxi benchmark
 uses real records and reports the quality claim.
-
-## NYC H3 Point-to-Point Flow Demo
-
-<H3TaxiFlowDemo />
-
-Use the hour and lane-volume controls to reveal the strongest directed routes
-across a city-scale H3 network, then select a hex to inspect all retained
-pickup and dropoff lanes for that location. This is a rendering and interaction
-scenario, clearly separate from the real-data benchmark: it demonstrates how a
-large artifact-backed H3 origin/destination table is presented without claiming
-that the displayed volumes came from TLC records.
 
 ## Public Contract
 
