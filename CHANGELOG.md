@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.3.5 — Spatial-Temporal Taxi Graph Forecasting
+
+- Added Rust-native directional market-structure forecasting with graph-aware
+  spatial-temporal transformer profiles, Python and WebAssembly bindings, and
+  artifact-backed taxi lane visualizations.
+- Added large-scale H3 pickup-to-dropoff lane exploration in the Modeling Lab
+  and linked the graph forecasting guides throughout the public documentation.
+
 - Added CartoBoost Forecasting V1: Rust-native `ForecastFrame`, deterministic
   `ForecastResult` outputs, naive/seasonal naive/theta/optimized-theta/ETS/
   AutoARIMA forecasters, rolling-origin backtesting, leakage-safe lag features,

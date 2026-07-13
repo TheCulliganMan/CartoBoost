@@ -143,14 +143,14 @@ dependencies = [
 
 [[package]]
 name = "cartoboost-cli"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "cartoboost-core",
 ]
 
 [[package]]
 name = "cartoboost-core"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "chrono",
  "criterion",
@@ -164,7 +164,7 @@ dependencies = [
 
 [[package]]
 name = "cartoboost-geo-causal"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "cartoboost-geo-core",
  "serde",
@@ -174,7 +174,7 @@ dependencies = [
 
 [[package]]
 name = "cartoboost-geo-core"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "chrono",
  "serde",
@@ -184,7 +184,7 @@ dependencies = [
 
 [[package]]
 name = "cartoboost-geo-st"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "cartoboost-neural",
  "serde",
@@ -195,7 +195,7 @@ dependencies = [
 
 [[package]]
 name = "cartoboost-geostats"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "cartoboost-geo-core",
  "criterion",
@@ -205,7 +205,7 @@ dependencies = [
 
 [[package]]
 name = "cartoboost-neural"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "cartoboost-core",
  "chrono",
@@ -223,7 +223,7 @@ dependencies = [
 
 [[package]]
 name = "cartoboost-prob"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "cartoboost-core",
  "serde",
@@ -233,7 +233,7 @@ dependencies = [
 
 [[package]]
 name = "cartoboost-py"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "cartoboost-core",
  "cartoboost-geo-causal",
@@ -252,7 +252,7 @@ dependencies = [
 
 [[package]]
 name = "cartoboost-spatial-econ"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "cartoboost-geo-core",
  "serde",
@@ -262,7 +262,7 @@ dependencies = [
 
 [[package]]
 name = "cartoboost-wasm"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "cartoboost-core",
  "cartoboost-geo-causal",
