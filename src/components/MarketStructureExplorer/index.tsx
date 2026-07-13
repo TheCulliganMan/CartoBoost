@@ -90,37 +90,54 @@ export function marketExplorerDataFromPayload(payload: MarketStructureExplorerPa
     rows.push(lane);
     marketLanes.set(origin, rows);
   });
-  const nodes = [...marketLanes.entries()].map(([originId, lanes]) => {
-    const horizonCount = Math.max(1, ...lanes.map((lane) => forecastsByLane.get(laneId(lane))?.length ?? 0));
-    const forecast = Array.from({length: horizonCount}, (_, index) => weightedMean(lanes.map((lane) => {
-      const row = forecastsByLane.get(laneId(lane))?.[index];
-      return {value: row?.primary ?? 0, weight: Math.max(row?.secondary ?? 0, 1)};
-    })));
-    const current = weightedMean(lanes.map((lane) => {
-      const rows = forecastsByLane.get(laneId(lane)) ?? [];
+  const nodes: MarketExplorerNode[] = [];
+  for (const [originId, originLanes] of marketLanes) {
+    let horizonCount = 1;
+    let outbound = 0;
+    const currentValues: Array<{value: number; weight: number}> = [];
+    const longitudeValues: Array<{value: number; weight: number}> = [];
+    const latitudeValues: Array<{value: number; weight: number}> = [];
+    for (const lane of originLanes) {
+      const forecastRows = forecastsByLane.get(laneId(lane)) ?? [];
+      horizonCount = Math.max(horizonCount, forecastRows.length);
       const explanation = explanationsByLane.get(laneId(lane));
-      return {
-        value: finite(explanation?.smoothed_primary ?? explanation?.smoothedPrimary ?? rows[0]?.primary),
-        weight: Math.max(rows[0]?.secondary ?? 0, 1),
-      };
-    }));
-    const outbound = lanes.reduce((sum, lane) => sum + (forecastsByLane.get(laneId(lane)) ?? []).reduce((subtotal, row) => subtotal + row.secondary, 0), 0);
-    const inbound = lanes
-      .filter((lane) => String(lane.destination_id ?? lane.destinationId ?? '') === originId)
-      .reduce((sum, lane) => sum + (forecastsByLane.get(laneId(lane)) ?? []).reduce((subtotal, row) => subtotal + row.secondary, 0), 0);
-    return {
+      currentValues.push({
+        value: finite(explanation?.smoothed_primary ?? explanation?.smoothedPrimary ?? forecastRows[0]?.primary),
+        weight: Math.max(forecastRows[0]?.secondary ?? 0, 1),
+      });
+      longitudeValues.push({value: finite(lane.origin_x ?? lane.originX), weight: 1});
+      latitudeValues.push({value: finite(lane.origin_y ?? lane.originY), weight: 1});
+      for (const row of forecastRows) outbound += row.secondary;
+    }
+    const forecast: number[] = [];
+    for (let index = 0; index < horizonCount; index += 1) {
+      const values: Array<{value: number; weight: number}> = [];
+      for (const lane of originLanes) {
+        const row = forecastsByLane.get(laneId(lane))?.[index];
+        values.push({value: row?.primary ?? 0, weight: Math.max(row?.secondary ?? 0, 1)});
+      }
+      forecast.push(weightedMean(values));
+    }
+    let inbound = 0;
+    for (const lane of lanes) {
+      if (String(lane.destination_id ?? lane.destinationId ?? '') !== originId) continue;
+      for (const row of forecastsByLane.get(laneId(lane)) ?? []) inbound += row.secondary;
+    }
+    const current = weightedMean(currentValues);
+    nodes.push({
       id: originId,
       label: `Market ${originId}`,
-      longitude: weightedMean(lanes.map((lane) => ({value: finite(lane.origin_x ?? lane.originX), weight: 1}))),
-      latitude: weightedMean(lanes.map((lane) => ({value: finite(lane.origin_y ?? lane.originY), weight: 1}))),
+      longitude: weightedMean(longitudeValues),
+      latitude: weightedMean(latitudeValues),
       inbound,
       outbound,
       primary: current,
       primaryChange: current ? (forecast.at(-1)! - current) / current * 100 : 0,
       secondary: outbound,
-      forecast: forecast.length ? forecast : [current],
-    };
-  }).sort((left, right) => left.id.localeCompare(right.id));
+      forecast,
+    });
+  }
+  nodes.sort((left, right) => left.id.localeCompare(right.id));
   const marketEdges = new Map<string, MarketExplorerEdge>();
   kernels.forEach((edge) => {
     const sourceLane = lanesById.get(String(edge.source_lane_id ?? edge.sourceLaneId ?? ''));
