@@ -21,9 +21,11 @@ import numpy as np
 from cartoboost.preview.forecasting import (
     DCRNNForecaster,
     GraphTemporalFrame,
+    GraphWaveNetForecaster,
     LSTTNForecaster,
     SpatialShiftGraphonMoEForecaster,
     SpatialTemporalGraphGatedTransformerForecaster,
+    STAEformerForecaster,
     STGformerForecaster,
     STGormerForecaster,
 )
@@ -31,6 +33,8 @@ from cartoboost.preview.forecasting import (
 
 PROFILE_MODELS = {
     "dcrnn": DCRNNForecaster,
+    "graph_wavenet": GraphWaveNetForecaster,
+    "staeformer": STAEformerForecaster,
     "stgormer": STGormerForecaster,
     "stgformer": STGformerForecaster,
     "lsttn": LSTTNForecaster,
@@ -131,6 +135,20 @@ def parse_cutoffs(value: str) -> list[int]:
     return cutoffs
 
 
+def parse_models(value: str) -> list[str]:
+    models = [item.strip() for item in value.split(",") if item.strip()]
+    if not models:
+        raise argparse.ArgumentTypeError("models must be a non-empty comma-separated list")
+    if models == ["all"]:
+        return sorted(PROFILE_MODELS)
+    unknown = sorted(set(models) - set(PROFILE_MODELS))
+    if unknown:
+        raise argparse.ArgumentTypeError(f"unsupported graph forecast models: {', '.join(unknown)}")
+    if len(models) != len(set(models)):
+        raise argparse.ArgumentTypeError("models must not contain duplicates")
+    return models
+
+
 def metrics(actual: np.ndarray, predicted: np.ndarray) -> dict[str, float]:
     residual = predicted - actual
     squared = float(np.sum(residual * residual))
@@ -144,9 +162,9 @@ def metrics(actual: np.ndarray, predicted: np.ndarray) -> dict[str, float]:
     }
 
 
-def build_model(args: argparse.Namespace) -> Any:
-    model_type = PROFILE_MODELS[args.model]
-    if args.model == "dcrnn":
+def build_model(args: argparse.Namespace, model_name: str) -> Any:
+    model_type = PROFILE_MODELS[model_name]
+    if model_name == "dcrnn":
         return model_type(
             diffusion_steps=args.graph_order,
             hidden_size=args.hidden_size,
@@ -154,7 +172,25 @@ def build_model(args: argparse.Namespace) -> Any:
             learning_rate=args.learning_rate,
             backend="cpu",
         )
-    if args.model == "lsttn" and args.lookback < args.periodicity * 14:
+    if model_name == "graph_wavenet":
+        return model_type(
+            lookback=args.lookback,
+            dilation_depth=args.dilation_depth,
+            hidden_size=args.hidden_size,
+            epochs=args.epochs,
+            learning_rate=args.learning_rate,
+            backend="cpu",
+        )
+    if model_name == "staeformer":
+        return model_type(
+            lookback=args.lookback,
+            attention_heads=args.attention_heads,
+            hidden_size=args.hidden_size,
+            epochs=args.epochs,
+            learning_rate=args.learning_rate,
+            backend="cpu",
+        )
+    if model_name == "lsttn" and args.lookback < args.periodicity * 14:
         raise ValueError(
             "LSTTN evaluation requires the paper's two-week long-history context: "
             "lookback must be at least periodicity * 14"
@@ -175,6 +211,7 @@ def build_model(args: argparse.Namespace) -> Any:
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
+    models = list(args.models)
     if args.data_h5 is not None:
         values = read_hdf_values(args.data_h5)
         values_path = args.data_h5
@@ -215,27 +252,29 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     for cutoff in args.cutoffs:
         if cutoff <= args.horizon or cutoff + args.horizon > values.shape[0]:
             raise ValueError(f"cutoff {cutoff} does not leave a full holdout horizon")
-        if args.model != "dcrnn" and cutoff <= args.lookback + args.horizon:
+        if any(model != "dcrnn" for model in models) and cutoff <= args.lookback + args.horizon:
             raise ValueError(f"cutoff {cutoff} is too early for lookback {args.lookback}")
         train = frame.train_slice(cutoff)
         actual = values[cutoff : cutoff + args.horizon]
-        model = build_model(args)
-        fit_start = time.perf_counter()
-        model.fit(train)
-        fit_seconds = time.perf_counter() - fit_start
-        predict_start = time.perf_counter()
-        prediction = np.asarray(model.predict(args.horizon), dtype=float)
-        predict_seconds = time.perf_counter() - predict_start
-        if prediction.shape != actual.shape or not np.isfinite(prediction).all():
-            raise RuntimeError("native graph model returned invalid forecast output")
-        rows.append(
-            {
-                "cutoff": cutoff,
-                **metrics(actual, prediction),
-                "fit_wallclock_seconds": fit_seconds,
-                "predict_wallclock_seconds": predict_seconds,
-            }
-        )
+        for model_name in models:
+            model = build_model(args, model_name)
+            fit_start = time.perf_counter()
+            model.fit(train)
+            fit_seconds = time.perf_counter() - fit_start
+            predict_start = time.perf_counter()
+            prediction = np.asarray(model.predict(args.horizon), dtype=float)
+            predict_seconds = time.perf_counter() - predict_start
+            if prediction.shape != actual.shape or not np.isfinite(prediction).all():
+                raise RuntimeError("native graph model returned invalid forecast output")
+            rows.append(
+                {
+                    "model": model_name,
+                    "cutoff": cutoff,
+                    **metrics(actual, prediction),
+                    "fit_wallclock_seconds": fit_seconds,
+                    "predict_wallclock_seconds": predict_seconds,
+                }
+            )
     return {
         "artifact_type": "cartoboost.traffic_graph_forecasting_evaluation",
         "source_url": args.source_url,
@@ -245,8 +284,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "adjacency_path": str(adjacency_path),
         "adjacency_sha256": sha256(adjacency_path),
         "adjacency_format": adjacency_format,
-        "model": args.model,
+        "model": models[0] if len(models) == 1 else "multi_model_comparison",
+        "models": models,
         "settings": {
+            "frequency": args.frequency,
             "lookback": args.lookback,
             "horizon": args.horizon,
             "hidden_size": args.hidden_size,
@@ -257,7 +298,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "epochs": args.epochs,
             "learning_rate": args.learning_rate,
             "weight_decay": args.weight_decay,
+            "dilation_depth": args.dilation_depth,
             "target_feature": args.target_feature,
+            "nodes": args.nodes,
+            "cutoffs": args.cutoffs,
         },
         "origins": rows,
     }
@@ -273,7 +317,9 @@ def main(argv: list[str] | None = None) -> int:
     adjacency_source.add_argument("--adjacency-npy", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--source-url", required=True)
-    parser.add_argument("--model", choices=sorted(PROFILE_MODELS), required=True)
+    model_selection = parser.add_mutually_exclusive_group(required=True)
+    model_selection.add_argument("--model", choices=sorted(PROFILE_MODELS))
+    model_selection.add_argument("--models", type=parse_models)
     parser.add_argument("--cutoffs", type=parse_cutoffs, required=True)
     parser.add_argument("--frequency", default="5min")
     parser.add_argument("--target-feature", type=int, default=0)
@@ -283,12 +329,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--hidden-size", type=int, default=16)
     parser.add_argument("--attention-heads", type=int, default=4)
     parser.add_argument("--graph-order", type=int, default=2)
+    parser.add_argument("--dilation-depth", type=int, default=3)
     parser.add_argument("--experts", type=int, default=4)
     parser.add_argument("--periodicity", type=int, default=288)
     parser.add_argument("--epochs", type=int, default=80)
     parser.add_argument("--learning-rate", type=float, default=0.01)
     parser.add_argument("--weight-decay", type=float, default=1e-5)
     args = parser.parse_args(argv)
+    args.models = [args.model] if args.model is not None else args.models
     result = run(args)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")

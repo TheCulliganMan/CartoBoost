@@ -125,12 +125,19 @@ def test_traffic_graph_runner_requires_explicit_ordered_origins_and_graph_edges(
     spec.loader.exec_module(module)
     adjacency_csr = module.adjacency_csr
     parse_cutoffs = module.parse_cutoffs
+    parse_models = module.parse_models
 
     assert parse_cutoffs("120,240,360") == [120, 240, 360]
     with pytest.raises(argparse.ArgumentTypeError):
         parse_cutoffs("240,120")
     with pytest.raises(argparse.ArgumentTypeError):
         parse_cutoffs("")
+    assert parse_models("dcrnn,graph_wavenet,lsttn") == ["dcrnn", "graph_wavenet", "lsttn"]
+    assert parse_models("all") == sorted(module.PROFILE_MODELS)
+    with pytest.raises(argparse.ArgumentTypeError, match="unsupported"):
+        parse_models("dcrnn,not_a_model")
+    with pytest.raises(argparse.ArgumentTypeError, match="duplicates"):
+        parse_models("dcrnn,dcrnn")
     indptr, indices, data = adjacency_csr(np.array([[0.0, 0.5], [1.0, 0.0]]))
     assert (indptr, indices, data) == ([0, 1, 2], [1, 0], [0.5, 1.0])
     with pytest.raises(ValueError, match="at least one non-zero edge"):
