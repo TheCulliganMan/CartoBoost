@@ -665,6 +665,7 @@ function DeepModelCatalog({selectedId, onSelect}: {selectedId: string; onSelect:
 
 function DeepModelResultCanvas({model, result}: {model: DeepModelDefinition; result: unknown}): React.ReactElement {
   const rows = deepExampleResultRows(result);
+  const visual = deepVisualSeries(result);
   return (
     <>
       <div className={styles.resultHeader}>
@@ -685,13 +686,49 @@ function DeepModelResultCanvas({model, result}: {model: DeepModelDefinition; res
         <a className={styles.deepDocsLink} href={model.docsPath}>Read model guide</a>
       </section>
       <section className={styles.deepResultPanel}>
-        <h3>Output summary</h3>
+        <h3>Model output</h3>
+        <DeepOutputVisualization model={model} visual={visual} />
         <dl className={styles.deepResultGrid}>
           {rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}
         </dl>
       </section>
     </>
   );
+}
+
+function DeepOutputVisualization({model, visual}: {model: DeepModelDefinition; visual: number[][]}): React.ReactElement {
+  const series = visual.length ? visual : [[0]];
+  const values = series.flat().filter(Number.isFinite);
+  const min = Math.min(...values, 0);
+  const max = Math.max(...values, 1);
+  const scale = (value: number) => 92 - ((value - min) / (max - min || 1)) * 76;
+  const line = (values: number[]) => values.map((value, index) => `${6 + index * 88 / Math.max(values.length - 1, 1)},${scale(value)}`).join(' ');
+  const labels = model.family === 'Uncertainty' ? ['Lower', 'Median', 'Upper'] : model.family === 'Decision' ? ['Candidate score'] : ['Prediction'];
+  return <div style={{display: 'grid', gap: '0.7rem', gridTemplateColumns: series.length > 1 ? 'minmax(0, 1.6fr) minmax(9rem, 1fr)' : '1fr'}}>
+    <div style={{background: 'linear-gradient(135deg, #0c2535, #123f52)', borderRadius: 10, minHeight: 154, padding: '0.65rem'}}>
+      <svg viewBox="0 0 100 100" role="img" aria-label={`${model.label} native output chart`} style={{display: 'block', height: 145, width: '100%'}}>
+        {[20, 45, 70].map((y) => <line key={y} x1="4" x2="96" y1={y} y2={y} stroke="rgba(255,255,255,.16)" strokeWidth=".45" />)}
+        {series.slice(0, 3).map((row, index) => <polyline key={index} points={line(row)} fill="none" stroke={['#73e6d0', '#ffe06a', '#ff9d72'][index]} strokeWidth={index === 1 ? 1.8 : 1.1} strokeOpacity={index === 1 ? 1 : .8} />)}
+        {series.length >= 3 && <polygon points={`${line(series[0])} ${[...series[2]].reverse().map((value, index) => `${94 - index * 88 / Math.max(series[2].length - 1, 1)},${scale(value)}`).join(' ')}`} fill="rgba(115,230,208,.16)" />}
+      </svg>
+    </div>
+    <div style={{display: 'grid', gap: '0.45rem', alignContent: 'center'}}>
+      {series.slice(0, 3).map((row, index) => <div key={index} style={{borderLeft: `3px solid ${['#73e6d0', '#ffe06a', '#ff9d72'][index]}`, paddingLeft: '0.55rem'}}><small>{labels[index] ?? `Series ${index + 1}`}</small><strong style={{display: 'block', fontSize: '1.15rem'}}>{formatMetric(row.at(-1) ?? 0)}</strong><span style={{fontSize: '.75rem'}}>Native result · final step</span></div>)}
+    </div>
+  </div>;
+}
+
+function deepVisualSeries(result: unknown): number[][] {
+  if (!result || typeof result !== 'object') return [];
+  const value = result as Record<string, unknown>;
+  const predictions = value.predictions ?? value.quantiles ?? value.samples ?? result;
+  if (Array.isArray(predictions)) {
+    if (predictions.every((row) => Array.isArray(row) && (row as unknown[]).every((cell) => Number.isFinite(Number(cell))))) return (predictions as unknown[][]).slice(0, 3).map((row) => row.map(Number));
+    const numeric = predictions.map((row) => typeof row === 'number' ? row : Number((row as Record<string, unknown>)?.prediction ?? (row as Record<string, unknown>)?.mean ?? NaN)).filter(Number.isFinite);
+    if (numeric.length) return [numeric];
+  }
+  const numeric = Object.values(value).flatMap((entry) => Array.isArray(entry) ? entry.map(Number).filter(Number.isFinite) : []);
+  return numeric.length ? [numeric.slice(0, 16)] : [];
 }
 
 function deepExampleResultRows(result: unknown): [string, string][] {
