@@ -330,6 +330,9 @@ export function H3TaxiFlowDemo(): React.ReactElement {
         center: [-73.92, 40.71],
         container: mapContainer.current,
         cooperativeGestures: true,
+        scrollZoom: false,
+        dragRotate: false,
+        touchPitch: false,
         style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
         zoom: 9.7,
       });
