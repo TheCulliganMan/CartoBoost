@@ -1861,8 +1861,9 @@ function ForecastExampleChart({records, table}: {records: ForecastRecord[]; tabl
   const padding = {top: 24, right: 18, bottom: 58, left: 58};
   const innerWidth = width - padding.left - padding.right;
   const innerHeight = height - padding.top - padding.bottom;
-  const actualPoints = points.filter((point) => point.kind === 'actual');
-  const forecastPoints = points.filter((point) => point.kind === 'forecast');
+  const validPoints = points.filter((point): point is ForecastChartPoint => Boolean(point) && Number.isFinite(point.value));
+  const actualPoints = validPoints.filter((point) => point.kind === 'actual');
+  const forecastPoints = validPoints.filter((point) => point.kind === 'forecast');
   const selectedSeries = selectForecastChartSeriesId(records, table);
   const holdoutActuals = forecastPoints
     .map((forecast) => {
@@ -1871,15 +1872,15 @@ function ForecastExampleChart({records, table}: {records: ForecastRecord[]; tabl
       return Number.isFinite(value) ? {forecast, value} : null;
     })
     .filter((point): point is {forecast: ForecastChartPoint; value: number} => point !== null);
-  const values = [...points.map((point) => point.value), ...holdoutActuals.map((point) => point.value)];
+  const values = [...validPoints.map((point) => point.value), ...holdoutActuals.map((point) => point.value)];
   const minValue = Math.min(...values);
   const maxValue = Math.max(...values);
   const valuePadding = Math.max((maxValue - minValue) * 0.12, 1);
   const yMin = minValue - valuePadding;
   const yMax = maxValue + valuePadding;
-  const xFor = (index: number) => padding.left + (points.length === 1 ? innerWidth / 2 : (index / (points.length - 1)) * innerWidth);
+  const xFor = (index: number) => padding.left + (validPoints.length === 1 ? innerWidth / 2 : (index / (validPoints.length - 1)) * innerWidth);
   const yFor = (value: number) => padding.top + (1 - (value - yMin) / (yMax - yMin)) * innerHeight;
-  const pointIndex = new Map(points.map((point, index) => [point, index]));
+  const pointIndex = new Map(validPoints.map((point, index) => [point, index]));
   const actualPath = chartPath(actualPoints, pointIndex, xFor, yFor);
   const forecastPath = chartPath(forecastPoints, pointIndex, xFor, yFor);
   const holdoutPath = holdoutActuals
@@ -1891,7 +1892,7 @@ function ForecastExampleChart({records, table}: {records: ForecastRecord[]; tabl
     actualPoints.length > 0 && forecastPoints.length > 0
       ? `M ${xFor(pointIndex.get(actualPoints[actualPoints.length - 1]) ?? 0)} ${yFor(actualPoints[actualPoints.length - 1].value)} L ${xFor(pointIndex.get(forecastPoints[0]) ?? 0)} ${yFor(forecastPoints[0].value)}`
       : '';
-  const tooltip = hovered ?? points[points.length - 1];
+  const tooltip = hovered ?? validPoints[validPoints.length - 1];
 
   return (
     <figure style={{margin: '1rem 0'}}>
@@ -1931,7 +1932,7 @@ function ForecastExampleChart({records, table}: {records: ForecastRecord[]; tabl
           {holdoutActuals.map(({forecast, value}) => (
             <circle key={`holdout-${forecast.timestamp}`} cx={xFor(pointIndex.get(forecast) ?? 0)} cy={yFor(value)} r="3" fill="#7dd3fc" stroke="white" strokeWidth="1" />
           ))}
-          {points.map((point, index) => {
+          {validPoints.map((point, index) => {
             const isEndpoint = index === 0 || index === points.length - 1 || point.kind === 'forecast';
             return (
               <g key={`${point.kind}-${point.timestamp}-${index}`}>
