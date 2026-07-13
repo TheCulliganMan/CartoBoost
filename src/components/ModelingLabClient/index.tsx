@@ -701,21 +701,32 @@ function DeepOutputVisualization({model, visual}: {model: DeepModelDefinition; v
   const values = series.flat().filter(Number.isFinite);
   const min = Math.min(...values, 0);
   const max = Math.max(...values, 1);
-  const scale = (value: number) => 92 - ((value - min) / (max - min || 1)) * 76;
-  const line = (values: number[]) => values.map((value, index) => `${6 + index * 88 / Math.max(values.length - 1, 1)},${scale(value)}`).join(' ');
-  const labels = model.family === 'Uncertainty' ? ['Lower', 'Median', 'Upper'] : model.family === 'Decision' ? ['Candidate score'] : ['Prediction'];
-  return <div style={{display: 'grid', gap: '0.7rem', gridTemplateColumns: series.length > 1 ? 'minmax(0, 1.6fr) minmax(9rem, 1fr)' : '1fr'}}>
-    <div style={{background: 'linear-gradient(135deg, #0c2535, #123f52)', borderRadius: 10, minHeight: 154, padding: '0.65rem'}}>
-      <svg viewBox="0 0 100 100" role="img" aria-label={`${model.label} native output chart`} style={{display: 'block', height: 145, width: '100%'}}>
-        {[20, 45, 70].map((y) => <line key={y} x1="4" x2="96" y1={y} y2={y} stroke="rgba(255,255,255,.16)" strokeWidth=".45" />)}
-        {series.slice(0, 3).map((row, index) => <polyline key={index} points={line(row)} fill="none" stroke={['#73e6d0', '#ffe06a', '#ff9d72'][index]} strokeWidth={index === 1 ? 1.8 : 1.1} strokeOpacity={index === 1 ? 1 : .8} />)}
-        {series.length >= 3 && <polygon points={`${line(series[0])} ${[...series[2]].reverse().map((value, index) => `${94 - index * 88 / Math.max(series[2].length - 1, 1)},${scale(value)}`).join(' ')}`} fill="rgba(115,230,208,.16)" />}
-      </svg>
-    </div>
-    <div style={{display: 'grid', gap: '0.45rem', alignContent: 'center'}}>
-      {series.slice(0, 3).map((row, index) => <div key={index} style={{borderLeft: `3px solid ${['#73e6d0', '#ffe06a', '#ff9d72'][index]}`, paddingLeft: '0.55rem'}}><small>{labels[index] ?? `Series ${index + 1}`}</small><strong style={{display: 'block', fontSize: '1.15rem'}}>{formatMetric(row.at(-1) ?? 0)}</strong><span style={{fontSize: '.75rem'}}>Native result · final step</span></div>)}
-    </div>
-  </div>;
+  const normalized = (value: number) => (value - min) / (max - min || 1);
+  const scale = (value: number) => 92 - normalized(value) * 76;
+  const line = (row: number[]) => row.map((value, index) => `${6 + index * 88 / Math.max(row.length - 1, 1)},${scale(value)}`).join(' ');
+  const shell: React.CSSProperties = {background: 'linear-gradient(135deg, #0c2535, #123f52)', borderRadius: 10, minHeight: 154, padding: '0.65rem'};
+  const gridLines = [20, 45, 70].map((y) => <line key={y} x1="4" x2="96" y1={y} y2={y} stroke="rgba(255,255,255,.16)" strokeWidth=".45" />);
+  const finalCards = (labels: string[]) => <div style={{display: 'grid', gap: '0.45rem', alignContent: 'center'}}>{series.slice(0, 3).map((row, index) => <div key={index} style={{borderLeft: `3px solid ${['#73e6d0', '#ffe06a', '#ff9d72'][index]}`, paddingLeft: '0.55rem'}}><small>{labels[index] ?? `Series ${index + 1}`}</small><strong style={{display: 'block', fontSize: '1.15rem'}}>{formatMetric(row.at(-1) ?? 0)}</strong><span style={{fontSize: '.75rem'}}>Native result · final step</span></div>)}</div>;
+
+  if (model.family === 'Uncertainty') {
+    const [lower, median = series[0], upper = series.at(-1) ?? series[0]] = series;
+    const band = `${line(lower)} ${[...upper].reverse().map((value, index) => `${94 - index * 88 / Math.max(upper.length - 1, 1)},${scale(value)}`).join(' ')}`;
+    return <div style={{display: 'grid', gap: '0.7rem', gridTemplateColumns: 'minmax(0, 1.6fr) minmax(9rem, 1fr)'}}><div style={shell}><svg viewBox="0 0 100 100" role="img" aria-label={`${model.label} quantile fan`} style={{display: 'block', height: 145, width: '100%'}}>{gridLines}<polygon points={band} fill="rgba(115,230,208,.22)" /><polyline points={line(lower)} fill="none" stroke="#73e6d0" strokeWidth="1" /><polyline points={line(upper)} fill="none" stroke="#73e6d0" strokeWidth="1" /><polyline points={line(median)} fill="none" stroke="#ffe06a" strokeWidth="2" /></svg></div>{finalCards(['Lower bound', 'Median prediction', 'Upper bound'])}</div>;
+  }
+
+  if (model.family === 'Scenarios') {
+    const rows = series.slice(0, 8);
+    const columns = Math.max(...rows.map((row) => row.length), 1);
+    return <div style={{display: 'grid', gap: '0.7rem', gridTemplateColumns: 'minmax(0, 1.6fr) minmax(9rem, 1fr)'}}><div style={shell}><svg viewBox={`0 0 ${columns * 12} ${rows.length * 14 + 18}`} role="img" aria-label={`${model.label} native scenario field`} style={{display: 'block', height: 145, width: '100%'}}>{rows.flatMap((row, rowIndex) => row.map((value, columnIndex) => <rect key={`${rowIndex}-${columnIndex}`} x={columnIndex * 12 + 2} y={rowIndex * 14 + 4} width="10" height="11" rx="1.5" fill={`hsl(${195 - normalized(value) * 155} 78% ${28 + normalized(value) * 35}%)`} />))}</svg></div><div style={{display: 'grid', alignContent: 'center', gap: '.45rem'}}><small>Native scenario field</small><strong style={{fontSize: '1.15rem'}}>{rows.length} paths × {columns} steps</strong><span style={{fontSize: '.75rem'}}>Each H3/graph state is a model output, not a simulated chart overlay.</span></div></div>;
+  }
+
+  if (model.family === 'Decision') {
+    const scores = series.flat().slice(0, 8);
+    const top = Math.max(...scores, 1);
+    return <div style={{display: 'grid', gap: '0.7rem', gridTemplateColumns: 'minmax(0, 1.6fr) minmax(9rem, 1fr)'}}><div style={{...shell, display: 'grid', gap: '.45rem', alignContent: 'center'}}>{scores.map((score, index) => <div key={index} style={{display: 'grid', gridTemplateColumns: '4.2rem 1fr 3.5rem', gap: '.45rem', alignItems: 'center'}}><small>Option {index + 1}</small><span style={{height: 11, borderRadius: 99, overflow: 'hidden', background: 'rgba(255,255,255,.13)'}}><i style={{display: 'block', height: '100%', width: `${Math.max(3, score / top * 100)}%`, borderRadius: 99, background: index === 0 ? '#ffe06a' : '#73e6d0'}} /></span><small>{formatMetric(score)}</small></div>)}</div><div style={{display: 'grid', alignContent: 'center', gap: '.45rem'}}><small>Ranked native outputs</small><strong style={{fontSize: '1.15rem'}}>Option 1</strong><span style={{fontSize: '.75rem'}}>Highest displayed model score</span></div></div>;
+  }
+
+  return <div style={{display: 'grid', gap: '0.7rem', gridTemplateColumns: 'minmax(0, 1.6fr) minmax(9rem, 1fr)'}}><div style={shell}><svg viewBox="0 0 100 100" role="img" aria-label={`${model.label} node horizon predictions`} style={{display: 'block', height: 145, width: '100%'}}>{gridLines}{series.slice(0, 6).map((row, rowIndex) => <polyline key={rowIndex} points={line(row)} fill="none" stroke={['#73e6d0', '#ffe06a', '#ff9d72', '#a995ff', '#54b9ff', '#ff6fae'][rowIndex]} strokeWidth={rowIndex === 0 ? 2 : 1.1} strokeOpacity={rowIndex === 0 ? 1 : .78} />)}</svg></div>{finalCards(['Node 1 forecast', 'Node 2 forecast', 'Node 3 forecast'])}</div>;
 }
 
 function deepVisualSeries(result: unknown): number[][] {

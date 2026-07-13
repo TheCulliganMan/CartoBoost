@@ -65,18 +65,26 @@ export type MarketStructureExplorerPayload = {
 export function marketExplorerDataFromPayload(payload: MarketStructureExplorerPayload): MarketStructureExplorerProps {
   const laneId = (row: {lane_id?: string; laneId?: string}) => String(row.lane_id ?? row.laneId ?? '');
   const finite = (value: unknown) => Number.isFinite(Number(value)) ? Number(value) : 0;
-  const lanesById = new Map(payload.lanes.map((lane) => [laneId(lane), lane]));
+  const requireRows = <T,>(value: unknown, name: string): T[] => {
+    if (!Array.isArray(value)) throw new Error(`Invalid market explorer payload: ${name} must be an array.`);
+    return value as T[];
+  };
+  const lanes = requireRows<MarketStructureExplorerPayload['lanes'][number]>(payload.lanes, 'lanes');
+  const forecasts = requireRows<MarketStructureExplorerPayload['forecasts'][number]>(payload.forecasts, 'forecasts');
+  const explanations = requireRows<MarketStructureExplorerPayload['explanations'][number]>(payload.explanations, 'explanations');
+  const kernels = requireRows<MarketStructureExplorerPayload['kernels'][number]>(payload.kernels, 'kernels');
+  const lanesById = new Map(lanes.map((lane) => [laneId(lane), lane]));
   const forecastsByLane = new Map<string, Array<{horizon: number; primary: number; secondary: number}>>();
-  payload.forecasts.forEach((row) => {
+  forecasts.forEach((row) => {
     const id = laneId(row);
     const values = forecastsByLane.get(id) ?? [];
     values.push({horizon: row.horizon, primary: finite(row.primary), secondary: finite(row.secondary)});
     forecastsByLane.set(id, values);
   });
   forecastsByLane.forEach((rows) => rows.sort((left, right) => left.horizon - right.horizon));
-  const explanationsByLane = new Map(payload.explanations.map((row) => [laneId(row), row]));
-  const marketLanes = new Map<string, typeof payload.lanes>();
-  payload.lanes.forEach((lane) => {
+  const explanationsByLane = new Map(explanations.map((row) => [laneId(row), row]));
+  const marketLanes = new Map<string, typeof lanes>();
+  lanes.forEach((lane) => {
     const origin = String(lane.origin_id ?? lane.originId ?? '');
     const rows = marketLanes.get(origin) ?? [];
     rows.push(lane);
@@ -97,7 +105,7 @@ export function marketExplorerDataFromPayload(payload: MarketStructureExplorerPa
       };
     }));
     const outbound = lanes.reduce((sum, lane) => sum + (forecastsByLane.get(laneId(lane)) ?? []).reduce((subtotal, row) => subtotal + row.secondary, 0), 0);
-    const inbound = payload.lanes
+    const inbound = lanes
       .filter((lane) => String(lane.destination_id ?? lane.destinationId ?? '') === originId)
       .reduce((sum, lane) => sum + (forecastsByLane.get(laneId(lane)) ?? []).reduce((subtotal, row) => subtotal + row.secondary, 0), 0);
     return {
@@ -114,7 +122,7 @@ export function marketExplorerDataFromPayload(payload: MarketStructureExplorerPa
     };
   }).sort((left, right) => left.id.localeCompare(right.id));
   const marketEdges = new Map<string, MarketExplorerEdge>();
-  payload.kernels.forEach((edge) => {
+  kernels.forEach((edge) => {
     const sourceLane = lanesById.get(String(edge.source_lane_id ?? edge.sourceLaneId ?? ''));
     const targetLane = lanesById.get(String(edge.target_lane_id ?? edge.targetLaneId ?? ''));
     const source = sourceLane && String(sourceLane.origin_id ?? sourceLane.originId ?? '');
@@ -126,7 +134,7 @@ export function marketExplorerDataFromPayload(payload: MarketStructureExplorerPa
       source,
       target,
       weight: Math.max(current?.weight ?? 0, finite(edge.weight)),
-      kinds: [...new Set([...(current?.kinds ?? []), ...edge.kinds])],
+      kinds: [...new Set([...(current?.kinds ?? []), ...(edge.kinds ?? [])])],
     });
   });
   const edges = [...marketEdges.values()].sort((left, right) => right.weight - left.weight);
@@ -174,11 +182,11 @@ export default function MarketStructureExplorer({nodes, edges, targetNames}: Mar
     if (!mapContainer.current || h3Nodes.length === 0) return undefined;
     let cancelled = false;
     void (async () => {
-      const [{default: maplibregl}, {MapboxOverlay}, {PolygonLayer, ArcLayer, TextLayer}, {HeatmapLayer, ContourLayer, GridLayer}] = await Promise.all([
+      const [{default: maplibregl}, {MapboxOverlay}, {ArcLayer, TextLayer}, {H3HexagonLayer}] = await Promise.all([
         import('maplibre-gl'),
         import('@deck.gl/mapbox'),
         import('@deck.gl/layers'),
-        import('@deck.gl/aggregation-layers'),
+        import('@deck.gl/geo-layers'),
       ]);
       if (cancelled || !mapContainer.current) return;
       const center = h3Nodes.reduce<[number, number]>((sum, node) => [sum[0] + node.longitude / h3Nodes.length, sum[1] + node.latitude / h3Nodes.length], [0, 0]);
@@ -191,7 +199,7 @@ export default function MarketStructureExplorer({nodes, edges, targetNames}: Mar
         zoom: 10,
       });
       const byId = new Map(h3Nodes.map((node) => [node.id, node]));
-      const overlay = new MapboxOverlay({interleaved: false, layers: buildLayers({ArcLayer, PolygonLayer, TextLayer, HeatmapLayer, ContourLayer, GridLayer, byId, edges, metric, surfaceMode, selectedId, onSelect: setSelectedId})});
+      const overlay = new MapboxOverlay({interleaved: false, layers: buildLayers({ArcLayer, H3HexagonLayer, TextLayer, byId, edges, metric, surfaceMode, selectedId, onSelect: setSelectedId})});
       map.addControl(overlay);
       map.once('load', () => {
         const points = h3Nodes.flatMap((node) => node.boundary);
@@ -217,9 +225,9 @@ export default function MarketStructureExplorer({nodes, edges, targetNames}: Mar
   useEffect(() => {
     if (!overlayRef.current) return;
     void (async () => {
-      const [{PolygonLayer, ArcLayer, TextLayer}, {HeatmapLayer, ContourLayer, GridLayer}] = await Promise.all([import('@deck.gl/layers'), import('@deck.gl/aggregation-layers')]);
+      const [{ArcLayer, TextLayer}, {H3HexagonLayer}] = await Promise.all([import('@deck.gl/layers'), import('@deck.gl/geo-layers')]);
       const byId = new Map(h3Nodes.map((node) => [node.id, node]));
-      overlayRef.current?.setProps({layers: buildLayers({ArcLayer, PolygonLayer, TextLayer, HeatmapLayer, ContourLayer, GridLayer, byId, edges, metric, surfaceMode, selectedId, onSelect: setSelectedId})});
+      overlayRef.current?.setProps({layers: buildLayers({ArcLayer, H3HexagonLayer, TextLayer, byId, edges, metric, surfaceMode, selectedId, onSelect: setSelectedId})});
     })();
   }, [edges, h3Nodes, metric, selectedId, surfaceMode]);
 
@@ -237,19 +245,18 @@ export default function MarketStructureExplorer({nodes, edges, targetNames}: Mar
         <label>
           Geometry
           <select value={surfaceMode} onChange={(event) => setSurfaceMode(event.target.value as SurfaceMode)}>
-            <option value="kernel">2D kernel + contours</option>
-            <option value="grid">3D market grid</option>
+            <option value="kernel">H3 prediction cells</option>
+            <option value="grid">H3 prediction extrusions</option>
           </select>
         </label>
-        <span className={styles.hint}>{mapReady ? `${surfaceMode === 'kernel' ? 'Kernel field' : 'Extruded grid'} · select a market or relationship` : 'Loading map'}</span>
+        <span className={styles.hint}>{mapReady ? `${surfaceMode === 'kernel' ? 'H3 prediction field' : 'H3 prediction volume'} · select a market or relationship` : 'Loading map'}</span>
       </div>
       <div className={styles.mapShell}>
         <div className={styles.map} ref={mapContainer} />
-        <MarketSurfaceOverlay nodes={nodes} edges={edges} metric={metric} surfaceMode={surfaceMode} selectedId={selected.id} />
         <div className={styles.legend} aria-label={`${labels[metric]} color scale`}>
           <span>{surfaceMode === 'kernel' ? 'Low' : 'Low volume'}</span><i /><span>{surfaceMode === 'kernel' ? 'High' : 'High volume'}</span>
         </div>
-        <div className={styles.surfaceNote}><strong>{labels[metric]}</strong><span>{surfaceMode === 'kernel' ? 'Smoothed spatial intensity' : 'Aggregated intensity, height = signal'}</span></div>
+        <div className={styles.surfaceNote}><strong>{labels[metric]}</strong><span>{surfaceMode === 'kernel' ? 'Model prediction, assigned to H3 resolution 9 cells' : 'Model prediction, H3 cell height = signal'}</span></div>
       </div>
       <div className={styles.detail}>
         <div>
@@ -425,60 +432,6 @@ function ForecastLine({values}: {values: number[]}) {
   return <svg className={styles.forecast} viewBox="0 0 100 42" role="img" aria-label="Selected market forecast path"><polyline points={points} /><circle cx="100" cy={36 - ((values.at(-1)! - min) / range) * 30} r="2.5" /></svg>;
 }
 
-/**
- * A lightweight, always-legible spatial surface above the basemap. Deck draws
- * the interactive aggregate layers; this SVG mirrors their geometry so that
- * the demand shape remains readable on low-power WebGL devices too.
- */
-function MarketSurfaceOverlay({nodes, edges, metric, surfaceMode, selectedId}: {nodes: MarketExplorerNode[]; edges: MarketExplorerEdge[]; metric: Metric; surfaceMode: SurfaceMode; selectedId: string}) {
-  const values = nodes.map((node) => marketSignal(node, edges, metric));
-  const maxValue = Math.max(...values, 1);
-  const minLongitude = Math.min(...nodes.map((node) => node.longitude));
-  const maxLongitude = Math.max(...nodes.map((node) => node.longitude));
-  const minLatitude = Math.min(...nodes.map((node) => node.latitude));
-  const maxLatitude = Math.max(...nodes.map((node) => node.latitude));
-  const xFor = (longitude: number) => 9 + ((longitude - minLongitude) / (maxLongitude - minLongitude || 1)) * 82;
-  const yFor = (latitude: number) => 90 - ((latitude - minLatitude) / (maxLatitude - minLatitude || 1)) * 80;
-  return (
-    <svg className={styles.surfaceOverlay} viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-      <defs>
-        {nodes.map((node) => (
-          <radialGradient id={`market-kernel-${node.id}`} key={node.id}>
-            <stop offset="0%" stopColor="#ffe16a" stopOpacity="0.88" />
-            <stop offset="34%" stopColor="#40d5bc" stopOpacity="0.55" />
-            <stop offset="100%" stopColor="#1684ad" stopOpacity="0" />
-          </radialGradient>
-        ))}
-      </defs>
-      {surfaceMode === 'kernel' && nodes.map((node) => {
-        const intensity = marketSignal(node, edges, metric) / maxValue;
-        const x = xFor(node.longitude);
-        const y = yFor(node.latitude);
-        const radius = 8 + intensity * 16;
-        return <g key={node.id} opacity={0.35 + intensity * 0.65}>
-          <circle cx={x} cy={y} r={radius} fill={`url(#market-kernel-${node.id})`} />
-          <circle cx={x} cy={y} r={radius * 0.55} fill="none" stroke="#a7f1dd" strokeOpacity="0.42" strokeWidth="0.22" />
-          {node.id === selectedId && <circle cx={x} cy={y} r={radius * 0.18 + 1.2} fill="#fff7d1" stroke="#ffffff" strokeWidth="0.45" />}
-        </g>;
-      })}
-      {surfaceMode === 'grid' && nodes.map((node) => {
-        const intensity = marketSignal(node, edges, metric) / maxValue;
-        const x = xFor(node.longitude);
-        const y = yFor(node.latitude);
-        const width = 3.8 + intensity * 4;
-        const height = 6 + intensity * 27;
-        const top = y - height;
-        const selected = node.id === selectedId;
-        return <g key={node.id} opacity={0.68 + intensity * 0.3}>
-          <polygon points={`${x - width / 2},${top} ${x + width / 2},${top} ${x + width / 2 + 1.7},${top - 2.7} ${x - width / 2 + 1.7},${top - 2.7}`} fill="#ffe06a" />
-          <polygon points={`${x + width / 2},${top} ${x + width / 2 + 1.7},${top - 2.7} ${x + width / 2 + 1.7},${y - 2.7} ${x + width / 2},${y}`} fill="#1682ad" />
-          <rect x={x - width / 2} y={top} width={width} height={height} fill={selected ? '#ff9859' : '#35c6b6'} stroke={selected ? '#fff4da' : '#92e7d5'} strokeWidth="0.35" />
-        </g>;
-      })}
-    </svg>
-  );
-}
-
 function byEdgePeer(edge: MarketExplorerEdge, selected: string): string { return edge.source === selected ? edge.target : edge.source; }
 function format(value: number): string { return Intl.NumberFormat('en-US', {maximumFractionDigits: 0}).format(value); }
 function weightedMean(values: Array<{value: number; weight: number}>): number {
@@ -489,7 +442,10 @@ function weightedMean(values: Array<{value: number; weight: number}>): number {
 
 function h3MarketNode(node: MarketExplorerNode, h3: typeof import('h3-js')): H3MarketNode {
   const h3Cell = h3.latLngToCell(node.latitude, node.longitude, 9);
-  const boundary = h3.cellToBoundary(h3Cell, true) as [number, number][];
+  const rawBoundary = h3.cellToBoundary(h3Cell, true) as [number, number][];
+  const first = rawBoundary[0];
+  const last = rawBoundary.at(-1);
+  const boundary = last?.[0] === first?.[0] && last?.[1] === first?.[1] ? rawBoundary : [...rawBoundary, first];
   return {...node, h3Cell, boundary};
 }
 function metricLabels(targetNames?: string[]): Record<Metric, string> {
@@ -598,36 +554,23 @@ function buildH3TaxiLayers({ArcLayer, PolygonLayer, ScatterplotLayer, cells, lan
   ];
 }
 
-function buildLayers({ArcLayer, PolygonLayer, TextLayer, HeatmapLayer, ContourLayer, GridLayer, byId, edges, metric, surfaceMode, selectedId, onSelect}: any): any[] {
+function buildLayers({ArcLayer, H3HexagonLayer, TextLayer, byId, edges, metric, surfaceMode, selectedId, onSelect}: any): any[] {
   const nodes = [...byId.values()] as H3MarketNode[];
   const selectedEdges = edges.filter((edge: MarketExplorerEdge) => edge.source === selectedId || edge.target === selectedId);
   const weights = selectedEdges.map((edge: MarketExplorerEdge) => edge.weight);
   const maxWeight = Math.max(...weights, 1);
   const value = (node: MarketExplorerNode): number => marketSignal(node, edges, metric);
   const maxValue = Math.max(...nodes.map(value), 1);
-  const surfaceData = nodes.map((node) => ({...node, intensity: Math.max(0, value(node))}));
-  const heatmap = new HeatmapLayer({
-    id: 'market-kernel-surface', data: surfaceData, getPosition: (node: MarketExplorerNode) => [node.longitude, node.latitude],
-    getWeight: (node: MarketExplorerNode & {intensity: number}) => node.intensity,
-    radiusPixels: 76, intensity: 1.35, threshold: 0.03,
-    colorRange: [[19, 26, 45], [26, 79, 116], [24, 145, 174], [88, 210, 178], [250, 213, 94], [242, 119, 63]],
-  });
-  const contours = new ContourLayer({
-    id: 'market-kernel-contours', data: surfaceData, getPosition: (node: MarketExplorerNode) => [node.longitude, node.latitude],
-    getWeight: (node: MarketExplorerNode & {intensity: number}) => node.intensity, cellSize: 220, gpuAggregation: true,
-    contours: [{threshold: 0.2, color: [123, 228, 211, 110], strokeWidth: 1}, {threshold: 0.48, color: [255, 230, 125, 190], strokeWidth: 1.5}, {threshold: 0.75, color: [255, 133, 75, 240], strokeWidth: 2}],
-  });
-  const grid = new GridLayer({
-    id: 'market-3d-grid', data: surfaceData, getPosition: (node: MarketExplorerNode) => [node.longitude, node.latitude],
-    getWeight: (node: MarketExplorerNode & {intensity: number}) => node.intensity, cellSize: 480, extruded: true,
-    elevationScale: 4.3, elevationRange: [0, 1600], opacity: 0.8, pickable: true,
-    colorRange: [[21, 52, 86], [21, 122, 154], [49, 183, 173], [235, 203, 80], [241, 112, 64]],
-  });
+  const fill = (node: H3MarketNode): [number, number, number, number] => {
+    if (node.id === selectedId) return [255, 138, 77, 245];
+    const intensity = Math.min(1, Math.max(0, value(node) / maxValue));
+    return intensity < 0.5
+      ? [24, Math.round(112 + intensity * 94), Math.round(154 + intensity * 55), 190]
+      : [Math.round(29 + (intensity - .5) * 442), Math.round(159 + (intensity - .5) * 88), Math.round(190 - (intensity - .5) * 244), 215];
+  };
   return [
-    surfaceMode === 'kernel' ? heatmap : grid,
-    ...(surfaceMode === 'kernel' ? [contours] : []),
     new ArcLayer({id: 'market-kernels', data: selectedEdges, getSourcePosition: (edge: MarketExplorerEdge) => [byId.get(edge.source).longitude, byId.get(edge.source).latitude], getTargetPosition: (edge: MarketExplorerEdge) => [byId.get(edge.target).longitude, byId.get(edge.target).latitude], getSourceColor: [58, 182, 220, 220], getTargetColor: [244, 154, 77, 200], getWidth: (edge: MarketExplorerEdge) => 1 + edge.weight / maxWeight * 7, getHeight: 0.22, pickable: true, onClick: ({object}: any) => onSelect(byEdgePeer(object, selectedId))}),
-    new PolygonLayer({id: 'market-h3-prediction-cells', data: nodes, getPolygon: (node: H3MarketNode) => node.boundary, extruded: true, getElevation: (node: H3MarketNode) => 120 + value(node) / maxValue * 1600, getFillColor: (node: H3MarketNode) => node.id === selectedId ? [255, 138, 77, 245] : [29, 159, 190, 185], getLineColor: (node: H3MarketNode) => node.id === selectedId ? [255, 247, 210, 255] : [151, 229, 225, 205], getLineWidth: (node: H3MarketNode) => node.id === selectedId ? 3 : 1, lineWidthUnits: 'pixels', stroked: true, filled: true, pickable: true, onClick: ({object}: {object?: H3MarketNode}) => object && onSelect(object.id)}),
-    new TextLayer({id: 'market-h3-labels', data: nodes, getPosition: (node: H3MarketNode) => [node.longitude, node.latitude], getText: (node: H3MarketNode) => node.h3Cell.slice(0, 8), getColor: [235, 243, 248, 245], getSize: 11, getTextAnchor: 'middle', getAlignmentBaseline: 'center', fontFamily: 'system-ui'}),
+    new H3HexagonLayer({id: 'market-h3-prediction-cells', data: nodes, getHexagon: (node: H3MarketNode) => node.h3Cell, extruded: surfaceMode === 'grid', getElevation: (node: H3MarketNode) => surfaceMode === 'grid' ? 120 + value(node) / maxValue * 1600 : 0, getFillColor: fill, getLineColor: (node: H3MarketNode) => node.id === selectedId ? [255, 247, 210, 255] : [151, 229, 225, 205], getLineWidth: (node: H3MarketNode) => node.id === selectedId ? 3 : 1, lineWidthUnits: 'pixels', stroked: true, filled: true, pickable: true, onClick: ({object}: {object?: H3MarketNode}) => object && onSelect(object.id)}),
+    new TextLayer({id: 'market-h3-labels', data: nodes, getPosition: (node: H3MarketNode) => [node.longitude, node.latitude], getText: (node: H3MarketNode) => node?.h3Cell?.slice(0, 8) ?? '', getColor: [235, 243, 248, 245], getSize: 11, getTextAnchor: 'middle', getAlignmentBaseline: 'center', fontFamily: 'system-ui'}),
   ];
 }
