@@ -2247,6 +2247,8 @@ impl TrainableGraphTransformerState {
                     // state conditions that affinity at each forecast cutoff.
                     let mut periodic = vec![tape.constant(0.0); hidden];
                     let mut periodic_count = 0usize;
+                    let fallback = [node];
+                    let adaptive_sources = adaptive_neighbor_indices(adjacency, node, &fallback);
                     for period_embedding in &lsttn_period_embeddings {
                         periodic_count += 1;
                         // Forward and backward graph diffusions from the
@@ -2279,14 +2281,13 @@ impl TrainableGraphTransformerState {
                                 );
                             }
                         }
-                        // Adaptive diffusion from separate source and
-                        // target node embeddings.  The current temporal
-                        // state is added to the source embedding before
-                        // the dot product, making the graph conditioned on
-                        // the input window; softmax supplies the required
-                        // row-normalized hidden transition matrix.
-                        let logits = (0..nodes)
-                            .map(|other| {
+                        // Adaptive diffusion uses the supplied sparse graph
+                        // neighborhood.  All-pairs node affinity is
+                        // quadratic in node count and is not viable for
+                        // global market graphs.
+                        let logits = adaptive_sources
+                            .iter()
+                            .map(|&other| {
                                 (0..hidden).fold(tape.constant(0.0), |score, latent| {
                                     let source = tape.add(
                                         parameter(
@@ -2304,17 +2305,18 @@ impl TrainableGraphTransformerState {
                             })
                             .collect::<Vec<_>>();
                         let adaptive = tape_softmax(&tape, &logits);
-                        for other in 0..nodes {
+                        for (weight, &other) in adaptive.iter().zip(adaptive_sources) {
                             for channel in 0..hidden {
                                 periodic[channel] = tape.add(
                                     periodic[channel],
-                                    tape.mul(adaptive[other], period_embedding[other][channel]),
+                                    tape.mul(*weight, period_embedding[other][channel]),
                                 );
                             }
                         }
                     }
                     if periodic_count > 0 {
-                        let denominator = tape.constant((periodic_count * (nodes + 2)) as f64);
+                        let denominator =
+                            tape.constant((periodic_count * (adaptive_sources.len() + 2)) as f64);
                         for channel in 0..hidden {
                             long[channel] =
                                 tape.add(long[channel], tape.div(periodic[channel], denominator));
@@ -2395,10 +2397,14 @@ impl TrainableGraphTransformerState {
                                 for target in 0..nodes {
                                     let source_embedding =
                                         parameter(&tape, layout.graphon_nodes + target);
+                                    let fallback = [target];
+                                    let adaptive_sources =
+                                        adaptive_neighbor_indices(adjacency, target, &fallback);
                                     let mut adaptive = vec![tape.constant(0.0); hidden];
                                     for channel in 0..hidden {
-                                        let logits = (0..nodes)
-                                            .map(|source| {
+                                        let logits = adaptive_sources
+                                            .iter()
+                                            .map(|&source| {
                                                 tape.add(
                                                     tape.mul(
                                                         source_embedding,
@@ -2412,11 +2418,13 @@ impl TrainableGraphTransformerState {
                                             })
                                             .collect::<Vec<_>>();
                                         let weights = tape_softmax(&tape, &logits);
-                                        for source in 0..nodes {
+                                        for (weight, &source) in
+                                            weights.iter().zip(adaptive_sources)
+                                        {
                                             adaptive[channel] = tape.add(
                                                 adaptive[channel],
                                                 tape.mul(
-                                                    weights[source],
+                                                    *weight,
                                                     temporal_next[time][source][channel],
                                                 ),
                                             );
@@ -2888,6 +2896,19 @@ fn tape_l2_normalize(tape: &AutodiffTape, values: &[usize]) -> Vec<usize> {
     });
     let norm = tape.sqrt(squared_norm);
     values.iter().map(|value| tape.div(*value, norm)).collect()
+}
+
+fn adaptive_neighbor_indices<'a>(
+    adjacency: &'a CsrAdjacency,
+    node: usize,
+    fallback: &'a [usize; 1],
+) -> &'a [usize] {
+    let neighbors = &adjacency.indices[adjacency.indptr[node]..adjacency.indptr[node + 1]];
+    if neighbors.is_empty() {
+        fallback
+    } else {
+        neighbors
+    }
 }
 
 fn tape_softmax(tape: &AutodiffTape, logits: &[usize]) -> Vec<usize> {
@@ -5114,6 +5135,23 @@ mod tests {
         let weights = tape_softmax(&tape, &[tape.constant(0.0), tape.constant(2.0)]);
         let ratio = tape.value(weights[1]) / tape.value(weights[0]);
         assert!((ratio - 2.0_f64.exp()).abs() < 1e-12);
+    }
+
+    #[test]
+    fn adaptive_diffusion_uses_csr_neighbors_with_isolated_node_fallback() {
+        let adjacency =
+            CsrAdjacency::new(vec![0, 2, 3, 3], vec![1, 2, 0], vec![1.0; 3], 3).unwrap();
+        let first_fallback = [0];
+        let isolated_fallback = [2];
+
+        assert_eq!(
+            adaptive_neighbor_indices(&adjacency, 0, &first_fallback),
+            &[1, 2]
+        );
+        assert_eq!(
+            adaptive_neighbor_indices(&adjacency, 2, &isolated_fallback),
+            &[2]
+        );
     }
 
     #[test]
