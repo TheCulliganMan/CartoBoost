@@ -19,7 +19,7 @@ from typing import Any
 
 import numpy as np
 from cartoboost import CartoBoostRegressor
-from cartoboost.preview.graph import (
+from cartoboost.graph import (
     DirectionalFeature,
     DirectionalityConfig,
     GraphEmbeddingsConfig,

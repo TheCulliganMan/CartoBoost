@@ -83,7 +83,7 @@ and timestamp before building the forecast frame.
 ## Config Object Example
 
 ```python
-from cartoboost.preview.forecasting import (
+from cartoboost.forecasting import (
     CalendarFeatureConfig,
     CartoBoostLagForecaster,
     LagConfig,

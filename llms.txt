@@ -83,53 +83,53 @@ compare it against strong baselines on the same split.
 - `cartoboost.CartoBoostRegressor`
 - `cartoboost.CartoBoostClassifier`
 - `cartoboost.CartoBoostRanker`
-- `cartoboost.preview.models.*`
-- `cartoboost.preview.spatial_econometrics.SpatialWeights`
-- `cartoboost.preview.spatial_econometrics.SpatialLagRegressor`
-- `cartoboost.preview.spatial_econometrics.SpatialErrorRegressor`
-- `cartoboost.preview.spatial_econometrics.SpatialDurbinRegressor`
-- `cartoboost.preview.spatial_econometrics.SpatialTwoStageLeastSquares`
-- `cartoboost.preview.geo_causal.GeoCausalPanel`
-- `cartoboost.preview.geo_causal.SyntheticDIDEstimator`
-- `cartoboost.preview.geo_causal.GeoLiftEstimator`
-- `cartoboost.preview.geo_causal.GeoExperimentDesigner`
-- `cartoboost.preview.geo_causal.SpatialPlaceboTester`
-- `cartoboost.preview.geostats.NearestNeighborGPRegressor`
-- `cartoboost.preview.geostats.ResidualNNGPRegressor`
-- `cartoboost.preview.geostats.SpatialGaussianProcessRegressor`
+- `cartoboost.models.*`
+- `cartoboost.spatial_econometrics.SpatialWeights`
+- `cartoboost.spatial_econometrics.SpatialLagRegressor`
+- `cartoboost.spatial_econometrics.SpatialErrorRegressor`
+- `cartoboost.spatial_econometrics.SpatialDurbinRegressor`
+- `cartoboost.spatial_econometrics.SpatialTwoStageLeastSquares`
+- `cartoboost.geo_causal.GeoCausalPanel`
+- `cartoboost.geo_causal.SyntheticDIDEstimator`
+- `cartoboost.geo_causal.GeoLiftEstimator`
+- `cartoboost.geo_causal.GeoExperimentDesigner`
+- `cartoboost.geo_causal.SpatialPlaceboTester`
+- `cartoboost.geostats.NearestNeighborGPRegressor`
+- `cartoboost.geostats.ResidualNNGPRegressor`
+- `cartoboost.geostats.SpatialGaussianProcessRegressor`
 - `cartoboost.forecasting.*`
-- `cartoboost.preview.graph.*`
+- `cartoboost.graph.*`
 - `cartoboost.geo`
-- `cartoboost.preview.causal.*`
-- `cartoboost.preview.prob.*`
-- `cartoboost.preview.experimental.*`
-- `cartoboost.preview.neural.*`
-- `cartoboost.preview.deep.*`
-- `cartoboost.preview.plotting`
-- `cartoboost.preview.Prophet` (Prophet-compatible `ds`/`y` forecasting over the Rust core; accepts pandas and Polars)
+- `cartoboost.causal.*`
+- `cartoboost.prob.*`
+- `cartoboost.experimental.*`
+- `cartoboost.neural.*`
+- `cartoboost.deep.*`
+- `cartoboost.plotting`
+- `cartoboost.Prophet` (Prophet-compatible `ds`/`y` forecasting over the Rust core; accepts pandas and Polars)
 - Prophet parity audit: `scripts/prophet_parity_audit.py`
 - Prophet speed benchmark: `scripts/prophet_surface_benchmark.py`
 
 ## Model Lists
 
-Preview `cartoboost.preview.models.ModelRegistry.defaults()` models:
+Supported `cartoboost.models.ModelRegistry.defaults()` models:
 
 - `models.cartoboost_regressor` / `cartoboost.CartoBoostRegressor`
 - `models.cartoboost_classifier` / `cartoboost.CartoBoostClassifier`
 - `models.cartoboost_ranker` / `cartoboost.CartoBoostRanker`
 - `forecasting.auto_forecaster` / `cartoboost.forecasting.AutoForecaster`
 - `forecasting.cartoboost_lag` / `cartoboost.forecasting.CartoBoostLagForecaster`
-- `graph.dcrnn` / `cartoboost.preview.forecasting.DCRNNForecaster`
-- `geo.nngp` / `cartoboost.preview.geostats.NearestNeighborGPRegressor`
-- `geo.residual_nngp` / `cartoboost.preview.geostats.ResidualNNGPRegressor`
-- `geo.spatial_lag` / `cartoboost.preview.spatial_econometrics.SpatialLagRegressor`
-- `geo.spatial_error` / `cartoboost.preview.spatial_econometrics.SpatialErrorRegressor`
-- `geo.spatial_durbin` / `cartoboost.preview.spatial_econometrics.SpatialDurbinRegressor`
-- `causal.synthetic_did` / `cartoboost.preview.geo_causal.SyntheticDIDEstimator`
-- `causal.geo_lift_design` / `cartoboost.preview.geo_causal.GeoExperimentDesigner`
-- `causal.spatial_placebo` / `cartoboost.preview.geo_causal.SpatialPlaceboTester`
-- `prob.conformal_interval` / `cartoboost.preview.prob.ConformalIntervalRegressor`
-- `prob.spatial_conformal` / `cartoboost.preview.prob.SpatialConformalRegressor`
+- `graph.dcrnn` / `cartoboost.forecasting.DCRNNForecaster`
+- `geo.nngp` / `cartoboost.geostats.NearestNeighborGPRegressor`
+- `geo.residual_nngp` / `cartoboost.geostats.ResidualNNGPRegressor`
+- `geo.spatial_lag` / `cartoboost.spatial_econometrics.SpatialLagRegressor`
+- `geo.spatial_error` / `cartoboost.spatial_econometrics.SpatialErrorRegressor`
+- `geo.spatial_durbin` / `cartoboost.spatial_econometrics.SpatialDurbinRegressor`
+- `causal.synthetic_did` / `cartoboost.geo_causal.SyntheticDIDEstimator`
+- `causal.geo_lift_design` / `cartoboost.geo_causal.GeoExperimentDesigner`
+- `causal.spatial_placebo` / `cartoboost.geo_causal.SpatialPlaceboTester`
+- `prob.conformal_interval` / `cartoboost.prob.ConformalIntervalRegressor`
+- `prob.spatial_conformal` / `cartoboost.prob.SpatialConformalRegressor`
 
 Forecasting model ids and classes:
 

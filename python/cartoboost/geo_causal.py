@@ -5,7 +5,11 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from ._artifacts import require_artifact_payload, versioned_artifact_payload
+from ._artifacts import (
+    ArtifactPersistenceMixin,
+    require_artifact_payload,
+    versioned_artifact_payload,
+)
 from ._native import (
     geo_causal_design_summary,
     geo_causal_representation_report_value,
@@ -107,7 +111,7 @@ CounterfactualRepresentationNet = InvariantRiskEncoder
 TreatmentEffectRepresentationHead = InvariantRiskEncoder
 
 
-class SyntheticDIDEstimator:
+class SyntheticDIDEstimator(ArtifactPersistenceMixin):
     """Synthetic difference-in-differences estimator for geographic interventions."""
 
     def __init__(self, *, intervention_time: str, seed: int = 13) -> None:
@@ -235,7 +239,7 @@ class SyntheticDIDEstimator:
         return self._summary
 
 
-class GeoExperimentDesigner:
+class GeoExperimentDesigner(ArtifactPersistenceMixin):
     """GeoLift-style helper for choosing balanced candidate test geos."""
 
     def __init__(self, *, intervention_time: str, seed: int = 13) -> None:
@@ -333,7 +337,7 @@ class GeoExperimentDesigner:
 GeoLiftEstimator = GeoExperimentDesigner
 
 
-class SpatialPlaceboTester:
+class SpatialPlaceboTester(ArtifactPersistenceMixin):
     """Deterministic spatial placebo runner for geographic panel experiments."""
 
     def __init__(self, *, intervention_time: str, seed: int = 13) -> None:

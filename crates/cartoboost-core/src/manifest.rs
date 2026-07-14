@@ -4,7 +4,7 @@ use serde_json::Value;
 
 /// Canonical model metadata consumed by Python, WASM, and release tooling.
 ///
-/// The manifest deliberately describes only generic capabilities. Preview
+/// The manifest deliberately describes only generic capabilities. Supported
 /// implementations can be added here without making them part of the stable
 /// contract, but they must carry an explicit tier and evidence level.
 pub const MODEL_MANIFEST_JSON: &str = r#"[
@@ -14,16 +14,16 @@ pub const MODEL_MANIFEST_JSON: &str = r#"[
   {"key":"forecasting.auto_forecaster","tier":"stable","backend":"rust_native","task":"forecasting","artifact_version":2,"dependencies":[],"evidence_level":"real_data"},
   {"key":"forecasting.cartoboost_lag","tier":"stable","backend":"rust_native","task":"forecasting","artifact_version":2,"dependencies":[],"evidence_level":"real_data"},
   {"key":"graph.dcrnn","tier":"experimental","backend":"python_orchestration","task":"forecasting","artifact_version":2,"dependencies":["torch"],"evidence_level":"experimental_only"},
-  {"key":"geo.nngp","tier":"preview","backend":"python_orchestration","task":"regression","artifact_version":2,"dependencies":[],"evidence_level":"synthetic"},
-  {"key":"geo.residual_nngp","tier":"preview","backend":"python_orchestration","task":"regression","artifact_version":2,"dependencies":[],"evidence_level":"synthetic"},
-  {"key":"geo.spatial_lag","tier":"preview","backend":"python_orchestration","task":"regression","artifact_version":2,"dependencies":["libpysal","spreg"],"evidence_level":"synthetic"},
-  {"key":"geo.spatial_error","tier":"preview","backend":"python_orchestration","task":"regression","artifact_version":2,"dependencies":["libpysal","spreg"],"evidence_level":"synthetic"},
-  {"key":"geo.spatial_durbin","tier":"preview","backend":"python_orchestration","task":"regression","artifact_version":2,"dependencies":["libpysal","spreg"],"evidence_level":"synthetic"},
-  {"key":"causal.synthetic_did","tier":"preview","backend":"python_orchestration","task":"causal_panel","artifact_version":2,"dependencies":[],"evidence_level":"synthetic"},
-  {"key":"causal.geo_lift_design","tier":"preview","backend":"python_orchestration","task":"causal_panel","artifact_version":2,"dependencies":[],"evidence_level":"synthetic"},
-  {"key":"causal.spatial_placebo","tier":"preview","backend":"python_orchestration","task":"causal_panel","artifact_version":2,"dependencies":[],"evidence_level":"synthetic"},
-  {"key":"prob.conformal_interval","tier":"preview","backend":"python_orchestration","task":"regression","artifact_version":2,"dependencies":[],"evidence_level":"synthetic"},
-  {"key":"prob.spatial_conformal","tier":"preview","backend":"python_orchestration","task":"regression","artifact_version":2,"dependencies":[],"evidence_level":"synthetic"}
+  {"key":"geo.nngp","tier":"supported","backend":"python_orchestration","task":"regression","artifact_version":2,"dependencies":[],"evidence_level":"synthetic"},
+  {"key":"geo.residual_nngp","tier":"supported","backend":"python_orchestration","task":"regression","artifact_version":2,"dependencies":[],"evidence_level":"synthetic"},
+  {"key":"geo.spatial_lag","tier":"supported","backend":"python_orchestration","task":"regression","artifact_version":2,"dependencies":["libpysal","spreg"],"evidence_level":"synthetic"},
+  {"key":"geo.spatial_error","tier":"supported","backend":"python_orchestration","task":"regression","artifact_version":2,"dependencies":["libpysal","spreg"],"evidence_level":"synthetic"},
+  {"key":"geo.spatial_durbin","tier":"supported","backend":"python_orchestration","task":"regression","artifact_version":2,"dependencies":["libpysal","spreg"],"evidence_level":"synthetic"},
+  {"key":"causal.synthetic_did","tier":"supported","backend":"python_orchestration","task":"causal_panel","artifact_version":2,"dependencies":[],"evidence_level":"synthetic"},
+  {"key":"causal.geo_lift_design","tier":"supported","backend":"python_orchestration","task":"causal_panel","artifact_version":2,"dependencies":[],"evidence_level":"synthetic"},
+  {"key":"causal.spatial_placebo","tier":"supported","backend":"python_orchestration","task":"causal_panel","artifact_version":2,"dependencies":[],"evidence_level":"synthetic"},
+  {"key":"prob.conformal_interval","tier":"supported","backend":"python_orchestration","task":"regression","artifact_version":2,"dependencies":[],"evidence_level":"synthetic"},
+  {"key":"prob.spatial_conformal","tier":"supported","backend":"python_orchestration","task":"regression","artifact_version":2,"dependencies":[],"evidence_level":"synthetic"}
 ]"#;
 
 /// Return the validated canonical manifest as JSON.
@@ -50,7 +50,7 @@ mod tests {
         assert!(stable.contains(&"models.cartoboost_regressor"));
         assert!(stable.contains(&"forecasting.auto_forecaster"));
         assert_eq!(entries.len(), 16);
-        assert!(entries.iter().any(|entry| entry["tier"] == "preview"));
+        assert!(entries.iter().any(|entry| entry["tier"] == "supported"));
         assert!(entries.iter().any(|entry| entry["tier"] == "experimental"));
     }
 }

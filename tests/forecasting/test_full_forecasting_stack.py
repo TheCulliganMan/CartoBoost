@@ -4,7 +4,7 @@ import pytest
 
 pd = pytest.importorskip("pandas")
 
-from cartoboost.preview.forecasting import (  # noqa: E402
+from cartoboost.forecasting import (  # noqa: E402
     ForecastFrame,
     ForecastingConfig,
     ThetaForecaster,

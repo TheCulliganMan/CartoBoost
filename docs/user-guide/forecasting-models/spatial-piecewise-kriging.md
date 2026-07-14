@@ -44,7 +44,7 @@ behavior for incomplete coordinate coverage.
 ## ForecastFrame Example
 
 ```python
-from cartoboost.preview.forecasting import ForecastFrame, SpatialPiecewiseKrigingForecaster
+from cartoboost.forecasting import ForecastFrame, SpatialPiecewiseKrigingForecaster
 
 frame = ForecastFrame.from_pandas(
     hourly_zone_demand,

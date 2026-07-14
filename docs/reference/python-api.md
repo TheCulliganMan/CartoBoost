@@ -4,7 +4,7 @@
 > estimators are `CartoBoostRegressor`, `CartoBoostClassifier`,
 > `CartoBoostRanker`, and `BoosterConfig`. Forecasting and validation use their
 > named stable modules; graph, geostatistical, causal, neural, probabilistic,
-> plotting, and deep surfaces are preview APIs under `cartoboost.preview`.
+> plotting, and deep surfaces are supported APIs under `cartoboost.supported`.
 > See [Migrating to 0.3](../migration-v0.3.md) before updating imports.
 
 This page lists the public Python entry points used to fit, evaluate, explain,
@@ -20,16 +20,16 @@ and keep artifacts that make the comparison reproducible.
 | Need | Primary entry points | Evidence to collect |
 | --- | --- | --- |
 | Row-level regression | `CartoBoostRegressor`, `cartoboost.schema.FeatureSchema`, sparse sets | RMSE, MAE, R2 on the same split as baselines. |
-| Spatial econometrics | `cartoboost.preview.spatial_econometrics.*` | Residual Moran's I, rho/lambda, AIC/BIC where valid, and same-split holdout metrics. |
-| Scalable GP geostatistics | `cartoboost.preview.geostats.*` | Interpolation RMSE/MAE, uncertainty calibration, duplicate-coordinate policy, and prediction variance near versus far from training points. |
-| Geo-causal experiments | `cartoboost.preview.geo_causal.*` | Treatment effect, unit/time weights, placebo distribution, spillover diagnostics, and explicit causal assumptions. |
+| Spatial econometrics | `cartoboost.spatial_econometrics.*` | Residual Moran's I, rho/lambda, AIC/BIC where valid, and same-split holdout metrics. |
+| Scalable GP geostatistics | `cartoboost.geostats.*` | Interpolation RMSE/MAE, uncertainty calibration, duplicate-coordinate policy, and prediction variance near versus far from training points. |
+| Geo-causal experiments | `cartoboost.geo_causal.*` | Treatment effect, unit/time weights, placebo distribution, spillover diagnostics, and explicit causal assumptions. |
 | Binary or multiclass classification | `CartoBoostClassifier`, sparse sets | Logloss, ROC-AUC or PR-AUC, Brier score, and calibration checks on the same split as baselines. |
 | Grouped ranking | `CartoBoostRanker`, grouped relevance labels | NDCG, MAP, MRR, and baseline ranking comparison by query group. |
 | Demand or time-series forecasting | `ForecastFrame`, `CartoBoostLagForecaster`, typed split policy, backtester | Rolling-origin or out-of-time RMSE, MAE, WAPE, horizon metrics. |
 | Spatial piecewise forecasting | `SpatialPiecewiseKrigingForecaster` | Compare base piecewise seasonal, kriging, and fused rows under the same rolling-origin folds; inspect correction, variance, neighbors, and runtime metadata. |
 | Directional panel forecasting | `NeuralPanelForecaster`, `LaneNeuralPanelForecaster` | Rolling-origin RMSE, MAE, WAPE, horizon metrics, quantile diagnostics, timing, and comparison against seasonal naive plus `CartoBoostLagForecaster`. |
 | Repeated-ID residual signal | `NeuralEmbeddingRegressor`, `benchmark_neural_vs_cartoboost` | Repeated-ID and cold-ID splits, with out-of-fold embeddings when possible. |
-| Directed topology | `cartoboost.preview.graph`, graph regressors, graph feature transformers | Same train-side graph construction for all rows, plus grouped or cold-source validation. |
+| Directed topology | `cartoboost.graph`, graph regressors, graph feature transformers | Same train-side graph construction for all rows, plus grouped or cold-source validation. |
 | Diagnostics and intervals | evaluation helpers, SHAP helpers, kriging diagnostics | Residual spatial autocorrelation, interval coverage, and residual summaries by zone/hour. |
 
 ## `cartoboost.CartoBoostRegressor`
@@ -350,7 +350,7 @@ tables, and provide leakage-safe evaluation for single-series and panel data.
 Use these APIs when the question is future demand rather than
 row-level fare or duration prediction.
 
-`cartoboost.preview.Prophet` is a Prophet-shaped compatibility façade for the
+`cartoboost.Prophet` is a Prophet-shaped compatibility façade for the
 Rust-native piecewise model. It accepts pandas or Polars `ds`/`y` dataframes
 and exposes `fit`, `predict`, `make_future_dataframe`, `add_seasonality`,
 `add_regressor`, `add_country_holidays`, `setup_dataframe`, and
@@ -483,12 +483,12 @@ Unified model registry and geo selector:
 
 | Entry point | Notes |
 | --- | --- |
-| `cartoboost.preview.models.ModelRegistry.defaults()` | Preview registry across `forecasting`, `geo`, `graph`, `causal`, and `prob` namespaces with typed metadata. |
-| `cartoboost.preview.models.ModelSpec` / `ModelMetadata` | Constructor and metadata records for preview model families. |
-| `cartoboost.preview.models.DataContract` / `ModelEvidenceCard` | Preview evidence-contract types; no automatic geo selector or stack is shipped in v0.3. |
-| `cartoboost.preview.models.model_card(model)` | JSON-compatible params, lifecycle, and metadata summary for preview model families. |
-| `cartoboost.preview.causal` / `cartoboost.preview.prob` | Preview aliases for geo-causal and probabilistic model namespaces. |
-| `cartoboost.preview.experimental` | Unstable research adapter namespace; adapters require explicit backends and are excluded from the stable registry. |
+| `cartoboost.models.ModelRegistry.defaults()` | Supported registry across `forecasting`, `geo`, `graph`, `causal`, and `prob` namespaces with typed metadata. |
+| `cartoboost.models.ModelSpec` / `ModelMetadata` | Constructor and metadata records for supported model families. |
+| `cartoboost.models.DataContract` / `ModelEvidenceCard` | Supported evidence-contract types; no automatic geo selector or stack is shipped in v0.3. |
+| `cartoboost.models.model_card(model)` | JSON-compatible params, lifecycle, and metadata summary for supported model families. |
+| `cartoboost.causal` / `cartoboost.prob` | Supported aliases for geo-causal and probabilistic model namespaces. |
+| `cartoboost.experimental` | Unstable research adapter namespace; adapters require explicit backends and are excluded from the stable registry. |
 
 Representation primitives and selective state-space models are not distributed in
 v0.3. The removed NumPy implementations have no import or compatibility namespace;
@@ -498,63 +498,63 @@ Inverted temporal transformer:
 
 | Entry point | Notes |
 | --- | --- |
-| `cartoboost.preview.deep.InvertedTemporalTransformer` | Entity-token panel forecaster for synchronized wide panels with cross-entity attention, horizon-wise metrics, ablation report, and save/load parity. |
-| `cartoboost.preview.deep.InvertedEntityTransformer` | Alias for the entity-token inverted temporal transformer surface. |
-| `cartoboost.preview.deep.TemporalEntityTransformer(architecture="inverted_transformer")` | Routes the existing temporal entity surface to the inverted transformer implementation. |
+| `cartoboost.deep.InvertedTemporalTransformer` | Entity-token panel forecaster for synchronized wide panels with cross-entity attention, horizon-wise metrics, ablation report, and save/load parity. |
+| `cartoboost.deep.InvertedEntityTransformer` | Alias for the entity-token inverted temporal transformer surface. |
+| `cartoboost.deep.TemporalEntityTransformer(architecture="inverted_transformer")` | Routes the existing temporal entity surface to the inverted transformer implementation. |
 
 Delay-aware graph transformer:
 
 | Entry point | Notes |
 | --- | --- |
-| `cartoboost.preview.deep.DelayAwareGraphTransformer` / `PropagationDelayGraphForecaster` | Directed graph propagation forecaster with explicit per-edge delay priors, edge-delay sensitivity, save/load parity, and a future CUDA/ROCm/MLX backend contract that hard-fails until native kernels exist. |
-| `cartoboost.preview.deep.DynamicAdjacencyTransformer` | Alias for the delay-aware graph transformer surface. |
-| `cartoboost.preview.deep.SpatioTemporalGraphForecaster(backbone="delay_aware_graph_transformer")` | Routes the generic graph sequence facade to the delay-aware graph implementation. |
+| `cartoboost.deep.DelayAwareGraphTransformer` / `PropagationDelayGraphForecaster` | Directed graph propagation forecaster with explicit per-edge delay priors, edge-delay sensitivity, save/load parity, and a future CUDA/ROCm/MLX backend contract that hard-fails until native kernels exist. |
+| `cartoboost.deep.DynamicAdjacencyTransformer` | Alias for the delay-aware graph transformer surface. |
+| `cartoboost.deep.SpatioTemporalGraphForecaster(backbone="delay_aware_graph_transformer")` | Routes the generic graph sequence facade to the delay-aware graph implementation. |
 
 Mixture-of-experts regime modeling:
 
 | Entry point | Notes |
 | --- | --- |
-| `cartoboost.preview.deep.RegimeMoEForecaster` | Six-expert regime model for stable recurring, sparse cold-start, high-volume hub, volatile shock, long-distance pair, and low-signal fallback behavior; emits expert weights, expert predictions, combined predictions, router entropy, expert usage, and single-expert comparison metrics. |
-| `cartoboost.preview.deep.GeoTemporalMixtureOfExperts` / `PairRegimeRouter` / `EntityRegimeRouter` | Aliases for the regime MoE surface. |
+| `cartoboost.deep.RegimeMoEForecaster` | Six-expert regime model for stable recurring, sparse cold-start, high-volume hub, volatile shock, long-distance pair, and low-signal fallback behavior; emits expert weights, expert predictions, combined predictions, router entropy, expert usage, and single-expert comparison metrics. |
+| `cartoboost.deep.GeoTemporalMixtureOfExperts` / `PairRegimeRouter` / `EntityRegimeRouter` | Aliases for the regime MoE surface. |
 
 Conditional flow uncertainty head:
 
 | Entry point | Notes |
 | --- | --- |
-| `cartoboost.preview.deep.ConditionalFlowDistributionHead` | Native-backed residual distribution head that fits on model hidden state plus optional horizon, entity or pair, and graph context features; predicts deterministic samples, log likelihood, marginal quantiles, joint scenario paths, tail-risk metrics, and calibration metrics when actuals are supplied. |
-| `cartoboost.preview.deep.JointHorizonFlowHead` / `ResidualFlowCalibrator` | Aliases for the same conditional flow uncertainty surface. |
+| `cartoboost.deep.ConditionalFlowDistributionHead` | Native-backed residual distribution head that fits on model hidden state plus optional horizon, entity or pair, and graph context features; predicts deterministic samples, log likelihood, marginal quantiles, joint scenario paths, tail-risk metrics, and calibration metrics when actuals are supplied. |
+| `cartoboost.deep.JointHorizonFlowHead` / `ResidualFlowCalibrator` | Aliases for the same conditional flow uncertainty surface. |
 | `save(path)` / `ConditionalFlowDistributionHead.load(path)` | Persist and restore the fitted native JSON artifact with save/load prediction parity covered by the Python deep-model tests. |
 
 Experimental diffusion scenario generation:
 
 | Entry point | Notes |
 | --- | --- |
-| `cartoboost.preview.deep.GeoTemporalDiffusionScenarioModel` | Native-backed graph residual scenario generator for future regional fields, residual shock fields, graph-wide stress scenarios, candidate outcome distributions, or counterfactual scenario analysis. It returns scenario panels, scenario mean, scenario variance, spatial correlation, and point-forecast comparison metrics. |
-| `cartoboost.preview.deep.FlowScenarioGenerator` / `ConditionalResidualDiffusion` | Aliases for the same experimental scenario-generation surface. |
+| `cartoboost.deep.GeoTemporalDiffusionScenarioModel` | Native-backed graph residual scenario generator for future regional fields, residual shock fields, graph-wide stress scenarios, candidate outcome distributions, or counterfactual scenario analysis. It returns scenario panels, scenario mean, scenario variance, spatial correlation, and point-forecast comparison metrics. |
+| `cartoboost.deep.FlowScenarioGenerator` / `ConditionalResidualDiffusion` | Aliases for the same experimental scenario-generation surface. |
 | `generate(point_forecast, edges)` | Requires a finite horizon-by-node point forecast panel and directed weighted edges. Metadata marks `capability_tier="experimental"` and excludes the output from primary benchmark evidence. |
 
 Advanced experimental neural operators:
 
 | Entry point | Notes |
 | --- | --- |
-| `cartoboost.preview.deep.GraphNeuralOperator` | Native-backed spatial field operator for horizon-by-node fields with coordinates, optional directed weighted graph edges, and optional exogenous fields. It returns `future_field`, `residual_field`, `uncertainty_field`, and advanced experimental metadata. |
-| `cartoboost.preview.deep.FourierGeoOperator` / `SpatioTemporalOperator` | Aliases for the same first-cut operator surface. |
+| `cartoboost.deep.GraphNeuralOperator` | Native-backed spatial field operator for horizon-by-node fields with coordinates, optional directed weighted graph edges, and optional exogenous fields. It returns `future_field`, `residual_field`, `uncertainty_field`, and advanced experimental metadata. |
+| `cartoboost.deep.FourierGeoOperator` / `SpatioTemporalOperator` | Aliases for the same first-cut operator surface. |
 | `GraphNeuralOperator.synthetic_benchmark()` | Runs the maintained smooth-field synthetic benchmark and reports operator RMSE, pointwise baseline RMSE, and improvement. |
 
 Choice-set candidate competition:
 
 | Entry point | Notes |
 | --- | --- |
-| `cartoboost.preview.deep.ChoiceSetTransformer` | Native-backed candidate competition scorer. `score(candidates)` groups by `decision_id`, encodes candidate value, candidate features, context features, optional entity/pair embeddings, and existing utility/probability fields, then emits per-candidate utility and softmax choice probability. |
-| `cartoboost.preview.deep.UtilityNet` / `NestedChoiceHead` / `CounterfactualCandidateScorer` | Aliases for the same choice-set surface in this first cut. |
+| `cartoboost.deep.ChoiceSetTransformer` | Native-backed candidate competition scorer. `score(candidates)` groups by `decision_id`, encodes candidate value, candidate features, context features, optional entity/pair embeddings, and existing utility/probability fields, then emits per-candidate utility and softmax choice probability. |
+| `cartoboost.deep.UtilityNet` / `NestedChoiceHead` / `CounterfactualCandidateScorer` | Aliases for the same choice-set surface in this first cut. |
 | `counterfactual_best(candidates)` / `calibration_report(candidates)` | Returns best candidates by decision group and Brier/ECE metrics when binary `chosen` labels are supplied. |
 
 Optional foundation adapters:
 
 | Entry point | Notes |
 | --- | --- |
-| `cartoboost.preview.foundation.ChronosAdapter` / `TimesFMAdapter` / `MoiraiAdapter` / `TimeGPTAdapter` | Optional preview time-series foundation adapters for baselines, feature generation, cold-start experts, and benchmark comparators. |
-| `cartoboost.preview.foundation.TabPFNAdapter` / `TabPFNFeatureGenerator` / `PriorFittedBaseline` | Optional preview tabular foundation adapters with the same cache and dependency contract. |
+| `cartoboost.foundation.ChronosAdapter` / `TimesFMAdapter` / `MoiraiAdapter` / `TimeGPTAdapter` | Optional supported time-series foundation adapters for baselines, feature generation, cold-start experts, and benchmark comparators. |
+| `cartoboost.foundation.TabPFNAdapter` / `TabPFNFeatureGenerator` / `PriorFittedBaseline` | Optional supported tabular foundation adapters with the same cache and dependency contract. |
 | `FoundationForecastFeatures.benchmark_with_without_features(...)` | Compares current predictions with and without foundation features and reports RMSE delta. Adapter caches include external dependency name, version when installed, model id, model hash, input hash, output shape, and explicit AutoGeo enablement metadata. |
 
 Python-owned JSON model artifacts include `artifact_type` and
@@ -562,40 +562,40 @@ Python-owned JSON model artifacts include `artifact_type` and
 verify nested version markers, save/load prediction drift, and explicit failure
 for unsupported artifact versions.
 
-`ForecastRegistry.defaults()` is an internal preview/demo registry. The stable
+`ForecastRegistry.defaults()` is an internal supported/demo registry. The stable
 Python forecasting surface is intentionally limited to `NaiveForecaster`,
 `SeasonalNaiveForecaster`, `CartoBoostLagForecaster`, `AutoForecaster`,
-`ForecastFrame`, and `ForecastResult`; other registry entries are preview
+`ForecastFrame`, and `ForecastResult`; other registry entries are supported
 implementations and are not part of the v0.3 source contract.
 
 Plotting:
 
 | Entry point | Notes |
 | --- | --- |
-| `cartoboost.preview.plotting.plot` | Prophet-compatible forecast plot for `ds`/`yhat` forecast tables and Prophet-shaped local models. |
-| `cartoboost.preview.plotting.plot_backtest_metrics` | Rolling-origin or blocked-fold metric trajectories by model. |
-| `cartoboost.preview.plotting.plot_changepoint_effects` | Signed changepoint effect magnitudes. |
-| `cartoboost.preview.plotting.plot_components` | Prophet-compatible trend, holiday, seasonality, and regressor component panels. |
-| `cartoboost.preview.plotting.plot_cross_validation_metric` | Prophet-compatible horizon metric curve for cross-validation rows. |
-| `cartoboost.preview.plotting.plot_cutoff_predictions` | Cross-validation predictions grouped by cutoff. |
-| `cartoboost.preview.plotting.plot_predicted_actual` | Predicted-vs-actual scatter plot with a parity reference line. |
-| `cartoboost.preview.plotting.plot_residual_diagnostics` | Residual-vs-prediction and residual distribution diagnostics. |
-| `cartoboost.preview.plotting.plot_route_segments` | Static route-segment map with optional metric coloring. |
-| `cartoboost.preview.plotting.plot_metric_comparison` | Sorted bar chart for RMSE, MAE, WAPE, timing, or other metric rows. |
-| `cartoboost.preview.plotting.plot_forecast` | History, forecast, optional holdout actuals, and optional interval bands. |
-| `cartoboost.preview.plotting.plot_forecast_component` | Prophet-compatible single component plot. |
-| `cartoboost.preview.plotting.plot_forecast_components` | Trend, seasonal, event, or other component panels with optional changepoints. |
-| `cartoboost.preview.plotting.plot_horizon_metrics` | Forecast metric trajectories by horizon and model. |
-| `cartoboost.preview.plotting.plot_interval_calibration` | Nominal-vs-observed interval coverage with optional mean interval width. |
-| `cartoboost.preview.plotting.plot_plotly`, `plot_components_plotly`, `plot_forecast_component_plotly`, `plot_seasonality_plotly` | Prophet-compatible interactive Plotly utilities. |
-| `cartoboost.preview.plotting.plot_seasonality`, `plot_weekly`, `plot_yearly` | Prophet-compatible seasonality curves. |
-| `cartoboost.preview.plotting.plot_seasonality_curve` | Periodic component curve with optional uncertainty bands. |
-| `cartoboost.preview.plotting.plot_spatial_points` | Static latitude/longitude point map with optional metric coloring. |
-| `cartoboost.preview.plotting.save_figure` | Creates parent directories and writes a Matplotlib figure. |
-| `cartoboost.preview.plotting.seasonality_plot_df`, `set_y_as_percent`, `add_changepoints_to_plot`, `get_forecast_component_plotly_props`, `get_seasonality_plotly_props` | Prophet-compatible plotting helper utilities matching `prophet.plot` 1.2.2 public names. |
-| `cartoboost.preview.plotting.write_pydeck_point_map` | Interactive PyDeck point map written to HTML. |
-| `cartoboost.preview.plotting.write_pydeck_route_map` | Interactive PyDeck route arc map written to HTML. |
-| `cartoboost.preview.plotting.write_plot_report` | Writes a named bundle of provided diagnostics and returns output paths. |
+| `cartoboost.plotting.plot` | Prophet-compatible forecast plot for `ds`/`yhat` forecast tables and Prophet-shaped local models. |
+| `cartoboost.plotting.plot_backtest_metrics` | Rolling-origin or blocked-fold metric trajectories by model. |
+| `cartoboost.plotting.plot_changepoint_effects` | Signed changepoint effect magnitudes. |
+| `cartoboost.plotting.plot_components` | Prophet-compatible trend, holiday, seasonality, and regressor component panels. |
+| `cartoboost.plotting.plot_cross_validation_metric` | Prophet-compatible horizon metric curve for cross-validation rows. |
+| `cartoboost.plotting.plot_cutoff_predictions` | Cross-validation predictions grouped by cutoff. |
+| `cartoboost.plotting.plot_predicted_actual` | Predicted-vs-actual scatter plot with a parity reference line. |
+| `cartoboost.plotting.plot_residual_diagnostics` | Residual-vs-prediction and residual distribution diagnostics. |
+| `cartoboost.plotting.plot_route_segments` | Static route-segment map with optional metric coloring. |
+| `cartoboost.plotting.plot_metric_comparison` | Sorted bar chart for RMSE, MAE, WAPE, timing, or other metric rows. |
+| `cartoboost.plotting.plot_forecast` | History, forecast, optional holdout actuals, and optional interval bands. |
+| `cartoboost.plotting.plot_forecast_component` | Prophet-compatible single component plot. |
+| `cartoboost.plotting.plot_forecast_components` | Trend, seasonal, event, or other component panels with optional changepoints. |
+| `cartoboost.plotting.plot_horizon_metrics` | Forecast metric trajectories by horizon and model. |
+| `cartoboost.plotting.plot_interval_calibration` | Nominal-vs-observed interval coverage with optional mean interval width. |
+| `cartoboost.plotting.plot_plotly`, `plot_components_plotly`, `plot_forecast_component_plotly`, `plot_seasonality_plotly` | Prophet-compatible interactive Plotly utilities. |
+| `cartoboost.plotting.plot_seasonality`, `plot_weekly`, `plot_yearly` | Prophet-compatible seasonality curves. |
+| `cartoboost.plotting.plot_seasonality_curve` | Periodic component curve with optional uncertainty bands. |
+| `cartoboost.plotting.plot_spatial_points` | Static latitude/longitude point map with optional metric coloring. |
+| `cartoboost.plotting.save_figure` | Creates parent directories and writes a Matplotlib figure. |
+| `cartoboost.plotting.seasonality_plot_df`, `set_y_as_percent`, `add_changepoints_to_plot`, `get_forecast_component_plotly_props`, `get_seasonality_plotly_props` | Prophet-compatible plotting helper utilities matching `prophet.plot` 1.2.2 public names. |
+| `cartoboost.plotting.write_pydeck_point_map` | Interactive PyDeck point map written to HTML. |
+| `cartoboost.plotting.write_pydeck_route_map` | Interactive PyDeck route arc map written to HTML. |
+| `cartoboost.plotting.write_plot_report` | Writes a named bundle of provided diagnostics and returns output paths. |
 
 See [Plotting](../plotting.md) for full examples. Install
 `cartoboost[visualization]` when visualization dependencies are not already
@@ -619,7 +619,7 @@ explicit future holdout over random row splits. Keep `series_id`, `timestamp`,
 and `horizon` in the forecast table so CartoBoost and external tools can be
 scored on the same lane/date rows.
 
-## `cartoboost.preview.NeuralEmbeddingRegressor`
+## `cartoboost.NeuralEmbeddingRegressor`
 
 ```python
 regressor = NeuralEmbeddingRegressor(
@@ -664,18 +664,18 @@ main model comparison.
 
 | Entry point | Purpose |
 | --- | --- |
-| `cartoboost.preview.utilities.naive_forecast(values, horizon)` and related `seasonal_naive_forecast`, `theta_forecast`, `optimized_theta_forecast`, `ets_forecast`, `arima_forecast`, `auto_arima_forecast` | Preview single-series forecasts for plain numeric sequences. |
+| `cartoboost.utilities.naive_forecast(values, horizon)` and related `seasonal_naive_forecast`, `theta_forecast`, `optimized_theta_forecast`, `ets_forecast`, `arima_forecast`, `auto_arima_forecast` | Supported single-series forecasts for plain numeric sequences. |
 | `cartoboost.local_level_kalman_filter(values, ..., horizon=0, interval_z=...)` | Local-level Kalman filtering for numeric sequences. Returns final level and variance, fixed-interval smoothed states, per-step estimates with fitted/residual/gain/likelihood diagnostics, residual summary metrics, optional flat forecast means, and optional forecast distributions with normal bounds. |
 | `cartoboost.local_level_kalman_forecast(values, horizon, ...)` | Local-level Kalman forecast utility. |
-| `cartoboost.preview.utilities.kalman_filter(values, level_process_variance=..., trend_process_variance=..., observation_variance=..., horizon=0, interval_z=...)` | Preview local-linear Kalman filtering for numeric sequences. |
+| `cartoboost.utilities.kalman_filter(values, level_process_variance=..., trend_process_variance=..., observation_variance=..., horizon=0, interval_z=...)` | Supported local-linear Kalman filtering for numeric sequences. |
 | `cartoboost.local_linear_trend_kalman_forecast(values, horizon, ...)` | Local-linear trend Kalman forecast utility. |
-| `cartoboost.preview.utilities.croston_forecast`, `sba_forecast`, `tsb_forecast` | Preview intermittent-demand utilities for non-negative numeric sequences. |
-| `cartoboost.preview.utilities.ordinary_kriging_predict(observations, targets, range=..., nugget=..., detailed=False)` | Preview ordinary kriging for observed `(x, y, value)` triples and target `(x, y)` coordinates. |
-| `cartoboost.preview.utilities.ordinary_kriging_leave_one_out(observations, ...)` | Preview leave-one-out kriging diagnostics for observed coordinates. |
-| `cartoboost.preview.utilities.empirical_variogram(observations, ...)` | Preview binned empirical semivariogram with lag ranges, mean lag distances, semivariances, and pair counts. |
-| `cartoboost.preview.utilities.fit_ordinary_kriging_variogram(observations, ...)` | Preview weighted least-squares variogram fitting over model/range/nugget/sill candidate grids. |
-| `cartoboost.preview.utilities.ordinary_kriging_leave_one_out_diagnostics(observations, ...)` | Preview leave-one-out predictions plus residual metrics such as bias, MAE, RMSE, standardized residuals, interval coverage, and average kriging variance. |
-| `cartoboost.preview.forecasting.sequence.*` | Sequence reference utilities for known-prefix continuation, reference path inference, leakage-safe OOF row generation and validation, group metrics, and aligned candidate blending. |
+| `cartoboost.utilities.croston_forecast`, `sba_forecast`, `tsb_forecast` | Supported intermittent-demand utilities for non-negative numeric sequences. |
+| `cartoboost.utilities.ordinary_kriging_predict(observations, targets, range=..., nugget=..., detailed=False)` | Supported ordinary kriging for observed `(x, y, value)` triples and target `(x, y)` coordinates. |
+| `cartoboost.utilities.ordinary_kriging_leave_one_out(observations, ...)` | Supported leave-one-out kriging diagnostics for observed coordinates. |
+| `cartoboost.utilities.empirical_variogram(observations, ...)` | Supported binned empirical semivariogram with lag ranges, mean lag distances, semivariances, and pair counts. |
+| `cartoboost.utilities.fit_ordinary_kriging_variogram(observations, ...)` | Supported weighted least-squares variogram fitting over model/range/nugget/sill candidate grids. |
+| `cartoboost.utilities.ordinary_kriging_leave_one_out_diagnostics(observations, ...)` | Supported leave-one-out predictions plus residual metrics such as bias, MAE, RMSE, standardized residuals, interval coverage, and average kriging variance. |
+| `cartoboost.forecasting.sequence.*` | Sequence reference utilities for known-prefix continuation, reference path inference, leakage-safe OOF row generation and validation, group metrics, and aligned candidate blending. |
 
 ## Direct Graph Encoders
 
@@ -704,9 +704,9 @@ in.
 | `to_artifact_json()` | `str` | Emits JSON artifact payload. |
 | `load_artifact_json(path)` | `Node2VecEncoder` / `GraphSageEncoder` / `HeteroGraphSageEncoder` / `HinSageEncoder` | Loads serialized encoder state. |
 
-## `cartoboost.preview.graph` Feature Helpers
+## `cartoboost.graph` Feature Helpers
 
-The `cartoboost.preview.graph` package contains CartoBoost graph models, CartoBoost
+The `cartoboost.graph` package contains CartoBoost graph models, CartoBoost
 link predictors, and graph-feature helpers. Use the direct models when the
 graph itself is the thing you want to score; use `GraphFeatureTransformer`
 only when you want dense and sparse graph inputs for another estimator.
@@ -808,8 +808,8 @@ Helper for declaring numeric, periodic, and sparse-set feature roles.
 ## SHAP Helpers
 
 ```python
-cartoboost.preview.explain.make_shap_explainer(model, background, **kwargs)
-cartoboost.preview.explain.explain_shap(model, X, background=..., **kwargs)
+cartoboost.explain.make_shap_explainer(model, background, **kwargs)
+cartoboost.explain.explain_shap(model, X, background=..., **kwargs)
 ```
 
 These functions are also available as estimator methods. See
@@ -845,16 +845,16 @@ model in a comparison.
 ## Metric And Diagnostic Helpers
 
 ```python
-cartoboost.preview.metrics.logloss(y_true, y_proba)
-cartoboost.preview.metrics.roc_auc(y_true, y_score)
-cartoboost.preview.metrics.pr_auc(y_true, y_score)
-cartoboost.preview.metrics.brier_score(y_true, y_proba)
-cartoboost.preview.metrics.ece_calibration_error(y_true, y_proba, n_bins=10)
-cartoboost.preview.metrics.ndcg_at_k(relevance, scores, groups=None, k=None)
-cartoboost.preview.metrics.mean_average_precision(relevance, scores, groups=None, k=None)
-cartoboost.preview.metrics.mean_reciprocal_rank(relevance, scores, groups=None, k=None)
-cartoboost.preview.metrics.residual_morans_i(coordinates, residuals)
-cartoboost.preview.metrics.spatial_cv_gap(random_cv_score, spatial_cv_score)
+cartoboost.metrics.logloss(y_true, y_proba)
+cartoboost.metrics.roc_auc(y_true, y_score)
+cartoboost.metrics.pr_auc(y_true, y_score)
+cartoboost.metrics.brier_score(y_true, y_proba)
+cartoboost.metrics.ece_calibration_error(y_true, y_proba, n_bins=10)
+cartoboost.metrics.ndcg_at_k(relevance, scores, groups=None, k=None)
+cartoboost.metrics.mean_average_precision(relevance, scores, groups=None, k=None)
+cartoboost.metrics.mean_reciprocal_rank(relevance, scores, groups=None, k=None)
+cartoboost.metrics.residual_morans_i(coordinates, residuals)
+cartoboost.metrics.spatial_cv_gap(random_cv_score, spatial_cv_score)
 ```
 
 Classification metrics are deterministic NumPy implementations for binary or
@@ -873,27 +873,27 @@ validated NumPy or dataframe inputs to the stable estimators.
 ## Geo Encoding Helpers
 
 ```python
-cartoboost.preview.geo.clockwise_bearing_unit_vector((pickup_x, pickup_y), (dropoff_x, dropoff_y))
-cartoboost.preview.geo.initial_bearing_unit_vector_latlng(
+cartoboost.geo.clockwise_bearing_unit_vector((pickup_x, pickup_y), (dropoff_x, dropoff_y))
+cartoboost.geo.initial_bearing_unit_vector_latlng(
     (pickup_latitude, pickup_longitude),
     (dropoff_latitude, dropoff_longitude),
 )
-cartoboost.preview.geo.route_feature_vector((pickup_x, pickup_y), (dropoff_x, dropoff_y))
-cartoboost.preview.geo.radial_anchor_distances((pickup_x, pickup_y), anchors)
-cartoboost.preview.geo.rbf_anchor_features((pickup_x, pickup_y), anchors, length_scale=3.0)
-cartoboost.preview.geo.local_frame_features((pickup_x, pickup_y), origin=(0.0, 0.0), axis=(1.0, 1.0))
-cartoboost.preview.h3.build_h3_sparse_sets(
+cartoboost.geo.route_feature_vector((pickup_x, pickup_y), (dropoff_x, dropoff_y))
+cartoboost.geo.radial_anchor_distances((pickup_x, pickup_y), anchors)
+cartoboost.geo.rbf_anchor_features((pickup_x, pickup_y), anchors, length_scale=3.0)
+cartoboost.geo.local_frame_features((pickup_x, pickup_y), origin=(0.0, 0.0), axis=(1.0, 1.0))
+cartoboost.h3.build_h3_sparse_sets(
     {"pickup_h3": (pickup_latitude, pickup_longitude)},
     resolution=9,
     parent_resolutions=[5, 7],
 )
-cartoboost.preview.h3.build_h3_route_sparse_sets(osrm_routes, name="route_h3", resolution=9)
-cartoboost.preview.s2.build_s2_sparse_sets(
+cartoboost.h3.build_h3_route_sparse_sets(osrm_routes, name="route_h3", resolution=9)
+cartoboost.s2.build_s2_sparse_sets(
     {"pickup_s2": (pickup_latitude, pickup_longitude)},
     level=12,
     parent_levels=[8, 10],
 )
-cartoboost.preview.s2.build_s2_route_sparse_sets(valhalla_routes, name="route_s2", level=12)
+cartoboost.s2.build_s2_route_sparse_sets(valhalla_routes, name="route_s2", level=12)
 ```
 
 Bearing helpers return continuous `(east, north)` unit-vector columns. Use the

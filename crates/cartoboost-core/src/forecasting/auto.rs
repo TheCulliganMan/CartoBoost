@@ -35,7 +35,7 @@ const MIN_AUTO_TRAIN_HISTORY: usize = 4;
 const MIN_SERIES_WEIGHT_VALIDATION_POINTS: usize = 4;
 // Keep the stable selector focused on candidates with deterministic fit
 // behavior across short, sparse panels. The broad classical expert bank is
-// still available as a standalone preview model, but is not part of the
+// still available as a standalone supported model, but is not part of the
 // stable AutoForecaster roster because one unstable ARIMA member can make an
 // otherwise valid panel selection fail.
 const AUTO_CANDIDATES: [&str; 13] = [

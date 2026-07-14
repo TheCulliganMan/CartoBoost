@@ -1,5 +1,8 @@
+import pickle
+from pathlib import Path
+
 import pytest
-from cartoboost.forecasting.local import NaiveForecaster
+from cartoboost.forecasting.local import ArimaForecaster, NaiveForecaster, ThetaForecaster
 
 
 def test_naive_requires_fit_before_predict():
@@ -33,3 +36,31 @@ def test_naive_native_metadata_round_trips_after_fit():
     metadata = NaiveForecaster().fit([1.0, 2.0, 4.0]).get_metadata()
 
     assert metadata == {"model": "naive"}
+
+
+def test_naive_pickle_and_weights_roundtrip(tmp_path: Path):
+    model = NaiveForecaster().fit([1.0, 2.0, 4.0])
+    expected = model.predict(3).predictions()
+    path = tmp_path / "naive.weights.json"
+
+    model.save_weights(path)
+
+    assert NaiveForecaster.load_weights(path).predict(3).predictions() == expected
+    assert pickle.loads(pickle.dumps(model)).predict(3).predictions() == expected
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        ThetaForecaster().fit([1.0, 2.0, 3.0, 4.0, 5.0]),
+        ArimaForecaster(p=1, d=0, q=0).fit([1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),
+    ],
+)
+def test_native_forecast_refit_artifact_roundtrip(model, tmp_path: Path):
+    expected = model.predict(2).predictions()
+    path = tmp_path / f"{type(model).__name__}.weights.json"
+
+    model.save_weights(path)
+
+    assert type(model).load_weights(path).predict(2).predictions() == expected
+    assert pickle.loads(pickle.dumps(model)).predict(2).predictions() == expected

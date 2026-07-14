@@ -8,7 +8,7 @@ direct graph structure, or learned ID embeddings.
 Use the model whose assumptions match the unit being predicted. Then compare it
 against simpler baselines under the same split before interpreting a gain.
 
-Use `cartoboost.preview.models.ModelRegistry` to inspect preview model metadata.
+Use `cartoboost.models.ModelRegistry` to inspect supported model metadata.
 Automatic geo model selection is intentionally not shipped in v0.3; choose a
 registered estimator explicitly and pair it with a native validation manifest.
 
@@ -33,7 +33,7 @@ registered estimator explicitly and pair it with a native validation manifest.
 | Should temporal changepoints and seasonality be fused with cutoff-safe spatial kriging? | `SpatialPiecewiseKrigingForecaster` | [Spatial Piecewise Kriging](forecasting-models/spatial-piecewise-kriging.md) |
 | Are you estimating intervention lift or designing a geographic experiment rather than forecasting? | `SyntheticDIDEstimator`, `GeoLiftEstimator`, `GeoExperimentDesigner`, or `SpatialPlaceboTester` | [Geo-Causal Experiment Models](geo-causal-models.md) |
 | Should a neural panel forecaster preserve directional entity identity? | `NeuralPanelForecaster` or `LaneNeuralPanelForecaster` | [Neural Panel](forecasting-models/neural-panel.md) |
-| Do you need generic ordered-pair, response-curve, event, residual, graph-sequence, or constrained candidate models? | `cartoboost.preview.deep.*` | [Generic Deep Models](deep-models.md) |
+| Do you need generic ordered-pair, response-curve, event, residual, graph-sequence, or constrained candidate models? | `cartoboost.deep.*` | [Generic Deep Models](deep-models.md) |
 | Do you need a fixed combination of fitted forecasters? | `WeightedEnsembleForecaster` | [Weighted Ensembles](forecasting-models/ensembles.md) |
 | Are stable ids themselves the learned artifact? | `NeuralEmbeddingStandaloneRegressor` | [CartoBoost Neural Embedding Regressor](neural-models/cartoboost-neural-embedding.md) |
 | Is the relationship network the object being modeled? | Graph models | [CartoBoost Graph Model Guides](graph-models/index.md) |
@@ -42,16 +42,16 @@ registered estimator explicitly and pair it with a native validation manifest.
 
 ## Unified Model Registry
 
-`cartoboost.preview.models.ModelRegistry.defaults()` describes preview model
-surfaces under the namespaces `cartoboost.forecasting` and preview modules
-such as `cartoboost.preview.geo`, `cartoboost.preview.graph`,
-`cartoboost.preview.causal`, and `cartoboost.preview.prob`. Each spec carries
+`cartoboost.models.ModelRegistry.defaults()` describes supported model
+surfaces under the namespaces `cartoboost.forecasting` and supported modules
+such as `cartoboost.geo`, `cartoboost.graph`,
+`cartoboost.causal`, and `cartoboost.prob`. Each spec carries
 typed metadata: model name, namespace,
 task types, capabilities, stability, artifact format, and optional dependency
 notes.
 
 ```python
-from cartoboost.preview.models import ModelRegistry
+from cartoboost.models import ModelRegistry
 
 registry = ModelRegistry.defaults()
 registry.names(namespace="geo")
@@ -66,7 +66,7 @@ leakage policy explicit. The v0.3 distribution does not include an automatic
 geo selector or a model stack; any future return requires native selection
 behavior and real-family evidence.
 
-Experimental research adapters live under `cartoboost.preview.experimental`. They are
+Experimental research adapters live under `cartoboost.experimental`. They are
 not registered as stable models and require an explicit backend before fitting.
 
 ## When CartoBoostRegressor Fits
@@ -151,7 +151,7 @@ unknown-category value.
 
 ```python
 from cartoboost import CartoBoostRegressor
-from cartoboost.preview import FeatureKind
+from cartoboost import FeatureKind
 
 schema = {"dense": [{"name": "location_id", "kind": FeatureKind.CATEGORICAL}]}
 model = CartoBoostRegressor(split_policy="axis_only")
@@ -227,9 +227,9 @@ entities. `environmental_blocked_cv` clusters covariates such as weather,
 demand regimes, or operational conditions.
 
 Use the stable native manifest constructors in `cartoboost.validation` for
-spatial and temporal split definitions. Preview diagnostics such as residual
+spatial and temporal split definitions. Supported diagnostics such as residual
 Moran's I and the random-to-spatial score gap live under
-`cartoboost.preview.metrics`; keep their output in the benchmark artifact
+`cartoboost.metrics`; keep their output in the benchmark artifact
 alongside the manifest hash.
 
 Positive spatial buffers should use projected linear units. Latitude/longitude

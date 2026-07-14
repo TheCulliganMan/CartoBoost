@@ -1,9 +1,11 @@
 import json
+import pickle
 from pathlib import Path
 
 import numpy as np
 import pytest
-from cartoboost import CartoBoostClassifier, FeatureKind
+from cartoboost import CartoBoostClassifier
+from cartoboost.schema import FeatureKind
 
 
 def test_binary_classifier_fit_predict_proba_and_roundtrip(tmp_path: Path):
@@ -215,13 +217,24 @@ def test_classifier_predict_before_fit_raises():
         CartoBoostClassifier().predict([[1.0]])
 
 
-def test_classifier_save_weights_fails_loudly(tmp_path: Path):
+def test_classifier_weights_and_pickle_roundtrip(tmp_path: Path):
     classifier = CartoBoostClassifier(
         n_estimators=1,
         max_depth=0,
-    ).fit([[0.0], [1.0]], [0, 1])
+    ).fit([[0.0], [1.0]], ["airport", "midtown"])
 
-    with pytest.raises(NotImplementedError, match="ONNX export"):
+    X = [[0.0], [1.0]]
+    expected = classifier.predict_proba(X)
+    path = tmp_path / "classifier.weights.json"
+    classifier.save_weights(path)
+
+    loaded = CartoBoostClassifier.load_weights(path)
+    restored = pickle.loads(pickle.dumps(classifier))
+
+    assert loaded.predict_proba(X) == pytest.approx(expected)
+    assert restored.predict_proba(X) == pytest.approx(expected)
+    assert loaded.predict(X).tolist() == classifier.predict(X).tolist()
+    with pytest.raises(NotImplementedError, match="JSON only"):
         classifier.save_weights(tmp_path / "classifier.onnx", format="onnx")
 
 

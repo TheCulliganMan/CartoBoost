@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import pickle
 import types
 
 import cartoboost.deep._native as native_helpers
@@ -427,6 +428,10 @@ def test_delay_aware_graph_transformer_direction_delay_and_roundtrip(tmp_path):
         horizon=4,
         edge_delay_prior=[2, 1],
     ).fit(correct)
+    routed_path = tmp_path / "routed-delay-graph.weights.json"
+    routed.save_weights(routed_path)
+    routed_loaded = SpatioTemporalGraphForecaster.load_weights(routed_path)
+    routed_pickled = pickle.loads(pickle.dumps(routed))
 
     assert model.score(actual) < reversed_model.score(actual)
     assert model.score(actual) < no_delay.score(actual)
@@ -457,6 +462,8 @@ def test_delay_aware_graph_transformer_direction_delay_and_roundtrip(tmp_path):
     assert model.metadata_["flow_uncertainty_head"]["surface"] == "SpatioTemporalGraphForecaster"
     assert model.metadata_["save_load_parity_checked"] is True
     assert routed.metadata_["backbone"] == "delay_aware_graph_transformer"
+    np.testing.assert_array_equal(routed_loaded.predict(), routed.predict())
+    np.testing.assert_array_equal(routed_pickled.predict(), routed.predict())
     np.testing.assert_array_equal(loaded.predict(), model.predict())
 
     with pytest.raises(RuntimeError, match="accelerator kernels are not available yet"):
@@ -506,6 +513,9 @@ def test_regime_moe_reports_usage_and_beats_single_expert(tmp_path):
     path = tmp_path / "regime-moe.json"
     model.save(path)
     loaded = RegimeMoEForecaster.load(path)
+    weights_path = tmp_path / "regime-moe.weights.json"
+    model.save_weights(weights_path)
+    weights_loaded = RegimeMoEForecaster.load_weights(weights_path)
 
     assert components["expert_weights"].shape == (steps, 6)
     assert components["expert_predictions"].shape == (steps, 6)
@@ -524,6 +534,30 @@ def test_regime_moe_reports_usage_and_beats_single_expert(tmp_path):
     ]
     np.testing.assert_allclose(
         loaded.predict(
+            features,
+            time_features=np.column_stack([np.sin(np.arange(steps) / 6.0)]),
+            recent_volatility=volatility,
+            recent_residuals=residuals,
+            graph_centrality=centrality,
+            historical_sparsity=sparsity,
+            candidate_value=distance,
+        ),
+        components["combined_prediction"],
+    )
+    np.testing.assert_allclose(
+        pickle.loads(pickle.dumps(model)).predict(
+            features,
+            time_features=np.column_stack([np.sin(np.arange(steps) / 6.0)]),
+            recent_volatility=volatility,
+            recent_residuals=residuals,
+            graph_centrality=centrality,
+            historical_sparsity=sparsity,
+            candidate_value=distance,
+        ),
+        components["combined_prediction"],
+    )
+    np.testing.assert_allclose(
+        weights_loaded.predict(
             features,
             time_features=np.column_stack([np.sin(np.arange(steps) / 6.0)]),
             recent_volatility=volatility,
@@ -560,7 +594,24 @@ def test_conditional_flow_head_outputs_joint_uncertainty_metrics(tmp_path):
     path = tmp_path / "flow.json"
     head.save(path)
     loaded = ConditionalFlowDistributionHead.load(path)
+    weights_path = tmp_path / "flow.weights.json"
+    head.save_weights(weights_path)
+    weights_loaded = ConditionalFlowDistributionHead.load_weights(weights_path)
     loaded_output = loaded.predict(
+        model_hidden_state=hidden,
+        horizon_embeddings=horizon,
+        entity_or_pair_embeddings=entity,
+        graph_context=graph,
+        actual=residuals,
+    )
+    weights_output = weights_loaded.predict(
+        model_hidden_state=hidden,
+        horizon_embeddings=horizon,
+        entity_or_pair_embeddings=entity,
+        graph_context=graph,
+        actual=residuals,
+    )
+    pickled_output = pickle.loads(pickle.dumps(head)).predict(
         model_hidden_state=hidden,
         horizon_embeddings=horizon,
         entity_or_pair_embeddings=entity,
@@ -572,6 +623,8 @@ def test_conditional_flow_head_outputs_joint_uncertainty_metrics(tmp_path):
     assert output["marginal_quantiles"].shape == (steps, 3)
     assert output["joint_scenario_paths"].shape == (12, steps)
     assert output["log_likelihood"].shape == (steps,)
+    np.testing.assert_allclose(weights_output["marginal_quantiles"], output["marginal_quantiles"])
+    np.testing.assert_allclose(pickled_output["marginal_quantiles"], output["marginal_quantiles"])
     assert "expected_shortfall_low" in output["tail_risk_metrics"]
     assert "crps" in output["metrics"]
     assert "pinball_median" in output["metrics"]

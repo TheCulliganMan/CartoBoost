@@ -71,7 +71,7 @@ explainer = model.make_shap_explainer(X_train)
 ```
 
 The module-level helpers are available from
-`cartoboost.preview.explain`; estimator methods are the preferred application
+`cartoboost.explain`; estimator methods are the preferred application
 interface because they preserve CartoBoost's fitted feature metadata.
 
 ## Additive Weight Decomposition

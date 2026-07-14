@@ -24,7 +24,7 @@ validated.
 
 ```python
 import numpy as np
-from cartoboost.preview.graph import HinSageStandaloneRegressor
+from cartoboost.graph import HinSageStandaloneRegressor
 
 node_types = np.array([0, 1, 1, 0], dtype=np.uint64)
 edge_type_triples = [(0, 0, 1), (1, 1, 0)]
@@ -66,7 +66,7 @@ pred = model.predict(
 ### Link Predictor
 
 ```python
-from cartoboost.preview.graph import HinSageLinkPredictor
+from cartoboost.graph import HinSageLinkPredictor
 
 predictor = HinSageLinkPredictor(
     input_dim=2,

@@ -18,7 +18,7 @@ normalized to one stable missing-category token before encoding.
 
 ```python
 from cartoboost import CartoBoostRegressor
-from cartoboost.preview import FeatureKind
+from cartoboost import FeatureKind
 
 schema = {
     "dense": [

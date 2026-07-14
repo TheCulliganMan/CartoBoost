@@ -67,10 +67,10 @@ manifest hash alongside the forecast artifact.
 
 ## Diagnostics
 
-Residual Moran's I and the random-to-spatial score gap are preview diagnostics:
+Residual Moran's I and the random-to-spatial score gap are supported diagnostics:
 
 ```python
-from cartoboost.preview.metrics import residual_morans_i, spatial_cv_gap
+from cartoboost.metrics import residual_morans_i, spatial_cv_gap
 
 gap = spatial_cv_gap(random_cv_rmse, buffered_cv_rmse)
 residual_i = residual_morans_i(projected_pickup_xy_validation, residuals)

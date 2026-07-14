@@ -1,7 +1,7 @@
 # CartoBoost Graph Models And Features
 
-> Preview API: graph models and feature encoders are imported from
-> `cartoboost.preview.graph` in CartoBoost 0.3.
+> Supported API: graph models and feature encoders are imported from
+> `cartoboost.graph` in CartoBoost 0.3.
 
 This is the contract page for graph-related functionality. Use the
 [graph model guides](user-guide/graph-models/index.md) for examples and model
@@ -65,7 +65,7 @@ fare when each row has a source zone and target zone.
 
 ```python
 import numpy as np
-from cartoboost.preview.graph import Node2VecStandaloneRegressor
+from cartoboost.graph import Node2VecStandaloneRegressor
 
 edges = [(0, 1), (1, 2), (2, 3), (3, 0), (0, 2)]
 pickup = np.array([0, 1, 2, 3], dtype=np.uint64)
@@ -91,7 +91,7 @@ Use `GraphSageStandaloneRegressor` instead when zone attributes should shape
 the learned representation.
 
 ```python
-from cartoboost.preview.graph import GraphSageStandaloneRegressor
+from cartoboost.graph import GraphSageStandaloneRegressor
 
 zone_features = np.array(
     [
@@ -128,7 +128,7 @@ Available predictors:
 - `HinSageLinkPredictor`
 
 ```python
-from cartoboost.preview.graph import Node2VecLinkPredictor
+from cartoboost.graph import Node2VecLinkPredictor
 
 predictor = Node2VecLinkPredictor(dim=8, walk_length=8, walks_per_node=4, epochs=2)
 predictor.fit(node_count=4, edges=edges)
@@ -276,7 +276,7 @@ then add graph-derived columns and measure whether directed flow structure
 changes the same validation split.
 
 ```python
-from cartoboost.preview.graph import GraphFeatureTransformer
+from cartoboost.graph import GraphFeatureTransformer
 
 transformer = GraphFeatureTransformer.from_config(config)
 bundle = transformer.fit_transform(
@@ -296,7 +296,7 @@ Use `HinSageFeatureEncoder` directly when you only need graph embeddings or
 link-prediction features:
 
 ```python
-from cartoboost.preview.graph import HinSageConfig, HinSageFeatureEncoder
+from cartoboost.graph import HinSageConfig, HinSageFeatureEncoder
 
 encoder = HinSageFeatureEncoder.from_config(
     HinSageConfig(

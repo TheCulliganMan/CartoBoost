@@ -45,7 +45,7 @@ Probabilistic rows should carry:
 ## Demand Example
 
 ```python
-from cartoboost.preview.forecasting import ConformalIntervalRegressor
+from cartoboost.forecasting import ConformalIntervalRegressor
 
 model = ConformalIntervalRegressor(base_demand_model, alpha=0.1)
 model.fit(
@@ -69,7 +69,7 @@ calibration.
 ## Pricing Example
 
 ```python
-from cartoboost.preview.forecasting import QuantileCartoBoostRegressor
+from cartoboost.forecasting import QuantileCartoBoostRegressor
 
 pricing = QuantileCartoBoostRegressor(
     quantiles=(0.1, 0.5, 0.9),
@@ -88,7 +88,7 @@ for airport pickup lanes or upper-tail duration for congested routes.
 ## Spatial Interpolation Example
 
 ```python
-from cartoboost.preview.forecasting import SpatialConformalRegressor
+from cartoboost.forecasting import SpatialConformalRegressor
 
 spatial = SpatialConformalRegressor(base_interpolator, alpha=0.1)
 spatial.fit(
@@ -118,7 +118,7 @@ split-conformal residual width and records the conformal method in metadata.
 ## Forecast Cutoff Safety
 
 ```python
-from cartoboost.preview.forecasting import ForecastConformalCalibrator
+from cartoboost.forecasting import ForecastConformalCalibrator
 
 calibrator = ForecastConformalCalibrator(alpha=0.2).fit(
     actual=backtest_actual,
@@ -138,7 +138,7 @@ from training on future holdout residuals.
 Use distributional metrics next to point metrics:
 
 ```python
-from cartoboost.preview.forecasting import (
+from cartoboost.forecasting import (
     crps_approximation,
     interval_coverage,
     mean_interval_width,

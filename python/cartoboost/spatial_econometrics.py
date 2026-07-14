@@ -6,6 +6,8 @@ from typing import Any
 
 import numpy as np
 
+from ._artifacts import ArtifactPersistenceMixin
+
 try:  # pragma: no cover - exercised when sklearn is installed.
     from sklearn.base import BaseEstimator, RegressorMixin
 except ImportError:  # pragma: no cover
@@ -90,7 +92,7 @@ class SpatialWeights:
         return list(self._native.isolated_rows())
 
 
-class _SpatialRegressionBase(RegressorMixin, BaseEstimator):
+class _SpatialRegressionBase(ArtifactPersistenceMixin, RegressorMixin, BaseEstimator):
     _native_cls: type
     model_name: str
 

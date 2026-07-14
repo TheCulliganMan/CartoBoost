@@ -17,6 +17,8 @@ from cartoboost._artifacts import (
     versioned_artifact_payload,
 )
 
+from .._artifacts import ArtifactPersistenceMixin
+
 
 @dataclass(frozen=True)
 class QuantileForecast:
@@ -134,7 +136,7 @@ class ConformalCalibrator:
         )
 
 
-class ConformalIntervalRegressor:
+class ConformalIntervalRegressor(ArtifactPersistenceMixin):
     """Generic split-conformal wrapper for estimators exposing ``fit`` and ``predict``."""
 
     def __init__(self, estimator: Any, *, alpha: float = 0.1) -> None:
@@ -242,7 +244,7 @@ class ConformalIntervalRegressor:
         return obj
 
 
-class QuantileCartoBoostRegressor:
+class QuantileCartoBoostRegressor(ArtifactPersistenceMixin):
     """Train one CartoBoost quantile regressor per requested level."""
 
     def __init__(self, *, quantiles: tuple[float, ...] = (0.1, 0.5, 0.9), **kwargs: Any) -> None:

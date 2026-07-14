@@ -9,7 +9,7 @@ for the point forecaster and is excluded from stable model selection.
 ## Public Contract
 
 ```python
-from cartoboost.preview.deep import GeoTemporalDiffusionScenarioModel
+from cartoboost.deep import GeoTemporalDiffusionScenarioModel
 
 model = GeoTemporalDiffusionScenarioModel(
     scenario_count=64,

@@ -77,7 +77,7 @@ not equivalent to adding an unadjusted `h * slope` term.
 ## Example
 
 ```python
-from cartoboost.preview.forecasting import OptimizedThetaForecaster, ThetaForecaster
+from cartoboost.forecasting import OptimizedThetaForecaster, ThetaForecaster
 
 hourly_airport_pickups = [
     88, 84, 79, 72, 91, 118, 146, 162, 155, 141, 130, 126,
@@ -105,7 +105,7 @@ Use a `ForecastFrame` for panel data. Each `series_id` is fit as its own local
 series.
 
 ```python
-from cartoboost.preview.forecasting import ForecastFrame, OptimizedThetaForecaster
+from cartoboost.forecasting import ForecastFrame, OptimizedThetaForecaster
 
 frame = ForecastFrame.from_pandas(
     hourly_zone_demand,
@@ -129,7 +129,7 @@ Hourly demand often has a daily cycle. Set both `seasonality` and
 `season_length` when the training window contains enough full cycles.
 
 ```python
-from cartoboost.preview.forecasting import ThetaForecaster
+from cartoboost.forecasting import ThetaForecaster
 
 model = ThetaForecaster(
     theta=2.0,
@@ -211,7 +211,7 @@ The core plotting pattern is:
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-from cartoboost.preview.forecasting import ForecastFrame, OptimizedThetaForecaster, ThetaForecaster
+from cartoboost.forecasting import ForecastFrame, OptimizedThetaForecaster, ThetaForecaster
 
 frame = ForecastFrame.from_pandas(
     train_pickups,

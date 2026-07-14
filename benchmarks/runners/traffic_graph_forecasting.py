@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from cartoboost.preview.forecasting import (
+from cartoboost.forecasting import (
     DCRNNForecaster,
     GraphTemporalFrame,
     GraphWaveNetForecaster,

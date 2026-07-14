@@ -45,9 +45,9 @@ if str(PYTHON_SOURCE) not in sys.path:
 
 from cartoboost import __version__  # noqa: E402
 from cartoboost import _native  # noqa: E402
-from cartoboost.preview import croston_forecast, sba_forecast, tsb_forecast  # noqa: E402
+from cartoboost import croston_forecast, sba_forecast, tsb_forecast  # noqa: E402
 from cartoboost.forecasting.global_models import CartoBoostLagForecaster  # noqa: E402
-from cartoboost.preview.forecasting import (  # noqa: E402
+from cartoboost.forecasting import (  # noqa: E402
     AutoStatsBank,
     DCRNNForecaster,
     GraphTemporalFrame,

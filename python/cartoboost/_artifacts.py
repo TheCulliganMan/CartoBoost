@@ -9,6 +9,60 @@ from pathlib import Path
 from typing import Any
 
 
+class ArtifactPersistenceMixin:
+    """Provide pickle and JSON weight persistence through a model's artifact API."""
+
+    def save_weights(self, path: str | Path, *, format: str = "auto") -> None:
+        if format not in {"auto", "json"}:
+            raise NotImplementedError(
+                f"{self.__class__.__name__} weight artifacts currently support JSON only"
+            )
+        self.save(path)
+
+    @classmethod
+    def load_weights(cls, path: str | Path) -> Any:
+        return cls.load(path)
+
+    def __getstate__(self) -> dict[str, Any]:
+        # Unfitted Python wrappers contain configuration only and can retain
+        # their ordinary state. Native wrappers instantiate a PyO3 handle in
+        # ``__init__``, so reconstruct those from their constructor settings.
+        if (
+            getattr(self, "_model", None) is None
+            and getattr(self, "_native_model", None) is None
+            and getattr(self, "_native", None) is None
+        ):
+            return dict(self.__dict__)
+        if not getattr(self, "is_fitted_", True):
+            params = getattr(self, "_params", None)
+            if isinstance(params, dict):
+                return {"_cartoboost_pickle_unfitted_params": dict(params)}
+            return dict(self.__dict__)
+        # Fitted native models must be reconstructed from their public
+        # artifact rather than pickling a PyO3 handle.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "model.json"
+            self.save(path)
+            payload = path.read_bytes()
+        return {"_cartoboost_pickle_artifact": payload}
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        payload = state.get("_cartoboost_pickle_artifact")
+        if payload is None:
+            params = state.get("_cartoboost_pickle_unfitted_params")
+            if isinstance(params, dict):
+                restored = type(self)(**params)
+                self.__dict__.update(restored.__dict__)
+                return
+            self.__dict__.update(state)
+            return
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "model.json"
+            path.write_bytes(payload)
+            restored = type(self).load(path)
+        self.__dict__.update(restored.__dict__)
+
+
 def library_version() -> str:
     """Resolve the installed package version without importing the package root."""
 
@@ -25,8 +79,8 @@ def library_version() -> str:
 ARTIFACT_VERSION = 1
 
 # Stable estimator artifacts intentionally have a separate envelope version from
-# preview/experimental Python artifacts.  This lets the v0.3 stable surface make
-# a clean break without silently accepting preview payloads as production models.
+# supported/experimental Python artifacts.  This lets the v0.3 stable surface make
+# a clean break without silently accepting supported payloads as production models.
 STABLE_ARTIFACT_FORMAT = "cartoboost.model"
 STABLE_ARTIFACT_VERSION = 2
 STABLE_MODEL_TYPES = {"regressor", "classifier", "ranker"}
@@ -139,7 +193,7 @@ def decode_stable_forecast_artifact(
     raw: Mapping[str, Any],
     model_type: str,
 ) -> dict[str, Any]:
-    """Validate a stable forecasting envelope without accepting preview artifacts."""
+    """Validate a stable forecasting envelope without accepting supported artifacts."""
 
     if model_type not in STABLE_FORECAST_MODEL_TYPES:
         raise ValueError(f"unsupported stable forecast model type {model_type!r}")
@@ -168,7 +222,7 @@ def decode_stable_model_artifact(
 ) -> dict[str, Any]:
     """Validate a stable envelope and migrate valid v0.2 artifacts in memory.
 
-    The returned value is always the canonical v2 envelope.  Legacy preview
+    The returned value is always the canonical v2 envelope.  Legacy supported
     artifact types are rejected rather than being interpreted as stable models.
     Raw native v0.2 model JSON remains loadable for the three stable boosters;
     it is wrapped in memory and never rewritten on disk.
@@ -200,7 +254,7 @@ def decode_stable_model_artifact(
     if artifact_type is not None:
         if artifact_type != expected_legacy or raw.get("artifact_version") != ARTIFACT_VERSION:
             raise ValueError(
-                f"unsupported {model_type} artifact; preview and experimental artifacts "
+                f"unsupported {model_type} artifact; supported and experimental artifacts "
                 "are not loadable through the stable API"
             )
         native = raw.get("native_model")
@@ -216,7 +270,7 @@ def decode_stable_model_artifact(
 
     # v0.2 native booster artifacts were written directly by Rust.  Keep this
     # narrow migration path for stable booster classes only; unknown JSON is a
-    # hard error so preview payloads cannot silently fall through.
+    # hard error so supported payloads cannot silently fall through.
     native_markers = {
         "regressor": {"init_prediction", "trees", "learning_rate"},
         "classifier": {"init_margins", "trees", "class_values"},
@@ -232,7 +286,7 @@ def decode_stable_model_artifact(
         )
     raise ValueError(
         "unsupported model artifact: expected CartoBoost v2 stable envelope; "
-        "preview and experimental artifacts are not loadable through the stable API"
+        "supported and experimental artifacts are not loadable through the stable API"
     )
 
 

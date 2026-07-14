@@ -94,7 +94,7 @@ degrees should be nearly identical, not far apart. CartoBoost exposes Rust-backe
 helpers that return `(east, north)` unit components:
 
 ```python
-from cartoboost.preview.geo import (
+from cartoboost.geo import (
     clockwise_bearing_unit_vector,
     initial_bearing_unit_vector_latlng,
 )
@@ -117,7 +117,7 @@ explicitly rather than silently replacing them.
 Route, radial, and local-frame helpers build on the same Rust geo primitives:
 
 ```python
-from cartoboost.preview.geo import (
+from cartoboost.geo import (
     local_frame_features,
     radial_anchor_distances,
     rbf_anchor_features,
@@ -161,7 +161,7 @@ GeoJSON route geometries use `[longitude, latitude]` coordinate pairs; direct
 Python route sequences use `(latitude, longitude)` pairs.
 
 ```python
-from cartoboost.preview.h3 import build_h3_route_sparse_sets
+from cartoboost.h3 import build_h3_route_sparse_sets
 
 route_sparse_sets = build_h3_route_sparse_sets(
     osrm_routes,

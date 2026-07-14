@@ -6,7 +6,7 @@ import math
 from pathlib import Path
 from typing import Any
 
-import cartoboost.preview as cb
+import cartoboost as cb
 import matplotlib
 
 matplotlib.use("Agg")

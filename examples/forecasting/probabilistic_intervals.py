@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pandas as pd
-from cartoboost.preview.forecasting import (
+from cartoboost.forecasting import (
     ForecastConformalCalibrator,
     ForecastResult,
     PredictionInterval,

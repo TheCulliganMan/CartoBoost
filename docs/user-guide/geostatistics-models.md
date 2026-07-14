@@ -2,7 +2,7 @@ import {GeostatisticsModelExample} from '@site/src/components/ModelingLabClient'
 
 # Scalable GP Geostatistics
 
-> Preview API: import these models from `cartoboost.preview.geostats`. They do
+> Supported API: import these models from `cartoboost.geostats`. They do
 > not carry the stable root-package compatibility promise in CartoBoost 0.3.
 
 Use `NearestNeighborGPRegressor` when each observation has a point coordinate
@@ -21,7 +21,7 @@ spatial correction at prediction time.
 
 ```python
 import numpy as np
-from cartoboost.preview.geostats import NearestNeighborGPRegressor
+from cartoboost.geostats import NearestNeighborGPRegressor
 
 coords = np.array([
     [-73.9851, 40.7589],
@@ -52,7 +52,7 @@ settings.
 
 ```python
 from cartoboost import CartoBoostRegressor
-from cartoboost.preview.geostats import NearestNeighborGPRegressor, ResidualNNGPRegressor
+from cartoboost.geostats import NearestNeighborGPRegressor, ResidualNNGPRegressor
 
 base = CartoBoostRegressor(
     n_estimators=120,
@@ -91,7 +91,7 @@ instead of silently averaging, dropping, or jittering rows.
 ## Variogram Utilities
 
 ```python
-from cartoboost.preview.geostats import binned_variogram, fit_variogram_wls
+from cartoboost.geostats import binned_variogram, fit_variogram_wls
 
 bins = binned_variogram(pickup_coords_train, residuals, bin_count=12)
 fit = fit_variogram_wls(

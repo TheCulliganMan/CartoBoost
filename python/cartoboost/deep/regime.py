@@ -7,6 +7,8 @@ from typing import Any, cast
 
 import numpy as np
 
+from .._artifacts import ArtifactPersistenceMixin
+
 EXPERT_NAMES = [
     "stable_recurring_pattern",
     "sparse_cold_start",
@@ -17,7 +19,7 @@ EXPERT_NAMES = [
 ]
 
 
-class RegimeMoEForecaster:
+class RegimeMoEForecaster(ArtifactPersistenceMixin):
     """Deterministic mixture-of-experts forecaster for heterogeneous regimes."""
 
     def __init__(self, *, expert_count: int = 6, ridge: float = 1e-6) -> None:

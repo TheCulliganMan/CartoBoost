@@ -23,7 +23,7 @@ each node.
 
 ```python
 import numpy as np
-from cartoboost.preview.graph import GraphSageStandaloneRegressor
+from cartoboost.graph import GraphSageStandaloneRegressor
 
 edges = [(0, 1), (1, 2), (2, 3), (3, 0), (0, 2)]
 source = np.array([0, 1, 2, 3], dtype=np.uint64)
@@ -56,7 +56,7 @@ pred = model.predict(
 ### Link Predictor
 
 ```python
-from cartoboost.preview.graph import GraphSageLinkPredictor
+from cartoboost.graph import GraphSageLinkPredictor
 
 predictor = GraphSageLinkPredictor(input_dim=2, hidden_dims=(8,), epochs=2)
 predictor.fit(node_features=node_features, edges=edges)

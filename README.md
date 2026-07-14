@@ -84,7 +84,7 @@ uv add cartoboost
 CartoBoost 0.3 keeps the root import surface intentionally small. Read the
 [0.3 migration guide](docs/migration-v0.3.md) when upgrading imports from 0.2;
 forecasting and validation use named modules, while advanced model families
-are explicitly under `cartoboost.preview`.
+are explicitly under `cartoboost.supported`.
 
 Optional integrations stay optional:
 
@@ -194,7 +194,7 @@ Use forecasting APIs when the target is future demand, counts, or other regular
 series.
 
 ```python
-from cartoboost.preview.forecasting import ForecastFrame, ThetaForecaster
+from cartoboost.forecasting import ForecastFrame, ThetaForecaster
 
 frame = ForecastFrame.from_pandas(
     lane_demand,
@@ -226,7 +226,7 @@ route ids, carry stable residual signal. Treat these as hypotheses to validate,
 not automatic upgrades.
 
 ```python
-from cartoboost.preview import NeuralEmbeddingRegressor
+from cartoboost import NeuralEmbeddingRegressor
 
 model = NeuralEmbeddingRegressor(
     dim=16,

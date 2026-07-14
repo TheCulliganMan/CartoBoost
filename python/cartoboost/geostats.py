@@ -24,6 +24,7 @@ except ImportError:  # pragma: no cover
 
 
 from ._artifacts import (
+    ArtifactPersistenceMixin,
     dump_model_artifact,
     load_model_artifact,
     require_artifact_payload,
@@ -34,7 +35,7 @@ from ._native import geostats_empirical_semivariogram_value as _native_empirical
 from ._native import geostats_fit_variogram_wls_value as _native_fit_variogram_wls
 
 
-class NearestNeighborGPRegressor(RegressorMixin, BaseEstimator):
+class NearestNeighborGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseEstimator):
     """Nearest-neighbor Gaussian process regressor for point coordinates."""
 
     def __init__(
@@ -197,7 +198,7 @@ class NearestNeighborGPRegressor(RegressorMixin, BaseEstimator):
         return self._model
 
 
-class ResidualNNGPRegressor(RegressorMixin, BaseEstimator):
+class ResidualNNGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseEstimator):
     """Fit any base estimator, then model spatial residuals with an NNGP."""
 
     def __init__(

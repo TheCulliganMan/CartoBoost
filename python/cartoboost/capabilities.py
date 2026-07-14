@@ -16,7 +16,7 @@ REQUIRED_CAPABILITY_FIELDS = (
 
 VALID_EXPERIMENTAL_STATUS = {
     "stable_native",
-    "preview",
+    "supported",
     "deterministic_python",
     "shallow_neural",
     "native_deep",
@@ -25,7 +25,7 @@ VALID_EXPERIMENTAL_STATUS = {
 
 # Canonical v0.3 manifest fields.  The historical capability labels remain in
 # each row for report consumers, while these fields provide one auditable
-# stable/preview/experimental contract.
+# stable/supported/experimental contract.
 CANONICAL_MANIFEST_FIELDS = (
     "key",
     "model_key",
@@ -37,7 +37,7 @@ CANONICAL_MANIFEST_FIELDS = (
     "evidence_level",
     "stable",
 )
-VALID_TIERS = {"stable", "preview", "experimental"}
+VALID_TIERS = {"stable", "supported", "experimental"}
 _STABLE_MODEL_KEYS = {
     "CartoBoostRegressor": "models.cartoboost_regressor",
     "CartoBoostClassifier": "models.cartoboost_classifier",
@@ -64,7 +64,7 @@ def _canonical_manifest_fields(row: dict[str, Any]) -> None:
         tier = (
             "experimental"
             if legacy_status == "experimental" or evidence == "experimental only"
-            else "preview"
+            else "supported"
         )
         backend = str(row.get("implementation_backend", "unknown"))
         task = "forecasting" if "forecast" in class_name.lower() else "generic"

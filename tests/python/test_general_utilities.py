@@ -1,7 +1,7 @@
 import math
 
 import pytest
-from cartoboost.preview.forecasting import (
+from cartoboost.forecasting import (
     ReferenceSignal,
     SequenceRow,
     SequenceSeries,

@@ -71,7 +71,7 @@ Read: the current scalable synthetic checks favor CartoBoost.
 
 ## Prophet-Compatible Surface
 
-`cartoboost.preview.Prophet` provides the familiar `ds`/`y` workflow over the Rust
+`cartoboost.Prophet` provides the familiar `ds`/`y` workflow over the Rust
 piecewise-linear core. The façade accepts pandas or Polars input, creates
 future dataframes, supports Fourier seasonalities, extra regressors, holidays,
 intervals, component columns, and predictive-sample access, and returns
@@ -84,9 +84,9 @@ and converts Polars to pandas, while CartoBoost fits the Polars frame directly.
 
 | Rows | Engine | Input | Fit seconds | Predict seconds | Total seconds | Output rows |
 | ---: | --- | --- | ---: | ---: | ---: | ---: |
-| 500 | `cartoboost.preview.Prophet` | Polars | 0.0170 | 0.0052 | 0.0222 | 30 |
+| 500 | `cartoboost.Prophet` | Polars | 0.0170 | 0.0052 | 0.0222 | 30 |
 | 500 | `prophet.Prophet` | Polars → pandas | 0.0538 | 0.0037 | 0.0575 | 30 |
-| 100,000 | `cartoboost.preview.Prophet` | Polars | 0.2359 | 0.0098 | 0.2457 | 30 |
+| 100,000 | `cartoboost.Prophet` | Polars | 0.2359 | 0.0098 | 0.2457 | 30 |
 | 100,000 | `prophet.Prophet` | Polars → pandas | 1.8920 | 0.0040 | 1.8960 | 30 |
 
 CartoBoost is 2.6× faster on the 500-row run and 7.7× faster on the

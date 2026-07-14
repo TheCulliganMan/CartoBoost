@@ -2019,7 +2019,7 @@ body:has(.shell) :global(.footer) {
   text-transform: uppercase;
 }
 
-.previewGrid {
+.sampleGrid {
   align-items: start;
   display: grid;
   gap: 0.65rem;
@@ -2047,10 +2047,10 @@ body:has(.shell) :global(.footer) {
   padding: 0.85rem;
 }
 
-.previewGrid .featureRolePanel,
-.previewGrid .geoPanel,
-.previewGrid .datasetProfile,
-.previewGrid .runPlanPanel {
+.sampleGrid .featureRolePanel,
+.sampleGrid .geoPanel,
+.sampleGrid .datasetProfile,
+.sampleGrid .runPlanPanel {
   grid-column: 1 / -1;
 }
 
@@ -3203,7 +3203,7 @@ body:has(.shell) :global(.footer) {
   }
 
   .profileGrid,
-  .previewGrid,
+  .sampleGrid,
   .diagnosticGrid,
   .planGrid,
   .geoStats,

@@ -134,7 +134,7 @@ def run_geo_evaluation_example() -> dict[str, Any]:
 
 def run_probabilistic_conformal_example() -> dict[str, Any]:
     from cartoboost import CartoBoostRegressor
-    from cartoboost.preview.forecasting import (
+    from cartoboost.forecasting import (
         ConformalIntervalRegressor,
         SpatialConformalRegressor,
         interval_coverage,

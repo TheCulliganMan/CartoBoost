@@ -9,8 +9,8 @@ CartoBoost exposes bounded, non-seasonal ARIMA models:
 - `ArimaForecaster` fits one fixed `(p, d, q)` order.
 - `AutoARIMAForecaster` searches a bounded deterministic grid of `(p, d, q)`
   candidates and refits the selected order.
-- `cartoboost.preview.utilities.arima_forecast` and
-  `cartoboost.preview.utilities.auto_arima_forecast` provide the
+- `cartoboost.utilities.arima_forecast` and
+  `cartoboost.utilities.auto_arima_forecast` provide the
   same model behavior for quick single-series utility calls.
 
 ## Interactive Example
@@ -65,10 +65,10 @@ Common failure modes are easy to diagnose:
 
 | Model | Import | Use when |
 | --- | --- | --- |
-| `ArimaForecaster` | `from cartoboost.preview.forecasting import ArimaForecaster` | You already know the non-seasonal `(p, d, q)` order. |
-| `AutoARIMAForecaster` | `from cartoboost.preview.forecasting import AutoARIMAForecaster` | You want bounded candidate search over `(p, d, q)`. |
-| `arima_forecast` | `from cartoboost.preview.utilities import arima_forecast` | You need a quick one-shot forecast for one numeric series. |
-| `auto_arima_forecast` | `from cartoboost.preview.utilities import auto_arima_forecast` | You need one-shot bounded order selection for one numeric series. |
+| `ArimaForecaster` | `from cartoboost.forecasting import ArimaForecaster` | You already know the non-seasonal `(p, d, q)` order. |
+| `AutoARIMAForecaster` | `from cartoboost.forecasting import AutoARIMAForecaster` | You want bounded candidate search over `(p, d, q)`. |
+| `arima_forecast` | `from cartoboost.utilities import arima_forecast` | You need a quick one-shot forecast for one numeric series. |
+| `auto_arima_forecast` | `from cartoboost.utilities import auto_arima_forecast` | You need one-shot bounded order selection for one numeric series. |
 
 ## Pickup-Demand Example
 
@@ -82,7 +82,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 import pandas as pd
-from cartoboost.preview.forecasting import AutoARIMAForecaster, ForecastFrame
+from cartoboost.forecasting import AutoARIMAForecaster, ForecastFrame
 
 
 def example_lane_table(hours: int = 72) -> pd.DataFrame:
@@ -227,7 +227,7 @@ Use fixed order when validation, domain knowledge, or a benchmark has already
 chosen the model shape.
 
 ```python
-from cartoboost.preview.forecasting import ArimaForecaster
+from cartoboost.forecasting import ArimaForecaster
 
 hourly_pickups = [42, 38, 35, 31, 44, 67, 91, 105, 98, 86, 73, 69]
 
@@ -285,7 +285,7 @@ The selected candidate is then refit on the complete history.
 AutoARIMA searches all candidates in the bounded grid:
 
 ```python
-from cartoboost.preview.forecasting import AutoARIMAForecaster
+from cartoboost.forecasting import AutoARIMAForecaster
 
 model = AutoARIMAForecaster(
     max_p=3,
@@ -319,7 +319,7 @@ ARIMA remains a local model family: each panel series is fitted independently.
 That is useful for a small set of important pickup/dropoff lanes.
 
 ```python
-from cartoboost.preview.forecasting import AutoARIMAForecaster, ForecastFrame
+from cartoboost.forecasting import AutoARIMAForecaster, ForecastFrame
 
 frame = ForecastFrame.from_pandas(
     hourly_lane_demand,
@@ -346,7 +346,7 @@ lane and keep the evaluation table keyed by lane, horizon, and timestamp:
 ```python
 from concurrent.futures import ThreadPoolExecutor
 
-from cartoboost.preview.utilities import auto_arima_forecast
+from cartoboost.utilities import auto_arima_forecast
 
 
 def forecast_lane(values: list[float]) -> list[float]:

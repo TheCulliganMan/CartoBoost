@@ -3,7 +3,7 @@
 Path C is bounded real-data evidence on NYC TLC 2024 yellow taxi tasks. It
 validates real-data `cartoboost` geo-temporal tree behavior and benchmark
 discipline on this dataset, not universal market superiority. It does not
-validate `cartoboost.preview.deep` models unless those models are explicitly added as
+validate `cartoboost.deep` models unless those models are explicitly added as
 Path C rows later.
 
 ## Evidence Contract

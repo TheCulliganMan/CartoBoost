@@ -62,7 +62,7 @@ time-ordered validation before treating a spatial surface as forecast evidence.
 ## Example With Panel Dict
 
 ```python
-from cartoboost.preview.forecasting import KrigingForecaster
+from cartoboost.forecasting import KrigingForecaster
 
 coordinates = {
     "132": (-73.7781, 40.6413),  # location 132
@@ -98,7 +98,7 @@ the spatial dependence implied by the coordinates and variogram settings.
 ## ForecastFrame Example
 
 ```python
-from cartoboost.preview.forecasting import ForecastFrame, KrigingForecaster
+from cartoboost.forecasting import ForecastFrame, KrigingForecaster
 
 frame = ForecastFrame.from_pandas(
     hourly_zone_demand,
@@ -137,7 +137,7 @@ configuration. They let you inspect the spatial surface and residual behavior at
 one timestamp or validation fold.
 
 ```python
-import cartoboost.preview as cb
+import cartoboost as cb
 
 observations = [
     (-73.7781, 40.6413, 126.0),  # location 132
@@ -316,12 +316,12 @@ pattern where distance in one direction should count differently.
 
 ## Diagnostics
 
-For one-off coordinate interpolation, `cartoboost.preview.utilities.ordinary_kriging_predict(...,
+For one-off coordinate interpolation, `cartoboost.utilities.ordinary_kriging_predict(...,
 detailed=True)` returns kriging variance and selected neighbor indices alongside
-the mean and weights. Use `cartoboost.preview.utilities.empirical_variogram(...)` to inspect binned
-semivariances, `cartoboost.preview.utilities.fit_ordinary_kriging_variogram(...)` to choose a
+the mean and weights. Use `cartoboost.utilities.empirical_variogram(...)` to inspect binned
+semivariances, `cartoboost.utilities.fit_ordinary_kriging_variogram(...)` to choose a
 range/nugget/sill/variogram model by weighted least squares, and
-`cartoboost.preview.utilities.ordinary_kriging_leave_one_out_diagnostics(...)` to inspect
+`cartoboost.utilities.ordinary_kriging_leave_one_out_diagnostics(...)` to inspect
 leave-one-out bias, MAE, RMSE, standardized residuals, interval coverage, and
 average kriging variance before using the configuration in a panel forecaster.
 

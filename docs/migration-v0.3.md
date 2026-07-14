@@ -11,11 +11,11 @@ Use the named stable modules for the rest of the product:
   and native manifest constructors such as `native_spatial_split` and
   `native_out_of_time_split`.
 - `cartoboost.forecasting` for `ForecastFrame`, forecasters, backtesting, and metrics.
-- `cartoboost.preview` for graph, geostatistical, probabilistic, causal, neural, and
+- `cartoboost.supported` for graph, geostatistical, probabilistic, causal, neural, and
   accelerator surfaces without a compatibility promise.
 
 Stable model files now use the `cartoboost.model` v2 envelope. Valid 0.2.45
-stable estimator artifacts are migrated in memory when loaded; preview and
+stable estimator artifacts are migrated in memory when loaded; supported and
 experimental artifacts are rejected explicitly. Source imports and constructor
 aliases are not migrated.
 

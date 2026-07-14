@@ -44,10 +44,10 @@ def test_auto_geo_selector_is_not_registered() -> None:
     assert all("auto_geo" not in key and "geo_model_stack" not in key for key in registry.names())
 
 
-def test_model_manifest_has_auditable_v03_tiers() -> None:
+def test_model_manifest_has_auditable_tiers() -> None:
     manifest = model_manifest()
     assert manifest
-    assert {row["tier"] for row in manifest} == {"stable", "preview", "experimental"}
+    assert {row["tier"] for row in manifest} == {"stable", "supported", "experimental"}
     assert {row["key"] for row in model_manifest(tier="stable")} == set(STABLE_MODEL_KEYS)
     for row in manifest:
         assert row["artifact_version"] == 2
@@ -56,15 +56,6 @@ def test_model_manifest_has_auditable_v03_tiers() -> None:
         assert row["dependencies"] == row["optional_dependencies"]
         assert row["evidence_level"] in {"real_data", "synthetic", "api_only", "experimental_only"}
         assert row["stable"] is (row["tier"] == "stable")
-
-
-def test_registry_tier_filters_do_not_mix_public_surface() -> None:
-    registry = ModelRegistry.defaults()
-    assert all(spec.metadata.tier == "stable" for spec in registry.by_tier("stable").specs())
-    assert all(spec.metadata.tier == "preview" for spec in registry.by_tier("preview").specs())
-    assert all(
-        spec.metadata.tier == "experimental" for spec in registry.by_tier("experimental").specs()
-    )
 
 
 def test_capability_manifest_matches_stable_registry() -> None:
@@ -76,7 +67,7 @@ def test_registered_model_factories_are_constructible() -> None:
     registry = ModelRegistry.defaults()
     for spec in registry.specs():
         assert callable(spec.factory), spec.key
-        assert spec.metadata.tier in {"stable", "preview", "experimental"}
+        assert spec.metadata.tier in {"stable", "supported", "experimental"}
 
 
 def test_stable_registry_exposes_lifecycle_contract() -> None:

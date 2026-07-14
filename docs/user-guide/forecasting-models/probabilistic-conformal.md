@@ -25,7 +25,7 @@ holdout splits.
 ### Quantile Regressor
 
 ```python
-from cartoboost.preview.forecasting import QuantileCartoBoostRegressor
+from cartoboost.forecasting import QuantileCartoBoostRegressor
 
 model = QuantileCartoBoostRegressor(
     quantiles=(0.1, 0.5, 0.9),
@@ -48,7 +48,7 @@ optional `median`, quantile columns, and interval bounds.
 
 ```python
 from cartoboost import CartoBoostRegressor
-from cartoboost.preview.forecasting import ConformalIntervalRegressor
+from cartoboost.forecasting import ConformalIntervalRegressor
 
 base = CartoBoostRegressor(n_estimators=200, learning_rate=0.04)
 model = ConformalIntervalRegressor(base, alpha=0.1)
@@ -72,7 +72,7 @@ width. Holdout rows are not used for fitting or calibration.
 ### Spatial Group Conformal
 
 ```python
-from cartoboost.preview.forecasting import SpatialConformalRegressor
+from cartoboost.forecasting import SpatialConformalRegressor
 
 model = SpatialConformalRegressor(base_estimator, alpha=0.1)
 model.fit(
@@ -101,7 +101,7 @@ the method in metadata.
 ### Rolling-Origin Forecast Calibration
 
 ```python
-from cartoboost.preview.forecasting import ForecastConformalCalibrator
+from cartoboost.forecasting import ForecastConformalCalibrator
 
 calibrator = ForecastConformalCalibrator(alpha=0.2).fit(
     actual=backtest_actual,
@@ -140,7 +140,7 @@ the prediction cutoff.
 Use interval metrics beside point metrics:
 
 ```python
-from cartoboost.preview.forecasting import (
+from cartoboost.forecasting import (
     interval_coverage,
     mean_interval_width,
     pinball_loss,

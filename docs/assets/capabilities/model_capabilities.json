@@ -109,7 +109,7 @@
     "model_key": null,
     "stable": false,
     "task": "forecasting",
-    "tier": "preview",
+    "tier": "supported",
     "trainable_parameters": "pair_embeddings_mlp_weights",
     "uses_native_core": true
   },
@@ -128,7 +128,7 @@
     "model_key": null,
     "stable": false,
     "task": "generic",
-    "tier": "preview",
+    "tier": "supported",
     "trainable_parameters": "entity_token_projection",
     "uses_native_core": false
   },
@@ -147,7 +147,7 @@
     "model_key": null,
     "stable": false,
     "task": "graph",
-    "tier": "preview",
+    "tier": "supported",
     "trainable_parameters": "graph_delay_weights",
     "uses_native_core": true
   },
@@ -166,7 +166,7 @@
     "model_key": null,
     "stable": false,
     "task": "generic",
-    "tier": "preview",
+    "tier": "supported",
     "trainable_parameters": "location_scale_ridge_weights",
     "uses_native_core": true
   },
@@ -185,7 +185,7 @@
     "model_key": null,
     "stable": false,
     "task": "generic",
-    "tier": "preview",
+    "tier": "supported",
     "trainable_parameters": "utility_softmax_temperature",
     "uses_native_core": true
   },
@@ -242,7 +242,7 @@
     "model_key": null,
     "stable": false,
     "task": "forecasting",
-    "tier": "preview",
+    "tier": "supported",
     "trainable_parameters": "expert_mixer_weights",
     "uses_native_core": false
   },
@@ -261,7 +261,7 @@
     "model_key": null,
     "stable": false,
     "task": "generic",
-    "tier": "preview",
+    "tier": "supported",
     "trainable_parameters": "utility_response_weights",
     "uses_native_core": true
   },
@@ -280,7 +280,7 @@
     "model_key": null,
     "stable": false,
     "task": "generic",
-    "tier": "preview",
+    "tier": "supported",
     "trainable_parameters": "event_probability_weights",
     "uses_native_core": true
   },
@@ -299,7 +299,7 @@
     "model_key": null,
     "stable": false,
     "task": "generic",
-    "tier": "preview",
+    "tier": "supported",
     "trainable_parameters": "residual_correction_weights",
     "uses_native_core": true
   },
@@ -318,7 +318,7 @@
     "model_key": null,
     "stable": false,
     "task": "generic",
-    "tier": "preview",
+    "tier": "supported",
     "trainable_parameters": "not_applicable_optimizer",
     "uses_native_core": true
   },
@@ -338,7 +338,7 @@
     "model_key": null,
     "stable": false,
     "task": "generic",
-    "tier": "preview",
+    "tier": "supported",
     "trainable_parameters": "entity_token_projection",
     "uses_native_core": false
   },
@@ -358,7 +358,7 @@
     "model_key": null,
     "stable": false,
     "task": "generic",
-    "tier": "preview",
+    "tier": "supported",
     "trainable_parameters": "entity_token_projection",
     "uses_native_core": false
   },
@@ -378,7 +378,7 @@
     "model_key": null,
     "stable": false,
     "task": "graph",
-    "tier": "preview",
+    "tier": "supported",
     "trainable_parameters": "graph_delay_weights",
     "uses_native_core": true
   },
@@ -398,7 +398,7 @@
     "model_key": null,
     "stable": false,
     "task": "graph",
-    "tier": "preview",
+    "tier": "supported",
     "trainable_parameters": "graph_delay_weights",
     "uses_native_core": true
   },
@@ -418,7 +418,7 @@
     "model_key": null,
     "stable": false,
     "task": "generic",
-    "tier": "preview",
+    "tier": "supported",
     "trainable_parameters": "graph_delay_weights",
     "uses_native_core": true
   },
@@ -438,7 +438,7 @@
     "model_key": null,
     "stable": false,
     "task": "generic",
-    "tier": "preview",
+    "tier": "supported",
     "trainable_parameters": "location_scale_ridge_weights",
     "uses_native_core": true
   },
@@ -458,7 +458,7 @@
     "model_key": null,
     "stable": false,
     "task": "generic",
-    "tier": "preview",
+    "tier": "supported",
     "trainable_parameters": "location_scale_ridge_weights",
     "uses_native_core": true
   },
@@ -478,7 +478,7 @@
     "model_key": null,
     "stable": false,
     "task": "generic",
-    "tier": "preview",
+    "tier": "supported",
     "trainable_parameters": "utility_softmax_temperature",
     "uses_native_core": true
   },
@@ -498,7 +498,7 @@
     "model_key": null,
     "stable": false,
     "task": "generic",
-    "tier": "preview",
+    "tier": "supported",
     "trainable_parameters": "utility_softmax_temperature",
     "uses_native_core": true
   },
@@ -518,7 +518,7 @@
     "model_key": null,
     "stable": false,
     "task": "causal",
-    "tier": "preview",
+    "tier": "supported",
     "trainable_parameters": "utility_softmax_temperature",
     "uses_native_core": true
   },
@@ -538,7 +538,7 @@
     "model_key": null,
     "stable": false,
     "task": "generic",
-    "tier": "preview",
+    "tier": "supported",
     "trainable_parameters": "expert_mixer_weights",
     "uses_native_core": false
   },
@@ -558,7 +558,7 @@
     "model_key": null,
     "stable": false,
     "task": "generic",
-    "tier": "preview",
+    "tier": "supported",
     "trainable_parameters": "expert_mixer_weights",
     "uses_native_core": false
   },
@@ -578,7 +578,7 @@
     "model_key": null,
     "stable": false,
     "task": "generic",
-    "tier": "preview",
+    "tier": "supported",
     "trainable_parameters": "expert_mixer_weights",
     "uses_native_core": false
   },
@@ -677,7 +677,7 @@
     "model_key": null,
     "stable": false,
     "task": "generic",
-    "tier": "preview",
+    "tier": "supported",
     "trainable_parameters": "not_applicable",
     "uses_native_core": false
   },
@@ -696,7 +696,7 @@
     "model_key": null,
     "stable": false,
     "task": "generic",
-    "tier": "preview",
+    "tier": "supported",
     "trainable_parameters": "not_applicable",
     "uses_native_core": false
   },
@@ -715,7 +715,7 @@
     "model_key": null,
     "stable": false,
     "task": "graph",
-    "tier": "preview",
+    "tier": "supported",
     "trainable_parameters": "not_applicable",
     "uses_native_core": false
   },
@@ -734,7 +734,7 @@
     "model_key": null,
     "stable": false,
     "task": "generic",
-    "tier": "preview",
+    "tier": "supported",
     "trainable_parameters": "not_applicable",
     "uses_native_core": false
   }

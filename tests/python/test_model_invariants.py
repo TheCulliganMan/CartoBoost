@@ -4,9 +4,8 @@ import json
 
 import numpy as np
 import pytest
-from cartoboost import CartoBoostRegressor
-from cartoboost.preview import Prophet
-from cartoboost.preview.forecasting import ForecastFrame, PiecewiseLinearSeasonalForecaster
+from cartoboost import CartoBoostRegressor, Prophet
+from cartoboost.forecasting import ForecastFrame, PiecewiseLinearSeasonalForecaster
 
 
 def _radial_fixture() -> tuple[np.ndarray, np.ndarray]:

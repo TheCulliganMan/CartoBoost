@@ -16,13 +16,11 @@ from cartoboost.forecasting import (
     CartoBoostLagForecaster,
     ForecastFrame,
     ForecastMetricSet,
-    NaiveForecaster,
-    SeasonalNaiveForecaster,
-)
-from cartoboost.preview.forecasting import (
     KrigingForecaster,
+    NaiveForecaster,
     OptimizedThetaForecaster,
     PiecewiseLinearSeasonalForecaster,
+    SeasonalNaiveForecaster,
     SpatialPiecewiseKrigingForecaster,
     ThetaForecaster,
     WeightedEnsembleForecaster,

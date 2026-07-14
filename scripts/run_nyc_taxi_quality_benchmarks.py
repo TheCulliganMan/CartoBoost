@@ -2005,8 +2005,7 @@ def fit_neural_guarded_model(
     effective_feature_names: list[str],
     args: argparse.Namespace,
 ) -> tuple[Any, dict[str, Any], dict[str, Any]]:
-    from cartoboost import CartoBoostRegressor
-    from cartoboost.preview import NeuralEmbeddingRegressor
+    from cartoboost import CartoBoostRegressor, NeuralEmbeddingRegressor
 
     ids = task_embedding_ids(task)
     schema = cartoboost_schema(

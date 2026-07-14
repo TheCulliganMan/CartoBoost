@@ -118,8 +118,10 @@ def test_python_schema_categorical_feature_roundtrip(tmp_path: Path):
     assert loaded.categorical_encoder_["columns"][0]["strategy"] == "OneHot"
     assert loaded.predict(x) == pytest.approx(before)
     assert loaded.predict([["unknown"]]).shape == (1,)
-    with pytest.raises(NotImplementedError, match="category mappings"):
-        loaded.save_weights(tmp_path / "categorical-weights.json")
+    weights_path = tmp_path / "categorical-weights.json"
+    loaded.save_weights(weights_path)
+    weights_loaded = CartoBoostRegressor.load_weights(weights_path)
+    assert weights_loaded.predict(x) == pytest.approx(before)
 
 
 def test_python_schema_pandas_categorical_missing_values_roundtrip():

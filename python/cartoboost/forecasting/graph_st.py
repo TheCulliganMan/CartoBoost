@@ -6,6 +6,7 @@ from typing import Any
 
 import numpy as np
 
+from .._artifacts import ArtifactPersistenceMixin
 from ..config import Backend, ChoiceStrEnum
 
 
@@ -208,7 +209,7 @@ class MarketPanelFrame:
         )
 
 
-class MarketStructureForecaster:
+class MarketStructureForecaster(ArtifactPersistenceMixin):
     """Sparse, explainable, time-aware smoothing for two named market targets."""
 
     def __init__(
@@ -330,7 +331,7 @@ class MarketStructureForecaster:
             raise RuntimeError("MarketStructureForecaster must be fit before prediction")
 
 
-class DCRNNForecaster:
+class DCRNNForecaster(ArtifactPersistenceMixin):
     """Rust DCRNN-style graph sequence forecaster."""
 
     native_class_name = "DCRNNForecaster"
@@ -522,7 +523,7 @@ def _choice_value(value: str | ChoiceStrEnum) -> str:
     return str(value)
 
 
-class STAEformerForecaster:
+class STAEformerForecaster(ArtifactPersistenceMixin):
     """Rust spatiotemporal attention graph sequence forecaster."""
 
     def __init__(
@@ -638,7 +639,7 @@ class STAEformerForecaster:
         return str(backend())
 
 
-class GraphWaveNetForecaster:
+class GraphWaveNetForecaster(ArtifactPersistenceMixin):
     """Rust graph WaveNet-style dilated temporal graph forecaster."""
 
     def __init__(
@@ -746,7 +747,7 @@ class GraphWaveNetForecaster:
         return str(backend())
 
 
-class _PaperGraphTransformerForecaster:
+class _PaperGraphTransformerForecaster(ArtifactPersistenceMixin):
     """Shared thin Python facade for paper-derived native graph architectures."""
 
     _profile: str

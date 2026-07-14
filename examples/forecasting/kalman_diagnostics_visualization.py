@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import cartoboost.preview as cb
+import cartoboost as cb
 import matplotlib
 
 matplotlib.use("Agg")

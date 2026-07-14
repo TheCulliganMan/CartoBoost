@@ -127,7 +127,7 @@ the run contract.
 ## Public Contract
 
 ```python
-from cartoboost.preview.forecasting import ForecastFrame, LaneNeuralPanelForecaster
+from cartoboost.forecasting import ForecastFrame, LaneNeuralPanelForecaster
 
 frame = ForecastFrame.from_pandas(
     hourly_lane_demand,

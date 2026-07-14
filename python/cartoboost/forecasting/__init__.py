@@ -1,10 +1,6 @@
-"""Stable Rust-backed forecasting API for CartoBoost 0.3.
+"""Unified Rust-backed forecasting API for CartoBoost."""
 
-Advanced local, neural, graph, spatial, probabilistic, and compatibility
-forecasters remain available through the lazy ``cartoboost.preview.forecasting``
-namespace. They are intentionally absent from this module's stable surface.
-"""
-
+from .. import _forecasting_catalog as _catalog
 from .auto import AutoForecastConfig, AutoForecaster
 from .backtesting import BacktestFoldResult, BacktestResult, RollingOriginBacktester
 from .global_models import CartoBoostLagForecaster
@@ -29,4 +25,13 @@ __all__ = [
     "RollingOriginBacktester",
     "RollingOriginSplitter",
     "SeasonalNaiveForecaster",
+    *_catalog.__all__,
 ]
+
+
+def __getattr__(name: str):
+    return getattr(_catalog, name)
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(__all__))

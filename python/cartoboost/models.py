@@ -11,7 +11,7 @@ from typing import Any
 import numpy as np
 
 Factory = Callable[..., Any]
-MODEL_TIERS = frozenset({"stable", "preview", "experimental"})
+MODEL_TIERS = frozenset({"stable", "supported", "experimental"})
 MODEL_BACKENDS = frozenset(
     {"rust_native", "rust_native_with_python_facade", "python_orchestration"}
 )
@@ -116,7 +116,7 @@ class ModelSpec:
 
 
 class ModelRegistry:
-    """Duplicate-safe registry for stable, preview, and experimental models."""
+    """Duplicate-safe registry for stable, supported, and experimental models."""
 
     def __init__(self, specs: Iterable[ModelSpec] | None = None) -> None:
         self._specs: dict[str, ModelSpec] = {}
@@ -393,7 +393,7 @@ def _spec(
         if key in STABLE_MODEL_KEYS
         else "experimental"
         if key in EXPERIMENTAL_MODEL_KEYS
-        else "preview"
+        else "supported"
     )
     if evidence_level == "real_data" and tier != "stable":
         evidence_level = "experimental_only" if tier == "experimental" else "synthetic"

@@ -9,7 +9,7 @@ completion, or acceptance probability when calibration matters.
 ## Public Contract
 
 ```python
-from cartoboost.preview.deep import EventOutcomeModel
+from cartoboost.deep import EventOutcomeModel
 
 model = EventOutcomeModel(calibration="temperature")
 model.fit(features_train, event_train)

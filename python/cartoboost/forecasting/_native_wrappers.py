@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import json
+import pickle
+from base64 import b64decode, b64encode
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from inspect import Parameter, signature
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+from .._artifacts import ArtifactPersistenceMixin
 
 
 @dataclass(frozen=True)
@@ -23,7 +28,7 @@ class ForecastResult:
         return np.asarray(self.mean, dtype=dtype)
 
 
-class NativeForecastWrapper:
+class NativeForecastWrapper(ArtifactPersistenceMixin):
     """Base class for Python forecasting wrappers over Rust/PyO3 implementations."""
 
     native_class_name: str
@@ -43,6 +48,7 @@ class NativeForecastWrapper:
         native_args = self._coerce_fit_args(args)
         result = fit(*native_args, **kwargs)
         self._native_model = native_model if result is None else result
+        self._fit_artifact = _encode_fit_artifact(args, kwargs)
         self.is_fitted_ = True
         return self
 
@@ -73,6 +79,7 @@ class NativeForecastWrapper:
     def set_params(self, **params: Any) -> NativeForecastWrapper:
         self._params.update(params)
         self._native_model = None
+        self._fit_artifact = None
         self.is_fitted_ = False
         return self
 
@@ -94,14 +101,54 @@ class NativeForecastWrapper:
     def save(self, path: str | Path) -> None:
         self._check_is_fitted()
         save = getattr(self._native_model, "save", None)
-        if not callable(save):
-            raise NotImplementedError(
-                f"Rust binding {self.native_class_name!r} does not expose save()."
+        if callable(save):
+            save(str(path))
+            return
+        artifact = getattr(self, "_fit_artifact", None)
+        if not isinstance(artifact, dict):
+            raise RuntimeError(
+                f"{self.__class__.__name__} has no recorded fit inputs for persistence"
             )
-        save(str(path))
+        payload = {
+            "format": "cartoboost.native_forecast_refit",
+            "artifact_version": 1,
+            "native_class_name": self.native_class_name,
+            "params": self._constructor_params(),
+            "fit": artifact,
+        }
+        Path(path).write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+
+    def __getstate__(self) -> dict[str, Any]:
+        if not self.is_fitted_:
+            return {"_cartoboost_pickle_unfitted_params": self._constructor_params()}
+        return super().__getstate__()
 
     @classmethod
     def load(cls, path: str | Path) -> NativeForecastWrapper:
+        path = Path(path)
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            payload = None
+        if (
+            isinstance(payload, dict)
+            and payload.get("format") == "cartoboost.native_forecast_refit"
+        ):
+            if payload.get("artifact_version") != 1:
+                raise ValueError(
+                    "unsupported cartoboost.native_forecast_refit artifact version "
+                    f"{payload.get('artifact_version')!r}"
+                )
+            if payload.get("native_class_name") != cls.native_class_name:
+                raise ValueError(
+                    f"artifact is for {payload.get('native_class_name')!r}, "
+                    f"not {cls.native_class_name!r}"
+                )
+            params = payload.get("params")
+            if not isinstance(params, dict):
+                raise ValueError("forecast artifact is missing constructor parameters")
+            args, kwargs = _decode_fit_artifact(payload.get("fit"))
+            return cls(**params).fit(*args, **kwargs)
         native_class = _native_class(cls.native_class_name)
         if native_class is None:
             raise NotImplementedError(
@@ -116,6 +163,7 @@ class NativeForecastWrapper:
         obj = cls.__new__(cls)
         NativeForecastWrapper.__init__(obj)
         obj._native_model = load(str(path))
+        obj._fit_artifact = None
         obj.is_fitted_ = True
         return obj
 
@@ -142,6 +190,26 @@ class NativeForecastWrapper:
                 f"cartoboost._native.{self.native_class_name} is missing."
             )
         return native_class(**self._params)
+
+    def _constructor_params(self) -> dict[str, Any]:
+        """Recover the public constructor contract rather than native aliases."""
+
+        params: dict[str, Any] = {}
+        for name, parameter in signature(type(self).__init__).parameters.items():
+            if name == "self" or parameter.kind in {
+                Parameter.VAR_POSITIONAL,
+                Parameter.VAR_KEYWORD,
+            }:
+                continue
+            if hasattr(self, name):
+                params[name] = getattr(self, name)
+            elif name in self._params:
+                params[name] = self._params[name]
+            elif parameter.default is Parameter.empty:
+                raise RuntimeError(
+                    f"{self.__class__.__name__} is missing constructor value {name!r}"
+                )
+        return params
 
     def _coerce_fit_args(self, args: tuple[Any, ...]) -> tuple[Any, ...]:
         if not args:
@@ -217,6 +285,49 @@ def _native_frame_from_values(values: Any) -> Any:
     else:
         raise ValueError("forecast training values must be a 1D series or 2D panel")
     return native_frame_class(rows, "D")
+
+
+def _encode_fit_artifact(args: tuple[Any, ...], kwargs: dict[str, Any]) -> dict[str, str]:
+    """Encode the exact public fit inputs used by native wrappers."""
+
+    encoded_args: tuple[Any, ...] = args
+    if args and hasattr(args[0], "_native_frame") and hasattr(args[0], "to_pandas"):
+        encoded_args = (
+            {"forecast_frame": _forecast_frame_to_artifact(args[0])},
+            *args[1:],
+        )
+    try:
+        return {
+            "args": b64encode(pickle.dumps(encoded_args, protocol=pickle.HIGHEST_PROTOCOL)).decode(
+                "ascii"
+            ),
+            "kwargs": b64encode(pickle.dumps(kwargs, protocol=pickle.HIGHEST_PROTOCOL)).decode(
+                "ascii"
+            ),
+        }
+    except (pickle.PickleError, TypeError) as exc:
+        raise TypeError(
+            "forecast fit inputs must be pickle-serializable for this model's artifact"
+        ) from exc
+
+
+def _decode_fit_artifact(value: Any) -> tuple[tuple[Any, ...], dict[str, Any]]:
+    if (
+        not isinstance(value, dict)
+        or not isinstance(value.get("args"), str)
+        or not isinstance(value.get("kwargs"), str)
+    ):
+        raise ValueError("forecast artifact is missing fit inputs")
+    try:
+        args = pickle.loads(b64decode(value["args"].encode("ascii"), validate=True))
+        kwargs = pickle.loads(b64decode(value["kwargs"].encode("ascii"), validate=True))
+    except (ValueError, pickle.PickleError) as exc:
+        raise ValueError("forecast artifact has invalid fit inputs") from exc
+    if not isinstance(args, tuple) or not isinstance(kwargs, dict):
+        raise ValueError("forecast artifact fit inputs have invalid types")
+    if args and isinstance(args[0], dict) and set(args[0]) == {"forecast_frame"}:
+        args = (_forecast_frame_from_artifact(args[0]["forecast_frame"]), *args[1:])
+    return args, kwargs
 
 
 def _forecast_frame_to_artifact(frame: Any) -> dict[str, Any]:

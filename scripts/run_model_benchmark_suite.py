@@ -906,7 +906,7 @@ def run_neural(
 ) -> tuple[np.ndarray, dict[str, float], dict[str, Any]]:
     if workload.embedding_ids is None:
         raise ValueError("neural benchmark requires embedding ids")
-    from cartoboost.preview import NeuralEmbeddingRegressor
+    from cartoboost import NeuralEmbeddingRegressor
 
     def build_neural_model() -> NeuralEmbeddingRegressor:
         return NeuralEmbeddingRegressor(
@@ -1149,7 +1149,7 @@ def run_standalone_neural(
 ) -> tuple[np.ndarray, dict[str, float], dict[str, Any]]:
     if workload.embedding_ids is None:
         raise ValueError("standalone neural benchmark requires embedding ids")
-    from cartoboost.preview.standalone import NeuralEmbeddingStandaloneRegressor
+    from cartoboost.standalone import NeuralEmbeddingStandaloneRegressor
 
     model = NeuralEmbeddingStandaloneRegressor(
         dim=args.neural_dim,

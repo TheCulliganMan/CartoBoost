@@ -5,6 +5,7 @@ from typing import Any
 
 import numpy as np
 
+from .._artifacts import ArtifactPersistenceMixin
 from ..config import Backend, ChoiceStrEnum
 from ._native import dumps, loads, require_native
 from .choice import ChoiceSetTransformer
@@ -12,7 +13,7 @@ from .flow import flow_uncertainty_report
 from .frames import ResponseCurveFrame
 
 
-class ResponseCurveModel:
+class ResponseCurveModel(ArtifactPersistenceMixin):
     def __init__(
         self,
         *,
@@ -130,7 +131,7 @@ class ResponseCurveModel:
             raise RuntimeError("model must be fit before prediction")
 
 
-class EventOutcomeModel:
+class EventOutcomeModel(ArtifactPersistenceMixin):
     def __init__(
         self,
         *,

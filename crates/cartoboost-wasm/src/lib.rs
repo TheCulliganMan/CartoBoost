@@ -4863,7 +4863,7 @@ fn split_display(
             format!(
                 "{} has {}",
                 feature_label(*feature, feature_names),
-                id_preview(ids)
+                id_summary(ids)
             ),
         ),
         Split::SparseListContainsAny {
@@ -4875,7 +4875,7 @@ fn split_display(
             format!(
                 "{} has {}",
                 feature_label(dense_feature_count + *sparse_feature, feature_names),
-                id_preview(ids)
+                id_summary(ids)
             ),
         ),
         Split::Fuzzy {
@@ -4899,7 +4899,7 @@ fn feature_label(feature: usize, feature_names: &[String]) -> String {
         .unwrap_or_else(|| format!("feature_{feature}"))
 }
 
-fn id_preview(ids: &[u64]) -> String {
+fn id_summary(ids: &[u64]) -> String {
     let mut values = ids.iter().take(4).map(u64::to_string).collect::<Vec<_>>();
     if ids.len() > values.len() {
         values.push("...".to_string());

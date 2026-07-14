@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 import pytest
-from cartoboost.preview.forecasting import ExpandingWindowSplitter, SlidingWindowSplitter
+from cartoboost.forecasting import ExpandingWindowSplitter, SlidingWindowSplitter
 
 
 def taxi_panel() -> pd.DataFrame:

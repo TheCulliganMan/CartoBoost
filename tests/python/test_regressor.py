@@ -1,4 +1,5 @@
 import json
+import pickle
 from pathlib import Path
 
 import cartoboost.tensorboard as tensorboard
@@ -165,6 +166,8 @@ def test_native_backend_save_weights_roundtrip_is_versioned_json(tmp_path: Path)
     assert payload["model_artifact_version"] == 1
     assert payload["backend"] == "rust"
     assert loaded.predict([[0.0], [3.0]]) == pytest.approx(predictions)
+    restored = pickle.loads(pickle.dumps(regressor))
+    assert restored.predict([[0.0], [3.0]]) == pytest.approx(predictions)
 
 
 def test_native_backend_save_weights_onnx_when_optional_dependency_is_available(tmp_path: Path):

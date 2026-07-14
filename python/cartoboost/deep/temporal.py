@@ -7,6 +7,7 @@ from typing import Any
 
 import numpy as np
 
+from .._artifacts import ArtifactPersistenceMixin
 from ._native import dumps, loads, require_native
 from .flow import flow_uncertainty_report
 from .frames import DirectionalPairFrame, EntityPanelFrame
@@ -210,7 +211,7 @@ class TemporalEntityTransformer:
         return float(np.sqrt(np.mean((actual_arr - pred) ** 2)))
 
 
-class InvertedTemporalTransformer:
+class InvertedTemporalTransformer(ArtifactPersistenceMixin):
     """Entity-token temporal forecaster for synchronized wide panels."""
 
     def __init__(

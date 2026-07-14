@@ -25,46 +25,22 @@ from cartoboost.validation import (
 )
 
 
-def test_root_surface_is_small_and_preview_is_lazy() -> None:
-    assert cartoboost.__all__ == [
-        "CartoBoostRegressor",
-        "CartoBoostClassifier",
-        "CartoBoostRanker",
-        "BoosterConfig",
-        "__version__",
-    ]
+def test_root_surface_is_unified() -> None:
+    assert {"CartoBoostRegressor", "forecasting", "deep", "graph", "geostats"} <= set(
+        cartoboost.__all__
+    )
     assert cartoboost.__version__.startswith("0.3.")
     assert not hasattr(cartoboost, "AutoGeoModel")
-    assert not hasattr(cartoboost.preview, "AutoGeoModel")
-    assert not hasattr(cartoboost.preview, "GeoModelStack")
-    assert not hasattr(cartoboost.preview, "representation")
-    assert not hasattr(cartoboost.preview.deep, "TemporalSSMForecaster")
     assert importlib.util.find_spec("cartoboost.representation") is None
     assert importlib.util.find_spec("cartoboost.deep.ssm") is None
-    assert cartoboost.preview.AutoForecaster.__name__ == "AutoForecaster"
+    assert cartoboost.AutoForecaster.__name__ == "AutoForecaster"
 
 
-def test_forecasting_surface_keeps_preview_models_out_of_stable_namespace() -> None:
+def test_forecasting_surface_exposes_all_shipped_models() -> None:
     from cartoboost import forecasting
 
-    assert forecasting.__all__ == [
-        "AutoForecastConfig",
-        "AutoForecaster",
-        "BacktestFoldResult",
-        "BacktestResult",
-        "CartoBoostLagForecaster",
-        "ForecastFold",
-        "ForecastFrame",
-        "ForecastMetricSet",
-        "ForecastResult",
-        "LagConfig",
-        "NaiveForecaster",
-        "RollingOriginBacktester",
-        "RollingOriginSplitter",
-        "SeasonalNaiveForecaster",
-    ]
-    assert not hasattr(forecasting, "ThetaForecaster")
-    assert cartoboost.preview.forecasting.ThetaForecaster.__name__ == "ThetaForecaster"
+    assert {"NaiveForecaster", "ThetaForecaster", "DCRNNForecaster"} <= set(forecasting.__all__)
+    assert forecasting.ThetaForecaster.__name__ == "ThetaForecaster"
 
 
 def test_rust_owned_manifest_matches_stable_surface() -> None:

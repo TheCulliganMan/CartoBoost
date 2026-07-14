@@ -11,7 +11,7 @@ Use this directory as the navigation map for the user-facing docs site.
 - [Getting started](./getting-started.md)
 - [Python estimator numeric input and missing-value contract](./user-guide/python-estimator.md)
 - [Choose a model](./user-guide/model-types.md)
-- [Stable estimators and preview model registry](./user-guide/model-types.md)
+- [Stable estimators and supported model registry](./user-guide/model-types.md)
 - [Spatial econometrics models](./user-guide/spatial-econometrics.md)
 - [Scalable GP geostatistics models](./user-guide/geostatistics-models.md)
 - [CartoBoost Boosting Model Guides](./user-guide/boosting-models/index.md)
@@ -68,7 +68,7 @@ Use this directory as the navigation map for the user-facing docs site.
 - Docs example audit: `../scripts/check_docs_examples.py`
 - Official geo evidence audit: `../scripts/check_official_geo_evidence.py`
 - Performance threshold audit: `../scripts/check_performance_thresholds.py`
-- AutoGeo is preview-only and excluded from the stable release gate.
+- AutoGeo is supported-only and excluded from the stable release gate.
 - NYC TLC quality benchmark harness: `../scripts/run_nyc_taxi_quality_benchmarks.py`
 - NYC TLC Path C claim harness: `../scripts/run_nyc_taxi_path_c_claims.py`
 - NYC TLC Path C gate audit: `../scripts/check_nyc_taxi_path_c_gates.py`
@@ -79,31 +79,31 @@ Use this directory as the navigation map for the user-facing docs site.
 
 ## Model Lists
 
-Preview `cartoboost.preview.models.ModelRegistry.defaults()` models:
+Supported `cartoboost.models.ModelRegistry.defaults()` models:
 
 - `models.cartoboost_regressor` / `cartoboost.CartoBoostRegressor`
 - `models.cartoboost_classifier` / `cartoboost.CartoBoostClassifier`
 - `models.cartoboost_ranker` / `cartoboost.CartoBoostRanker`
 - `forecasting.auto_forecaster` / `cartoboost.forecasting.AutoForecaster`
 - `forecasting.cartoboost_lag` / `cartoboost.forecasting.CartoBoostLagForecaster`
-- `graph.dcrnn` / `cartoboost.preview.forecasting.DCRNNForecaster`
-- `geo.nngp` / `cartoboost.preview.geostats.NearestNeighborGPRegressor`
-- `geo.residual_nngp` / `cartoboost.preview.geostats.ResidualNNGPRegressor`
-- `geo.spatial_lag` / `cartoboost.preview.spatial_econometrics.SpatialLagRegressor`
-- `geo.spatial_error` / `cartoboost.preview.spatial_econometrics.SpatialErrorRegressor`
-- `geo.spatial_durbin` / `cartoboost.preview.spatial_econometrics.SpatialDurbinRegressor`
-- `causal.synthetic_did` / `cartoboost.preview.geo_causal.SyntheticDIDEstimator`
-- `causal.geo_lift_design` / `cartoboost.preview.geo_causal.GeoExperimentDesigner`
-- `causal.spatial_placebo` / `cartoboost.preview.geo_causal.SpatialPlaceboTester`
-- `prob.conformal_interval` / `cartoboost.preview.prob.ConformalIntervalRegressor`
-- `prob.spatial_conformal` / `cartoboost.preview.prob.SpatialConformalRegressor`
+- `graph.dcrnn` / `cartoboost.forecasting.DCRNNForecaster`
+- `geo.nngp` / `cartoboost.geostats.NearestNeighborGPRegressor`
+- `geo.residual_nngp` / `cartoboost.geostats.ResidualNNGPRegressor`
+- `geo.spatial_lag` / `cartoboost.spatial_econometrics.SpatialLagRegressor`
+- `geo.spatial_error` / `cartoboost.spatial_econometrics.SpatialErrorRegressor`
+- `geo.spatial_durbin` / `cartoboost.spatial_econometrics.SpatialDurbinRegressor`
+- `causal.synthetic_did` / `cartoboost.geo_causal.SyntheticDIDEstimator`
+- `causal.geo_lift_design` / `cartoboost.geo_causal.GeoExperimentDesigner`
+- `causal.spatial_placebo` / `cartoboost.geo_causal.SpatialPlaceboTester`
+- `prob.conformal_interval` / `cartoboost.prob.ConformalIntervalRegressor`
+- `prob.spatial_conformal` / `cartoboost.prob.SpatialConformalRegressor`
 
 Forecasting model ids and classes:
 
 Only `NaiveForecaster`, `SeasonalNaiveForecaster`, `CartoBoostLagForecaster`,
 `AutoForecaster`, and the typed forecast result/config surfaces are stable in
-the v0.3 Python API. Other forecasting classes below are preview/demo entries
-and must be imported from `cartoboost.preview` when available.
+the v0.3 Python API. Other forecasting classes below are supported/demo entries
+and must be imported from `cartoboost.supported` when available.
 
 - `naive` / `NaiveForecaster`
 - `seasonal_naive` / `SeasonalNaiveForecaster`

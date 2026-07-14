@@ -3,6 +3,18 @@ import sys
 from pathlib import Path
 
 import pytest
+from cartoboost.forecasting import AutoKalmanForecaster as PublicAutoKalmanForecaster
+from cartoboost.forecasting import (
+    AutoLocalLevelKalmanForecaster as PublicAutoLocalLevelKalmanForecaster,
+)
+from cartoboost.forecasting import KalmanForecaster as PublicKalmanForecaster
+from cartoboost.forecasting import KrigingForecaster as PublicKrigingForecaster
+from cartoboost.forecasting import (
+    LocalLevelKalmanForecaster as PublicLocalLevelKalmanForecaster,
+)
+from cartoboost.forecasting import (
+    SpatialPiecewiseKrigingForecaster as PublicSpatialPiecewiseKrigingForecaster,
+)
 from cartoboost.forecasting.local import (
     AutoKalmanForecaster,
     AutoLocalLevelKalmanForecaster,
@@ -10,18 +22,6 @@ from cartoboost.forecasting.local import (
     KrigingForecaster,
     LocalLevelKalmanForecaster,
     SpatialPiecewiseKrigingForecaster,
-)
-from cartoboost.preview.forecasting import AutoKalmanForecaster as PublicAutoKalmanForecaster
-from cartoboost.preview.forecasting import (
-    AutoLocalLevelKalmanForecaster as PublicAutoLocalLevelKalmanForecaster,
-)
-from cartoboost.preview.forecasting import KalmanForecaster as PublicKalmanForecaster
-from cartoboost.preview.forecasting import KrigingForecaster as PublicKrigingForecaster
-from cartoboost.preview.forecasting import (
-    LocalLevelKalmanForecaster as PublicLocalLevelKalmanForecaster,
-)
-from cartoboost.preview.forecasting import (
-    SpatialPiecewiseKrigingForecaster as PublicSpatialPiecewiseKrigingForecaster,
 )
 
 

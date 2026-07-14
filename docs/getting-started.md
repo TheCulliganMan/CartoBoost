@@ -119,7 +119,7 @@ time-indexed quantity. Panel data should identify the series, such as
 pickup/dropoff lane or pickup zone.
 
 ```python
-from cartoboost.preview.forecasting import ForecastFrame, ThetaForecaster
+from cartoboost.forecasting import ForecastFrame, ThetaForecaster
 
 import pandas as pd
 
@@ -191,7 +191,7 @@ leakage-aware validation details in the benchmark writeup.
 
 ## 8. Add Advanced Structure When Justified
 
-Graph, neural, causal, and foundation surfaces are preview APIs in the v0.3
+Graph, neural, causal, and foundation surfaces are supported APIs in the v0.3
 reset. Use them only when their evidence tier and native backend match the
 study requirement; they are intentionally excluded from the core quickstart.
 
@@ -199,7 +199,7 @@ Use learned embeddings when high-cardinality IDs carry stable signal that is not
 captured by dense features alone.
 
 ```python
-from cartoboost.preview import NeuralEmbeddingRegressor
+from cartoboost import NeuralEmbeddingRegressor
 
 neural_model = NeuralEmbeddingRegressor(
     dim=16,

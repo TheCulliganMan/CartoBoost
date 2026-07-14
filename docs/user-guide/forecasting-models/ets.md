@@ -60,7 +60,7 @@ CartoBoost lag/calendar features or a spatial model where appropriate.
 ## Example
 
 ```python
-from cartoboost.preview.forecasting import ETSForecaster
+from cartoboost.forecasting import ETSForecaster
 
 hourly_jfk_pickups = [
     64, 58, 52, 49, 55, 73, 98, 116, 121, 108, 95, 90,
@@ -92,7 +92,7 @@ panel data, prefer `ForecastFrame` so timestamps and series IDs stay explicit.
 ## ForecastFrame Example
 
 ```python
-from cartoboost.preview.forecasting import ETSForecaster, ForecastFrame
+from cartoboost.forecasting import ETSForecaster, ForecastFrame
 
 frame = ForecastFrame.from_pandas(
     hourly_zone_demand.query("series_id == '132'"),
@@ -180,7 +180,7 @@ The plot is designed to answer three practical questions:
 The core pattern is:
 
 ```python
-from cartoboost.preview.forecasting import ETSForecaster, ForecastFrame
+from cartoboost.forecasting import ETSForecaster, ForecastFrame
 
 frame = ForecastFrame.from_pandas(
     hourly_zone_demand,

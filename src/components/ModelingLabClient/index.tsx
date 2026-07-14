@@ -2941,7 +2941,7 @@ export default function ModelingLabClient(): React.ReactElement {
   const runLogIdRef = useRef(0);
   const [pendingLabRun, setPendingLabRun] = useState<PendingLabRun | null>(null);
 
-  const previewRows = table?.rows.slice(0, 6) ?? [];
+  const sampleRows = table?.rows.slice(0, 6) ?? [];
   const selectedForecastModel = modelOptions.find((option) => option.value === model) ?? modelOptions[0];
   const selectedDeepModel = deepModelCatalog.find((item) => item.id === deepModelId) ?? deepModelCatalog[0];
   const isLoadingTaxiSample = isLoadingTaxiLane || isLoadingTaxiVariedRoutes;
@@ -4042,13 +4042,13 @@ export default function ModelingLabClient(): React.ReactElement {
             <>
               <div className={styles.emptyState}>
                 <div>
-                  <span className={styles.eyebrow}>Preview</span>
+                  <span className={styles.eyebrow}>Data sample</span>
                   <h2>{table ? 'Dataset loaded' : 'Waiting for data'}</h2>
                 </div>
               </div>
               {table && (
                 <>
-                  <div className={styles.previewGrid}>
+                  <div className={styles.sampleGrid}>
                     <DatasetProfile table={table} timestampCol={timestampCol} targetCol={targetCol} seriesCol={seriesCol} />
                     <TargetRunPlan
                       table={table}
@@ -4072,7 +4072,7 @@ export default function ModelingLabClient(): React.ReactElement {
                     />
                     <GeoDatasetVisualization table={table} targetCol={targetCol} seriesCol={seriesCol} />
                   </div>
-                  <PreviewTable columns={table.columns} rows={previewRows} />
+                  <SampleTable columns={table.columns} rows={sampleRows} />
                 </>
               )}
             </>
@@ -5500,7 +5500,7 @@ function LineChart({caption, series, showForecastBoundary = true}: {caption: str
   );
 }
 
-function PreviewTable({columns, rows}: {columns: string[]; rows: Record<string, string>[]}) {
+function SampleTable({columns, rows}: {columns: string[]; rows: Record<string, string>[]}) {
   return (
     <div className={styles.tableScroller}>
       <table>
@@ -6310,7 +6310,7 @@ function GeoDatasetVisualization({table, targetCol, seriesCol}: {table: ParsedTa
       )}
       {directRegions.length > 0 && <DirectSpatialRegionMap regions={directRegions} targetName={targetCol} />}
       {points.length > 0 && (
-        <svg className={styles.geoSvg} viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Geographic dataset preview">
+        <svg className={styles.geoSvg} viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Geographic dataset sample">
           <rect x="0" y="0" width={width} height={height} />
           <text className={styles.geoAxisTitle} x={width / 2} y={height - 9}>
             Longitude

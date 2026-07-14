@@ -14,7 +14,7 @@ import json
 
 import numpy as np
 from cartoboost import CartoBoostRegressor
-from cartoboost.preview.graph import (
+from cartoboost.graph import (
     GraphEmbeddingsConfig,
     GraphEncoderConfig,
     GraphEncoderFamily,

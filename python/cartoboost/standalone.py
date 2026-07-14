@@ -7,6 +7,7 @@ from typing import Any
 
 import numpy as np
 
+from ._artifacts import ArtifactPersistenceMixin
 from ._native import (
     StandaloneGraphSageLinkPredictor as _NativeGraphSageLinkPredictor,
 )
@@ -50,7 +51,7 @@ __all__ = [
 ]
 
 
-class NeuralEmbeddingStandaloneRegressor:
+class NeuralEmbeddingStandaloneRegressor(ArtifactPersistenceMixin):
     """Supervised regressor over learned ID embeddings and optional dense features."""
 
     def __init__(
@@ -115,7 +116,7 @@ class NeuralEmbeddingStandaloneRegressor:
         return instance
 
 
-class Node2VecStandaloneRegressor:
+class Node2VecStandaloneRegressor(ArtifactPersistenceMixin):
     """Standalone Node2Vec regressor for node or source-target row modeling."""
 
     def __init__(
@@ -224,7 +225,7 @@ class Node2VecStandaloneRegressor:
         return instance
 
 
-class GraphSageStandaloneRegressor:
+class GraphSageStandaloneRegressor(ArtifactPersistenceMixin):
     """Standalone GraphSAGE regressor for node or source-target row modeling."""
 
     def __init__(
@@ -331,7 +332,7 @@ class GraphSageStandaloneRegressor:
         return instance
 
 
-class HeteroGraphSageStandaloneRegressor:
+class HeteroGraphSageStandaloneRegressor(ArtifactPersistenceMixin):
     """Standalone heterogeneous GraphSAGE regressor."""
 
     def __init__(
@@ -419,7 +420,7 @@ class HeteroGraphSageStandaloneRegressor:
         return instance
 
 
-class HinSageStandaloneRegressor:
+class HinSageStandaloneRegressor(ArtifactPersistenceMixin):
     """Standalone HinSAGE regressor with explicit node and edge type schema."""
 
     def __init__(
@@ -515,7 +516,7 @@ class HinSageStandaloneRegressor:
         return instance
 
 
-class Node2VecLinkPredictor:
+class Node2VecLinkPredictor(ArtifactPersistenceMixin):
     """Standalone Node2Vec edge scorer."""
 
     def __init__(self, **kwargs: Any) -> None:
@@ -560,7 +561,7 @@ class Node2VecLinkPredictor:
         return instance
 
 
-class GraphSageLinkPredictor:
+class GraphSageLinkPredictor(ArtifactPersistenceMixin):
     """Standalone GraphSAGE edge scorer."""
 
     def __init__(self, *, input_dim: int, **kwargs: Any) -> None:
@@ -607,7 +608,7 @@ class GraphSageLinkPredictor:
         return instance
 
 
-class HeteroGraphSageLinkPredictor:
+class HeteroGraphSageLinkPredictor(ArtifactPersistenceMixin):
     """Standalone heterogeneous GraphSAGE edge scorer."""
 
     def __init__(self, *, input_dim: int, relation_count: int, **kwargs: Any) -> None:
@@ -658,7 +659,7 @@ class HeteroGraphSageLinkPredictor:
         return instance
 
 
-class HinSageLinkPredictor:
+class HinSageLinkPredictor(ArtifactPersistenceMixin):
     """Standalone HinSAGE edge scorer."""
 
     def __init__(

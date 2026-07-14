@@ -398,23 +398,40 @@ class CartoBoostRanker(BaseEstimator):
         path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
 
     def save_weights(self, path: str | Path, *, format: str = "auto") -> None:
-        """Fail loudly for unsupported ranker weight/export artifacts.
+        """Save a prediction-ready ranker weights artifact.
 
         Example:
-            >>> ranker = CartoBoostRanker(n_estimators=2, split_policy="axis_only")
-            >>> ranker.fit([[0.0], [1.0]], [0.0, 1.0], groups=[2])
-            CartoBoostRanker(...)
-            >>> ranker.save_weights("ranker.onnx", format="onnx")
-            Traceback (most recent call last):
-            ...
-            NotImplementedError: CartoBoostRanker does not support save_weights or ONNX export; ...
+            >>> model.save_weights("route-ranker-weights.json")
         """
         if self._model is None:
             raise RuntimeError("CartoBoostRanker is not fitted")
-        raise NotImplementedError(
-            "CartoBoostRanker does not support save_weights or ONNX export; "
-            "use save(path) for the supported ranker artifact"
-        )
+        if format not in {"auto", "json"}:
+            raise NotImplementedError("ranker weight artifacts currently support JSON only")
+        # Retain the categorical encoder and group-column configuration so
+        # loaded models accept the same public prediction inputs.
+        self.save(path)
+
+    def __getstate__(self) -> dict[str, Any]:
+        state = dict(self.__dict__)
+        if self._model is None:
+            return state
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "ranker.json"
+            self.save(path)
+            state["_cartoboost_pickle_artifact"] = path.read_bytes()
+        state["_model"] = None
+        return state
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        payload = state.pop("_cartoboost_pickle_artifact", None)
+        self.__dict__.update(state)
+        if payload is None:
+            return
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "ranker.json"
+            path.write_bytes(payload)
+            restored = type(self).load(path)
+        self.__dict__.update(restored.__dict__)
 
     @classmethod
     def load(cls, path: str | Path) -> CartoBoostRanker:
@@ -443,6 +460,19 @@ class CartoBoostRanker(BaseEstimator):
             estimator.n_features_in_ = int(estimator.categorical_encoder_["original_feature_count"])
             estimator.encoded_n_features_in_ = native_model.feature_count
         return estimator
+
+    @classmethod
+    def load_weights(cls, path: str | Path) -> CartoBoostRanker:
+        """Load a ranker weights artifact.
+
+        Example:
+            >>> restored = CartoBoostRanker.load_weights("route-ranker-weights.json")
+        """
+        path = Path(path)
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if raw.get("format") == "cartoboost.model":
+            return cls.load(path)
+        return cls._from_native_model(_NativeRankerModel.load_weights(path))
 
     @classmethod
     def _from_native_model(cls, native_model: Any) -> CartoBoostRanker:

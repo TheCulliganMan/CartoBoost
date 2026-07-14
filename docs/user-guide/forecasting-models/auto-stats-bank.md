@@ -21,7 +21,7 @@ needed. Keep naive and seasonal naive in the comparison table.
 ## Public Contract
 
 ```python
-from cartoboost.preview.forecasting import AutoStatsBank, ForecastFrame
+from cartoboost.forecasting import AutoStatsBank, ForecastFrame
 
 frame = ForecastFrame.from_pandas(
     hourly_demand,

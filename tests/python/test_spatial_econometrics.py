@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pickle
+
 import numpy as np
 import pytest
 from cartoboost.spatial_econometrics import (
@@ -99,8 +101,14 @@ def test_spatial_durbin_effects_and_save_load(tmp_path) -> None:
     path = tmp_path / "spatial-durbin.json"
     model.save(path)
     loaded = SpatialDurbinRegressor.load(path)
+    weights_path = tmp_path / "spatial-durbin.weights.json"
+    model.save_weights(weights_path)
+    weights_loaded = SpatialDurbinRegressor.load_weights(weights_path)
+    pickled = pickle.loads(pickle.dumps(model))
 
     np.testing.assert_allclose(before, loaded.predict(x, spatial_weights=weights))
+    np.testing.assert_allclose(before, weights_loaded.predict(x, spatial_weights=weights))
+    np.testing.assert_allclose(before, pickled.predict(x, spatial_weights=weights))
     assert loaded.summary()["diagnostics"]["total_effects"] is not None
     assert model.durbin_coef_.shape == (1,)
     np.testing.assert_allclose(model.durbin_coef_, loaded.durbin_coef_)

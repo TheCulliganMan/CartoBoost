@@ -23,9 +23,9 @@ each one is good for, and which baseline to compare against.
 ## Start Here
 
 - [Getting Started](getting-started.md): first run, install paths, and local workflow.
-- [Migrating to 0.3](migration-v0.3.md): root API reset, named modules, and preview surfaces.
+- [Migrating to 0.3](migration-v0.3.md): root API reset, named modules, and supported surfaces.
 - [Choose A Model](user-guide/model-types.md): pick the right entry point.
-- `cartoboost.preview.models`: preview model metadata and registry; stable estimators live at the package root.
+- `cartoboost.models`: supported model metadata and registry; stable estimators live at the package root.
 - [CartoBoost Boosting Model Guides](user-guide/boosting-models/index.md): row-level tree models.
 - [CartoBoost Forecasting Model Guides](user-guide/forecasting-models/index.md): one guide per forecast family.
 - [Geo-Causal Experiment Models](user-guide/geo-causal-models.md): synthetic DID, GeoLift-style design, and spillover diagnostics.

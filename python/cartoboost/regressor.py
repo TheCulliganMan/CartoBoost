@@ -557,10 +557,14 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
         path = Path(path)
         resolved_format = _resolve_weights_format(path, format)
         if getattr(self, "categorical_encoder_", None):
-            raise NotImplementedError(
-                "save_weights does not support models with native categorical encoders; "
-                "use save() to preserve category mappings"
-            )
+            if resolved_format != "json":
+                raise NotImplementedError(
+                    "ONNX weight export does not support models with native categorical encoders"
+                )
+            # A native-only weights payload omits category mappings. The stable
+            # model artifact is the JSON weights format for encoded inputs.
+            self.save(path)
+            return
         if resolved_format == "onnx":
             artifact = self._weights_artifact_payload()
             _save_weights_onnx(artifact, path)
@@ -572,6 +576,28 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
             self._model.save_weights(path)
             return
         raise NotImplementedError("native model does not support save_weights")
+
+    def __getstate__(self) -> dict[str, Any]:
+        state = dict(self.__dict__)
+        if self._model is None:
+            return state
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "regressor.json"
+            self.save(path)
+            state["_cartoboost_pickle_artifact"] = path.read_bytes()
+        state["_model"] = None
+        return state
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        payload = state.pop("_cartoboost_pickle_artifact", None)
+        self.__dict__.update(state)
+        if payload is None:
+            return
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "regressor.json"
+            path.write_bytes(payload)
+            restored = type(self).load(path)
+        self.__dict__.update(restored.__dict__)
 
     @classmethod
     def load(cls, path: str | Path) -> CartoBoostRegressor:
@@ -598,6 +624,9 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
     @classmethod
     def load_weights(cls, path: str | Path) -> CartoBoostRegressor:
         path = Path(path)
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if raw.get("format") == "cartoboost.model":
+            return cls.load(path)
         native_model = _NativeRegressorModel.load_weights(path)
         return cls._from_native_model(native_model)
 

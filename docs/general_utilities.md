@@ -11,18 +11,18 @@ method on a simple zone sequence, route panel, or coordinate interpolation
 problem.
 
 ```python
-import cartoboost.preview as cb
+import cartoboost as cb
 ```
 
 ## Sequence Reference Utilities
 
-Use `cartoboost.preview.forecasting.sequence` when a row sequence has a known target
+Use `cartoboost.forecasting.sequence` when a row sequence has a known target
 prefix, a target-missing prediction suffix, and an external reference axis such
 as a canonical demand profile. The utilities validate the prefix/suffix
 boundary and reject target leakage in prediction rows.
 
 ```python
-from cartoboost.preview.forecasting import (
+from cartoboost.forecasting import (
     ReferenceSignal,
     SequenceRow,
     SequenceSeries,
@@ -65,7 +65,7 @@ Example: a location counter reads a stable hourly demand level with small
 noise, and you want a smoothed level plus a short flat forecast.
 
 ```python
-import cartoboost.preview as cb
+import cartoboost as cb
 
 readings = [99.0, 101.0, 100.0, 102.0, 101.0, 103.0]
 
@@ -118,7 +118,7 @@ Visualization example:
 
 ```python
 import matplotlib.pyplot as plt
-import cartoboost.preview as cb
+import cartoboost as cb
 
 readings = [184.0, 187.0, 183.0, 186.0, 185.0, 188.0, 186.0]
 state = cb.local_level_kalman_filter(readings, horizon=3)
@@ -148,7 +148,7 @@ Example: daily pickup demand is increasing by about two trips per day, with
 noise.
 
 ```python
-import cartoboost.preview as cb
+import cartoboost as cb
 
 pickups = [40.0, 42.0, 45.0, 47.0, 50.0, 51.0, 54.0]
 
@@ -201,7 +201,7 @@ Visualization example:
 
 ```python
 import matplotlib.pyplot as plt
-import cartoboost.preview as cb
+import cartoboost as cb
 
 pickups = [40.0, 42.0, 45.0, 47.0, 50.0, 51.0, 54.0]
 state = cb.kalman_filter(pickups, horizon=4)
@@ -230,7 +230,7 @@ Use `KalmanForecaster` when you want the same local-linear model behind the
 forecasting API.
 
 ```python
-from cartoboost.preview.forecasting import KalmanForecaster
+from cartoboost.forecasting import KalmanForecaster
 
 model = KalmanForecaster(
     level_process_variance=0.05,
@@ -265,7 +265,7 @@ Example: three locations have observed demand pressure, and you want the
 estimated pressure at a nearby centroid.
 
 ```python
-import cartoboost.preview as cb
+import cartoboost as cb
 
 observations = [
     (0.0, 0.0, 10.0),  # x, y, value
@@ -347,7 +347,7 @@ a fixed coordinate. The wrapper forecasts each series by kriging the latest
 known panel values at that series coordinate.
 
 ```python
-from cartoboost.preview.forecasting import KrigingForecaster
+from cartoboost.forecasting import KrigingForecaster
 
 coordinates = {
     "location_142": (0.0, 0.0),
@@ -389,7 +389,7 @@ Example: a low-volume lane has several zero-demand days and occasional
 orders.
 
 ```python
-import cartoboost.preview as cb
+import cartoboost as cb
 
 demand = [0.0, 0.0, 4.0, 0.0, 0.0, 2.0, 0.0, 5.0, 0.0]
 
@@ -419,7 +419,7 @@ The same local models used by forecasting wrappers can be called on plain
 numeric sequences:
 
 ```python
-import cartoboost.preview as cb
+import cartoboost as cb
 
 values = [20.0, 21.0, 19.0, 22.0, 23.0, 24.0, 26.0]
 

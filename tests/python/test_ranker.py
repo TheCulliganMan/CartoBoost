@@ -1,10 +1,12 @@
 import json
+import pickle
 from pathlib import Path
 
 import numpy as np
 import pytest
-from cartoboost import CartoBoostRanker, FeatureKind
+from cartoboost import CartoBoostRanker
 from cartoboost.ranker import _normalize_groups
+from cartoboost.schema import FeatureKind
 
 
 def test_ranker_fit_predict_metrics_and_roundtrip(tmp_path: Path):
@@ -260,7 +262,7 @@ def test_ranker_predict_before_fit_raises():
         CartoBoostRanker().predict([[1.0]])
 
 
-def test_ranker_save_weights_fails_loudly(tmp_path: Path):
+def test_ranker_weights_and_pickle_roundtrip(tmp_path: Path):
     X = [[0.0], [1.0], [0.0], [1.0]]
     y = [0.0, 1.0, 0.0, 2.0]
     ranker = CartoBoostRanker(
@@ -269,5 +271,14 @@ def test_ranker_save_weights_fails_loudly(tmp_path: Path):
         min_samples_leaf=1,
     ).fit(X, y, groups=[2, 2])
 
-    with pytest.raises(NotImplementedError, match="ONNX export"):
+    expected = ranker.predict(X)
+    path = tmp_path / "ranker.weights.json"
+    ranker.save_weights(path)
+
+    loaded = CartoBoostRanker.load_weights(path)
+    restored = pickle.loads(pickle.dumps(ranker))
+
+    assert loaded.predict(X) == pytest.approx(expected)
+    assert restored.predict(X) == pytest.approx(expected)
+    with pytest.raises(NotImplementedError, match="JSON only"):
         ranker.save_weights(tmp_path / "ranker.onnx", format="onnx")

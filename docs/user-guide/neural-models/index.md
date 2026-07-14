@@ -9,7 +9,7 @@ Use [CartoBoost Forecasting Model Guides](../forecasting-models/index.md) for
 Model Guides](../graph-models/index.md) when the relationship network itself is
 the thing being modeled. Use [CartoBoost Deep Model Guides](../deep-models.md)
 for ordered pairs, response curves, event probabilities, residual correction,
-graph sequences, and constrained candidate selection under `cartoboost.preview.deep`.
+graph sequences, and constrained candidate selection under `cartoboost.deep`.
 
 ## Choose A Guide
 

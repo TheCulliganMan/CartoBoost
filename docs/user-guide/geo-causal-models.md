@@ -54,7 +54,7 @@ time weights, estimates the post-period treatment effect, and can run placebo
 assignments.
 
 ```python
-from cartoboost.preview.geo_causal import GeoCausalPanel, SyntheticDIDEstimator
+from cartoboost.geo_causal import GeoCausalPanel, SyntheticDIDEstimator
 
 panel = GeoCausalPanel(
     rows,
@@ -89,7 +89,7 @@ test. The designer ranks candidate test geos by pre-period balance, estimates
 detectable lift from placebo dispersion, and reports spillover warnings.
 
 ```python
-from cartoboost.preview.geo_causal import GeoExperimentDesigner
+from cartoboost.geo_causal import GeoExperimentDesigner
 
 design = (
     GeoExperimentDesigner(intervention_time="2026-03-08", seed=11)

@@ -6,10 +6,11 @@ from typing import Any
 
 import numpy as np
 
+from .._artifacts import ArtifactPersistenceMixin
 from ._native import require_native
 
 
-class ConditionalFlowDistributionHead:
+class ConditionalFlowDistributionHead(ArtifactPersistenceMixin):
     """Rust-backed conditional residual flow distribution head."""
 
     def __init__(

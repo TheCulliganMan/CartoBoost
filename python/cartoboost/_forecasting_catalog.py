@@ -1,7 +1,7 @@
-"""Lazy implementation map for :mod:`cartoboost.preview.forecasting`.
+"""Lazy implementation map for :mod:`cartoboost.forecasting`.
 
-This module is private; users reach it through the preview proxy so importing
-the stable forecasting package never imports optional model families.
+This module is private; users reach its models through the public forecasting
+package without eagerly importing every model family.
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ from importlib import import_module
 from typing import Any
 
 _EXPORTS: dict[str, tuple[str, str]] = {
-    # Stable forecasting objects are also visible from the preview namespace.
+    # Rust-backed forecasting objects are exported from the public package.
     "AutoForecastConfig": ("cartoboost.forecasting.auto", "AutoForecastConfig"),
     "AutoForecaster": ("cartoboost.forecasting.auto", "AutoForecaster"),
     "CartoBoostLagForecaster": (
@@ -69,7 +69,7 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "LagFeatureConfig": ("cartoboost.forecasting.lag_features", "LagFeatureConfig"),
     "RollingFeatureConfig": ("cartoboost.forecasting.lag_features", "RollingFeatureConfig"),
     "PredictionInterval": ("cartoboost.forecasting.schema", "PredictionInterval"),
-    # Local and panel preview models.
+    # Local and panel supported models.
     "AutoARIMAForecaster": ("cartoboost.forecasting.local", "AutoARIMAForecaster"),
     "ArimaForecaster": ("cartoboost.forecasting.local", "ArimaForecaster"),
     "AutoKalmanForecaster": ("cartoboost.forecasting.local", "AutoKalmanForecaster"),
@@ -134,7 +134,7 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "NeuralPanelForecaster": ("cartoboost.forecasting.neural", "NeuralPanelForecaster"),
     "NHITSForecaster": ("cartoboost.forecasting.neural", "NHITSForecaster"),
     "NHiTSForecaster": ("cartoboost.forecasting.neural", "NHiTSForecaster"),
-    # Preview probabilistic, registry, and sequence surfaces.
+    # Standard probabilistic, registry, and sequence surfaces.
     "ConformalCalibrator": ("cartoboost.forecasting.probabilistic", "ConformalCalibrator"),
     "ConformalInterval": ("cartoboost.forecasting.probabilistic", "ConformalInterval"),
     "ConformalIntervalRegressor": (

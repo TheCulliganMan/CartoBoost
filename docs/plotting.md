@@ -1,6 +1,6 @@
 # Plotting
 
-`cartoboost.preview.plotting` turns fitted model outputs, forecast artifacts, and
+`cartoboost.plotting` turns fitted model outputs, forecast artifacts, and
 benchmark metric rows into Matplotlib figures. It is separate from model
 fitting: the plots consume predictions and metrics that were already computed
 by CartoBoost, the CLI, or an external baseline.
@@ -24,7 +24,7 @@ diagnostics for CartoBoost benchmark evidence:
 
 ## Browser model visualizer
 
-The [Modeling Lab](../modeling-lab) is separate from `cartoboost.preview.plotting`: it
+The [Modeling Lab](../modeling-lab) is separate from `cartoboost.plotting`: it
 runs forecasting, regression, and neural examples in the browser, then asks for
 opt-in diagnostics from that same fit. For
 `piecewise_linear_seasonal`, the browser request uses Prophet-style modeling
@@ -68,9 +68,9 @@ CartoBoost also exposes a local Prophet-compatible plotting surface for
 The parity target is the public `prophet.plot` API from the package resolved by
 CartoBoost's benchmark dependency range `prophet>=1.1,<1.3`: `prophet==1.2.2`.
 That upstream module exposes these public plotting utilities, and CartoBoost
-implements the same names in `cartoboost.preview.plotting`:
+implements the same names in `cartoboost.plotting`:
 
-| Upstream `prophet.plot` utility | Local `cartoboost.preview.plotting` utility | Purpose |
+| Upstream `prophet.plot` utility | Local `cartoboost.plotting` utility | Purpose |
 | --- | --- | --- |
 | `plot` | `plot` | Observed points, `yhat`, optional intervals, capacity, floor, and legend. |
 | `plot_components` | `plot_components` | Trend, holidays, seasonalities, and extra regressor panels. |
@@ -100,13 +100,13 @@ forecast columns and model attributes (`history`, `seasonalities`,
 `predict_seasonal_components`).
 
 The plotting helpers can be used directly or through the reusable
-`cartoboost.preview.Prophet` façade. The façade delegates fitting and prediction to the
+`cartoboost.Prophet` façade. The façade delegates fitting and prediction to the
 Rust-native `PiecewiseLinearSeasonalForecaster` while preserving Prophet's
 `ds`/`y` dataframe ergonomics.
 
 The forecast plot follows the installed `prophet.plot.plot` behavior:
 
-| Element | Behavior matched by `cartoboost.preview.plotting.plot` |
+| Element | Behavior matched by `cartoboost.plotting.plot` |
 | --- | --- |
 | Observations | `m.history["ds"]` and `m.history["y"]` drawn as black points. |
 | Forecast | `fcst["ds"]` and `fcst["yhat"]` drawn as a solid forecast line. |
@@ -123,7 +123,7 @@ from types import SimpleNamespace
 
 import pandas as pd
 
-from cartoboost.preview.plotting import plot, save_figure
+from cartoboost.plotting import plot, save_figure
 
 history = pd.DataFrame(
     {
@@ -189,7 +189,7 @@ same held-out rows across CartoBoost and baselines.
 
 ```python
 from cartoboost import CartoBoostRegressor
-from cartoboost.preview.plotting import (
+from cartoboost.plotting import (
     plot_predicted_actual,
     plot_residual_diagnostics,
     save_figure,
@@ -234,7 +234,7 @@ dataframe-like object with `to_dict`. Keep the rows tied to one split and one
 metric definition.
 
 ```python
-from cartoboost.preview.plotting import plot_metric_comparison, save_figure
+from cartoboost.plotting import plot_metric_comparison, save_figure
 
 rows = [
     {"model": "cartoboost", "rmse": 4.12, "mae": 2.18},
@@ -266,8 +266,8 @@ holdout actuals, optional lower/upper bounds from forecast rows, and optional
 changepoint markers.
 
 ```python
-from cartoboost.preview.forecasting import ForecastArtifact
-from cartoboost.preview.plotting import plot_forecast, save_figure
+from cartoboost.forecasting import ForecastArtifact
+from cartoboost.plotting import plot_forecast, save_figure
 
 artifact = ForecastArtifact.load("target/forecast-artifacts/demand")
 
@@ -304,7 +304,7 @@ chart to one model. Pass any numeric component columns emitted by a CartoBoost
 artifact, benchmark harness, or external baseline.
 
 ```python
-from cartoboost.preview.plotting import plot_forecast_components, save_figure
+from cartoboost.plotting import plot_forecast_components, save_figure
 
 component_rows = [
     {
@@ -347,7 +347,7 @@ horizon diagnostics so trend, seasonality, and holdout error are read together:
 optional lower/upper bands.
 
 ```python
-from cartoboost.preview.plotting import plot_seasonality_curve, save_figure
+from cartoboost.plotting import plot_seasonality_curve, save_figure
 
 seasonality_rows = [
     {"component": "weekly", "phase": 0, "value": -8.0, "lower": -10.0, "upper": -6.0},
@@ -373,7 +373,7 @@ save_figure(fig, "target/plots/pickup_weekly_seasonality.png", close=True)
 signed effect sizes.
 
 ```python
-from cartoboost.preview.plotting import plot_changepoint_effects, save_figure
+from cartoboost.plotting import plot_changepoint_effects, save_figure
 
 changepoint_rows = [
     {"timestamp": "2026-03-01", "delta": 14.2},
@@ -398,7 +398,7 @@ lines and component panels so step changes are visible in the same report.
 models.
 
 ```python
-from cartoboost.preview.plotting import plot_horizon_metrics, save_figure
+from cartoboost.plotting import plot_horizon_metrics, save_figure
 
 horizon_rows = [
     {"model": "cartoboost_lag", "horizon": 1, "rmse": 11.2},
@@ -428,7 +428,7 @@ Rendered horizon metric example:
 folds or depends on one unusually easy cutoff.
 
 ```python
-from cartoboost.preview.plotting import plot_backtest_metrics, save_figure
+from cartoboost.plotting import plot_backtest_metrics, save_figure
 
 fold_rows = [
     {"model": "cartoboost_lag", "fold": 1, "rmse": 11.2},
@@ -450,7 +450,7 @@ coverage and, when available, shows mean interval width. Use it when reporting
 probabilistic forecasts or conformal intervals.
 
 ```python
-from cartoboost.preview.plotting import plot_interval_calibration, save_figure
+from cartoboost.plotting import plot_interval_calibration, save_figure
 
 interval_rows = [
     {"nominal_coverage": 0.5, "coverage": 0.48, "mean_width": 18.2},
@@ -479,7 +479,7 @@ emitted from each validation cutoff. This is useful when a rolling-origin metric
 curve needs a row-level explanation.
 
 ```python
-from cartoboost.preview.plotting import plot_cutoff_predictions, save_figure
+from cartoboost.plotting import plot_cutoff_predictions, save_figure
 
 cutoff_rows = [
     {"cutoff": "2026-03-01", "timestamp": "2026-03-02", "actual": 180, "prediction": 176},
@@ -508,7 +508,7 @@ manifest-style dictionary of plot names to paths. This is useful for benchmark
 runs where every model or split should emit the same evidence set.
 
 ```python
-from cartoboost.preview.plotting import write_plot_report
+from cartoboost.plotting import write_plot_report
 
 plots = write_plot_report(
     "target/plots/fare_holdout",
@@ -543,7 +543,7 @@ with coordinates. Static maps use GeoPandas and Shapely; interactive maps use
 PyDeck. These packages are optional and loaded only when a map helper is called.
 
 ```python
-from cartoboost.preview.plotting import (
+from cartoboost.plotting import (
     plot_route_segments,
     plot_spatial_points,
     save_figure,
@@ -605,7 +605,7 @@ directories, writes the file with a stable default DPI, and can close the figure
 after writing:
 
 ```python
-from cartoboost.preview.plotting import save_figure
+from cartoboost.plotting import save_figure
 
 save_figure(fig, "target/plots/chart.png", dpi=180, close=True)
 ```

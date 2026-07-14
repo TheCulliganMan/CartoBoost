@@ -4,7 +4,7 @@
 > modules. They have no import or compatibility namespace; any future return
 > requires a native binding and real-data evidence.
 
-Use `cartoboost.preview.deep` when the modeling unit is more structured than one
+Use `cartoboost.deep` when the modeling unit is more structured than one
 ordinary row: ordered pairs, candidate response curves, event probabilities,
 baseline residual correction, graph sequences, or constrained candidate
 selection.
@@ -158,7 +158,7 @@ raise a clear skip reason. Cached outputs include external version metadata,
 model hash, input hash, output shape, and whether the adapter was explicitly
 enabled for orchestration.
 
-Use `cartoboost.preview.deep.available_deep_backends()` to inspect the installed wheel.
+Use `cartoboost.deep.available_deep_backends()` to inspect the installed wheel.
 If a requested accelerator is unavailable, treat that as an environment error
 rather than silently changing the benchmark or production contract.
 On Apple-platform builds with the native Metal feature, `backend="metal"` is

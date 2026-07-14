@@ -3,11 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .._artifacts import ArtifactPersistenceMixin
 from .frequency import validate_horizon
 from .schema import ForecastFrame
 
 
-class BaseForecaster:
+class BaseForecaster(ArtifactPersistenceMixin):
     """Base guardrails for forecasting estimators."""
 
     is_fitted_: bool = False

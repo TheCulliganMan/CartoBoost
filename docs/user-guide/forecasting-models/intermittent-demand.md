@@ -41,7 +41,7 @@ than one configured bucket fails explicitly.
 ## Public Contract
 
 ```python
-from cartoboost.preview.forecasting import CrostonForecaster, SbaForecaster, TsbForecaster
+from cartoboost.forecasting import CrostonForecaster, SbaForecaster, TsbForecaster
 
 demand = [0, 0, 4, 0, 0, 7, 0, 3, 0, 0, 0, 5]
 
@@ -76,7 +76,7 @@ tsb_forecast = tsb.predict(6)
 ## Panel Fit
 
 ```python
-from cartoboost.preview.forecasting import ForecastFrame, TsbForecaster
+from cartoboost.forecasting import ForecastFrame, TsbForecaster
 
 frame = ForecastFrame.from_pandas(
     sparse_panel,

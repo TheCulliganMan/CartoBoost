@@ -70,7 +70,7 @@ Common failure modes in panel data:
 ## Example
 
 ```python
-from cartoboost.preview.forecasting import ForecastFrame, PiecewiseLinearSeasonalForecaster
+from cartoboost.forecasting import ForecastFrame, PiecewiseLinearSeasonalForecaster
 
 frame = ForecastFrame.from_pandas(
     hourly_airport_pickups,
@@ -104,7 +104,7 @@ and recent operational rows are daily or business-daily. The model fits on the
 actual timestamps and uses `freq` only as the default horizon cadence.
 
 ```python
-from cartoboost.preview.forecasting import ForecastFrame, PiecewiseLinearSeasonalForecaster
+from cartoboost.forecasting import ForecastFrame, PiecewiseLinearSeasonalForecaster
 
 frame = ForecastFrame.from_pandas(
     taxi_route_training_rows,
@@ -205,7 +205,7 @@ install `cartoboost[holidays]` when country calendars are needed. Explicit
 The local plotting layer provides full public plotting-utility parity with the
 `prophet.plot` module from `prophet==1.2.2`, the package version resolved by
 CartoBoost's benchmark dependency range `prophet>=1.1,<1.3`. Use
-`cartoboost.preview.plotting.plot`, `plot_components`, `plot_forecast_component`,
+`cartoboost.plotting.plot`, `plot_components`, `plot_forecast_component`,
 `plot_weekly`, `plot_yearly`, `plot_seasonality`,
 `add_changepoints_to_plot`, `plot_cross_validation_metric`, the matching
 Plotly helpers, and the helper-prop functions when a report expects Prophet's

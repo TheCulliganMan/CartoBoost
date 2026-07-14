@@ -9,7 +9,7 @@ from statistics import mean
 from typing import Any
 
 import pandas as pd
-from cartoboost.preview.forecasting import ForecastFrame, OptimizedThetaForecaster, ThetaForecaster
+from cartoboost.forecasting import ForecastFrame, OptimizedThetaForecaster, ThetaForecaster
 
 
 def synthetic_zone_pickups(hours: int) -> pd.DataFrame:

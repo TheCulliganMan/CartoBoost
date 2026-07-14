@@ -49,7 +49,7 @@ settings match the series.
 ## Example
 
 ```python
-from cartoboost.preview.forecasting import AutoKalmanForecaster
+from cartoboost.forecasting import AutoKalmanForecaster
 
 airport_pickups = [72, 75, 79, 82, 80, 86, 91, 96, 94, 99, 103, 108]
 
@@ -74,7 +74,7 @@ full panel.
 | Example | Use | Why |
 | --- | --- | --- |
 | A single location sensor is noisy but the true demand level is stable. | `LocalLevelKalmanForecaster` or `cartoboost.local_level_kalman_filter` | One latent level is enough; there is no explicit slope. |
-| Airport pickup demand is drifting upward through the evening rush. | `KalmanForecaster` or `cartoboost.preview.utilities.kalman_filter` | The local-linear model estimates both a level and a trend. |
+| Airport pickup demand is drifting upward through the evening rush. | `KalmanForecaster` or `cartoboost.utilities.kalman_filter` | The local-linear model estimates both a level and a trend. |
 | You want the model to choose variance settings from a small grid. | `AutoLocalLevelKalmanForecaster` or `AutoKalmanForecaster` | Candidate settings are scored by predictive negative log likelihood on a time-ordered tail window and the winner is refit. |
 | You need a normal forecast band for a dashboard. | `forecast_distribution` from either utility | It returns mean, variance, lower, and upper for each horizon. |
 | You need to explain why a point looked unusual. | Per-step estimates and `diagnostics` | Innovations, standardized innovations, gains, and log likelihood show how surprising the observation was. |
@@ -82,7 +82,7 @@ full panel.
 Local-level example:
 
 ```python
-import cartoboost.preview as cb
+import cartoboost as cb
 
 zone_236_readings = [184.0, 187.0, 183.0, 186.0, 185.0, 188.0, 186.0]
 
@@ -100,7 +100,7 @@ print(state["forecast_distribution"])
 Local-linear example:
 
 ```python
-import cartoboost.preview as cb
+import cartoboost as cb
 
 jfk_evening_pickups = [74.0, 76.0, 79.0, 78.0, 83.0, 86.0, 84.0, 90.0, 92.0]
 
@@ -119,7 +119,7 @@ print(state["diagnostics"]["rmse"], state["diagnostics"]["mae"])
 ## ForecastFrame Example
 
 ```python
-from cartoboost.preview.forecasting import AutoKalmanForecaster, ForecastFrame
+from cartoboost.forecasting import AutoKalmanForecaster, ForecastFrame
 
 frame = ForecastFrame.from_pandas(
     hourly_zone_demand.query("series_id == '132'"),
@@ -156,7 +156,7 @@ variants report `selected_params` and per-candidate `mse` and
 ## Self-Tuning Pattern
 
 ```python
-from cartoboost.preview.forecasting import AutoLocalLevelKalmanForecaster
+from cartoboost.forecasting import AutoLocalLevelKalmanForecaster
 
 model = AutoLocalLevelKalmanForecaster(
     level_process_variance_grid=[0.005, 0.02, 0.08],
@@ -195,7 +195,7 @@ Use the plain utility when you need state diagnostics instead of only a
 forecasting API result:
 
 ```python
-import cartoboost.preview as cb
+import cartoboost as cb
 
 state = cb.kalman_filter(
     airport_pickups,
@@ -244,7 +244,7 @@ The core plotting pattern is:
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-import cartoboost.preview as cb
+import cartoboost as cb
 
 pickup_hours = list(range(18))
 pickups = [
@@ -319,7 +319,7 @@ predictive-likelihood score and MSE tie-breaker.
 ```python
 import math
 
-import cartoboost.preview as cb
+import cartoboost as cb
 
 train = [74.0, 76.0, 79.0, 78.0, 83.0, 86.0, 84.0, 90.0, 92.0, 91.0, 97.0, 101.0]
 validation = [99.0, 104.0, 108.0]

@@ -1,3 +1,6 @@
+import pickle
+from pathlib import Path
+
 import pytest
 from cartoboost.forecasting.local import SeasonalNaiveForecaster
 
@@ -36,3 +39,14 @@ def test_seasonal_naive_native_metadata_round_trips_after_fit():
     metadata = SeasonalNaiveForecaster(season_length=3).fit([1.0, 2.0, 3.0]).get_metadata()
 
     assert metadata == {"model": "seasonal_naive", "season_length": 3}
+
+
+def test_seasonal_naive_pickle_and_weights_roundtrip(tmp_path: Path):
+    model = SeasonalNaiveForecaster(season_length=2).fit([1.0, 2.0, 3.0, 4.0])
+    expected = model.predict(3).predictions()
+    path = tmp_path / "seasonal-naive.weights.json"
+
+    model.save_weights(path)
+
+    assert SeasonalNaiveForecaster.load_weights(path).predict(3).predictions() == expected
+    assert pickle.loads(pickle.dumps(model)).predict(3).predictions() == expected

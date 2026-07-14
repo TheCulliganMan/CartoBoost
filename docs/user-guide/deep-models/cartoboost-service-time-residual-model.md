@@ -9,7 +9,7 @@ final prediction is the baseline plus the learned residual.
 ## Public Contract
 
 ```python
-from cartoboost.preview.deep import ServiceTimeResidualModel
+from cartoboost.deep import ServiceTimeResidualModel
 
 rows = [
     {

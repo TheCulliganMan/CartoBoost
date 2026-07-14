@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+from base64 import b64decode, b64encode
 from pathlib import Path
 from typing import Any
 
@@ -21,12 +22,13 @@ from cartoboost.forecasting.graph_st import STAEformerForecaster as _STAEformerF
 from cartoboost.forecasting.graph_st import STGformerForecaster as _STGformerForecaster
 from cartoboost.forecasting.graph_st import STGormerForecaster as _STGormerForecaster
 
+from .._artifacts import ArtifactPersistenceMixin
 from ..config import Backend, GraphBackbone
 from .flow import flow_uncertainty_report
 from .frames import GraphTemporalFrame
 
 
-class SpatioTemporalGraphForecaster:
+class SpatioTemporalGraphForecaster(ArtifactPersistenceMixin):
     """Generic graph sequence forecaster facade over implemented native graph cores."""
 
     def __init__(
@@ -92,8 +94,40 @@ class SpatioTemporalGraphForecaster:
     def score(self, *args: Any, **kwargs: Any) -> Any:
         return self._model.score(*args, **kwargs)
 
-    def save(self, *args: Any, **kwargs: Any) -> Any:
-        return self._model.save(*args, **kwargs)
+    def save(self, path: str | Path) -> Path:
+        """Save the selected graph architecture and its native artifact together."""
+        path = Path(path)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            native_path = Path(temp_dir) / "graph-model.json"
+            self._model.save(native_path)
+            native_payload = native_path.read_bytes()
+        payload = {
+            "artifact_type": "spatiotemporal_graph_forecaster",
+            "artifact_version": 1,
+            "backbone": self.backbone.value,
+            "native_artifact": b64encode(native_payload).decode("ascii"),
+        }
+        path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+        return path
+
+    @classmethod
+    def load(cls, path: str | Path) -> SpatioTemporalGraphForecaster:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        if (
+            payload.get("artifact_type") != "spatiotemporal_graph_forecaster"
+            or payload.get("artifact_version") != 1
+        ):
+            raise ValueError("unsupported SpatioTemporalGraphForecaster artifact")
+        backbone = GraphBackbone(payload["backbone"])
+        native_payload = payload.get("native_artifact")
+        if not isinstance(native_payload, str):
+            raise ValueError("SpatioTemporalGraphForecaster artifact is missing native_artifact")
+        obj = cls(backbone=backbone)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            native_path = Path(temp_dir) / "graph-model.json"
+            native_path.write_bytes(b64decode(native_payload.encode("ascii"), validate=True))
+            obj._model = type(obj._model).load(native_path)
+        return obj
 
     def get_params(self, deep: bool = True) -> dict[str, Any]:
         return {
@@ -115,7 +149,7 @@ class SpatioTemporalGraphForecaster:
         return metadata
 
 
-class DelayAwareGraphTransformer:
+class DelayAwareGraphTransformer(ArtifactPersistenceMixin):
     """Directed delayed graph propagation forecaster backed by Rust graph ST core."""
 
     def __init__(

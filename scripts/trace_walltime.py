@@ -175,8 +175,8 @@ def trace_neural(
     y: np.ndarray,
     ids: np.ndarray,
 ) -> None:
+    from cartoboost import NeuralEmbeddingRegressor
     from cartoboost.neural.features import NeuralEmbeddingFeatures
-    from cartoboost.preview import NeuralEmbeddingRegressor
 
     case = "net:embedding_table"
     features = NeuralEmbeddingFeatures(dim=args.neural_dim, random_state=args.seed)

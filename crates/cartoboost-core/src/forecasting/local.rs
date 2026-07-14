@@ -22,12 +22,12 @@ const MAX_ARIMA_COLUMNS: usize = MAX_ARIMA_ORDER * 2 + 1;
 const PIECEWISE_LINEAR_SEASONAL_ARTIFACT_KIND: &str = "cartoboost_piecewise_linear_seasonal";
 const PIECEWISE_LINEAR_SEASONAL_ARTIFACT_VERSION: u32 = 1;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NaiveForecaster {
     fitted: Option<FittedLocalState>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SeasonalNaiveForecaster {
     season_length: usize,
     fitted: Option<FittedLocalState>,
@@ -294,7 +294,7 @@ pub struct ThetaSeasonality {
     season_length: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct FittedLocalState {
     frame: ForecastFrame,
     history_by_series: BTreeMap<String, Vec<ForecastRow>>,

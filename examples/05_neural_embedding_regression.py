@@ -15,7 +15,7 @@ from typing import Any
 
 import numpy as np
 from cartoboost import CartoBoostRegressor
-from cartoboost.preview import NeuralEmbeddingRegressor
+from cartoboost import NeuralEmbeddingRegressor
 
 SPLITTERS = ["axis_histogram:256"]
 

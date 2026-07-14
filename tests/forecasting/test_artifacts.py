@@ -1,4 +1,5 @@
 import json
+import pickle
 
 import numpy as np
 import pandas as pd
@@ -127,3 +128,9 @@ def test_stable_forecaster_v2_artifact_roundtrip(model_cls, kwargs, tmp_path):
     restored = model_cls.load(path)
     assert restored.get_params() == model.get_params()
     assert restored.predict(3).predictions() == before
+
+    weights_path = tmp_path / f"{model_cls.__name__}.weights.json"
+    model.save_weights(weights_path)
+    weights_restored = model_cls.load_weights(weights_path)
+    assert weights_restored.predict(3).predictions() == before
+    assert pickle.loads(pickle.dumps(model)).predict(3).predictions() == before

@@ -58,7 +58,7 @@ deduplicated before training, so duplicates do not change the route.
 Arbitrary geographic labels can be mapped into stable sparse IDs:
 
 ```python
-from cartoboost.preview.geo import build_geo_sparse_sets
+from cartoboost.geo import build_geo_sparse_sets
 
 geo_sparse_sets = build_geo_sparse_sets(
     {
@@ -92,7 +92,7 @@ Zone features can be expanded into geographic sparse columns with explicit
 pickup/dropoff roles:
 
 ```python
-from cartoboost.preview.geo import build_zip_sparse_sets
+from cartoboost.geo import build_zip_sparse_sets
 
 zip_sparse_sets = build_zip_sparse_sets(
     origin_zip=["11430", "10019"],
@@ -129,7 +129,7 @@ than a named taxi zone. This is useful for pickup/dropoff coordinates, dense
 urban hotspots, and multi-resolution neighborhood effects.
 
 ```python
-from cartoboost.preview.h3 import build_h3_sparse_sets
+from cartoboost.h3 import build_h3_sparse_sets
 
 h3_sparse_sets = build_h3_sparse_sets(
     {
@@ -146,7 +146,7 @@ of route cells. Request decoded GeoJSON/shape coordinates from the router first;
 CartoBoost rejects encoded polyline strings instead of guessing.
 
 ```python
-from cartoboost.preview.h3 import build_h3_route_sparse_sets
+from cartoboost.h3 import build_h3_route_sparse_sets
 
 route_sparse_sets = build_h3_route_sparse_sets(
     osrm_routes,
@@ -174,7 +174,7 @@ schema = {
 }
 ```
 
-`cartoboost.preview.h3.normalize_h3_id` accepts non-negative integer IDs plus decimal or
+`cartoboost.h3.normalize_h3_id` accepts non-negative integer IDs plus decimal or
 hexadecimal strings when cells are already encoded upstream. Auto-encoding
 requires the optional `h3` package and raises `ImportError` if it is missing.
 ID parsing, coordinate validation, resolution validation, scaffold parent
@@ -208,7 +208,7 @@ Use S2 for spatial cell features when your data pipeline or scientific
 comparison is already based on S2 cell IDs.
 
 ```python
-from cartoboost.preview.s2 import build_s2_sparse_sets
+from cartoboost.s2 import build_s2_sparse_sets
 
 s2_sparse_sets = build_s2_sparse_sets(
     {
@@ -223,7 +223,7 @@ s2_sparse_sets = build_s2_sparse_sets(
 Decoded route geometries can also be encoded as S2 sparse rows:
 
 ```python
-from cartoboost.preview.s2 import build_s2_route_sparse_sets
+from cartoboost.s2 import build_s2_route_sparse_sets
 
 route_sparse_sets = build_s2_route_sparse_sets(
     valhalla_routes,
@@ -233,7 +233,7 @@ route_sparse_sets = build_s2_route_sparse_sets(
 )
 ```
 
-`cartoboost.preview.s2.normalize_s2_id` accepts non-negative integer S2 IDs plus decimal
+`cartoboost.s2.normalize_s2_id` accepts non-negative integer S2 IDs plus decimal
 or `0x`-prefixed strings when cells are already encoded upstream. Auto-encoding
 requires the optional `s2sphere` package and raises `ImportError` if it is
 missing. ID parsing, coordinate validation, level validation, and sparse-row

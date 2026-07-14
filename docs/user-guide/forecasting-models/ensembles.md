@@ -61,7 +61,7 @@ scientific value.
 ## Example
 
 ```python
-from cartoboost.preview.forecasting import (
+from cartoboost.forecasting import (
     KalmanForecaster,
     SeasonalNaiveForecaster,
     ThetaForecaster,
@@ -95,9 +95,9 @@ Weights are normalized, so `{1.0, 3.0}` becomes `{0.25, 0.75}` in metadata.
 ## ForecastFrame Example
 
 ```python
-from cartoboost.preview.forecasting import ForecastFrame, KalmanForecaster
-from cartoboost.preview.forecasting import SeasonalNaiveForecaster, ThetaForecaster
-from cartoboost.preview.forecasting import WeightedEnsembleForecaster
+from cartoboost.forecasting import ForecastFrame, KalmanForecaster
+from cartoboost.forecasting import SeasonalNaiveForecaster, ThetaForecaster
+from cartoboost.forecasting import WeightedEnsembleForecaster
 
 frame = ForecastFrame.from_pandas(
     hourly_zone_demand.query("series_id == '161'"),
@@ -134,7 +134,7 @@ synthetic hourly pickup counts and does not download data.
 The core pattern is:
 
 ```python
-from cartoboost.preview.forecasting import (
+from cartoboost.forecasting import (
     ForecastFrame,
     KalmanForecaster,
     SeasonalNaiveForecaster,

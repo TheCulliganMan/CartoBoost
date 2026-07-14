@@ -78,7 +78,7 @@ graphon gradients, trains the mixup router against the remaining experts, and
 uses binary Gumbel-Softmax graphon sampling during native fitting.
 
 ```python
-from cartoboost.preview.forecasting import GraphTemporalFrame, STGormerForecaster
+from cartoboost.forecasting import GraphTemporalFrame, STGormerForecaster
 
 model = STGormerForecaster(
     lookback=12,
@@ -240,7 +240,7 @@ uses real records and reports the quality claim.
 
 ```python
 import numpy as np
-from cartoboost.preview.forecasting import (
+from cartoboost.forecasting import (
     DCRNNForecaster,
     GraphTemporalFrame,
     GraphWaveNetForecaster,
@@ -412,7 +412,7 @@ selected targets and geography.
 import math
 import numpy as np
 
-from cartoboost.preview.forecasting import MarketPanelFrame, MarketStructureForecaster
+from cartoboost.forecasting import MarketPanelFrame, MarketStructureForecaster
 
 # Twelve directional lanes across airport and Manhattan-style markets. The
 # caller owns the two target names; neither is assigned package semantics.

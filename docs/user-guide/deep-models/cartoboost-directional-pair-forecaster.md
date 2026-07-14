@@ -10,7 +10,7 @@ or account-to-account interactions.
 ## Public Contract
 
 ```python
-from cartoboost.preview.deep import DirectionalPairForecaster, DirectionalPairFrame
+from cartoboost.deep import DirectionalPairForecaster, DirectionalPairFrame
 
 frame = DirectionalPairFrame.from_pandas(
     pair_history,

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from cartoboost.preview.geo_causal import (
+from cartoboost.geo_causal import (
     GeoCausalPanel,
     GeoExperimentDesigner,
     SpatialPlaceboTester,

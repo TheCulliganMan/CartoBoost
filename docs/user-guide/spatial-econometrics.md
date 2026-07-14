@@ -1,7 +1,7 @@
 # Spatial Econometrics Models
 
-> Preview API: import these models from
-> `cartoboost.preview.spatial_econometrics`. They do not carry the stable
+> Supported API: import these models from
+> `cartoboost.spatial_econometrics`. They do not carry the stable
 > root-package compatibility promise in CartoBoost 0.3.
 
 Classical spatial econometrics models are interpretable baselines for areal
@@ -59,7 +59,7 @@ reported separately when it is the evaluation metric of interest.
 default, and isolated rows are recorded instead of silently removed.
 
 ```python
-from cartoboost.preview.spatial_econometrics import SpatialWeights
+from cartoboost.spatial_econometrics import SpatialWeights
 
 taxi_zone_weights = SpatialWeights(
     4,
@@ -97,7 +97,7 @@ This example fits a spatial lag model for taxi-zone fare residuals after dense
 trip features have been assembled.
 
 ```python
-from cartoboost.preview.spatial_econometrics import SpatialLagRegressor
+from cartoboost.spatial_econometrics import SpatialLagRegressor
 
 model = SpatialLagRegressor()
 model.fit(
@@ -127,7 +127,7 @@ local demand, inventory capacity, service hours, and distance to the nearest
 hub.
 
 ```python
-from cartoboost.preview.spatial_econometrics import SpatialErrorRegressor
+from cartoboost.spatial_econometrics import SpatialErrorRegressor
 
 store_error = SpatialErrorRegressor().fit(
     store_features_train,
@@ -147,7 +147,7 @@ For route cells, make each row a cell, segment, or origin-destination service
 unit. Fit Durbin when neighboring cells' features are part of the hypothesis.
 
 ```python
-from cartoboost.preview.spatial_econometrics import SpatialDurbinRegressor
+from cartoboost.spatial_econometrics import SpatialDurbinRegressor
 
 durbin = SpatialDurbinRegressor().fit(
     route_cell_features_train,
@@ -169,7 +169,7 @@ study needs both predictive and interpretable spatial evidence.
 
 ```python
 from cartoboost import CartoBoostRegressor
-from cartoboost.preview.spatial_econometrics import SpatialLagRegressor
+from cartoboost.spatial_econometrics import SpatialLagRegressor
 
 cartoboost = CartoBoostRegressor(
     n_estimators=200,

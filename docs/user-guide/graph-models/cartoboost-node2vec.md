@@ -25,7 +25,7 @@ edge structure itself.
 
 ```python
 import numpy as np
-from cartoboost.preview.graph import Node2VecStandaloneRegressor
+from cartoboost.graph import Node2VecStandaloneRegressor
 
 edges = [(0, 1), (1, 2), (2, 3), (3, 0), (0, 2)]
 source = np.array([0, 1, 2, 3], dtype=np.uint64)
@@ -50,7 +50,7 @@ model.save("node2vec-regressor.json")
 ### Link Predictor
 
 ```python
-from cartoboost.preview.graph import Node2VecLinkPredictor
+from cartoboost.graph import Node2VecLinkPredictor
 
 predictor = Node2VecLinkPredictor(dim=8, walk_length=8, walks_per_node=4, epochs=2)
 predictor.fit(node_count=4, edges=edges)
