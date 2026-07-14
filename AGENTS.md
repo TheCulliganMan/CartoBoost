@@ -39,6 +39,17 @@
 - Avoid vague table headers such as `Scope` in public benchmark docs. Prefer concrete labels such as `Model`, `RMSE`, `MAE`, `WAPE`, `Read`, `Artifact`, `Details`, and `Result`.
 - If benchmark code affecting reported metrics changes, rerun the affected maintained forecast benchmarks before updating public benchmark claims. Do not rely on stale artifact values when the user expects current benchmark evidence.
 
+## Release procedure
+
+- Keep ordinary verification and Pages deployment in `.github/workflows/ci.yml`. Leave the tag-triggered PyPI workflow in `.github/workflows/publish-pypi.yml` unchanged unless the user explicitly asks to change release publishing behavior.
+- A package release is a new SemVer version and tag; never attempt to republish an existing PyPI version or reuse an existing `v*` tag.
+- Bump the version consistently in every package manifest, Python package metadata, npm metadata and lockfile, Cargo lockfile, uv lockfile, and `CHANGELOG.md`. Validate with `uv run --group dev python scripts/check_release_versions.py --tag vX.Y.Z`.
+- If a version bump or implementation change touches files classified as benchmark-affecting, regenerate each maintained affected benchmark artifact before release. Use the artifact's recorded command and real required inputs; update the maintained public benchmark narrative with the resulting timing and metrics.
+- Benchmark artifacts record the commit they were generated from. Run the benchmark on the release-candidate commit, commit the refreshed artifact and narrative, then run the freshness and quality gates. Do not hand-edit an artifact commit field or bypass the freshness gate.
+- Before pushing a release candidate, run `uv run --group dev pytest tests/integration/test_validation_scripts.py` and `uv run --group dev pre-commit run --all-files`.
+- Push the release candidate to `main`, wait for the exact commit's successful push-to-main CI run, then create and push the matching `vX.Y.Z` tag. Do not tag before that CI run succeeds: the unchanged PyPI workflow requires it and will fail otherwise.
+- After pushing the tag, monitor the `Release` workflow through completion and verify the GitHub release and PyPI publication. Report the release URL, tag, and final workflow outcome; do not call the release complete while a workflow is queued, running, cancelled, or failed.
+
 ## Testing instructions
 - Run `just validate` for full local validation.
 - Always run lint/format checks before pushing. All linting and format checks must go through `uv run --group dev pre-commit run --all-files`; report that command in the handoff.
