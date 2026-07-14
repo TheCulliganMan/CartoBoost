@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import numpy as np
@@ -33,14 +34,7 @@ def make_shap_explainer(
             background,
             sparse_sets=sparse_sets,
         )
-        explainer = shap.Explainer(
-            adapter.predict,
-            adapter.background,
-            algorithm=algorithm,
-            feature_names=adapter.feature_names,
-            **kwargs,
-        )
-        return _AdditiveWeightShapExplainer(explainer, adapter)
+        return _AdditiveWeightShapExplainer(shap, adapter, **kwargs)
     if sparse_sets is not None:
         adapter = _SparseSetShapAdapter(
             model,
@@ -63,6 +57,17 @@ def make_shap_explainer(
             "sparse_sets must be provided when explaining a model that requires sparse_sets"
         )
     names = feature_names or _model_feature_names(model)
+    tree_ensemble = _tree_shap_ensemble(model)
+    if tree_ensemble is not None:
+        return _NativeTreeShapExplainer(
+            shap.TreeExplainer(
+                tree_ensemble,
+                data=_as_2d_array(background),
+                model_output="raw",
+                feature_perturbation="interventional",
+                feature_names=names,
+            )
+        )
     return shap.Explainer(
         model,
         background,
@@ -158,15 +163,62 @@ def _model_feature_names(model: Any) -> list[str] | None:
 
 
 class _AdditiveWeightShapExplainer:
-    def __init__(self, explainer: Any, adapter: _AdditiveWeightShapAdapter) -> None:
-        self.explainer = explainer
+    """Exact SHAP explainer for CartoBoost's additive prediction components.
+
+    ``predict_additive_values`` returns the initial prediction followed by one
+    contribution per fitted tree.  The prediction is their sum, so each
+    component is an independent additive feature.  Its SHAP value is therefore
+    its value minus its background mean; the expected prediction is the sum of
+    those means.  Computing this directly is exact and avoids routing a
+    potentially very-wide tree-weight matrix through SHAP's generic permutation
+    explainer.
+    """
+
+    def __init__(self, shap: Any, adapter: _AdditiveWeightShapAdapter, **kwargs: Any) -> None:
+        self._shap = shap
         self.cartoboost_additive_adapter = adapter
+        self.expected_value = float(np.sum(adapter.background_mean))
+        # Retain this familiar attribute for callers that inspect explainers.
+        self.feature_names = adapter.feature_names
+        if kwargs:
+            unsupported = ", ".join(sorted(kwargs))
+            raise TypeError(
+                "weight decomposition is computed exactly and does not accept "
+                f"SHAP explainer options: {unsupported}"
+            )
 
     def __call__(self, X: Any, *, sparse_sets: Any | None = None, **kwargs: Any) -> Any:
-        return self.explainer(
-            self.cartoboost_additive_adapter.transform(X, sparse_sets=sparse_sets),
-            **kwargs,
+        values = self.cartoboost_additive_adapter.transform(X, sparse_sets=sparse_sets)
+        if kwargs:
+            unsupported = ", ".join(sorted(kwargs))
+            raise TypeError(
+                "weight decomposition is computed exactly and does not accept "
+                f"SHAP call options: {unsupported}"
+            )
+        return self._shap.Explanation(
+            values=values - self.cartoboost_additive_adapter.background_mean,
+            base_values=np.full(values.shape[0], self.expected_value, dtype=float),
+            data=values,
+            feature_names=self.feature_names,
         )
+
+    def shap_values(self, X: Any, *, sparse_sets: Any | None = None) -> np.ndarray:
+        """Return the exact component SHAP values as a NumPy array."""
+        return np.asarray(self(X, sparse_sets=sparse_sets).values)
+
+
+class _NativeTreeShapExplainer:
+    """Expose SHAP's native TreeExplainer for a CartoBoost axis-tree ensemble."""
+
+    def __init__(self, explainer: Any) -> None:
+        self.explainer = explainer
+        self.expected_value = explainer.expected_value
+
+    def __call__(self, X: Any, **kwargs: Any) -> Any:
+        return self.explainer(_as_2d_array(X), **kwargs)
+
+    def shap_values(self, X: Any, **kwargs: Any) -> Any:
+        return self.explainer.shap_values(_as_2d_array(X), **kwargs)
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.explainer, name)
@@ -182,6 +234,7 @@ class _AdditiveWeightShapAdapter:
     ) -> None:
         self.model = model
         self.background = self.transform(background, sparse_sets=sparse_sets)
+        self.background_mean = np.mean(self.background, axis=0)
         self.feature_names = ["init_prediction"] + [
             f"tree_{idx}" for idx in range(max(0, self.background.shape[1] - 1))
         ]
@@ -198,6 +251,32 @@ class _AdditiveWeightShapAdapter:
     def predict(self, additive_values: Any) -> np.ndarray:
         values = _as_2d_array(additive_values)
         return np.sum(values, axis=1)
+
+
+def _tree_shap_ensemble(model: Any) -> dict[str, Any] | None:
+    """Return a NumPy-backed SHAP tree model when native routing permits it."""
+    native_model = getattr(model, "_model", None)
+    export = getattr(native_model, "tree_shap_ensemble_json", None)
+    if export is None:
+        return None
+    try:
+        payload = json.loads(export())
+    except ValueError:
+        # Structured splitters and linear leaves require CartoBoost's general
+        # SHAP path; the native exporter deliberately rejects lossy conversion.
+        return None
+    for tree in payload["trees"]:
+        for name in (
+            "children_left",
+            "children_right",
+            "children_default",
+            "features",
+        ):
+            tree[name] = np.asarray(tree[name], dtype=np.int32)
+        tree["thresholds"] = np.asarray(tree["thresholds"], dtype=np.float64)
+        tree["values"] = np.asarray(tree["values"], dtype=np.float64)
+        tree["node_sample_weight"] = np.asarray(tree["node_sample_weight"], dtype=np.float64)
+    return payload
 
 
 class _SparseSetShapAdapter:

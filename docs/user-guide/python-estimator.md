@@ -233,6 +233,12 @@ explainer = model.make_shap_explainer(X_background)
 explanation = model.explain_shap(X_test, background=X_background)
 ```
 
+For an exact, low-latency attribution to the fitted ensemble components, use
+`decomposition="weights"`. It returns initial-prediction and per-tree values
+without SHAP permutation sampling. This is a component audit rather than
+original-column attribution; see [SHAP Support](../shap.md) for the choice and
+`TreeExplainer` compatibility details.
+
 Run `uv add "cartoboost[explain]"` or add the optional SHAP dependency in
 your local environment. Sparse-list models can be explained through the helper
 by supplying matching foreground and background sparse sets.

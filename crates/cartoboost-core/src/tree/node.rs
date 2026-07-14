@@ -6,6 +6,7 @@ use crate::predictors::LinearLeafModel;
 use crate::{CartoBoostError, Result};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::path::Path;
 
 pub const MODEL_ARTIFACT_VERSION: u32 = 1;
@@ -210,6 +211,29 @@ pub enum FuzzyKernel {
 }
 
 impl Model {
+    /// Export ordinary axis-aligned constant-leaf trees for TreeSHAP consumers.
+    ///
+    /// CartoBoost also supports structured routing and linear leaves. Those do
+    /// not have the semantics required by a conventional TreeSHAP ensemble and
+    /// are rejected rather than serialized as an incorrect axis-tree model.
+    pub fn tree_shap_ensemble(&self) -> Result<Value> {
+        if self.prediction_transform != PredictionTransform::Identity {
+            return Err(CartoBoostError::InvalidInput(
+                "TreeSHAP export requires an identity prediction transform".to_string(),
+            ));
+        }
+        let trees = self
+            .trees
+            .iter()
+            .map(|tree| tree.tree_shap_tree(self.learning_rate))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(json!({
+            "trees": trees,
+            "base_offset": self.init_prediction,
+            "tree_output": "raw_value",
+        }))
+    }
+
     pub fn default_metadata() -> ModelMetadata {
         ModelMetadata {
             library_name: env!("CARGO_PKG_NAME").to_string(),
@@ -586,6 +610,129 @@ impl Model {
     fn transform_prediction(&self, prediction: f64) -> f64 {
         self.prediction_transform.apply(prediction)
     }
+}
+
+impl Tree {
+    fn tree_shap_tree(&self, learning_rate: f64) -> Result<Value> {
+        let mut children_left = Vec::new();
+        let mut children_right = Vec::new();
+        let mut children_default = Vec::new();
+        let mut features = Vec::new();
+        let mut thresholds = Vec::new();
+        let mut values = Vec::new();
+        let mut node_sample_weight = Vec::new();
+        append_tree_shap_node(
+            &self.root,
+            learning_rate,
+            &mut children_left,
+            &mut children_right,
+            &mut children_default,
+            &mut features,
+            &mut thresholds,
+            &mut values,
+            &mut node_sample_weight,
+        )?;
+        Ok(json!({
+            "children_left": children_left,
+            "children_right": children_right,
+            "children_default": children_default,
+            "features": features,
+            "thresholds": thresholds,
+            "values": values,
+            "node_sample_weight": node_sample_weight,
+        }))
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn append_tree_shap_node(
+    node: &Node,
+    learning_rate: f64,
+    children_left: &mut Vec<isize>,
+    children_right: &mut Vec<isize>,
+    children_default: &mut Vec<isize>,
+    features: &mut Vec<isize>,
+    thresholds: &mut Vec<f64>,
+    values: &mut Vec<Vec<f64>>,
+    node_sample_weight: &mut Vec<f64>,
+) -> Result<usize> {
+    let index = children_left.len();
+    children_left.push(-1);
+    children_right.push(-1);
+    children_default.push(-1);
+    features.push(-1);
+    thresholds.push(0.0);
+    values.push(vec![0.0]);
+    match node {
+        Node::Leaf {
+            value,
+            sample_weight_sum,
+            ..
+        } => {
+            values[index][0] = value * learning_rate;
+            node_sample_weight.push(*sample_weight_sum);
+        }
+        Node::Branch {
+            split,
+            left,
+            right,
+            sample_weight_sum,
+            ..
+        } => {
+            let (feature, threshold, missing_goes_left) = match split {
+                Split::Axis {
+                    feature,
+                    threshold,
+                    missing_goes_left,
+                } => (*feature, *threshold, *missing_goes_left),
+                _ => {
+                    return Err(CartoBoostError::InvalidInput(
+                        "TreeSHAP feature export requires axis-aligned splits and constant leaves"
+                            .to_string(),
+                    ));
+                }
+            };
+            features[index] = feature as isize;
+            thresholds[index] = threshold;
+            node_sample_weight.push(*sample_weight_sum);
+            let left_index = append_tree_shap_node(
+                left,
+                learning_rate,
+                children_left,
+                children_right,
+                children_default,
+                features,
+                thresholds,
+                values,
+                node_sample_weight,
+            )?;
+            let right_index = append_tree_shap_node(
+                right,
+                learning_rate,
+                children_left,
+                children_right,
+                children_default,
+                features,
+                thresholds,
+                values,
+                node_sample_weight,
+            )?;
+            children_left[index] = left_index as isize;
+            children_right[index] = right_index as isize;
+            children_default[index] = if missing_goes_left {
+                left_index as isize
+            } else {
+                right_index as isize
+            };
+        }
+        Node::LinearLeaf { .. } => {
+            return Err(CartoBoostError::InvalidInput(
+                "TreeSHAP feature export requires axis-aligned splits and constant leaves"
+                    .to_string(),
+            ));
+        }
+    }
+    Ok(index)
 }
 
 impl FlatAxisPredictor {

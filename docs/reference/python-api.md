@@ -69,8 +69,8 @@ CartoBoostRegressor(
 | `fit(X, y, sample_weight=None, feature_schema=None, sparse_sets=None, eval_set=None)` | `self` | `eval_set` is accepted but currently ignored. |
 | `predict(X, sparse_sets=None)` | `numpy.ndarray` | Requires matching dense width and sparse columns. |
 | `predict_additive_values(X, sparse_sets=None)` | `numpy.ndarray` | Row sums equal `predict(X)`. |
-| `make_shap_explainer(background, **kwargs)` | SHAP explainer | Requires optional SHAP dependency. |
-| `explain_shap(X, background=..., **kwargs)` | `shap.Explanation` | Convenience SHAP entry point. |
+| `make_shap_explainer(background, decomposition="features", **kwargs)` | SHAP explainer | Requires optional SHAP dependency. `decomposition="weights"` returns CartoBoost's direct exact initial-value/per-tree explainer. |
+| `explain_shap(X, background=..., decomposition="features", **kwargs)` | `shap.Explanation` | Convenience SHAP entry point. Weight explanations use the background component mean as their baseline and avoid permutation sampling. |
 | `save(path)` | `None` | Writes a model artifact. |
 | `save_weights(path, format="auto")` | `None` | Writes JSON weights or supported ONNX. |
 | `CartoBoostRegressor.load(path)` | estimator | Loads model artifacts. |

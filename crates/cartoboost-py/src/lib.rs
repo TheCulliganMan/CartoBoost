@@ -5683,6 +5683,16 @@ impl NativeCartoBoostRegressor {
         .map_err(to_py_value_error)
     }
 
+    /// Serialize the exact axis-tree ensemble accepted by SHAP's TreeExplainer.
+    fn tree_shap_ensemble_json(&self) -> PyResult<String> {
+        let model = self
+            .model
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("CartoBoostRegressor is not fitted"))?;
+        let ensemble = model.tree_shap_ensemble().map_err(to_py_value_error)?;
+        serde_json::to_string(&ensemble).map_err(to_py_json_error)
+    }
+
     fn save(&self, py: Python<'_>, path: PathBuf) -> PyResult<()> {
         let model = self
             .model

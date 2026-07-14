@@ -2,7 +2,8 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from cartoboost import CartoBoostRegressor, make_shap_explainer
+from cartoboost import CartoBoostRegressor
+from cartoboost.explain import make_shap_explainer
 
 shap = pytest.importorskip("shap")
 
@@ -63,6 +64,25 @@ def test_explain_shap_returns_additive_explanation_for_native_backend():
     _assert_additive(explanation, model.predict(X[:3]))
 
 
+def test_dense_axis_models_use_shap_tree_explainer():
+    X = np.asarray([[0.0], [1.0], [2.0], [3.0]], dtype=float)
+    y = np.asarray([0.0, 1.0, 4.0, 9.0], dtype=float)
+    model = CartoBoostRegressor(
+        n_estimators=8,
+        learning_rate=0.3,
+        max_depth=2,
+        min_samples_leaf=1,
+        split_policy="axis_only",
+    ).fit(X, y)
+
+    explainer = model.make_shap_explainer(X)
+    explanation = explainer(X[:2])
+
+    assert type(explainer.explainer).__name__ == "TreeExplainer"
+    assert explanation.values.shape == (2, 1)
+    _assert_additive(explanation, model.predict(X[:2]))
+
+
 def test_make_shap_explainer_public_helper_matches_method():
     X = np.asarray([[0.0], [1.0], [2.0], [3.0]], dtype=float)
     y = np.asarray([0.0, 1.0, 2.0, 3.0], dtype=float)
@@ -112,6 +132,31 @@ def test_shap_decomposes_additive_weights_for_weighted_native_backend():
     _assert_additive(explanation, model.predict(X[:2]))
 
 
+def test_weight_decomposition_is_direct_exact_shap_without_generic_explainer(monkeypatch):
+    X = np.asarray([[0.0], [1.0], [2.0], [3.0]], dtype=float)
+    y = np.asarray([0.0, 1.0, 4.0, 9.0], dtype=float)
+    model = CartoBoostRegressor(
+        n_estimators=3,
+        learning_rate=0.5,
+        max_depth=1,
+        min_samples_leaf=1,
+    ).fit(X, y)
+
+    def fail_if_generic_explainer_is_used(*args, **kwargs):
+        raise AssertionError("weight decomposition must not construct shap.Explainer")
+
+    monkeypatch.setattr(shap, "Explainer", fail_if_generic_explainer_is_used)
+    explainer = model.make_shap_explainer(X, decomposition="weights")
+    explanation = explainer(X[:2])
+    additive = model.predict_additive_values(X[:2])
+    background_mean = model.predict_additive_values(X).mean(axis=0)
+
+    assert explanation.values == pytest.approx(additive - background_mean)
+    assert explanation.base_values == pytest.approx(background_mean.sum())
+    assert explainer.shap_values(X[:2]) == pytest.approx(explanation.values)
+    _assert_additive(explanation, model.predict(X[:2]))
+
+
 def test_shap_preserves_pandas_feature_names():
     pd = pytest.importorskip("pandas")
     X = pd.DataFrame({"distance_m": [0.0, 1.0, 2.0, 3.0], "hour": [0.0, 1.0, 0.0, 1.0]})
@@ -129,37 +174,37 @@ def test_shap_preserves_pandas_feature_names():
 
 
 @pytest.mark.parametrize(
-    ("splitters", "X", "y", "extra"),
+    ("split_policy", "X", "y", "extra"),
     [
-        (["axis"], [[0.0], [1.0], [2.0], [3.0]], [0.0, 0.0, 10.0, 10.0], {}),
+        ("axis_only", [[0.0], [1.0], [2.0], [3.0]], [0.0, 0.0, 10.0, 10.0], {}),
         (
-            ["diagonal_2d"],
+            "auto",
             [[-2.0, -1.0], [-1.0, -1.0], [1.0, 1.0], [2.0, 1.0]],
             [-10.0, -10.0, 10.0, 10.0],
             {},
         ),
         (
-            ["gaussian_2d"],
+            "structured",
             [[0.0, 0.0], [0.2, 0.1], [3.0, 3.0], [3.2, 3.1]],
             [5.0, 5.0, -5.0, -5.0],
             {},
         ),
         (
-            ["periodic:24"],
+            "auto",
             [[0.0], [1.0], [12.0], [13.0]],
             [10.0, 10.0, 0.0, 0.0],
             {"feature_schema": {"dense": [{"name": "hour", "kind": "periodic", "period": 24}]}},
         ),
     ],
 )
-def test_shap_additivity_for_rust_dense_splitters(splitters, X, y, extra):
+def test_shap_additivity_for_native_split_policies(split_policy, X, y, extra):
     rows = np.asarray(X, dtype=float)
     model = CartoBoostRegressor(
         n_estimators=2,
         learning_rate=0.5,
         max_depth=1,
         min_samples_leaf=1,
-        splitters=splitters,
+        split_policy=split_policy,
     )
     _fit_or_skip(model, rows, y, **extra)
 
@@ -220,7 +265,6 @@ def test_shap_supports_sparse_set_models_with_augmented_features():
         learning_rate=0.5,
         max_depth=1,
         min_samples_leaf=1,
-        splitters=["sparse_set"],
     )
     _fit_or_skip(model, X, y, sparse_sets=sparse_sets)
 
@@ -254,7 +298,6 @@ def test_shap_decomposes_additive_weights_for_sparse_set_models():
         learning_rate=0.5,
         max_depth=1,
         min_samples_leaf=1,
-        splitters=["sparse_set"],
     )
     _fit_or_skip(model, X, y, sparse_sets=sparse_sets)
 

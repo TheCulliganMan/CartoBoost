@@ -1,6 +1,17 @@
 # Changelog
 
-## Unreleased
+## 0.3.8 — Exact Tree-Component SHAP
+
+- Made `CartoBoostRegressor` weight SHAP decomposition exact and direct. The
+  `decomposition="weights"` path now returns background-centered initial-value
+  and per-tree attributions without constructing SHAP's generic permutation
+  explainer, and exposes `expected_value` and `shap_values(...)` for existing
+  analysis pipelines.
+- Added native SHAP `TreeExplainer` export for dense axis-aligned,
+  constant-leaf CartoBoost models, preserving initial prediction, tree scaling,
+  thresholds, missing routing, and node weights.
+- Documented decomposition selection, component baseline semantics, sparse-set
+  behavior, and structured-routing support.
 
 ## 0.3.7 — Full Accelerator Backends
 

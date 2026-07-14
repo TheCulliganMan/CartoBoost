@@ -269,6 +269,22 @@ explanation = loaded.explain_shap(
 )
 ```
 
+For a fast exact decomposition that scales with the number of rows and fitted
+trees, rather than SHAP permutation samples, request tree-component weights:
+
+```python
+explainer = loaded.make_shap_explainer(
+    X_train_dense,
+    decomposition="weights",
+)
+explanation = explainer(X_validation_dense)
+```
+
+This attributes each prediction to its initial value and each fitted tree. It
+does not attribute original input columns; use the default feature
+decomposition for that. See [SHAP support](docs/shap.md) for baseline semantics,
+sparse IDs, performance guidance, and the `TreeExplainer` compatibility limit.
+
 Model artifacts are versioned JSON and include optional metadata, feature
 schema, and training configuration fields. Graph and neural standalone artifacts
 are complete model artifacts. Feature-generation artifacts should be persisted

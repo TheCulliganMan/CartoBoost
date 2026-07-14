@@ -488,9 +488,9 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
             background,
             sparse_sets=sparse_sets,
             sparse_id_vocabulary=sparse_id_vocabulary,
-            algorithm=algorithm.value,
+            algorithm=_explanation_value(algorithm),
             feature_names=feature_names,
-            decomposition=decomposition.value,
+            decomposition=_explanation_value(decomposition),
             **kwargs,
         )
 
@@ -517,9 +517,9 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
             sparse_sets=sparse_sets,
             background_sparse_sets=background_sparse_sets,
             sparse_id_vocabulary=sparse_id_vocabulary,
-            algorithm=algorithm.value,
+            algorithm=_explanation_value(algorithm),
             feature_names=feature_names,
-            decomposition=decomposition.value,
+            decomposition=_explanation_value(decomposition),
             **kwargs,
         )
 
@@ -746,6 +746,13 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
                 raise ValueError("monotonic constraints require fuzzy=False")
             if self.split_policy not in {SplitPolicy.AUTO, SplitPolicy.AXIS_ONLY}:
                 raise ValueError("monotonic constraints support only axis splitters")
+
+
+def _explanation_value(value: ExplanationAlgorithm | ExplanationDecomposition | str) -> str:
+    """Accept enum and documented string forms for SHAP configuration."""
+    if isinstance(value, (ExplanationAlgorithm, ExplanationDecomposition)):
+        return value.value
+    return str(value)
 
 
 def _shape_2d(values: Any) -> tuple[int, int]:

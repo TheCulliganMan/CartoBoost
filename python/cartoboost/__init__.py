@@ -12,7 +12,7 @@ from __future__ import annotations
 from importlib import import_module as _import_module
 from typing import Any as _Any
 
-__version__ = "0.3.7"
+__version__ = "0.3.8"
 
 __all__ = [
     "CartoBoostRegressor",
