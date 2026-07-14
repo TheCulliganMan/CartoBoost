@@ -1177,170 +1177,185 @@ impl TrainableGraphTransformerState {
         let mut total_loss = 0.0;
         let mut gradients = vec![0.0; self.parameters.len()];
         let accelerated = backend.is_some_and(|selection| selection.selected != "cpu");
+        const METAL_PRETRAIN_NODE_BATCH: usize = 256;
+        let node_batch_size = if accelerated {
+            METAL_PRETRAIN_NODE_BATCH
+        } else {
+            self.nodes
+        };
         for patch in &masked {
-            // Keep one graph per masked patch across all nodes.  The mask
-            // query is shared by every node, while each node retains its own
-            // visible-subseries encoding.  This exactly accumulates the
-            // original batch loss but bounds the tape to one masked-query
-            // pass instead of retaining a complete network or repeatedly
-            // growing allocator high-water for every node/query pair.
-            let tape = if accelerated {
-                AutodiffTape::deferred()
-            } else {
-                AutodiffTape::new()
-            };
-            let parameter_nodes = self
-                .parameters
-                .iter()
-                .enumerate()
-                .map(|(index, value)| tape.parameter(index, *value))
-                .collect::<Vec<_>>();
-            let parameter = |index: usize| parameter_nodes[index];
-            let representations = (0..self.nodes)
-                .map(|node| {
-                    visible
-                        .iter()
-                        .map(|visible_patch| {
-                            let mean = window
-                                [visible_patch * patch_width..(visible_patch + 1) * patch_width]
-                                .iter()
-                                .map(|row| row[node])
-                                .sum::<f64>()
-                                / patch_width as f64;
-                            (0..self.hidden)
-                                .map(|channel| {
-                                    let projected = tape.add(
-                                        parameter(layout.input + 7 * self.hidden + channel),
-                                        tape.mul(
-                                            parameter(layout.input + channel),
-                                            tape.constant(mean),
-                                        ),
-                                    );
-                                    tape.tanh(tape.add(
-                                        projected,
-                                        parameter(
-                                            layout.pretrain_position
-                                                + (visible_patch % position_count) * self.hidden
-                                                + channel,
-                                        ),
-                                    ))
-                                })
-                                .collect::<Vec<_>>()
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .collect::<Vec<_>>();
-            let keys = representations
-                .iter()
-                .map(|node_representations| {
-                    node_representations
-                        .iter()
-                        .map(|representation| {
-                            tape_linear(
-                                &tape,
-                                &parameter_nodes,
-                                layout.temporal_k,
-                                representation,
-                                self.hidden,
-                                self.hidden,
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .collect::<Vec<_>>();
-            let values = representations
-                .iter()
-                .map(|node_representations| {
-                    node_representations
-                        .iter()
-                        .map(|representation| {
-                            tape_linear(
-                                &tape,
-                                &parameter_nodes,
-                                layout.temporal_v,
-                                representation,
-                                self.hidden,
-                                self.hidden,
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .collect::<Vec<_>>();
-            let mut loss = tape.constant(0.0);
-            let scale = tape.constant(1.0 / (masked.len() * self.nodes * patch_width) as f64);
-            let mask_representation = (0..self.hidden)
-                .map(|channel| {
-                    tape.add(
-                        parameter(layout.pretrain_mask_token + channel),
-                        parameter(
-                            layout.pretrain_position
-                                + (patch % position_count) * self.hidden
-                                + channel,
-                        ),
-                    )
-                })
-                .collect::<Vec<_>>();
-            let query = tape_linear(
-                &tape,
-                &parameter_nodes,
-                layout.temporal_q,
-                &mask_representation,
-                self.hidden,
-                self.hidden,
-            );
-            for node in 0..self.nodes {
-                let weights = tape_softmax(
-                    &tape,
-                    &keys[node]
-                        .iter()
-                        .map(|key| {
-                            tape.mul(
-                                tape.constant(1.0 / (self.hidden as f64).sqrt()),
-                                tape_dot(&tape, &query, key),
-                            )
-                        })
-                        .collect::<Vec<_>>(),
-                );
-                let context = tape_weighted_sum(&tape, &weights, &values[node], self.hidden);
-                for offset in 0..patch_width {
-                    let mut prediction =
-                        parameter(layout.pretrain_decoder + patch_width * self.hidden + offset);
-                    for (channel, context_value) in context.iter().enumerate().take(self.hidden) {
-                        prediction = tape.add(
-                            prediction,
-                            tape.mul(
-                                parameter(layout.pretrain_decoder + offset * self.hidden + channel),
-                                *context_value,
+            // Each node's reconstruction is conditionally independent once
+            // the shared mask query and model parameters are fixed. Metal
+            // therefore trains bounded node batches instead of materializing
+            // one tape for every lane in a global panel.
+            for node_start in (0..self.nodes).step_by(node_batch_size) {
+                let node_end = (node_start + node_batch_size).min(self.nodes);
+                let batch_nodes = node_end - node_start;
+                let tape = if accelerated {
+                    AutodiffTape::deferred()
+                } else {
+                    AutodiffTape::new()
+                };
+                let parameter_nodes = self
+                    .parameters
+                    .iter()
+                    .enumerate()
+                    .map(|(index, value)| tape.parameter(index, *value))
+                    .collect::<Vec<_>>();
+                let parameter = |index: usize| parameter_nodes[index];
+                let representations = (node_start..node_end)
+                    .map(|node| {
+                        visible
+                            .iter()
+                            .map(|visible_patch| {
+                                let mean = window[visible_patch * patch_width
+                                    ..(visible_patch + 1) * patch_width]
+                                    .iter()
+                                    .map(|row| row[node])
+                                    .sum::<f64>()
+                                    / patch_width as f64;
+                                (0..self.hidden)
+                                    .map(|channel| {
+                                        let projected = tape.add(
+                                            parameter(layout.input + 7 * self.hidden + channel),
+                                            tape.mul(
+                                                parameter(layout.input + channel),
+                                                tape.constant(mean),
+                                            ),
+                                        );
+                                        tape.tanh(tape.add(
+                                            projected,
+                                            parameter(
+                                                layout.pretrain_position
+                                                    + (visible_patch % position_count)
+                                                        * self.hidden
+                                                    + channel,
+                                            ),
+                                        ))
+                                    })
+                                    .collect::<Vec<_>>()
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>();
+                let keys = representations
+                    .iter()
+                    .map(|node_representations| {
+                        node_representations
+                            .iter()
+                            .map(|representation| {
+                                tape_linear(
+                                    &tape,
+                                    &parameter_nodes,
+                                    layout.temporal_k,
+                                    representation,
+                                    self.hidden,
+                                    self.hidden,
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>();
+                let values = representations
+                    .iter()
+                    .map(|node_representations| {
+                        node_representations
+                            .iter()
+                            .map(|representation| {
+                                tape_linear(
+                                    &tape,
+                                    &parameter_nodes,
+                                    layout.temporal_v,
+                                    representation,
+                                    self.hidden,
+                                    self.hidden,
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>();
+                let mut loss = tape.constant(0.0);
+                let loss_nodes = if accelerated { batch_nodes } else { self.nodes };
+                let scale = tape.constant(1.0 / (masked.len() * loss_nodes * patch_width) as f64);
+                let mask_representation = (0..self.hidden)
+                    .map(|channel| {
+                        tape.add(
+                            parameter(layout.pretrain_mask_token + channel),
+                            parameter(
+                                layout.pretrain_position
+                                    + (patch % position_count) * self.hidden
+                                    + channel,
                             ),
-                        );
-                    }
-                    let residual = tape.add(
-                        prediction,
-                        tape.constant(-window[patch * patch_width + offset][node]),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let query = tape_linear(
+                    &tape,
+                    &parameter_nodes,
+                    layout.temporal_q,
+                    &mask_representation,
+                    self.hidden,
+                    self.hidden,
+                );
+                for (batch_node, node) in (node_start..node_end).enumerate() {
+                    let weights = tape_softmax(
+                        &tape,
+                        &keys[batch_node]
+                            .iter()
+                            .map(|key| {
+                                tape.mul(
+                                    tape.constant(1.0 / (self.hidden as f64).sqrt()),
+                                    tape_dot(&tape, &query, key),
+                                )
+                            })
+                            .collect::<Vec<_>>(),
                     );
-                    loss = tape.add(loss, tape.mul(scale, tape.mul(residual, residual)));
+                    let context =
+                        tape_weighted_sum(&tape, &weights, &values[batch_node], self.hidden);
+                    for offset in 0..patch_width {
+                        let mut prediction =
+                            parameter(layout.pretrain_decoder + patch_width * self.hidden + offset);
+                        for (channel, context_value) in context.iter().enumerate().take(self.hidden)
+                        {
+                            prediction = tape.add(
+                                prediction,
+                                tape.mul(
+                                    parameter(
+                                        layout.pretrain_decoder + offset * self.hidden + channel,
+                                    ),
+                                    *context_value,
+                                ),
+                            );
+                        }
+                        let residual = tape.add(
+                            prediction,
+                            tape.constant(-window[patch * patch_width + offset][node]),
+                        );
+                        loss = tape.add(loss, tape.mul(scale, tape.mul(residual, residual)));
+                    }
                 }
-            }
-            if accelerated {
-                let next_step = self.steps + 1;
-                total_loss += tape.accelerated_train_step(
-                    backend.expect("non-CPU backend is present"),
-                    loss,
-                    &mut self.parameters,
-                    &mut self.first_moment,
-                    &mut self.second_moment,
-                    next_step,
-                    learning_rate,
-                    weight_decay,
-                )?;
-                self.steps = next_step;
-            } else {
-                total_loss += tape.value(loss);
-                for (total, gradient) in gradients
-                    .iter_mut()
-                    .zip(tape.backward(loss, self.parameters.len()))
-                {
-                    *total += gradient;
+                if accelerated {
+                    let next_step = self.steps + 1;
+                    total_loss += tape.accelerated_train_step(
+                        backend.expect("non-CPU backend is present"),
+                        loss,
+                        &mut self.parameters,
+                        &mut self.first_moment,
+                        &mut self.second_moment,
+                        next_step,
+                        learning_rate,
+                        weight_decay,
+                    )? * batch_nodes as f64
+                        / self.nodes as f64;
+                    self.steps = next_step;
+                } else {
+                    total_loss += tape.value(loss);
+                    for (total, gradient) in gradients
+                        .iter_mut()
+                        .zip(tape.backward(loss, self.parameters.len()))
+                    {
+                        *total += gradient;
+                    }
                 }
             }
         }
