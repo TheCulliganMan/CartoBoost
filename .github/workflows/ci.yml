@@ -255,6 +255,7 @@ jobs:
 
       - name: Test Python 3.14 import and native concurrency
         if: matrix.python-version == '3.14'
+        shell: bash
         run: |
           uv run --no-group dev python - <<'PY'
           import concurrent.futures
@@ -273,6 +274,7 @@ jobs:
 
       - name: Test free-threaded Python import and native concurrency
         if: matrix.python-version == '3.14t'
+        shell: bash
         env:
           PYTHON_GIL: "0"
         run: |
