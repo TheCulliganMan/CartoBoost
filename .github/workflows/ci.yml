@@ -256,7 +256,7 @@ jobs:
       - name: Test Python 3.14 import and native concurrency
         if: matrix.python-version == '3.14'
         run: |
-          uv run python - <<'PY'
+          uv run --no-group dev python - <<'PY'
           import concurrent.futures
           from cartoboost import CartoBoostRegressor
 
@@ -276,7 +276,7 @@ jobs:
         env:
           PYTHON_GIL: "0"
         run: |
-          uv run python - <<'PY'
+          uv run --no-group dev python - <<'PY'
           import concurrent.futures
           import sysconfig
           import warnings
