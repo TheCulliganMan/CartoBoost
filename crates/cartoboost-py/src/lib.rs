@@ -10527,30 +10527,36 @@ where
     T: Send,
     F: FnOnce() -> Result<T, CartoBoostError> + Send,
 {
-    if let Some(n_threads) = n_threads {
-        static THREAD_POOLS: OnceLock<Mutex<HashMap<usize, Arc<ThreadPool>>>> = OnceLock::new();
-        let pools = THREAD_POOLS.get_or_init(|| Mutex::new(HashMap::new()));
-        let pool = {
-            let mut pools = pools
-                .lock()
-                .map_err(|_| CartoBoostError::InvalidInput("thread-pool cache poisoned".into()))?;
-            if let Some(pool) = pools.get(&n_threads) {
-                Arc::clone(pool)
-            } else {
-                let pool = Arc::new(
-                    ThreadPoolBuilder::new()
-                        .num_threads(n_threads)
-                        .build()
-                        .map_err(|err| CartoBoostError::InvalidInput(err.to_string()))?,
-                );
-                pools.insert(n_threads, Arc::clone(&pool));
-                pool
-            }
-        };
-        pool.install(f)
-    } else {
-        f()
-    }
+    // Never rely on Rayon’s global pool for public model operations.  It can
+    // be initialized by a notebook host, another extension, or an embedding
+    // application with a single worker before CartoBoost is imported.
+    // Constructing a cached pool here makes the default genuinely use the
+    // machine’s available CPUs while preserving an explicit user override.
+    let n_threads = n_threads.unwrap_or_else(|| {
+        std::thread::available_parallelism()
+            .map(|count| count.get())
+            .unwrap_or(1)
+    });
+    static THREAD_POOLS: OnceLock<Mutex<HashMap<usize, Arc<ThreadPool>>>> = OnceLock::new();
+    let pools = THREAD_POOLS.get_or_init(|| Mutex::new(HashMap::new()));
+    let pool = {
+        let mut pools = pools
+            .lock()
+            .map_err(|_| CartoBoostError::InvalidInput("thread-pool cache poisoned".into()))?;
+        if let Some(pool) = pools.get(&n_threads) {
+            Arc::clone(pool)
+        } else {
+            let pool = Arc::new(
+                ThreadPoolBuilder::new()
+                    .num_threads(n_threads)
+                    .build()
+                    .map_err(|err| CartoBoostError::InvalidInput(err.to_string()))?,
+            );
+            pools.insert(n_threads, Arc::clone(&pool));
+            pool
+        }
+    };
+    pool.install(f)
 }
 
 #[allow(clippy::too_many_arguments)]
