@@ -19,15 +19,15 @@ cartoboost-neural = { path = "../cartoboost-neural" }
 cartoboost-prob = { path = "../cartoboost-prob" }
 cartoboost-spatial-econ = { path = "../cartoboost-spatial-econ" }
 chrono.workspace = true
-numpy = "0.24"
+numpy = "0.26"
 pyo3.workspace = true
 rayon = "1.11"
 serde_json.workspace = true
 
 [features]
-# Accelerator implementations are explicit preview builds and must never be
-# pulled into stable wheels by target detection or unconditional features.
-preview-cuda = ["cartoboost-geo-st/cuda", "cartoboost-neural/cuda"]
-preview-rocm = ["cartoboost-geo-st/rocm", "cartoboost-neural/rocm"]
-preview-metal = ["cartoboost-geo-st/metal", "cartoboost-neural/metal"]
-preview-webgpu = ["cartoboost-geo-st/webgpu", "cartoboost-neural/webgpu"]
+# Optional accelerator backends are exposed by their backend names and are
+# enabled only when explicitly requested at build time.
+cuda = ["cartoboost-geo-st/cuda", "cartoboost-neural/cuda"]
+rocm = ["cartoboost-geo-st/rocm", "cartoboost-neural/rocm"]
+metal = ["cartoboost-geo-st/metal", "cartoboost-neural/metal"]
+webgpu = ["cartoboost-geo-st/webgpu", "cartoboost-neural/webgpu"]

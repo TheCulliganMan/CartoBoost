@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {assertForecastResponseRecords, coerceFiniteNumber, formatFixed, formatPercent} from '../../src/components/ModelingLabClient/numberFormat';
+import {
+  assertForecastResponseRecords,
+  coerceFiniteNumber,
+  forecastCellDiagnostics,
+  formatFixed,
+  formatPercent,
+} from '../../src/components/ModelingLabClient/numberFormat';
 
 test('coerceFiniteNumber accepts finite numbers and numeric strings', () => {
   assert.equal(coerceFiniteNumber(12.5), 12.5);
@@ -23,6 +29,42 @@ test('formatters do not call toFixed on non-number payloads', () => {
   assert.equal(formatFixed('bad-payload', 3), '-');
   assert.equal(formatPercent('0.1874', 1), '+18.7%');
   assert.equal(formatPercent('bad-payload', 1), '-');
+});
+
+test('LSTTN H3 diagnostics preserve signed native counterfactual effects', () => {
+  assert.deepEqual(
+    forecastCellDiagnostics({
+      forecast: 120,
+      actual: 114,
+      latest: 100,
+      isolated: 108,
+      recentNeutral: 115,
+      rhythmNeutral: 124,
+    }),
+    {volume: 120, rate: 20, error: 6, network: 12, recent: 5, rhythm: -4},
+  );
+  assert.equal(
+    forecastCellDiagnostics({
+      forecast: 8,
+      actual: 7,
+      latest: 0,
+      isolated: 8,
+      recentNeutral: 8,
+      rhythmNeutral: 8,
+    }).rate,
+    0,
+  );
+  assert.throws(
+    () => forecastCellDiagnostics({
+      forecast: Number.NaN,
+      actual: 7,
+      latest: 6,
+      isolated: 5,
+      recentNeutral: 4,
+      rhythmNeutral: 3,
+    }),
+    /finite native forecast values/,
+  );
 });
 
 test('forecast responses must contain finite non-empty records', () => {

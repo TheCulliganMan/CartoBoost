@@ -210,13 +210,15 @@ export default function MarketStructureExplorer({nodes, edges, targetNames}: Mar
         attributionControl: false,
         center,
         container: mapContainer.current,
-        cooperativeGestures: true,
+        cooperativeGestures: false,
+        scrollZoom: true,
         style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
         zoom: 10,
       });
       const byId = new Map(h3Nodes.map((node) => [node.id, node]));
       const overlay = new MapboxOverlay({interleaved: false, layers: buildLayers({ArcLayer, TextLayer, byId, edges, selectedId, onSelect: setSelectedId})});
       map.addControl(overlay);
+      map.addControl(new maplibregl.NavigationControl({showCompass: false}), 'top-right');
       map.once('load', () => {
         const points = h3Nodes.flatMap((node) => node.boundary);
         const bounds = points.reduce((next, point) => next.extend(point), new maplibregl.LngLatBounds(points[0], points[0]));
@@ -379,8 +381,8 @@ export function H3TaxiFlowDemo(): React.ReactElement {
         attributionControl: false,
         center: [-73.92, 40.71],
         container: mapContainer.current,
-        cooperativeGestures: true,
-        scrollZoom: false,
+        cooperativeGestures: false,
+        scrollZoom: true,
         dragRotate: false,
         touchPitch: false,
         style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
@@ -388,6 +390,7 @@ export function H3TaxiFlowDemo(): React.ReactElement {
       });
       const overlay = new MapboxOverlay({interleaved: false, layers: buildH3TaxiLayers({ArcLayer, PolygonLayer, ScatterplotLayer, cells: network.cells, lanes: renderedLanes, selectedId, onSelect: setSelectedId})});
       map.addControl(overlay);
+      map.addControl(new maplibregl.NavigationControl({showCompass: false}), 'top-right');
       map.once('load', () => { if (!cancelled) setMapReady(true); });
       overlayRef.current = overlay;
       mapRef.current = map;

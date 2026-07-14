@@ -92,7 +92,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14", "3.14t"]
         platform:
           - name: linux-x86_64
             runner: ubuntu-latest
@@ -183,6 +183,10 @@ jobs:
             platform: linux-x86_64
             runner: ubuntu-latest
             python-version: "3.13"
+          - name: linux-x86_64
+            platform: linux-x86_64
+            runner: ubuntu-latest
+            python-version: "3.14t"
           - name: macos-aarch64
             platform: macos-aarch64
             runner: macos-15
@@ -191,6 +195,10 @@ jobs:
             platform: macos-aarch64
             runner: macos-15
             python-version: "3.13"
+          - name: macos-aarch64
+            platform: macos-aarch64
+            runner: macos-15
+            python-version: "3.14t"
           - name: windows-x86_64
             platform: windows-x86_64
             runner: windows-latest
@@ -199,6 +207,10 @@ jobs:
             platform: windows-x86_64
             runner: windows-latest
             python-version: "3.13"
+          - name: windows-x86_64
+            platform: windows-x86_64
+            runner: windows-latest
+            python-version: "3.14t"
     steps:
       - name: Set up Python
         uses: actions/setup-python@v5

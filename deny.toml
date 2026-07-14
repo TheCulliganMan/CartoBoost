@@ -1,13 +1,12 @@
 [advisories]
 version = 2
-# PyO3 0.24.2 is the newest release compatible with this binding's stable
-# `allow_threads` API.  CartoBoost does not call `PyCFunction::new_closure`;
-# revisit this exception when the binding migrates to PyO3 0.29+.
-# `paste` is pulled only by the optional Metal preview backend.  The advisory
+# PyO3 0.26 supports CPython 3.14's free-threaded build. CartoBoost does not
+# call `PyCFunction::new_closure`; revisit this exception on the next PyO3
+# upgrade.
+# `paste` is pulled only by the optional Metal backend. The advisory
 # reports no safe upgrade; stable CPU wheels do not enable this dependency.
 # CartoBoost does not use the PyList/PyTuple iterator or closure APIs covered by
-# the PyO3 advisories; migrating to 0.29 would remove the stable allow_threads
-# API and is not a compatible release-plumbing change.
+# the PyO3 advisories.
 ignore = ["RUSTSEC-2026-0176", "RUSTSEC-2026-0177", "RUSTSEC-2024-0436"]
 
 [licenses]

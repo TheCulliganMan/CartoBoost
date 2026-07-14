@@ -23,7 +23,7 @@ Use this directory as the navigation map for the user-facing docs site.
 - [Croston forecasting](./user-guide/forecasting-models/croston.md)
 - [SBA forecasting](./user-guide/forecasting-models/sba.md)
 - [TSB forecasting](./user-guide/forecasting-models/tsb.md)
-- [Graph Spatiotemporal Forecasting, Paper Graph Transformers, and Learned Market Structure](./user-guide/forecasting-models/graph-spatiotemporal.md)
+- [Graph Spatiotemporal Forecasting, LSTTN H3 WASM Debugger, Paper Graph Transformers, and Learned Market Structure](./user-guide/forecasting-models/graph-spatiotemporal.md)
 - [N-BEATS and N-HiTS neural forecasting](./user-guide/forecasting-models/beats-hits.md)
 - [Neural panel forecasting](./user-guide/forecasting-models/neural-panel.md)
 - [Probabilistic and conformal forecasting guide](./user-guide/forecasting-models/probabilistic-conformal.md)

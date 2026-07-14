@@ -56,9 +56,16 @@ def test_arima_native_paths_release_gil_for_fit_predict_and_utility():
     source = (repo_root / "crates" / "cartoboost-py" / "src" / "lib.rs").read_text(encoding="utf-8")
 
     assert "fn fit_forecaster_py<M: Forecaster>" in source
-    assert "py.allow_threads(|| model.fit(&frame.frame))" in source
+    assert "py.detach(|| model.fit(&frame.frame))" in source
     assert "fn predict_forecaster_py<M: Forecaster>" in source
-    assert "forecast_to_py(py.allow_threads(|| model.predict(horizon)))" in source
+    assert "forecast_to_py(py.detach(|| model.predict(horizon)))" in source
     assert "fn utility_series_forecast(" in source
     assert "forecaster.fit(&frame)?;" in source
     assert "forecaster.predict(horizon)" in source
+
+
+def test_native_module_declares_free_threaded_python_support():
+    repo_root = Path(__file__).resolve().parents[2]
+    source = (repo_root / "crates" / "cartoboost-py" / "src" / "lib.rs").read_text(encoding="utf-8")
+
+    assert "#[pymodule(gil_used = false)]" in source

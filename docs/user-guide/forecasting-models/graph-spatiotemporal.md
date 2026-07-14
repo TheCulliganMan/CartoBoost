@@ -1,7 +1,7 @@
 import {DeepModelWasmExample, ForecastModelExample, MarketStructureWasmExample} from '@site/src/components/ModelingLabClient';
 import {MarketStructureExplorerSample} from '@site/src/components/MarketStructureExplorer';
 
-# Market Structure Forecasting
+# Graph and Market Structure Forecasting
 
 `MarketStructureForecaster` is the learned sparse-kernel model for connected,
 directional markets. Open the [Modeling Lab](../../../modeling-lab), select
@@ -62,8 +62,14 @@ Here `horizon` is also expressed in frame rows, so this predicts seven days
 when the input frame has hourly timestamps. CartoBoost does not assume a
 five-minute sampling interval.
 
-The Modeling Lab uses an explicitly reduced toy configuration for its in-page
-WASM smoke example; it is a wiring check, not a long-history benchmark.
+The embedded browser debugger uses an explicitly compact interpretation
+fixture: 48 hourly history rows across eight real H3 cells and a six-hour
+holdout. It runs the native Rust LSTTN forecast four times in WASM: the full
+directed graph, self edges only, recent values replaced by prior-period values,
+and a trend-preserving history with recurring variation removed. Those reruns
+measure how graph context, immediate dynamics, and recurring history change
+each cell's forecast. They are interpretation checks, not long-history
+benchmark evidence.
 
 `SpatialShiftGraphonMoEForecaster` derives recurring source environments by
 partitioning a traffic cycle into contiguous rank-coherent graph relations. Its
@@ -96,7 +102,25 @@ then fit any of these native graph profiles. The adapter preserves the observed
 target exactly and rejects unavailable lane values; it never invents a graph or
 imputes targets.
 
-<DeepModelWasmExample model="STGormerForecaster" />
+### LSTTN H3 WASM Debugger
+
+<DeepModelWasmExample model="LSTTNForecaster" />
+
+Use the map controls to move through forecast horizons and switch among:
+
+- forecast and observed holdout volume;
+- forecast rate relative to the latest observation;
+- absolute holdout error;
+- signed directed-graph sensitivity;
+- signed recent-pulse sensitivity; and
+- signed recurring-rhythm sensitivity.
+
+Click an H3 cell to see its history, forecast, observed holdout, ranked native
+counterfactual sensitivities, and the fitted architecture report. Toggle 3D
+height to read magnitude and graph edges to follow the directed paths available
+at the forecast cutoff. Counterfactual sensitivities are not additive feature
+attributions: LSTTN's pathways interact, so read each number as the result of
+one controlled native rerun.
 
 The Modeling Lab exposes separate runnable Rust/WASM entries for
 `STGormerForecaster`, `STGformerForecaster`, `LSTTNForecaster`,

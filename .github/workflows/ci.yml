@@ -132,14 +132,22 @@ jobs:
             python-version: "3.12"
           - os: ubuntu-latest
             python-version: "3.13"
+          - os: ubuntu-latest
+            python-version: "3.14"
+          - os: ubuntu-latest
+            python-version: "3.14t"
           - os: macos-latest
             python-version: "3.10"
           - os: macos-latest
             python-version: "3.13"
+          - os: macos-latest
+            python-version: "3.14"
           - os: windows-latest
             python-version: "3.10"
           - os: windows-latest
             python-version: "3.13"
+          - os: windows-latest
+            python-version: "3.14"
 
     steps:
       - name: Checkout
@@ -169,14 +177,24 @@ jobs:
           enable-cache: true
 
       - name: Sync Python environment
+        if: matrix.python-version != '3.14t'
         run: uv sync --python ${{ matrix.python-version }}
+
+      - name: Sync free-threaded Python environment
+        if: matrix.python-version == '3.14t'
+        run: uv sync --no-group dev --python ${{ matrix.python-version }}
 
       - name: Lint and format
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
         run: uv run --group dev pre-commit run --all-files
 
       - name: Install native extension
+        if: matrix.python-version != '3.14t'
         run: uv run maturin develop
+
+      - name: Install free-threaded native extension
+        if: matrix.python-version == '3.14t'
+        run: uvx maturin develop
 
       - name: Release gate audit
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
@@ -236,7 +254,36 @@ jobs:
             docs/assets/nyc_taxi_benchmarks/results.json
 
       - name: Test Python
+        if: matrix.python-version != '3.14t'
         run: uv run pytest tests/forecasting tests/python/test_v03_contract.py tests/python/test_private_shadow_gate.py tests/python/test_model_registry.py tests/python/test_feature_schema.py tests/python/test_benchmark_manifests.py tests/integration -q --cov=python/cartoboost --cov-report=term-missing --cov-fail-under=35
+
+      - name: Test free-threaded import and native concurrency
+        if: matrix.python-version == '3.14t'
+        env:
+          PYTHON_GIL: "0"
+        run: |
+          uv run python - <<'PY'
+          import concurrent.futures
+          import sysconfig
+          import warnings
+
+          with warnings.catch_warnings(record=True) as caught:
+              warnings.simplefilter("always")
+              from cartoboost import CartoBoostRegressor
+
+          assert sysconfig.get_config_var("Py_GIL_DISABLED") == 1
+          assert not [warning for warning in caught if "GIL" in str(warning.message)]
+
+          def fit_and_predict(seed):
+              model = CartoBoostRegressor(n_estimators=4, max_depth=2, min_samples_leaf=1)
+              model.fit([[0.0], [1.0], [2.0], [3.0]], [seed, seed + 1, seed + 2, seed + 3])
+              return model.predict([[1.5]])[0]
+
+          with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+              values = list(pool.map(fit_and_predict, range(4)))
+
+          assert all(isinstance(value, float) for value in values)
+          PY
 
   validation:
     name: Validation artifacts

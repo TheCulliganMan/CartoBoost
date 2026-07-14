@@ -12,12 +12,15 @@ core package is NumPy-only; optional extras add dataframe and other integrations
 uv add cartoboost
 ```
 
-The published wheels target CPython 3.10, 3.11, 3.12, and 3.13 on:
+The published wheels target CPython 3.10, 3.11, 3.12, 3.13, and 3.14 on:
 
 - Linux x86_64 and aarch64 with manylinux2014 compatibility.
 - macOS x86_64 and arm64.
-- Windows x86_64 and arm64 (Python 3.11–3.13 on Windows arm64; check the
+- Windows x86_64 and arm64 (Python 3.11–3.14 on Windows arm64; check the
   release assets for the exact interpreter/platform matrix).
+
+CartoBoost also supports CPython 3.14's free-threaded build. Install the
+matching `cp314t` wheel, or build from source with a free-threaded interpreter.
 
 If no compatible wheel exists, `uv` may try to build from source, which requires
 the project build toolchain.
@@ -72,5 +75,5 @@ model = CartoBoostRegressor(n_estimators=10, max_depth=2)
 | Symptom | Fix |
 | --- | --- |
 | `ImportError` during import | Reinstall CartoBoost in a clean Python environment. |
-| `uv` tries to compile from source | Use CPython 3.10-3.13 on a supported platform, or install the project build toolchain before building. |
+| `uv` tries to compile from source | Use CPython 3.10-3.14 on a supported platform, or install the project build toolchain before building. |
 | `examples/quickstart.py` cannot import CartoBoost | Make sure the Python environment where `cartoboost` was installed is active. |

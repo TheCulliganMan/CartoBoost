@@ -4,7 +4,13 @@ import useBaseUrl from '@docusaurus/useBaseUrl';
 import {contourDensity, geoGraticule, geoMercator, geoPath, interpolateTurbo, scaleSequential} from 'd3';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
-import {assertForecastResponseRecords, coerceFiniteNumber, formatFixed, formatPercent} from './numberFormat';
+import {
+  assertForecastResponseRecords,
+  coerceFiniteNumber,
+  forecastCellDiagnostics,
+  formatFixed,
+  formatPercent,
+} from './numberFormat';
 import MarketStructureExplorer, {marketExplorerDataFromPayload, type MarketStructureExplorerPayload} from '../MarketStructureExplorer';
 import styles from './styles.module.css';
 
@@ -170,6 +176,38 @@ type ForecastResponse = {
   };
   quantiles?: {
     records: ForecastQuantileRecord[];
+  };
+};
+
+type GraphForecastResponse = {
+  predictions: number[][];
+  nodeIds: string[];
+  horizon: number;
+  metrics?: Record<string, unknown> | null;
+  metadata: {
+    model?: string;
+    frequency?: string;
+    architectureReport?: {
+      profile?: string;
+      components?: string[];
+      directMultiHorizon?: boolean;
+      trainableForecastHead?: boolean;
+    };
+  };
+};
+
+type LSTTNDebuggerResult = GraphForecastResponse & {
+  debugger: {
+    actual: number[][];
+    history: number[][];
+    isolatedPredictions: number[][];
+    recentNeutralPredictions: number[][];
+    rhythmNeutralPredictions: number[][];
+    adjacency: {indptr: number[]; indices: number[]; data: number[]};
+    lookback: number;
+    periodicity: number;
+    recentWindow: number;
+    fixture: string;
   };
 };
 
@@ -562,7 +600,7 @@ export function DeepModelWasmExample({model}: {model: string}): React.ReactEleme
       <p style={{margin: '0.5rem 0 0'}}>
         {status}
       </p>
-      {result && <DeepModelWasmResult result={result} />}
+      {result && <DeepModelWasmResult model={model} result={result} />}
     </section>
   );
 }
@@ -614,7 +652,10 @@ export function MarketStructureWasmExample(): React.ReactElement {
   );
 }
 
-function DeepModelWasmResult({result}: {result: unknown}) {
+function DeepModelWasmResult({model, result}: {model: string; result: unknown}) {
+  if (model === 'LSTTNForecaster' && isLSTTNDebuggerResult(result)) {
+    return <LSTTNH3ForecastDebugger result={result} />;
+  }
   const rows = deepExampleResultRows(result);
   return (
     <div style={{overflowX: 'auto', marginTop: '0.75rem'}}>
@@ -630,6 +671,388 @@ function DeepModelWasmResult({result}: {result: unknown}) {
       </table>
     </div>
   );
+}
+
+type LSTTNMapMode = 'volume' | 'actual' | 'rate' | 'error' | 'network' | 'recent' | 'rhythm';
+type LSTTNMapCell = {
+  id: string;
+  label: string;
+  longitude: number;
+  latitude: number;
+  boundary: [number, number][];
+  nodeIndex: number;
+};
+
+const lsttnMapModeDetails: Record<LSTTNMapMode, {label: string; shortLabel: string; signed: boolean; unit: string}> = {
+  volume: {label: 'Forecast volume', shortLabel: 'Volume', signed: false, unit: 'trips/hour'},
+  actual: {label: 'Observed holdout volume', shortLabel: 'Actual', signed: false, unit: 'trips/hour'},
+  rate: {label: 'Rate vs latest observation', shortLabel: 'Rate', signed: true, unit: '%'},
+  error: {label: 'Absolute holdout error', shortLabel: 'Error', signed: false, unit: 'trips/hour'},
+  network: {label: 'Directed graph sensitivity', shortLabel: 'Graph', signed: true, unit: 'trips/hour'},
+  recent: {label: 'Recent-pulse sensitivity', shortLabel: 'Recent', signed: true, unit: 'trips/hour'},
+  rhythm: {label: 'Recurring-rhythm sensitivity', shortLabel: 'Rhythm', signed: true, unit: 'trips/hour'},
+};
+
+function LSTTNH3ForecastDebugger({result}: {result: LSTTNDebuggerResult}): React.ReactElement {
+  const mapContainer = useRef<HTMLDivElement | null>(null);
+  const mapRef = useRef<any>(null);
+  const overlayRef = useRef<any>(null);
+  const [cells, setCells] = useState<LSTTNMapCell[]>([]);
+  const [mapReady, setMapReady] = useState(false);
+  const [mode, setMode] = useState<LSTTNMapMode>('volume');
+  const [horizonIndex, setHorizonIndex] = useState(0);
+  const [selectedId, setSelectedId] = useState(result.nodeIds[0] ?? '');
+  const [extruded, setExtruded] = useState(true);
+  const [showEdges, setShowEdges] = useState(true);
+  const latest = result.debugger.history.at(-1) ?? [];
+  const diagnostics = useMemo(() => result.nodeIds.map((id, nodeIndex) => ({
+    id,
+    nodeIndex,
+    values: forecastCellDiagnostics({
+      forecast: result.predictions[horizonIndex][nodeIndex],
+      actual: result.debugger.actual[horizonIndex][nodeIndex],
+      latest: latest[nodeIndex],
+      isolated: result.debugger.isolatedPredictions[horizonIndex][nodeIndex],
+      recentNeutral: result.debugger.recentNeutralPredictions[horizonIndex][nodeIndex],
+      rhythmNeutral: result.debugger.rhythmNeutralPredictions[horizonIndex][nodeIndex],
+    }),
+  })), [horizonIndex, latest, result]);
+  const diagnosticById = useMemo(() => new Map(diagnostics.map((row) => [row.id, row])), [diagnostics]);
+  const values = diagnostics.map((row) => row.values[mode]);
+  const selected = diagnostics.find((row) => row.id === selectedId) ?? diagnostics[0];
+  const selectedCell = cells.find((cell) => cell.id === selected?.id);
+  const summary = lsttnHorizonSummary(result, horizonIndex);
+  const scaleLimit = lsttnMapModeDetails[mode].signed
+    ? Math.max(...values.map(Math.abs), 1e-9)
+    : Math.max(...values, 1e-9);
+  const scaleMin = lsttnMapModeDetails[mode].signed ? -scaleLimit : Math.min(...values);
+  const scaleMax = lsttnMapModeDetails[mode].signed ? scaleLimit : Math.max(...values);
+
+  useEffect(() => {
+    let cancelled = false;
+    void import('h3-js').then((h3) => {
+      if (cancelled) return;
+      setCells(result.nodeIds.map((id, nodeIndex) => {
+        const [latitude, longitude] = h3.cellToLatLng(id);
+        return {
+          id,
+          label: `H3 cell ${nodeIndex + 1}`,
+          longitude,
+          latitude,
+          boundary: h3.cellToBoundary(id, true) as [number, number][],
+          nodeIndex,
+        };
+      }));
+    }).catch(() => setCells([]));
+    return () => { cancelled = true; };
+  }, [result.nodeIds]);
+
+  useEffect(() => {
+    if (!mapContainer.current || cells.length === 0) return undefined;
+    let cancelled = false;
+    void (async () => {
+      const [{default: maplibregl}, {MapboxOverlay}, {PolygonLayer, ArcLayer}] = await Promise.all([
+        import('maplibre-gl'),
+        import('@deck.gl/mapbox'),
+        import('@deck.gl/layers'),
+      ]);
+      if (cancelled || !mapContainer.current) return;
+      const map = new maplibregl.Map({
+        attributionControl: false,
+        center: [-73.95, 40.73],
+        container: mapContainer.current,
+        cooperativeGestures: false,
+        dragRotate: true,
+        pitch: 42,
+        scrollZoom: true,
+        style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+        zoom: 9.4,
+      });
+      const overlay = new MapboxOverlay({interleaved: false, layers: []});
+      map.addControl(overlay);
+      map.addControl(new maplibregl.NavigationControl({showCompass: false}), 'top-right');
+      map.once('load', () => {
+        if (cancelled) return;
+        const points = cells.flatMap((cell) => cell.boundary);
+        if (points.length > 0) {
+          const bounds = points.reduce(
+            (next, point) => next.extend(point),
+            new maplibregl.LngLatBounds(points[0], points[0]),
+          );
+          map.fitBounds(bounds, {duration: 0, padding: 66, pitch: 42});
+        }
+        overlay.setProps({layers: buildLSTTNMapLayers({
+          ArcLayer,
+          PolygonLayer,
+          cells,
+          diagnosticById,
+          mode,
+          scaleMin,
+          scaleMax,
+          selectedId,
+          extruded,
+          showEdges,
+          adjacency: result.debugger.adjacency,
+          onSelect: setSelectedId,
+        })});
+        setMapReady(true);
+      });
+      overlayRef.current = overlay;
+      mapRef.current = map;
+    })().catch(() => setMapReady(false));
+    return () => {
+      cancelled = true;
+      overlayRef.current?.finalize();
+      mapRef.current?.remove();
+      overlayRef.current = null;
+      mapRef.current = null;
+    };
+  }, [cells]);
+
+  useEffect(() => {
+    if (!overlayRef.current || cells.length === 0) return;
+    void (async () => {
+      const {PolygonLayer, ArcLayer} = await import('@deck.gl/layers');
+      overlayRef.current?.setProps({layers: buildLSTTNMapLayers({
+        ArcLayer,
+        PolygonLayer,
+        cells,
+        diagnosticById,
+        mode,
+        scaleMin,
+        scaleMax,
+        selectedId,
+        extruded,
+        showEdges,
+        adjacency: result.debugger.adjacency,
+        onSelect: setSelectedId,
+      })});
+    })();
+  }, [cells, diagnosticById, extruded, mode, result.debugger.adjacency, scaleMax, scaleMin, selectedId, showEdges]);
+
+  const drivers = selected ? [
+    {label: 'Directed graph', value: selected.values.network, description: 'Difference from a native rerun with only self edges.'},
+    {label: 'Recent pulse', value: selected.values.recent, description: `Difference after replacing the latest ${result.debugger.recentWindow} hours with their prior-period values.`},
+    {label: 'Recurring rhythm', value: selected.values.rhythm, description: 'Difference from a native rerun that preserves level and trend but removes recurring variation.'},
+  ].sort((left, right) => Math.abs(right.value) - Math.abs(left.value)) : [];
+  const topCells = [...diagnostics].sort((left, right) => right.values.volume - left.values.volume).slice(0, 5);
+  const architecture = result.metadata.architectureReport?.components ?? [];
+
+  return (
+    <section className={styles.lsttnDebugger} aria-label="LSTTN H3 forecast debugger">
+      <header className={styles.lsttnDebuggerHeader}>
+        <div>
+          <span className={styles.eyebrow}>Native WASM · H3 diagnostic surface</span>
+          <h3>LSTTN forecast field</h3>
+          <p>Inspect what the model predicts, where it misses, and how its graph, recent, and recurring-history inputs move each cell.</p>
+        </div>
+        <dl>
+          <div><dt>Cells</dt><dd>{result.nodeIds.length}</dd></div>
+          <div><dt>History</dt><dd>{result.debugger.history.length} h</dd></div>
+          <div><dt>Forecast</dt><dd>{result.horizon} h</dd></div>
+          <div><dt>Period</dt><dd>{result.debugger.periodicity} h</dd></div>
+          <div><dt>Recent</dt><dd>{result.debugger.recentWindow} h</dd></div>
+        </dl>
+      </header>
+
+      <div className={styles.lsttnModeBar} role="group" aria-label="Map signal">
+        {(Object.keys(lsttnMapModeDetails) as LSTTNMapMode[]).map((value) => (
+          <button type="button" key={value} aria-pressed={mode === value} className={mode === value ? styles.lsttnModeActive : ''} onClick={() => setMode(value)}>
+            {lsttnMapModeDetails[value].shortLabel}
+          </button>
+        ))}
+      </div>
+
+      <div className={styles.lsttnMapControls}>
+        <label>
+          Forecast step <strong>+{horizonIndex + 1} hour{horizonIndex === 0 ? '' : 's'}</strong>
+          <input aria-label="LSTTN forecast horizon" type="range" min="0" max={result.horizon - 1} value={horizonIndex} onChange={(event) => setHorizonIndex(Number(event.target.value))} />
+        </label>
+        <div>
+          <button type="button" aria-pressed={extruded} onClick={() => setExtruded((value) => !value)}>{extruded ? '3D volume on' : '3D volume off'}</button>
+          <button type="button" aria-pressed={showEdges} onClick={() => setShowEdges((value) => !value)}>{showEdges ? 'Graph edges on' : 'Graph edges off'}</button>
+        </div>
+      </div>
+
+      <div className={styles.lsttnMapShell}>
+        <div className={styles.lsttnMap} ref={mapContainer} />
+        <div className={styles.lsttnMapTitle}>
+          <span>{lsttnMapModeDetails[mode].label}</span>
+          <strong>{mapReady ? `Horizon +${horizonIndex + 1}` : 'Loading H3 geometry'}</strong>
+        </div>
+        <div className={`${styles.lsttnLegend} ${lsttnMapModeDetails[mode].signed ? styles.lsttnLegendSigned : ''}`}>
+          <span>{formatSigned(scaleMin)}</span><i /><span>{formatSigned(scaleMax)} {lsttnMapModeDetails[mode].unit}</span>
+        </div>
+        <div className={styles.lsttnMapSelection}>
+          <span>Selected</span>
+          <strong>{selectedCell?.label ?? selected?.id ?? 'None'}</strong>
+          <code>{selected?.id}</code>
+        </div>
+      </div>
+
+      <div className={styles.lsttnMetricGrid}>
+        <LSTTNMetric label="RMSE" value={formatMetric(summary.rmse)} detail="all H3 cells" />
+        <LSTTNMetric label="MAE" value={formatMetric(summary.mae)} detail="holdout at this step" />
+        <LSTTNMetric label="WAPE" value={`${(summary.wape * 100).toFixed(1)}%`} detail="volume weighted" />
+        <LSTTNMetric label="Network movement" value={formatSigned(selected?.values.network ?? 0)} detail="vs self-edge rerun" />
+      </div>
+
+      {selected && (
+        <div className={styles.lsttnInspectorGrid}>
+          <section className={styles.lsttnWhyPanel}>
+            <span className={styles.eyebrow}>Why this cell moved</span>
+            <h4>{selectedCell?.label ?? selected.id} · +{horizonIndex + 1}h</h4>
+            <p className={styles.lsttnWhyLead}>{lsttnDriverSentence(drivers[0])}</p>
+            <div className={styles.lsttnDriverList}>
+              {drivers.map((driver) => (
+                <div key={driver.label}>
+                  <span><strong>{driver.label}</strong><small>{driver.description}</small></span>
+                  <i className={driver.value >= 0 ? styles.lsttnPositive : styles.lsttnNegative} style={{width: `${Math.max(4, Math.min(100, Math.abs(driver.value) / Math.max(...drivers.map((row) => Math.abs(row.value)), 1e-9) * 100))}%`}} />
+                  <b>{formatSigned(driver.value)}</b>
+                </div>
+              ))}
+            </div>
+            <p className={styles.lsttnMethodNote}>Sensitivities are one-at-a-time native LSTTN counterfactual reruns. They are not additive feature attributions and may interact.</p>
+          </section>
+          <section className={styles.lsttnTracePanel}>
+            <span className={styles.eyebrow}>Observed and predicted path</span>
+            <LSTTNTraceChart result={result} nodeIndex={selected.nodeIndex} />
+            <dl>
+              <div><dt>Latest</dt><dd>{formatMetric(latest[selected.nodeIndex])}</dd></div>
+              <div><dt>Forecast</dt><dd>{formatMetric(selected.values.volume)}</dd></div>
+              <div><dt>Actual</dt><dd>{formatMetric(result.debugger.actual[horizonIndex][selected.nodeIndex])}</dd></div>
+              <div><dt>Rate</dt><dd>{formatSigned(selected.values.rate)}%</dd></div>
+            </dl>
+          </section>
+        </div>
+      )}
+
+      <section className={styles.lsttnArchitecture}>
+        <div>
+          <span className={styles.eyebrow}>What LSTTN used</span>
+          <h4>Long history + recurring graph + immediate dynamics</h4>
+          <p>The architecture report below comes from the fitted Rust model. The map sensitivities above test three of those pathways against the same forecast origin.</p>
+        </div>
+        <ul>
+          {architecture.map((component) => <li key={component}>{humanizeArchitectureComponent(component)}</li>)}
+        </ul>
+      </section>
+
+      <section className={styles.lsttnRankTable}>
+        <div><span className={styles.eyebrow}>Highest forecast volume</span><strong>Horizon +{horizonIndex + 1}</strong></div>
+        <ol>
+          {topCells.map((row) => <li key={row.id}><button type="button" onClick={() => setSelectedId(row.id)}><span>H3 {row.id.slice(0, 9)}…</span><strong>{formatMetric(row.values.volume)}</strong><small>{formatSigned(row.values.rate)}%</small></button></li>)}
+        </ol>
+      </section>
+      <p className={styles.lsttnFixtureNote}>{result.debugger.fixture}. This bundled fixture demonstrates interpretation mechanics; it is not benchmark evidence or a claim about TLC trip volume.</p>
+    </section>
+  );
+}
+
+function LSTTNMetric({label, value, detail}: {label: string; value: string; detail: string}) {
+  return <div><span>{label}</span><strong>{value}</strong><small>{detail}</small></div>;
+}
+
+function lsttnHorizonSummary(result: LSTTNDebuggerResult, horizonIndex: number) {
+  const predicted = result.predictions[horizonIndex];
+  const actual = result.debugger.actual[horizonIndex];
+  const errors = predicted.map((value, index) => value - actual[index]);
+  const mae = errors.reduce((sum, value) => sum + Math.abs(value), 0) / Math.max(errors.length, 1);
+  const rmse = Math.sqrt(errors.reduce((sum, value) => sum + value * value, 0) / Math.max(errors.length, 1));
+  const wape = errors.reduce((sum, value) => sum + Math.abs(value), 0) / Math.max(actual.reduce((sum, value) => sum + Math.abs(value), 0), 1e-9);
+  return {mae, rmse, wape};
+}
+
+function buildLSTTNMapLayers({ArcLayer, PolygonLayer, cells, diagnosticById, mode, scaleMin, scaleMax, selectedId, extruded, showEdges, adjacency, onSelect}: any): any[] {
+  const edges = cells.flatMap((source, sourceIndex) => {
+    const start = adjacency.indptr[sourceIndex];
+    const end = adjacency.indptr[sourceIndex + 1];
+    return adjacency.indices.slice(start, end).map((targetIndex: number, offset: number) => ({source, target: cells[targetIndex], weight: adjacency.data[start + offset]}));
+  }).filter((edge) => edge.source.id !== edge.target.id);
+  const cellValue = (cell: LSTTNMapCell) => diagnosticById.get(cell.id)?.values[mode] ?? 0;
+  const magnitude = (value: number) => lsttnMapModeDetails[mode].signed
+    ? Math.abs(value) / Math.max(Math.abs(scaleMin), Math.abs(scaleMax), 1e-9)
+    : (value - scaleMin) / Math.max(scaleMax - scaleMin, 1e-9);
+  return [
+    new PolygonLayer({
+      id: 'lsttn-h3-forecast-cells',
+      data: cells,
+      extruded,
+      filled: true,
+      getElevation: (cell: LSTTNMapCell) => 80 + magnitude(cellValue(cell)) * 1900,
+      getFillColor: (cell: LSTTNMapCell) => lsttnDiagnosticColor(cellValue(cell), scaleMin, scaleMax, lsttnMapModeDetails[mode].signed, cell.id === selectedId),
+      getLineColor: (cell: LSTTNMapCell) => cell.id === selectedId ? [255, 239, 178, 255] : [126, 210, 222, 150],
+      getLineWidth: (cell: LSTTNMapCell) => cell.id === selectedId ? 3 : 0.8,
+      getPolygon: (cell: LSTTNMapCell) => cell.boundary,
+      lineWidthUnits: 'pixels',
+      onClick: ({object}: {object?: LSTTNMapCell}) => object && onSelect(object.id),
+      pickable: true,
+      stroked: true,
+      wireframe: false,
+    }),
+    new ArcLayer({
+      id: 'lsttn-h3-directed-graph',
+      data: showEdges ? edges : [],
+      getHeight: 0.28,
+      getSourceColor: [63, 211, 221, 185],
+      getSourcePosition: (edge: {source: LSTTNMapCell}) => [edge.source.longitude, edge.source.latitude],
+      getTargetColor: [255, 186, 91, 220],
+      getTargetPosition: (edge: {target: LSTTNMapCell}) => [edge.target.longitude, edge.target.latitude],
+      getWidth: (edge: {weight: number}) => 1 + edge.weight * 3.2,
+      pickable: false,
+    }),
+  ];
+}
+
+function lsttnDiagnosticColor(value: number, min: number, max: number, signed: boolean, selected: boolean): [number, number, number, number] {
+  const normalized = signed
+    ? Math.min(1, Math.abs(value) / Math.max(Math.abs(min), Math.abs(max), 1e-9))
+    : Math.min(1, Math.max(0, (value - min) / Math.max(max - min, 1e-9)));
+  if (selected) return [255, 211, 92, 245];
+  if (signed && value < 0) return [58 + Math.round(42 * (1 - normalized)), 112 + Math.round(72 * (1 - normalized)), 224, 215];
+  if (signed) return [241, 91 + Math.round(80 * (1 - normalized)), 76 + Math.round(72 * (1 - normalized)), 220];
+  return [27 + Math.round(220 * normalized), 116 + Math.round(95 * normalized), 164 - Math.round(92 * normalized), 220];
+}
+
+function LSTTNTraceChart({result, nodeIndex}: {result: LSTTNDebuggerResult; nodeIndex: number}) {
+  const history = result.debugger.history.slice(-24).map((row) => row[nodeIndex]);
+  const forecast = result.predictions.map((row) => row[nodeIndex]);
+  const actual = result.debugger.actual.map((row) => row[nodeIndex]);
+  const values = [...history, ...forecast, ...actual];
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const scaleY = (value: number) => 86 - ((value - min) / (max - min || 1)) * 70;
+  const historyPoints = history.map((value, index) => `${index / Math.max(history.length + result.horizon - 1, 1) * 100},${scaleY(value)}`).join(' ');
+  const path = (rows: number[]) => rows.map((value, index) => `${(history.length - 1 + index) / Math.max(history.length + result.horizon - 1, 1) * 100},${scaleY(value)}`).join(' ');
+  return <svg className={styles.lsttnTrace} viewBox="0 0 100 96" role="img" aria-label="Selected H3 cell history, LSTTN forecast, and observed holdout"><line x1={(history.length - 1) / (history.length + result.horizon - 1) * 100} x2={(history.length - 1) / (history.length + result.horizon - 1) * 100} y1="6" y2="90" /><polyline className={styles.lsttnHistoryLine} points={historyPoints} /><polyline className={styles.lsttnForecastLine} points={path(forecast)} /><polyline className={styles.lsttnActualLine} points={path(actual)} /></svg>;
+}
+
+function lsttnDriverSentence(driver?: {label: string; value: number}): string {
+  if (!driver) return 'No counterfactual sensitivity is available for this cell.';
+  const direction = driver.value >= 0 ? 'raised' : 'lowered';
+  return `${driver.label} was the strongest tested pathway and ${direction} this forecast by ${Math.abs(driver.value).toFixed(2)} trips/hour.`;
+}
+
+function humanizeArchitectureComponent(value: string): string {
+  const labels: Record<string, string> = {
+    masked_patch_encoder_decoder_pretraining: 'Masked-patch pretraining reconstructs withheld history blocks.',
+    supervised_contextual_patch_attention: 'Contextual patch attention reads the retained long history.',
+    full_context_learned_patch_positions: 'Learned positions preserve order across the configured context.',
+    absolute_row_periodic_phase: 'Absolute phase keeps recurring cycles aligned across forecast origins.',
+    dilated_long_trend_extractor: 'Dilated convolutions summarize slower long-term movement.',
+    forward_backward_adaptive_graph_day_week_periodicity: 'Directed and adaptive graph paths carry recurring spatial signal.',
+    gated_temporal_adaptive_graph_short_term_branch: 'A gated short branch reacts to immediate graph-local changes.',
+    short_term_graph_forecaster_fusion: 'Input-conditioned fusion combines long and short branches.',
+    nonoverlapping_horizon_block_supervision: 'Direct horizon blocks avoid recursive error accumulation.',
+    shared_origin_direct_horizon_decoder: 'Every horizon is decoded from the same forecast origin.',
+  };
+  return labels[value] ?? value.replaceAll('_', ' ');
+}
+
+function formatSigned(value: number): string {
+  const magnitude = Math.abs(value);
+  const digits = magnitude >= 100 ? 0 : magnitude >= 10 ? 1 : magnitude >= 0.1 ? 2 : 3;
+  return `${value >= 0 ? '+' : ''}${value.toFixed(digits)}`;
 }
 
 function DeepModelCatalog({selectedId, onSelect}: {selectedId: string; onSelect: (id: string) => void}): React.ReactElement {
@@ -678,16 +1101,18 @@ function DeepModelResultCanvas({model, result}: {model: DeepModelDefinition; res
           <div><dt>Runtime</dt><dd>Wasm</dd></div>
         </dl>
       </div>
-      <section className={styles.deepResultPanel}>
+      <section className={`${styles.deepResultPanel} ${model.id === 'LSTTNForecaster' ? styles.deepResultPanelStacked : ''}`}>
         <div>
           <h3>Native browser run</h3>
           <p>{model.description} This run uses the Rust browser export and a compact taxi-shaped example.</p>
         </div>
         <a className={styles.deepDocsLink} href={model.docsPath}>Read model guide</a>
       </section>
-      <section className={styles.deepResultPanel}>
+      <section className={`${styles.deepResultPanel} ${model.id === 'LSTTNForecaster' ? styles.deepResultPanelStacked : ''}`}>
         <h3>Model output</h3>
-        <DeepOutputVisualization model={model} visual={visual} />
+        {model.id === 'LSTTNForecaster' && isLSTTNDebuggerResult(result)
+          ? <LSTTNH3ForecastDebugger result={result} />
+          : <DeepOutputVisualization model={model} visual={visual} />}
         <dl className={styles.deepResultGrid}>
           {rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}
         </dl>
@@ -816,9 +1241,14 @@ function runDeepModelWasmExample(wasmModule: WasmModule, model: string): unknown
       }
       return wasmModule.runGraphForecast(deepGraphForecastRequest());
     }
+    case 'LSTTNForecaster': {
+      if (!wasmModule.runGraphForecast) {
+        throw new Error('The LSTTN Wasm export is not available from this bundle.');
+      }
+      return runLSTTNDebuggerForecasts(wasmModule.runGraphForecast);
+    }
     case 'STGormerForecaster':
     case 'STGformerForecaster':
-    case 'LSTTNForecaster':
     case 'SpatialTemporalGraphGatedTransformerForecaster':
     case 'SpatialShiftGraphonMoEForecaster': {
       if (!wasmModule.runGraphForecast) {
@@ -1070,6 +1500,170 @@ function deepServiceResidualRows() {
     {baseline_value: 24.1, features: [3.6, 16, 0.62]},
     {baseline_value: 58.0, features: [15.2, 20, 0.94]},
   ];
+}
+
+const LSTTN_H3_NODE_IDS = [
+  '872a100d2ffffff',
+  '872a10080ffffff',
+  '872a1008cffffff',
+  '872a10395ffffff',
+  '872a1061bffffff',
+  '872a10725ffffff',
+  '872a1072dffffff',
+  '872a100d6ffffff',
+];
+const LSTTN_DEBUG_HISTORY_ROWS = 48;
+const LSTTN_DEBUG_HORIZON = 6;
+const LSTTN_DEBUG_PERIODICITY = 24;
+const LSTTN_DEBUG_RECENT_WINDOW = 12;
+
+type LSTTNCounterfactual = 'full' | 'isolated' | 'recent_neutral' | 'rhythm_neutral';
+
+function runLSTTNDebuggerForecasts(runGraphForecast: (request: unknown) => unknown): LSTTNDebuggerResult {
+  const fullRequest = lsttnH3ForecastRequest('full');
+  const full = requireGraphForecastResponse(runGraphForecast(fullRequest), 'full LSTTN forecast');
+  const isolated = requireGraphForecastResponse(
+    runGraphForecast(lsttnH3ForecastRequest('isolated')),
+    'isolated-graph LSTTN forecast',
+  );
+  const recentNeutral = requireGraphForecastResponse(
+    runGraphForecast(lsttnH3ForecastRequest('recent_neutral')),
+    'recent-neutral LSTTN forecast',
+  );
+  const rhythmNeutral = requireGraphForecastResponse(
+    runGraphForecast(lsttnH3ForecastRequest('rhythm_neutral')),
+    'rhythm-neutral LSTTN forecast',
+  );
+  return {
+    ...full,
+    debugger: {
+      actual: lsttnH3TargetRows().slice(LSTTN_DEBUG_HISTORY_ROWS),
+      history: fullRequest.frame.target,
+      isolatedPredictions: isolated.predictions,
+      recentNeutralPredictions: recentNeutral.predictions,
+      rhythmNeutralPredictions: rhythmNeutral.predictions,
+      adjacency: fullRequest.frame.adjacency,
+      lookback: fullRequest.options.lookback,
+      periodicity: fullRequest.options.periodicity,
+      recentWindow: fullRequest.options.recentWindow,
+      fixture: 'Deterministic hourly H3 demand field; native LSTTN fit, forecast, and counterfactual reruns',
+    },
+  };
+}
+
+function requireGraphForecastResponse(value: unknown, label: string): GraphForecastResponse {
+  if (!value || typeof value !== 'object') {
+    throw new Error(`${label} returned no result.`);
+  }
+  const response = value as GraphForecastResponse;
+  if (
+    !Array.isArray(response.predictions)
+    || response.predictions.length !== LSTTN_DEBUG_HORIZON
+    || response.predictions.some((row) => !Array.isArray(row)
+      || row.length !== LSTTN_H3_NODE_IDS.length
+      || row.some((cell) => !Number.isFinite(cell)))
+  ) {
+    throw new Error(`${label} returned an invalid horizon-by-H3 prediction matrix.`);
+  }
+  return response;
+}
+
+function isLSTTNDebuggerResult(value: unknown): value is LSTTNDebuggerResult {
+  if (!value || typeof value !== 'object') return false;
+  const result = value as Partial<LSTTNDebuggerResult>;
+  return Array.isArray(result.predictions)
+    && Array.isArray(result.nodeIds)
+    && typeof result.debugger === 'object'
+    && result.debugger !== null
+    && Array.isArray(result.debugger.actual)
+    && Array.isArray(result.debugger.isolatedPredictions)
+    && Array.isArray(result.debugger.recentNeutralPredictions)
+    && Array.isArray(result.debugger.rhythmNeutralPredictions);
+}
+
+function lsttnH3ForecastRequest(counterfactual: LSTTNCounterfactual) {
+  const allRows = lsttnH3TargetRows();
+  const originalHistory = allRows.slice(0, LSTTN_DEBUG_HISTORY_ROWS);
+  const history = lsttnCounterfactualHistory(originalHistory, counterfactual);
+  const adjacency = lsttnH3Adjacency(counterfactual === 'isolated');
+  return {
+    frame: {
+      nodeIds: LSTTN_H3_NODE_IDS,
+      timestamps: Array.from({length: history.length}, (_, index) => index),
+      target: history,
+      adjacency,
+      horizon: LSTTN_DEBUG_HORIZON,
+      frequency: 'hourly',
+    },
+    actual: allRows.slice(LSTTN_DEBUG_HISTORY_ROWS),
+    options: {
+      profile: 'long_short_fusion',
+      lookback: 36,
+      hiddenSize: 4,
+      attentionHeads: 2,
+      graphOrder: 2,
+      experts: 2,
+      periodicity: LSTTN_DEBUG_PERIODICITY,
+      recentWindow: LSTTN_DEBUG_RECENT_WINDOW,
+      epochs: 1,
+      learningRate: 0.004,
+      weightDecay: 0.00001,
+      backend: 'cpu',
+    },
+  };
+}
+
+function lsttnH3TargetRows(): number[][] {
+  const rowCount = LSTTN_DEBUG_HISTORY_ROWS + LSTTN_DEBUG_HORIZON;
+  return Array.from({length: rowCount}, (_, time) => LSTTN_H3_NODE_IDS.map((_, node) => {
+    const hour = time % 24;
+    const morning = Math.exp(-((hour - (7.5 + node * 0.18)) ** 2) / 8.5);
+    const evening = Math.exp(-((hour - (17.5 - node * 0.12)) ** 2) / 11);
+    const dailyWave = Math.sin(((hour + node * 1.7) / 24) * Math.PI * 2);
+    const longTrend = time * (0.055 + node * 0.004);
+    const recentPulse = time >= 42 ? Math.max(0, time - 41) * (node === 0 || node === 5 ? 1.35 : node % 3 === 0 ? 0.62 : 0.18) : 0;
+    const networkWave = Math.sin(((time - node * 2.1) / 18) * Math.PI * 2) * (2.2 + node * 0.16);
+    return Math.max(1, 28 + node * 4.6 + longTrend + morning * (19 + node) + evening * (24 - node * 0.7) + dailyWave * 4.2 + networkWave + recentPulse);
+  }));
+}
+
+function lsttnCounterfactualHistory(history: number[][], counterfactual: LSTTNCounterfactual): number[][] {
+  if (counterfactual === 'recent_neutral') {
+    return history.map((row, time) => time < history.length - LSTTN_DEBUG_RECENT_WINDOW
+      ? [...row]
+      : [...history[Math.max(0, time - LSTTN_DEBUG_PERIODICITY)]]);
+  }
+  if (counterfactual === 'rhythm_neutral') {
+    const first = history[0];
+    const last = history.at(-1) ?? first;
+    return history.map((_, time) => first.map((start, node) => {
+      const progress = time / Math.max(history.length - 1, 1);
+      return start + (last[node] - start) * progress;
+    }));
+  }
+  return history.map((row) => [...row]);
+}
+
+function lsttnH3Adjacency(isolated: boolean) {
+  if (isolated) {
+    return {
+      indptr: Array.from({length: LSTTN_H3_NODE_IDS.length + 1}, (_, index) => index),
+      indices: Array.from({length: LSTTN_H3_NODE_IDS.length}, (_, index) => index),
+      data: Array.from({length: LSTTN_H3_NODE_IDS.length}, () => 1),
+    };
+  }
+  const indices: number[] = [];
+  const data: number[] = [];
+  const indptr = [0];
+  for (let node = 0; node < LSTTN_H3_NODE_IDS.length; node += 1) {
+    const peers = node === 0 ? [1, 5, 7] : [(node + 1) % LSTTN_H3_NODE_IDS.length, 0];
+    peers.forEach((peer, index) => {
+      indices.push(peer);
+      data.push(index === 0 ? 0.68 : peers.length === 3 ? 0.16 : 0.32);
+    });
+    indptr.push(indices.length);
+  }
+  return {indptr, indices, data};
 }
 
 function deepGraphForecastRequest(profile?: string) {
@@ -5322,7 +5916,8 @@ function WebGlGeoMap({
           attributionControl: false,
           center,
           container: mapContainerRef.current,
-          cooperativeGestures: true,
+          cooperativeGestures: false,
+          scrollZoom: true,
           style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
           zoom: 10,
         });
@@ -5506,9 +6101,11 @@ function DirectSpatialRegionMap({regions, targetName}: {regions: SpatialRegion[]
         container: mapContainerRef.current,
         style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
         center: bounds.getCenter(),
-        cooperativeGestures: true,
+        cooperativeGestures: false,
+        scrollZoom: true,
         zoom: 10,
       });
+      map.addControl(new maplibregl.NavigationControl({showCompass: false}), 'top-right');
       map.once('load', () => {
         if (cancelled || !map) return;
         map.addSource('direct-spatial-regions', {type: 'geojson', data: featureCollection as any});
@@ -7070,7 +7667,7 @@ function buildDirectSpatialRegions(table: ParsedTable, targetCol: string, h3Colu
     }
   }
   return {
-    regions: [...grouped.entries()].map(([id, value]) => ({id, kind: value.kind, label: value.label, geometry: value.geometry, target: value.sum / value.count, count: value.count})).slice(0, 500),
+    regions: Array.from(grouped.entries()).map(([id, value]) => ({id, kind: value.kind, label: value.label, geometry: value.geometry, target: value.sum / value.count, count: value.count})).slice(0, 500),
     errors: [...new Set(errors)].slice(0, 3),
   };
 }

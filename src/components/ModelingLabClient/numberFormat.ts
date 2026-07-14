@@ -23,6 +23,49 @@ export function formatPercent(value: unknown, digits = 1) {
   return numeric === null ? '-' : `${numeric >= 0 ? '+' : ''}${(numeric * 100).toFixed(digits)}%`;
 }
 
+export type ForecastCellDiagnostics = {
+  volume: number;
+  rate: number;
+  error: number;
+  network: number;
+  recent: number;
+  rhythm: number;
+};
+
+/**
+ * Display-only diagnostics for one graph node and horizon. Counterfactual
+ * values must come from native model reruns; this helper only turns those
+ * outputs into comparable map signals.
+ */
+export function forecastCellDiagnostics({
+  forecast,
+  actual,
+  latest,
+  isolated,
+  recentNeutral,
+  rhythmNeutral,
+}: {
+  forecast: number;
+  actual: number;
+  latest: number;
+  isolated: number;
+  recentNeutral: number;
+  rhythmNeutral: number;
+}): ForecastCellDiagnostics {
+  const values = [forecast, actual, latest, isolated, recentNeutral, rhythmNeutral];
+  if (!values.every(Number.isFinite)) {
+    throw new Error('LSTTN map diagnostics require finite native forecast values.');
+  }
+  return {
+    volume: forecast,
+    rate: latest === 0 ? 0 : ((forecast - latest) / Math.abs(latest)) * 100,
+    error: Math.abs(forecast - actual),
+    network: forecast - isolated,
+    recent: forecast - recentNeutral,
+    rhythm: forecast - rhythmNeutral,
+  };
+}
+
 export function assertForecastResponseRecords(response: unknown, requestedModel: string): void {
   const typedResponse = response as {
     metadata?: {input?: {series_ids?: unknown}};

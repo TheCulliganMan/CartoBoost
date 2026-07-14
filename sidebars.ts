@@ -64,7 +64,7 @@ const sidebars: SidebarsConfig = {
             {
               type: 'doc',
               id: 'user-guide/forecasting-models/graph-spatiotemporal',
-              label: 'Market Structure Forecasting',
+              label: 'Graph and Market Structure Forecasting',
             },
             {
               type: 'doc',
