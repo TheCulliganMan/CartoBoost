@@ -1189,7 +1189,13 @@ impl TrainableGraphTransformerState {
             } else {
                 AutodiffTape::new()
             };
-            let parameter = |index: usize| tape.parameter(index, self.parameters[index]);
+            let parameter_nodes = self
+                .parameters
+                .iter()
+                .enumerate()
+                .map(|(index, value)| tape.parameter(index, *value))
+                .collect::<Vec<_>>();
+            let parameter = |index: usize| parameter_nodes[index];
             let representations = (0..self.nodes)
                 .map(|node| {
                     visible
@@ -1232,7 +1238,7 @@ impl TrainableGraphTransformerState {
                         .map(|representation| {
                             tape_linear(
                                 &tape,
-                                &self.parameters,
+                                &parameter_nodes,
                                 layout.temporal_k,
                                 representation,
                                 self.hidden,
@@ -1250,7 +1256,7 @@ impl TrainableGraphTransformerState {
                         .map(|representation| {
                             tape_linear(
                                 &tape,
-                                &self.parameters,
+                                &parameter_nodes,
                                 layout.temporal_v,
                                 representation,
                                 self.hidden,
@@ -1276,7 +1282,7 @@ impl TrainableGraphTransformerState {
                 .collect::<Vec<_>>();
             let query = tape_linear(
                 &tape,
-                &self.parameters,
+                &parameter_nodes,
                 layout.temporal_q,
                 &mask_representation,
                 self.hidden,
@@ -1412,8 +1418,13 @@ impl TrainableGraphTransformerState {
         } else {
             AutodiffTape::new()
         };
-        let parameter =
-            |tape: &AutodiffTape, index: usize| tape.parameter(index, self.parameters[index]);
+        let parameter_nodes = self
+            .parameters
+            .iter()
+            .enumerate()
+            .map(|(index, value)| tape.parameter(index, *value))
+            .collect::<Vec<_>>();
+        let parameter = |_tape: &AutodiffTape, index: usize| parameter_nodes[index];
         let nodes = self.nodes;
         let hidden = self.hidden;
         let times = window.len();
@@ -1429,8 +1440,26 @@ impl TrainableGraphTransformerState {
         // normalized reverse graph rather than treating the supplied road
         // graph as undirected.
         let reverse_adjacency = adjacency.transpose(nodes);
+        let observed_values = window
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|value| tape.constant(*value))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let adjacency_weights = adjacency
+            .data
+            .iter()
+            .map(|weight| tape.constant(*weight))
+            .collect::<Vec<_>>();
+        let reverse_adjacency_weights = reverse_adjacency
+            .data
+            .iter()
+            .map(|weight| tape.constant(*weight))
+            .collect::<Vec<_>>();
         let mut graph_values = vec![vec![0usize; nodes]; times];
-        for (time, row) in window.iter().enumerate() {
+        for time in 0..times {
             for target in 0..nodes {
                 graph_values[time][target] = (adjacency.indptr[target]
                     ..adjacency.indptr[target + 1])
@@ -1438,8 +1467,8 @@ impl TrainableGraphTransformerState {
                         tape.add(
                             sum,
                             tape.mul(
-                                tape.constant(adjacency.data[edge]),
-                                tape.constant(row[adjacency.indices[edge]]),
+                                adjacency_weights[edge],
+                                observed_values[time][adjacency.indices[edge]],
                             ),
                         )
                     });
@@ -1447,9 +1476,34 @@ impl TrainableGraphTransformerState {
         }
         let degrees = graph_in_degrees(adjacency, nodes);
         let out_degrees = graph_out_degrees(adjacency, nodes);
+        let positions = (0..times)
+            .map(|time| tape.constant((time + 1) as f64 / times as f64))
+            .collect::<Vec<_>>();
+        let periodic_features = (0..times)
+            .map(|time| {
+                [
+                    tape.constant(periodic_phase(
+                        phase_offset + time + 1,
+                        effective_periodicity,
+                    )),
+                    tape.constant(periodic_phase(
+                        phase_offset + time + 1,
+                        effective_periodicity * 7,
+                    )),
+                ]
+            })
+            .collect::<Vec<_>>();
+        let degree_features = (0..nodes)
+            .map(|node| {
+                [
+                    tape.constant(degrees[node] / nodes.max(1) as f64),
+                    tape.constant(out_degrees[node] / nodes.max(1) as f64),
+                ]
+            })
+            .collect::<Vec<_>>();
         let mut embedding = vec![vec![vec![0usize; hidden]; nodes]; times];
         for time in 0..times {
-            let position = tape.constant((time + 1) as f64 / times as f64);
+            let position = positions[time];
             for node in 0..nodes {
                 for channel in 0..hidden {
                     let time2vec = tape.sin(tape.add(
@@ -1460,19 +1514,13 @@ impl TrainableGraphTransformerState {
                         parameter(&tape, layout.time2vec_phase + channel),
                     ));
                     let inputs = [
-                        tape.constant(window[time][node]),
+                        observed_values[time][node],
                         graph_values[time][node],
                         time2vec,
-                        tape.constant(periodic_phase(
-                            phase_offset + time + 1,
-                            effective_periodicity,
-                        )),
-                        tape.constant(periodic_phase(
-                            phase_offset + time + 1,
-                            effective_periodicity * 7,
-                        )),
-                        tape.constant(degrees[node] / nodes.max(1) as f64),
-                        tape.constant(out_degrees[node] / nodes.max(1) as f64),
+                        periodic_features[time][0],
+                        periodic_features[time][1],
+                        degree_features[node][0],
+                        degree_features[node][1],
                     ];
                     let mut value = parameter(&tape, layout.input + 7 * hidden + channel);
                     for (input, input_value) in inputs.iter().enumerate() {
@@ -1520,7 +1568,7 @@ impl TrainableGraphTransformerState {
             for node in 0..nodes {
                 let query = tape_linear(
                     &tape,
-                    &self.parameters,
+                    &parameter_nodes,
                     layout.temporal_q,
                     &embedding[times - 1][node],
                     hidden,
@@ -1531,7 +1579,7 @@ impl TrainableGraphTransformerState {
                 for time in 0..times {
                     let key = tape_linear(
                         &tape,
-                        &self.parameters,
+                        &parameter_nodes,
                         layout.temporal_k,
                         &embedding[time][node],
                         hidden,
@@ -1539,7 +1587,7 @@ impl TrainableGraphTransformerState {
                     );
                     let value = tape_linear(
                         &tape,
-                        &self.parameters,
+                        &parameter_nodes,
                         layout.temporal_v,
                         &embedding[time][node],
                         hidden,
@@ -1593,7 +1641,12 @@ impl TrainableGraphTransformerState {
             }
         }
 
-        let distances = graph_distances(adjacency, nodes);
+        // LongShortFusion owns its sparse forward, backward, and adaptive
+        // graph diffusions below. It does not use Graphormer shortest-path
+        // attention, so allocating an all-pairs distance matrix would be
+        // quadratic and unnecessary for global graphs.
+        let distances = (*profile != GraphTransformerProfile::LongShortFusion)
+            .then(|| graph_distances(adjacency, nodes));
         let mut spatial = vec![vec![0usize; hidden]; nodes];
         if *profile == GraphTransformerProfile::LongShortFusion {
             // LSTTN's periodic branch owns its forward, backward, and
@@ -1607,7 +1660,7 @@ impl TrainableGraphTransformerState {
                 .map(|node| {
                     tape_linear(
                         &tape,
-                        &self.parameters,
+                        &parameter_nodes,
                         layout.temporal_k,
                         &temporal[node],
                         hidden,
@@ -1619,7 +1672,7 @@ impl TrainableGraphTransformerState {
                 .map(|node| {
                     tape_linear(
                         &tape,
-                        &self.parameters,
+                        &parameter_nodes,
                         layout.temporal_v,
                         &temporal[node],
                         hidden,
@@ -1647,7 +1700,7 @@ impl TrainableGraphTransformerState {
             for node in 0..nodes {
                 let query = tape_linear(
                     &tape,
-                    &self.parameters,
+                    &parameter_nodes,
                     layout.temporal_q,
                     &temporal[node],
                     hidden,
@@ -1665,10 +1718,13 @@ impl TrainableGraphTransformerState {
                 }
             }
         } else {
+            let distances = distances
+                .as_ref()
+                .expect("non-LSTTN spatial attention requires graph distances");
             for node in 0..nodes {
                 let query = tape_linear(
                     &tape,
-                    &self.parameters,
+                    &parameter_nodes,
                     layout.spatial_q,
                     &temporal[node],
                     hidden,
@@ -1679,7 +1735,7 @@ impl TrainableGraphTransformerState {
                 for other in 0..nodes {
                     let key = tape_linear(
                         &tape,
-                        &self.parameters,
+                        &parameter_nodes,
                         layout.spatial_k,
                         &temporal[other],
                         hidden,
@@ -1687,7 +1743,7 @@ impl TrainableGraphTransformerState {
                     );
                     let value = tape_linear(
                         &tape,
-                        &self.parameters,
+                        &parameter_nodes,
                         layout.spatial_v,
                         &temporal[other],
                         hidden,
@@ -1725,6 +1781,9 @@ impl TrainableGraphTransformerState {
         }
 
         if *profile == GraphTransformerProfile::HeterogeneousMoE {
+            let distances = distances
+                .as_ref()
+                .expect("heterogeneous graph attention requires graph distances");
             // STGormer stacks three causal temporal-attention and spatial-
             // attention blocks.  Each stage owns an independent Q/K/V set;
             // spatial output becomes the representation consumed by the next
@@ -1745,7 +1804,7 @@ impl TrainableGraphTransformerState {
                     for node in 0..nodes {
                         let query = tape_linear(
                             &tape,
-                            &self.parameters,
+                            &parameter_nodes,
                             temporal_q,
                             &states[time][node],
                             hidden,
@@ -1755,7 +1814,7 @@ impl TrainableGraphTransformerState {
                             .map(|past| {
                                 tape_linear(
                                     &tape,
-                                    &self.parameters,
+                                    &parameter_nodes,
                                     temporal_k,
                                     &states[past][node],
                                     hidden,
@@ -1767,7 +1826,7 @@ impl TrainableGraphTransformerState {
                             .map(|past| {
                                 tape_linear(
                                     &tape,
-                                    &self.parameters,
+                                    &parameter_nodes,
                                     temporal_v,
                                     &states[past][node],
                                     hidden,
@@ -1798,7 +1857,7 @@ impl TrainableGraphTransformerState {
                     for node in 0..nodes {
                         let query = tape_linear(
                             &tape,
-                            &self.parameters,
+                            &parameter_nodes,
                             spatial_q,
                             &block_temporal[time][node],
                             hidden,
@@ -1808,7 +1867,7 @@ impl TrainableGraphTransformerState {
                             .map(|other| {
                                 tape_linear(
                                     &tape,
-                                    &self.parameters,
+                                    &parameter_nodes,
                                     spatial_k,
                                     &block_temporal[time][other],
                                     hidden,
@@ -1820,7 +1879,7 @@ impl TrainableGraphTransformerState {
                             .map(|other| {
                                 tape_linear(
                                     &tape,
-                                    &self.parameters,
+                                    &parameter_nodes,
                                     spatial_v,
                                     &block_temporal[time][other],
                                     hidden,
@@ -1888,16 +1947,13 @@ impl TrainableGraphTransformerState {
                     for channel in 0..hidden {
                         aggregated[channel] = tape.add(
                             aggregated[channel],
-                            tape.mul(
-                                tape.constant(adjacency.data[edge]),
-                                temporal[neighbor][channel],
-                            ),
+                            tape.mul(adjacency_weights[edge], temporal[neighbor][channel]),
                         );
                     }
                 }
                 graph_convolution[node] = tape_linear(
                     &tape,
-                    &self.parameters,
+                    &parameter_nodes,
                     layout.spatial_v,
                     &aggregated,
                     hidden,
@@ -1925,7 +1981,7 @@ impl TrainableGraphTransformerState {
                     .map(|input| {
                         tape_linear(
                             &tape,
-                            &self.parameters,
+                            &parameter_nodes,
                             layout.temporal_q,
                             input,
                             hidden,
@@ -1938,7 +1994,7 @@ impl TrainableGraphTransformerState {
                     .map(|input| {
                         tape_linear(
                             &tape,
-                            &self.parameters,
+                            &parameter_nodes,
                             layout.temporal_k,
                             input,
                             hidden,
@@ -1951,7 +2007,7 @@ impl TrainableGraphTransformerState {
                     .map(|input| {
                         tape_linear(
                             &tape,
-                            &self.parameters,
+                            &parameter_nodes,
                             layout.temporal_v,
                             input,
                             hidden,
@@ -1999,7 +2055,7 @@ impl TrainableGraphTransformerState {
                 for node in 0..nodes {
                     let pointwise = tape_linear(
                         &tape,
-                        &self.parameters,
+                        &parameter_nodes,
                         layout.stgformer_pointwise + order * hidden * (hidden + 1),
                         &previous[node],
                         hidden,
@@ -2023,10 +2079,7 @@ impl TrainableGraphTransformerState {
                         for channel in 0..hidden {
                             next[target][channel] = tape.add(
                                 next[target][channel],
-                                tape.mul(
-                                    tape.constant(adjacency.data[edge]),
-                                    propagated[source][channel],
-                                ),
+                                tape.mul(adjacency_weights[edge], propagated[source][channel]),
                             );
                         }
                     }
@@ -2133,7 +2186,7 @@ impl TrainableGraphTransformerState {
                     // context rather than only transferring input weights.
                     let context_query = tape_linear(
                         &tape,
-                        &self.parameters,
+                        &parameter_nodes,
                         layout.temporal_q,
                         subseries.last().expect("nonempty LSTTN patch sequence"),
                         hidden,
@@ -2144,7 +2197,7 @@ impl TrainableGraphTransformerState {
                         .map(|patch| {
                             tape_linear(
                                 &tape,
-                                &self.parameters,
+                                &parameter_nodes,
                                 layout.temporal_k,
                                 patch,
                                 hidden,
@@ -2157,7 +2210,7 @@ impl TrainableGraphTransformerState {
                         .map(|patch| {
                             tape_linear(
                                 &tape,
-                                &self.parameters,
+                                &parameter_nodes,
                                 layout.temporal_v,
                                 patch,
                                 hidden,
@@ -2261,7 +2314,7 @@ impl TrainableGraphTransformerState {
                                 periodic[channel] = tape.add(
                                     periodic[channel],
                                     tape.mul(
-                                        tape.constant(adjacency.data[edge]),
+                                        adjacency_weights[edge],
                                         period_embedding[source][channel],
                                     ),
                                 );
@@ -2275,7 +2328,7 @@ impl TrainableGraphTransformerState {
                                 periodic[channel] = tape.add(
                                     periodic[channel],
                                     tape.mul(
-                                        tape.constant(reverse_adjacency.data[edge]),
+                                        reverse_adjacency_weights[edge],
                                         period_embedding[source][channel],
                                     ),
                                 );
@@ -2763,7 +2816,7 @@ impl TrainableGraphTransformerState {
 
 fn tape_linear(
     tape: &AutodiffTape,
-    parameters: &[f64],
+    parameter_nodes: &[usize],
     offset: usize,
     input: &[usize],
     input_width: usize,
@@ -2771,18 +2824,12 @@ fn tape_linear(
 ) -> Vec<usize> {
     (0..output_width)
         .map(|output| {
-            let mut value = tape.parameter(
-                offset + input_width * output_width + output,
-                parameters[offset + input_width * output_width + output],
-            );
+            let mut value = parameter_nodes[offset + input_width * output_width + output];
             for (index, input_value) in input.iter().enumerate().take(input_width) {
                 value = tape.add(
                     value,
                     tape.mul(
-                        tape.parameter(
-                            offset + index * output_width + output,
-                            parameters[offset + index * output_width + output],
-                        ),
+                        parameter_nodes[offset + index * output_width + output],
                         *input_value,
                     ),
                 );
@@ -5135,6 +5182,26 @@ mod tests {
         let weights = tape_softmax(&tape, &[tape.constant(0.0), tape.constant(2.0)]);
         let ratio = tape.value(weights[1]) / tape.value(weights[0]);
         assert!((ratio - 2.0_f64.exp()).abs() < 1e-12);
+    }
+
+    #[test]
+    fn training_tape_interns_each_model_parameter_once() {
+        let tape = AutodiffTape::new();
+        let parameters = [0.25, -0.5];
+        let parameter_nodes = parameters
+            .iter()
+            .enumerate()
+            .map(|(index, value)| tape.parameter(index, *value))
+            .collect::<Vec<_>>();
+
+        let first_use = tape.mul(parameter_nodes[0], tape.constant(2.0));
+        let second_use = tape.add(parameter_nodes[0], parameter_nodes[1]);
+        let loss = tape.add(first_use, second_use);
+        let gradients = tape.backward(loss, parameters.len());
+
+        assert_eq!(parameter_nodes.len(), parameters.len());
+        assert_eq!(tape.nodes.borrow().len(), 6);
+        assert_eq!(gradients, vec![3.0, 1.0]);
     }
 
     #[test]

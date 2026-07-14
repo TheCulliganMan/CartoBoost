@@ -588,8 +588,6 @@ fn metal_scalar_graph_train_step_f32(
     };
     use std::cell::RefCell;
 
-    let values = metal_scalar_graph_f32(initial_values, opcodes, left, right)?;
-    let loss_value = values[loss];
     let mut levels = vec![0usize; opcodes.len()];
     let mut by_level = vec![Vec::<u32>::new()];
     for index in 0..opcodes.len() {
@@ -619,6 +617,34 @@ fn metal_scalar_graph_train_step_f32(
     const SOURCE: &str = r#"
         #include <metal_stdlib>
         using namespace metal;
+
+        kernel void evaluate_scalar_graph_f32(
+            device float* values [[buffer(0)]],
+            const device uchar* opcodes [[buffer(1)]],
+            const device uint* left [[buffer(2)]],
+            const device uint* right [[buffer(3)]],
+            const device uint* schedule [[buffer(4)]],
+            constant uint& schedule_offset [[buffer(5)]],
+            uint id [[thread_position_in_grid]]
+        ) {
+            uint output = schedule[schedule_offset + id];
+            uchar opcode = opcodes[output];
+            float a = values[left[output]];
+            float b = values[right[output]];
+            switch (opcode) {
+                case 2: values[output] = a + b; break;
+                case 3: values[output] = a * b; break;
+                case 4: values[output] = a / max(b, 1.0e-12f); break;
+                case 5: values[output] = tanh(a); break;
+                case 6: values[output] = exp(a); break;
+                case 7: values[output] = sqrt(max(a, 1.0e-12f)); break;
+                case 8: values[output] = sin(a); break;
+                case 9: values[output] = 1.0f / (1.0f + exp(-a)); break;
+                case 10: values[output] = max(a, b); break;
+                case 11: values[output] = a; break;
+                default: break;
+            }
+        }
 
         kernel void backward_scalar_graph_f32(
             const device float* values [[buffer(0)]],
@@ -718,6 +744,7 @@ fn metal_scalar_graph_train_step_f32(
     struct MetalScalarTrainingContext {
         device: metal::Device,
         queue: CommandQueue,
+        forward: ComputePipelineState,
         backward: ComputePipelineState,
         gather: ComputePipelineState,
         adam: ComputePipelineState,
@@ -743,6 +770,7 @@ fn metal_scalar_graph_train_step_f32(
                     .new_compute_pipeline_state_with_function(&function)
                     .map_err(|error| NeuralError::InvalidArgument(error.to_string()))
             };
+            let forward = pipeline("evaluate_scalar_graph_f32")?;
             let backward = pipeline("backward_scalar_graph_f32")?;
             let gather = pipeline("gather_parameter_gradients_f32")?;
             let adam = pipeline("adamw_scalar_graph_f32")?;
@@ -750,6 +778,7 @@ fn metal_scalar_graph_train_step_f32(
             Ok(Self {
                 device,
                 queue,
+                forward,
                 backward,
                 gather,
                 adam,
@@ -798,7 +827,7 @@ fn metal_scalar_graph_train_step_f32(
         let context = maybe_context
             .as_mut()
             .expect("initialized Metal training context");
-        let values_buffer = upload_training(context, 0, &values);
+        let values_buffer = upload_training(context, 0, initial_values);
         let opcode_buffer = upload_training(context, 1, opcodes);
         let left_buffer = upload_training(context, 2, left);
         let right_buffer = upload_training(context, 3, right);
@@ -819,6 +848,33 @@ fn metal_scalar_graph_train_step_f32(
         let second_correction_buffer =
             upload_training(context, 15, std::slice::from_ref(&second_correction));
         let command = context.queue.new_command_buffer();
+        for (level, nodes) in by_level.iter().enumerate().skip(1) {
+            if nodes.is_empty() {
+                continue;
+            }
+            let encoder = command.new_compute_command_encoder();
+            encoder.set_compute_pipeline_state(&context.forward);
+            encoder.set_buffer(0, Some(&values_buffer), 0);
+            encoder.set_buffer(1, Some(&opcode_buffer), 0);
+            encoder.set_buffer(2, Some(&left_buffer), 0);
+            encoder.set_buffer(3, Some(&right_buffer), 0);
+            encoder.set_buffer(4, Some(&schedule_buffer), 0);
+            encoder.set_buffer(
+                5,
+                Some(&offset_buffer),
+                (level * std::mem::size_of::<u32>()) as u64,
+            );
+            let width = context
+                .forward
+                .thread_execution_width()
+                .max(1)
+                .min(nodes.len() as u64);
+            encoder.dispatch_threads(
+                MTLSize::new(nodes.len() as u64, 1, 1),
+                MTLSize::new(width, 1, 1),
+            );
+            encoder.end_encoding();
+        }
         for level in (1..by_level.len()).rev() {
             let nodes = &by_level[level];
             if nodes.is_empty() {
@@ -886,6 +942,7 @@ fn metal_scalar_graph_train_step_f32(
         adam_encoder.end_encoding();
         command.commit();
         command.wait_until_completed();
+        let loss_value = unsafe { *values_buffer.contents().cast::<f32>().add(loss) };
         unsafe {
             parameters.copy_from_slice(std::slice::from_raw_parts(
                 parameter_buffer.contents().cast::<f32>(),
