@@ -41,6 +41,8 @@ dependencies = [
     "onnx>=1.16",
     "optuna>=4.0",
     "tensorboardX>=2.6",
+    "torch>=2.1,<2.5; python_version < '3.13'",
+    "torch>=2.7; python_version >= '3.13'",
     "geopandas>=1.0",
     "matplotlib>=3.7",
     "pydeck>=0.9",
