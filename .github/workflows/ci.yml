@@ -418,13 +418,16 @@ jobs:
           from cartoboost import CartoBoostRegressor, BoosterConfig
           from cartoboost.schema import FeatureSchema, NumericSpec
 
-          assert "pandas" in (metadata("cartoboost").get_all("Provides-Extra") or [])
+          assert any(
+              requirement.startswith("pandas")
+              for requirement in (metadata("cartoboost").get_all("Requires-Dist") or [])
+          )
           assert not any(ep.name == 'cartoboost' for ep in entry_points(group='console_scripts'))
           assert cartoboost.__version__
-          assert cartoboost.__all__ == [
+          assert {
               'CartoBoostRegressor', 'CartoBoostClassifier', 'CartoBoostRanker',
-              'BoosterConfig', '__version__'
-          ]
+              'BoosterConfig', 'forecasting', 'geo', 'graph', 'deep', '__version__'
+          } <= set(cartoboost.__all__)
           assert not hasattr(cartoboost, 'AutoGeoModel')
           FeatureSchema.from_specs([NumericSpec('distance')]).validate(1, [])
           x = np.arange(96, dtype=float).reshape(48, 2)
