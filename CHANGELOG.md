@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 0.3.6 — Full Metal LSTTN Forecasting
+
+- Added full Metal execution for LSTTN training and inference, including the
+  scalar computation graph, reverse-mode gradients, AdamW parameter updates,
+  and direct long-horizon forecast evaluation.
+- Added configurable long-history, periodic, recent-context, and forecast
+  windows for hourly freight and traffic forecasting without fixed five-minute
+  assumptions.
+- Added verified 207-sensor METR-LA evidence for a 168-hour horizon, with
+  source checksums, exact backend scope, comparable graph-model results, and a
+  committed machine-readable artifact.
+- Updated the Rust/WASM graph forecasting surface and Metal parity, lifecycle,
+  long-horizon stability, and browser-profile validation.
+
 ## 0.3.5 — Spatial-Temporal Taxi Graph Forecasting
 
 - Added Rust-native directional market-structure forecasting with graph-aware
