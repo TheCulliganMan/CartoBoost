@@ -19,9 +19,6 @@ The published wheels target CPython 3.10, 3.11, 3.12, 3.13, and 3.14 on:
 - Windows x86_64 and arm64 (Python 3.11–3.14 on Windows arm64; check the
   release assets for the exact interpreter/platform matrix).
 
-CartoBoost also supports CPython 3.14's free-threaded build. Install the
-matching `cp314t` wheel, or build from source with a free-threaded interpreter.
-
 If no compatible wheel exists, `uv` may try to build from source, which requires
 the project build toolchain.
 

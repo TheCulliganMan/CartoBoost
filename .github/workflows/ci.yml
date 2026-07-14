@@ -134,8 +134,6 @@ jobs:
             python-version: "3.13"
           - os: ubuntu-latest
             python-version: "3.14"
-          - os: ubuntu-latest
-            python-version: "3.14t"
           - os: macos-latest
             python-version: "3.10"
           - os: macos-latest
@@ -260,35 +258,6 @@ jobs:
           uv run --no-group dev python - <<'PY'
           import concurrent.futures
           from cartoboost import CartoBoostRegressor
-
-          def fit_and_predict(seed):
-              model = CartoBoostRegressor(n_estimators=4, max_depth=2, min_samples_leaf=1)
-              model.fit([[0.0], [1.0], [2.0], [3.0]], [seed, seed + 1, seed + 2, seed + 3])
-              return model.predict([[1.5]])[0]
-
-          with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
-              values = list(pool.map(fit_and_predict, range(4)))
-
-          assert all(isinstance(value, float) for value in values)
-          PY
-
-      - name: Test free-threaded Python import and native concurrency
-        if: matrix.python-version == '3.14t'
-        shell: bash
-        env:
-          PYTHON_GIL: "0"
-        run: |
-          uv run --no-group dev python - <<'PY'
-          import concurrent.futures
-          import sysconfig
-          import warnings
-
-          with warnings.catch_warnings(record=True) as caught:
-              warnings.simplefilter("always")
-              from cartoboost import CartoBoostRegressor
-
-          assert sysconfig.get_config_var("Py_GIL_DISABLED") == 1
-          assert not [warning for warning in caught if "GIL" in str(warning.message)]
 
           def fit_and_predict(seed):
               model = CartoBoostRegressor(n_estimators=4, max_depth=2, min_samples_leaf=1)
