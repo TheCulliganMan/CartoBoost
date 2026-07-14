@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.9 — Unified Model API and Portable Model Artifacts
+
+- Made every shipped modeling family available through the standard
+  `cartoboost` and `cartoboost.forecasting` imports, including graph, spatial,
+  probabilistic, causal, neural, and foundation-model adapters.
+- Made the full model dependency set part of the standard installation so
+  documented model classes are immediately available after installation.
+- Added portable `save_weights`, `load_weights`, and pickle round-trips for
+  native boosters, local forecasters, deep models, spatial estimators, and
+  Python orchestration wrappers.
+
 ## 0.3.8 — Exact Tree-Component SHAP
 
 - Made `CartoBoostRegressor` weight SHAP decomposition exact and direct. The
