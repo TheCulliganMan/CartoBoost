@@ -19,7 +19,8 @@ pub use artifact::{
 };
 pub use backend::{
     available_backends, backend_affine_scores, backend_dense_layer_f32, backend_dispatch_report,
-    backend_pair_sigmoid_scores_f32, select_backend, BackendDispatchReport, BackendSelection,
+    backend_pair_sigmoid_scores_f32, backend_scalar_graph_f32, backend_scalar_graph_train_step_f32,
+    backend_train_tanh_mlp_f32, select_backend, BackendDispatchReport, BackendSelection,
     ComputeBackend,
 };
 #[cfg(all(feature = "webgpu", target_arch = "wasm32"))]

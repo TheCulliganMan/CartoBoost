@@ -14,6 +14,7 @@ type KnownFutureCovariates = BTreeMap<(String, NaiveDateTime), BTreeMap<String, 
 type KnownFutureCovariateIndex<'a> =
     BTreeMap<&'a str, BTreeMap<NaiveDateTime, &'a BTreeMap<String, f64>>>;
 type FeatureComponentBreakdown = (f64, f64, BTreeMap<String, f64>, BTreeMap<String, f64>);
+type ForwardTrace = (Vec<Vec<f64>>, Vec<Vec<f64>>);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TrendMode {
@@ -1447,35 +1448,43 @@ impl Forecaster for NeuralPanelForecaster {
             .collect();
         let output_width = self.config.n_forecasts * self.config.quantiles.len();
         self.ar_net = if self.config.n_lags > 0 {
-            Some(train_mlp(
-                self.config.n_lags,
-                output_width,
-                &self.config.ar_layers,
-                ar_training_examples(&self.config, &dataset, &scaler, |series_id, offset| {
-                    self.trend_baseline(series_id, offset)
-                }),
-                &self.config,
-                self.config.seed ^ 0xA71,
-            ))
+            Some(
+                train_mlp(
+                    self.config.n_lags,
+                    output_width,
+                    &self.config.ar_layers,
+                    ar_training_examples(&self.config, &dataset, &scaler, |series_id, offset| {
+                        self.trend_baseline(series_id, offset)
+                    }),
+                    &self.config,
+                    self.config.seed ^ 0xA71,
+                    &self.config.backend,
+                )
+                .map_err(|err| CartoBoostError::InvalidInput(err.to_string()))?,
+            )
         } else {
             None
         };
         let covar_input_width = self.config.lagged_regressors.values().sum::<usize>();
         self.covar_net = if covar_input_width > 0 {
-            Some(train_mlp(
-                covar_input_width,
-                output_width,
-                &self.config.lagged_reg_layers,
-                covar_training_examples(
+            Some(
+                train_mlp(
+                    covar_input_width,
+                    output_width,
+                    &self.config.lagged_reg_layers,
+                    covar_training_examples(
+                        &self.config,
+                        &dataset,
+                        &scaler,
+                        &self.ar_net,
+                        |series_id, offset| self.trend_baseline(series_id, offset),
+                    ),
                     &self.config,
-                    &dataset,
-                    &scaler,
-                    &self.ar_net,
-                    |series_id, offset| self.trend_baseline(series_id, offset),
-                ),
-                &self.config,
-                self.config.seed ^ 0xC09A,
-            ))
+                    self.config.seed ^ 0xC09A,
+                    &self.config.backend,
+                )
+                .map_err(|err| CartoBoostError::InvalidInput(err.to_string()))?,
+            )
         } else {
             None
         };
@@ -2680,7 +2689,7 @@ pub fn fit_dense_regressor(
         loss: NeuralPanelLoss::Mse,
         ..NeuralPanelConfig::default()
     };
-    Ok(train_mlp(
+    train_mlp(
         config.input_width,
         config.output_width,
         &config.hidden_layers,
@@ -2694,7 +2703,8 @@ pub fn fit_dense_regressor(
             .collect(),
         &panel_config,
         config.seed,
-    ))
+        &BackendSelection::default(),
+    )
 }
 
 fn train_mlp(
@@ -2704,10 +2714,11 @@ fn train_mlp(
     examples: Vec<TrainingExample>,
     config: &NeuralPanelConfig,
     seed: u64,
-) -> MlpState {
+    backend: &BackendSelection,
+) -> Result<MlpState> {
     let mut net = MlpState::initialized(input_width, output_width, hidden_layers, seed);
     if examples.is_empty() || input_width == 0 || output_width == 0 {
-        return net;
+        return Ok(net);
     }
     let mut m = clone_zero_layers(&net.layers);
     let mut v = clone_zero_layers(&net.layers);
@@ -2718,7 +2729,8 @@ fn train_mlp(
     for _epoch in 0..config.epochs {
         for example in &examples {
             step += 1.0;
-            let (activations, preactivations) = forward_trace(&net, &example.input);
+            let (activations, preactivations) =
+                forward_trace_with_backend(&net, &example.input, backend)?;
             let prediction = activations.last().cloned().unwrap_or_default();
             let mut delta = prediction
                 .iter()
@@ -2773,7 +2785,7 @@ fn train_mlp(
             }
         }
     }
-    net
+    Ok(net)
 }
 
 fn ar_training_examples(
@@ -2991,7 +3003,7 @@ fn padded_input(input: &[f64], width: usize) -> Vec<f64> {
     values
 }
 
-fn forward_trace(net: &MlpState, input: &[f64]) -> (Vec<Vec<f64>>, Vec<Vec<f64>>) {
+fn forward_trace(net: &MlpState, input: &[f64]) -> ForwardTrace {
     let mut activations = vec![padded_input(input, net.input_width)];
     let mut preactivations = Vec::new();
     for (layer_idx, layer) in net.layers.iter().enumerate() {
@@ -3017,6 +3029,45 @@ fn forward_trace(net: &MlpState, input: &[f64]) -> (Vec<Vec<f64>>, Vec<Vec<f64>>
         activations.push(activation);
     }
     (activations, preactivations)
+}
+
+fn forward_trace_with_backend(
+    net: &MlpState,
+    input: &[f64],
+    backend: &BackendSelection,
+) -> Result<ForwardTrace> {
+    if backend.selected == "cpu" {
+        return Ok(forward_trace(net, input));
+    }
+    let mut activations = vec![padded_input(input, net.input_width)];
+    let mut preactivations = Vec::with_capacity(net.layers.len());
+    for (layer_idx, layer) in net.layers.iter().enumerate() {
+        let input = activations.last().expect("input activation exists");
+        let features = vec![input.iter().map(|value| *value as f32).collect::<Vec<_>>()];
+        let weights = (0..input.len())
+            .flat_map(|input_idx| layer.weights.iter().map(move |row| row[input_idx] as f32))
+            .collect::<Vec<_>>();
+        let biases = layer
+            .biases
+            .iter()
+            .map(|value| *value as f32)
+            .collect::<Vec<_>>();
+        let linear = backend_dense_layer_f32(backend, &features, &weights, &biases)?
+            .into_iter()
+            .next()
+            .expect("backend dense layer returns one row")
+            .into_iter()
+            .map(f64::from)
+            .collect::<Vec<_>>();
+        let is_last = layer_idx + 1 == net.layers.len();
+        let next = linear
+            .iter()
+            .map(|value| if is_last { *value } else { value.max(0.0) })
+            .collect::<Vec<_>>();
+        preactivations.push(linear);
+        activations.push(next);
+    }
+    Ok((activations, preactivations))
 }
 
 fn clone_zero_layers(layers: &[DenseLayer]) -> Vec<DenseLayer> {

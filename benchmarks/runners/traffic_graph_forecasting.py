@@ -12,12 +12,13 @@ import argparse
 import hashlib
 import json
 import pickle
+import shlex
+import sys
 import time
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-
 from cartoboost.preview.forecasting import (
     DCRNNForecaster,
     GraphTemporalFrame,
@@ -29,7 +30,6 @@ from cartoboost.preview.forecasting import (
     STGformerForecaster,
     STGormerForecaster,
 )
-
 
 PROFILE_MODELS = {
     "dcrnn": DCRNNForecaster,
@@ -162,6 +162,20 @@ def metrics(actual: np.ndarray, predicted: np.ndarray) -> dict[str, float]:
     }
 
 
+def model_lookback(args: argparse.Namespace, model_name: str) -> int:
+    if model_name == "dcrnn":
+        return 0
+    return args.lsttn_lookback if model_name == "lsttn" else args.lookback
+
+
+def backend_execution_scope(model_name: str, selected_backend: str) -> str:
+    if selected_backend == "cpu":
+        return "cpu_training_and_inference"
+    if model_name == "lsttn":
+        return f"{selected_backend}_full_graph_training_and_inference_cpu_orchestration"
+    return f"{selected_backend}_forecast_head_cpu_feature_graph_and_training"
+
+
 def build_model(args: argparse.Namespace, model_name: str) -> Any:
     model_type = PROFILE_MODELS[model_name]
     if model_name == "dcrnn":
@@ -170,7 +184,7 @@ def build_model(args: argparse.Namespace, model_name: str) -> Any:
             hidden_size=args.hidden_size,
             epochs=args.epochs,
             learning_rate=args.learning_rate,
-            backend="cpu",
+            backend=args.backend,
         )
     if model_name == "graph_wavenet":
         return model_type(
@@ -179,7 +193,7 @@ def build_model(args: argparse.Namespace, model_name: str) -> Any:
             hidden_size=args.hidden_size,
             epochs=args.epochs,
             learning_rate=args.learning_rate,
-            backend="cpu",
+            backend=args.backend,
         )
     if model_name == "staeformer":
         return model_type(
@@ -188,25 +202,27 @@ def build_model(args: argparse.Namespace, model_name: str) -> Any:
             hidden_size=args.hidden_size,
             epochs=args.epochs,
             learning_rate=args.learning_rate,
-            backend="cpu",
+            backend=args.backend,
         )
-    if model_name == "lsttn" and args.lookback < args.periodicity * 14:
+    if model_name == "lsttn" and args.lsttn_lookback < args.periodicity * 14:
         raise ValueError(
             "LSTTN evaluation requires the paper's two-week long-history context: "
-            "lookback must be at least periodicity * 14"
+            "lsttn_lookback must be at least periodicity * 14"
         )
+    lookback = model_lookback(args, model_name)
     return model_type(
-        lookback=args.lookback,
+        lookback=lookback,
         hidden_size=args.hidden_size,
         attention_heads=args.attention_heads,
         graph_order=args.graph_order,
         experts=args.experts,
         periodicity=args.periodicity,
+        recent_window=args.recent_window,
         epochs=args.epochs,
         learning_rate=args.learning_rate,
         weight_decay=args.weight_decay,
         horizon=args.horizon,
-        backend="cpu",
+        backend=args.backend,
     )
 
 
@@ -232,6 +248,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError(
             f"series has {values.shape[1]} nodes but adjacency has {adjacency.shape[0]} nodes"
         )
+    source_time_rows = int(values.shape[0])
+    source_nodes = int(values.shape[1])
     if args.nodes is not None:
         if args.nodes <= 0 or args.nodes > values.shape[1]:
             raise ValueError("nodes must be between 1 and the source node count")
@@ -252,11 +270,20 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     for cutoff in args.cutoffs:
         if cutoff <= args.horizon or cutoff + args.horizon > values.shape[0]:
             raise ValueError(f"cutoff {cutoff} does not leave a full holdout horizon")
-        if any(model != "dcrnn" for model in models) and cutoff <= args.lookback + args.horizon:
-            raise ValueError(f"cutoff {cutoff} is too early for lookback {args.lookback}")
+        required_context = max(model_lookback(args, model) for model in models)
+        if cutoff <= required_context + args.horizon:
+            raise ValueError(
+                f"cutoff {cutoff} is too early for required context {required_context}"
+            )
         train = frame.train_slice(cutoff)
         actual = values[cutoff : cutoff + args.horizon]
         for model_name in models:
+            print(
+                f"[{model_name}] fitting cutoff={cutoff} rows={cutoff} "
+                f"nodes={values.shape[1]} backend={args.backend}",
+                file=sys.stderr,
+                flush=True,
+            )
             model = build_model(args, model_name)
             fit_start = time.perf_counter()
             model.fit(train)
@@ -266,18 +293,53 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             predict_seconds = time.perf_counter() - predict_start
             if prediction.shape != actual.shape or not np.isfinite(prediction).all():
                 raise RuntimeError("native graph model returned invalid forecast output")
+            model_metadata = model.metadata_
+            selected_backend = str(model_metadata["backend"])
+            row_metrics = metrics(actual, prediction)
             rows.append(
                 {
                     "model": model_name,
                     "cutoff": cutoff,
-                    **metrics(actual, prediction),
+                    "backend": selected_backend,
+                    "backend_execution_scope": backend_execution_scope(
+                        model_name, selected_backend
+                    ),
+                    **row_metrics,
                     "fit_wallclock_seconds": fit_seconds,
                     "predict_wallclock_seconds": predict_seconds,
                 }
             )
+            print(
+                f"[{model_name}] rmse={row_metrics['rmse']:.6f} "
+                f"mae={row_metrics['mae']:.6f} r2={row_metrics['r2']:.6f} "
+                f"fit={fit_seconds:.3f}s predict={predict_seconds:.3f}s",
+                file=sys.stderr,
+                flush=True,
+            )
     return {
         "artifact_type": "cartoboost.traffic_graph_forecasting_evaluation",
+        "dataset": {
+            "name": "user_supplied_traffic_graph",
+            "source_time_rows": source_time_rows,
+            "source_time_rows_before_preprocessing": (args.source_time_rows_before_preprocessing),
+            "source_nodes": source_nodes,
+            "evaluated_nodes": len(frame.node_ids),
+            "directed_edges": len(data),
+        },
+        "task": {
+            "target": "traffic_speed",
+            "frequency": args.frequency,
+            "forecast_horizon": args.horizon,
+        },
+        "split": {
+            "kind": "fixed_origin_temporal_holdout",
+            "origins": args.cutoffs,
+            "train_rows_per_origin": args.cutoffs,
+            "test_rows_per_origin": args.horizon,
+        },
         "source_url": args.source_url,
+        "source_artifact_sha256": args.source_artifact_sha256,
+        "preprocessing": args.preprocessing,
         "traffic_values_path": str(values_path),
         "traffic_values_sha256": sha256(values_path),
         "traffic_values_format": values_format,
@@ -287,14 +349,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "model": models[0] if len(models) == 1 else "multi_model_comparison",
         "models": models,
         "settings": {
+            "backend": args.backend,
             "frequency": args.frequency,
             "lookback": args.lookback,
+            "lsttn_lookback": args.lsttn_lookback,
             "horizon": args.horizon,
             "hidden_size": args.hidden_size,
             "attention_heads": args.attention_heads,
             "graph_order": args.graph_order,
             "experts": args.experts,
             "periodicity": args.periodicity,
+            "recent_window": args.recent_window,
             "epochs": args.epochs,
             "learning_rate": args.learning_rate,
             "weight_decay": args.weight_decay,
@@ -317,6 +382,9 @@ def main(argv: list[str] | None = None) -> int:
     adjacency_source.add_argument("--adjacency-npy", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--source-url", required=True)
+    parser.add_argument("--source-artifact-sha256")
+    parser.add_argument("--source-time-rows-before-preprocessing", type=int)
+    parser.add_argument("--preprocessing", default="none")
     model_selection = parser.add_mutually_exclusive_group(required=True)
     model_selection.add_argument("--model", choices=sorted(PROFILE_MODELS))
     model_selection.add_argument("--models", type=parse_models)
@@ -325,6 +393,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--target-feature", type=int, default=0)
     parser.add_argument("--nodes", type=int)
     parser.add_argument("--lookback", type=int, default=12)
+    parser.add_argument("--lsttn-lookback", type=int, default=4032)
     parser.add_argument("--horizon", type=int, default=12)
     parser.add_argument("--hidden-size", type=int, default=16)
     parser.add_argument("--attention-heads", type=int, default=4)
@@ -332,12 +401,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dilation-depth", type=int, default=3)
     parser.add_argument("--experts", type=int, default=4)
     parser.add_argument("--periodicity", type=int, default=288)
+    parser.add_argument("--recent-window", type=int, default=12)
     parser.add_argument("--epochs", type=int, default=80)
     parser.add_argument("--learning-rate", type=float, default=0.01)
     parser.add_argument("--weight-decay", type=float, default=1e-5)
+    parser.add_argument(
+        "--backend", choices=["auto", "cpu", "cuda", "rocm", "metal"], default="cpu"
+    )
     args = parser.parse_args(argv)
     args.models = [args.model] if args.model is not None else args.models
     result = run(args)
+    result["invocation"] = " ".join(shlex.quote(value) for value in [sys.executable, *sys.argv])
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     return 0

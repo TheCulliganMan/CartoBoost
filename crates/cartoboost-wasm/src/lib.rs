@@ -999,6 +999,8 @@ struct BrowserGraphForecastOptions {
     #[serde(default)]
     periodicity: Option<usize>,
     #[serde(default)]
+    recent_window: Option<usize>,
+    #[serde(default)]
     weight_decay: Option<f64>,
     #[serde(default = "default_graph_teacher_forcing_start")]
     teacher_forcing_start: f64,
@@ -1023,6 +1025,7 @@ impl Default for BrowserGraphForecastOptions {
             graph_order: None,
             experts: None,
             periodicity: None,
+            recent_window: None,
             weight_decay: None,
             teacher_forcing_start: default_graph_teacher_forcing_start(),
             teacher_forcing_end: default_graph_teacher_forcing_end(),
@@ -3247,18 +3250,23 @@ fn run_graph_forecast_request(
         let profile_kind = parse_browser_graph_transformer_profile(profile)?;
         let (default_lookback, default_periodicity) =
             if profile_kind == BrowserGraphTransformerProfile::LongShortFusion {
-                (4032, 288)
+                (24 * 28, 24)
             } else {
                 (3, 24)
             };
+        let lookback = request.options.lookback.unwrap_or(default_lookback);
         let config = BrowserPaperGraphTransformerConfig {
             profile: profile_kind,
-            lookback: request.options.lookback.unwrap_or(default_lookback),
+            lookback,
             hidden_size: request.options.hidden_size,
             attention_heads: request.options.attention_heads.unwrap_or(2),
             graph_order: request.options.graph_order.unwrap_or(2),
             experts: request.options.experts.unwrap_or(2),
             periodicity: request.options.periodicity.unwrap_or(default_periodicity),
+            recent_window: request
+                .options
+                .recent_window
+                .unwrap_or(lookback.min(24 * 7)),
             epochs: request.options.epochs,
             learning_rate: request.options.learning_rate,
             weight_decay: request.options.weight_decay.unwrap_or(1e-5),
@@ -8027,6 +8035,7 @@ mod tests {
                     graph_order: Some(2),
                     experts: Some(2),
                     periodicity: Some(3),
+                    recent_window: Some(3),
                     epochs: 2,
                     learning_rate: 0.01,
                     ..BrowserGraphForecastOptions::default()
@@ -8046,7 +8055,7 @@ mod tests {
     }
 
     #[test]
-    fn browser_lsttn_default_requires_reference_length_history() {
+    fn browser_lsttn_default_requires_long_horizon_history() {
         let error = run_graph_forecast_request(BrowserGraphForecastRequest {
             frame: BrowserGraphTemporalFrame {
                 node_ids: vec!["PULocationID:161".into()],
@@ -8070,7 +8079,7 @@ mod tests {
             },
             actual: None,
         })
-        .expect_err("LSTTN browser defaults must not shorten its long history");
+        .expect_err("LSTTN browser defaults must retain long-horizon history");
         assert!(error.to_string().contains("lookback plus horizon"));
     }
 

@@ -32,17 +32,35 @@ time-ordered split.
 | --- | --- | --- |
 | `STGormerForecaster` | Spatial and temporal behavior differs by node or time regime. | Time2Vec-style temporal features, in/out-degree and path features, three causal spatial-temporal attention stages, and independent spatial/temporal routed MoE states. |
 | `STGformerForecaster` | A large graph needs retained high-order propagation in one efficient block. | Retained propagation orders, shared-QKV scaling-normalized linear space-time interaction at every order, recursive pointwise interaction. |
-| `LSTTNForecaster` | Long history, recurring periods, and immediate dynamics all matter. | Masked-subseries context, pooled dilated long trend, forward/backward/adaptive day/week graph periodicity, and a gated temporal adaptive-graph short branch. |
+| `LSTTNForecaster` | Long history, recurring periods, and immediate dynamics all matter. | Masked-subseries pretraining, contextual patch attention, pooled dilated long trend, forward/backward/adaptive day/week graph periodicity, and an input-conditioned long/short fusion gate. |
 | `SpatialTemporalGraphGatedTransformerForecaster` | Graph signal should be filtered through stable temporal gates. | Graph convolution, causal temporal attention, GRU reset/update gates. |
 | `SpatialShiftGraphonMoEForecaster` | Graph relationships may change between the training and deployment periods. | Input-conditioned graphon experts and softmax graphon mixing. |
 
-`LSTTNForecaster` defaults to the reference five-minute traffic history: 4,032
-observations (14 days) with a daily period of 288. Its native pretraining stage
+`LSTTNForecaster` defaults to a long-horizon hourly configuration: four weeks
+of history, a daily period, one week of recent context, and a one-week forecast.
+Its native pretraining stage
 reconstructs randomly withheld whole patches from the remaining patch context
 before supervised forecast fitting; the long-trend and periodic branches then
-operate on those learned patch-level representations. For another sampling frequency, set both
-`lookback` and `periodicity` explicitly while preserving a two-week history
-when evaluating the long-history architecture.
+operate on those learned patch-level representations. Learned patch positions
+cover the complete configured history, calendar phase remains aligned across
+rolling origins, and all direct horizon heads are referenced to one forecast
+origin. For another sampling frequency, set `lookback`, `periodicity`,
+`recent_window`, and `horizon`
+explicitly. All four are measured in frame rows rather than fixed wall-clock
+units. For example, an hourly freight-network forecast can use:
+
+```python
+model = LSTTNForecaster(
+    lookback=24 * 28,
+    periodicity=24,
+    recent_window=24 * 7,
+    horizon=24 * 7,
+)
+```
+
+Here `horizon` is also expressed in frame rows, so this predicts seven days
+when the input frame has hourly timestamps. CartoBoost does not assume a
+five-minute sampling interval.
 
 The Modeling Lab uses an explicitly reduced toy configuration for its in-page
 WASM smoke example; it is a wiring check, not a long-history benchmark.
@@ -108,13 +126,13 @@ uv run --with h5py -- python -m benchmarks.runners.traffic_graph_forecasting \
   --output target/metr-la-stgformer.json \
   --models dcrnn,graph_wavenet,staeformer,stgormer,stgformer,lsttn,spatial_temporal_graph_gated_transformer,spatial_shift_graphon_moe \
   --cutoffs 10000,15000,20000,25000,30000 \
-  --horizon 12 --lookback 4032 --periodicity 288
+  --horizon 12 --lookback 12 --lsttn-lookback 4032 --periodicity 288 --recent-window 12
 ```
 
 Use the same input files, origins, horizon, and estimator budget for every
-model in a comparison. For `lsttn`, set `lookback` to at least fourteen periods;
-the runner rejects a shorter context rather than silently disabling its
-long-history branch.
+model in a comparison. For `lsttn`, set `--lsttn-lookback` to at least fourteen
+periods; the runner rejects a shorter context rather than silently disabling
+its long-history branch.
 
 The runner also accepts the established PEMS-BAY layout used by the PyTorch
 Geometric Temporal loader: `--node-values-npy` for a `[time, node, feature]`
@@ -122,6 +140,60 @@ array and `--adjacency-npy` for its matching dense adjacency. Its default
 `--target-feature 0` matches that loader's speed target; select another source
 feature only when the dataset definition explicitly identifies it as the
 forecast target.
+
+## METR-LA 168-Hour Metal Results
+
+On the registered [METR-LA archive](https://anl.app.box.com/shared/static/plgsv3te0akmqluiuqva34su60nn93c2),
+STAEformer produced the lowest RMSE and the only positive R², while LSTTN
+produced the lowest MAE. The MAE difference between LSTTN and STAEformer was
+0.0079, so this one-origin run supports an MAE tie in practical terms rather
+than a broad accuracy-win claim for either model.
+
+| Model | RMSE | MAE | R² | Fit | Predict | Execution |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `staeformer` | **20.3177** | 14.6713 | **0.0271** | 16,286.223s | 8.445s | Metal forecast head; CPU feature graph and training |
+| `graph_wavenet` | 21.7086 | 18.1118 | -0.1107 | 293.396s | 0.200s | Metal forecast head; CPU feature graph and training |
+| `lsttn` | 21.7977 | **14.6634** | -0.1198 | 1,306.264s | 65.714s | Full Metal graph training and inference; CPU orchestration |
+| `dcrnn` | 39.0141 | 30.9860 | -2.5873 | 721.803s | 0.101s | Metal forecast head; CPU feature graph and training |
+
+The source archive SHA-256 is
+`82319afd4a2ef3327c0551bf0e1f2adb14395a8ecf65cd393d4fe24cf574d34e`.
+All 34,272 five-minute timestamps and all 207 sensors were loaded, then each
+block of 12 consecutive rows was averaged to produce 2,856 hourly rows. The
+derived values SHA-256 is
+`d7e30ab900ae9d293e543551e14c79df0bd61ed5b8310a81aaa94d16a07019a3`;
+the 1,722-edge adjacency SHA-256 is
+`e87344b0a792e1eb5ff884e892ffbfbdd642fbb66c56fd739fd271a55279f825`.
+The fixed origin trained on the first 2,284 hourly rows and evaluated the next
+168 hours for all 207 sensors. The remaining 404 hourly rows are outside this
+declared origin and were not used for fitting or scoring.
+
+The exact command was:
+
+```bash
+uv run --group dev python -m benchmarks.runners.traffic_graph_forecasting \
+  --node-values-npy /tmp/cartoboost-metr-la/metr_la_hourly.npy \
+  --adjacency-npy /tmp/cartoboost-metr-la/adj_mat.npy \
+  --source-url https://anl.app.box.com/shared/static/plgsv3te0akmqluiuqva34su60nn93c2 \
+  --source-artifact-sha256 82319afd4a2ef3327c0551bf0e1f2adb14395a8ecf65cd393d4fe24cf574d34e \
+  --source-time-rows-before-preprocessing 34272 \
+  --preprocessing mean_12_consecutive_5min_rows_to_hourly \
+  --output docs/assets/model_benchmarks/metr_la_hourly_168h_metal.json \
+  --models lsttn,dcrnn,graph_wavenet,staeformer \
+  --cutoffs 2284 --frequency hourly --horizon 168 \
+  --lookback 168 --lsttn-lookback 672 --periodicity 24 --recent-window 168 \
+  --hidden-size 4 --attention-heads 2 --graph-order 2 --experts 2 \
+  --epochs 1 --learning-rate 0.003 --weight-decay 0.00001 --backend metal
+```
+
+The [machine-readable artifact](../../assets/model_benchmarks/metr_la_hourly_168h_metal.json)
+records the exact invocation, source hashes, split, settings, per-model backend
+scope, quality metrics, and wall-clock timings. This is a full-scale execution
+and device-path verification with one small hidden layer and one training epoch,
+not a tuned state-of-the-art comparison. It uses one forecast origin, and three
+of the four models have negative R². Those limits prevent a general accuracy
+claim; the result establishes that LSTTN's complete training and inference graph
+runs on Metal at 207-sensor, four-week-history, one-week-horizon scale.
 
 ## Interactive Example
 
@@ -214,16 +286,18 @@ shape `[horizon, node]`. `backtest` returns horizon-level MAE, RMSE, and WAPE
 for the supplied cutoff.
 
 `backend="cpu"` is the default. `backend="auto"` is accepted as a CPU-resolving
-alias. On Apple-platform wheels built with native
-Metal support, `backend="metal"` routes the DCRNN decoder head, GraphWaveNet
-dilated decoder head, and STAEformer attention decoder head through the shared
-Metal affine kernel. On Linux or WSL wheels built with ROCm support,
+alias. On Apple-platform wheels built with native Metal support,
+`backend="metal"` runs LSTTN's scalar computation graph, reverse-mode
+gradients, AdamW updates, and forecast evaluation on Metal; Rust on the CPU
+still validates data and orchestrates graph execution. The DCRNN decoder head,
+GraphWaveNet dilated decoder head, and STAEformer attention decoder head use the
+shared Metal affine kernel while their feature graphs and training remain on
+the CPU. On Linux or WSL wheels built with ROCm support,
 `backend="rocm"` routes the same decoder head through the shared HIP affine
 kernel. On Windows or Linux wheels built with CUDA support, `backend="cuda"`
-routes the same decoder head through the shared CUDA affine kernel. Diffusion
-state updates, dilated temporal graph features, attention feature generation,
-graph validation, and training remain deterministic Rust code. If the requested
-accelerator is unavailable, construction fails with the available backend list.
+routes the same decoder head through the shared CUDA affine kernel. If the
+requested accelerator is unavailable, construction fails with the available
+backend list.
 
 ## Inputs
 

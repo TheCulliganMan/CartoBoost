@@ -5,7 +5,7 @@ use cartoboost_core::{CartoBoostError, Result as CoreResult};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
-use crate::{backend_dense_layer_f32, BackendSelection};
+use crate::{backend_dense_layer_f32, backend_train_tanh_mlp_f32, BackendSelection};
 
 use super::dataloader::WindowDataset;
 use super::scaler::StandardScaler;
@@ -98,7 +98,8 @@ impl Forecaster for NBeatsForecaster {
             self.config.backend.clone(),
         );
         self.model
-            .fit(&examples, self.config.epochs, self.config.learning_rate);
+            .fit(&examples, self.config.epochs, self.config.learning_rate)
+            .map_err(|err| CartoBoostError::InvalidInput(err.to_string()))?;
         self.scaler = Some(scaler);
         self.frequency = Some(dataset.frequency());
         self.tails = dataset.tails().clone();
@@ -213,12 +214,60 @@ impl DeterministicMlp {
         }
     }
 
-    pub(crate) fn fit(&mut self, examples: &[(Vec<f64>, f64)], epochs: usize, learning_rate: f64) {
+    pub(crate) fn fit(
+        &mut self,
+        examples: &[(Vec<f64>, f64)],
+        epochs: usize,
+        learning_rate: f64,
+    ) -> crate::Result<()> {
+        if matches!(self.backend.selected.as_str(), "metal" | "cuda" | "rocm") {
+            let inputs = examples
+                .iter()
+                .map(|(input, _)| {
+                    input
+                        .iter()
+                        .take(self.input_size)
+                        .map(|value| *value as f32)
+                        .collect()
+                })
+                .collect::<Vec<_>>();
+            let targets = examples
+                .iter()
+                .map(|(_, target)| *target as f32)
+                .collect::<Vec<_>>();
+            let mut parameters = self
+                .w1
+                .iter()
+                .chain(&self.b1)
+                .chain(&self.w2)
+                .copied()
+                .map(|value| value as f32)
+                .chain(std::iter::once(self.b2 as f32))
+                .collect::<Vec<_>>();
+            backend_train_tanh_mlp_f32(
+                &self.backend,
+                &inputs,
+                &targets,
+                self.hidden_size,
+                epochs,
+                learning_rate as f32,
+                &mut parameters,
+            )?;
+            let (w1, rest) = parameters.split_at(self.w1.len());
+            let (b1, rest) = rest.split_at(self.b1.len());
+            let (w2, b2) = rest.split_at(self.w2.len());
+            self.w1 = w1.iter().map(|value| f64::from(*value)).collect();
+            self.b1 = b1.iter().map(|value| f64::from(*value)).collect();
+            self.w2 = w2.iter().map(|value| f64::from(*value)).collect();
+            self.b2 = f64::from(b2[0]);
+            return Ok(());
+        }
         for _ in 0..epochs {
             for (input, target) in examples {
                 self.train_one(input, *target, learning_rate);
             }
         }
+        Ok(())
     }
 
     pub(crate) fn predict_with_backend(&self, input: &[f64]) -> crate::Result<f64> {

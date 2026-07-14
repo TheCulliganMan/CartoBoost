@@ -124,6 +124,8 @@ def test_traffic_graph_runner_requires_explicit_ordered_origins_and_graph_edges(
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     adjacency_csr = module.adjacency_csr
+    backend_execution_scope = module.backend_execution_scope
+    model_lookback = module.model_lookback
     parse_cutoffs = module.parse_cutoffs
     parse_models = module.parse_models
 
@@ -138,6 +140,17 @@ def test_traffic_graph_runner_requires_explicit_ordered_origins_and_graph_edges(
         parse_models("dcrnn,not_a_model")
     with pytest.raises(argparse.ArgumentTypeError, match="duplicates"):
         parse_models("dcrnn,dcrnn")
+    contexts = types.SimpleNamespace(lookback=12, lsttn_lookback=4032)
+    assert model_lookback(contexts, "dcrnn") == 0
+    assert model_lookback(contexts, "graph_wavenet") == 12
+    assert model_lookback(contexts, "lsttn") == 4032
+    assert backend_execution_scope("lsttn", "metal") == (
+        "metal_full_graph_training_and_inference_cpu_orchestration"
+    )
+    assert backend_execution_scope("graph_wavenet", "metal") == (
+        "metal_forecast_head_cpu_feature_graph_and_training"
+    )
+    assert backend_execution_scope("lsttn", "cpu") == "cpu_training_and_inference"
     indptr, indices, data = adjacency_csr(np.array([[0.0, 0.5], [1.0, 0.0]]))
     assert (indptr, indices, data) == ([0, 1, 2], [1, 0], [0.5, 1.0])
     with pytest.raises(ValueError, match="at least one non-zero edge"):

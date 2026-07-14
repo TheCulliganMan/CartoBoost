@@ -210,6 +210,759 @@ pub fn backend_affine_scores(
     }
 }
 
+/// Evaluates a topologically ordered scalar computation graph on the selected
+/// accelerator. Leaf nodes use `initial_values`; every other node is described
+/// by an opcode and up to two earlier node indices. This lets model crates keep
+/// graph construction and validation in Rust while executing the complete
+/// numeric inference graph on the device.
+pub fn backend_scalar_graph_f32(
+    selection: &BackendSelection,
+    initial_values: &[f32],
+    opcodes: &[u8],
+    left: &[u32],
+    right: &[u32],
+) -> Result<Vec<f32>> {
+    validate_scalar_graph_inputs(initial_values, opcodes, left, right)?;
+    match selection.selected.as_str() {
+        "metal" => with_metal_autoreleasepool(|| {
+            metal_scalar_graph_f32(initial_values, opcodes, left, right)
+        }),
+        other => Err(NeuralError::InvalidArgument(format!(
+            "backend {other:?} does not provide a complete scalar-graph inference kernel"
+        ))),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn backend_scalar_graph_train_step_f32(
+    selection: &BackendSelection,
+    initial_values: &[f32],
+    opcodes: &[u8],
+    left: &[u32],
+    right: &[u32],
+    parameter_ids: &[u32],
+    loss: usize,
+    parameters: &mut [f32],
+    first_moment: &mut [f32],
+    second_moment: &mut [f32],
+    step: u64,
+    learning_rate: f32,
+    weight_decay: f32,
+) -> Result<f32> {
+    validate_scalar_graph_inputs(initial_values, opcodes, left, right)?;
+    if parameter_ids.len() != opcodes.len()
+        || loss >= opcodes.len()
+        || parameters.is_empty()
+        || first_moment.len() != parameters.len()
+        || second_moment.len() != parameters.len()
+        || step == 0
+        || !learning_rate.is_finite()
+        || learning_rate <= 0.0
+        || !weight_decay.is_finite()
+    {
+        return Err(NeuralError::InvalidArgument(
+            "scalar-graph training state or optimizer configuration is invalid".to_string(),
+        ));
+    }
+    if parameter_ids
+        .iter()
+        .enumerate()
+        .any(|(index, parameter)| opcodes[index] == 1 && (*parameter as usize) >= parameters.len())
+        || parameters
+            .iter()
+            .chain(first_moment.iter())
+            .chain(second_moment.iter())
+            .any(|value| !value.is_finite())
+    {
+        return Err(NeuralError::InvalidArgument(
+            "scalar-graph training parameters must be finite and correctly indexed".to_string(),
+        ));
+    }
+    match selection.selected.as_str() {
+        "metal" => with_metal_autoreleasepool(|| {
+            metal_scalar_graph_train_step_f32(
+                initial_values,
+                opcodes,
+                left,
+                right,
+                parameter_ids,
+                loss,
+                parameters,
+                first_moment,
+                second_moment,
+                step,
+                learning_rate,
+                weight_decay,
+            )
+        }),
+        other => Err(NeuralError::InvalidArgument(format!(
+            "backend {other:?} does not provide complete scalar-graph training"
+        ))),
+    }
+}
+
+#[cfg(all(
+    feature = "metal",
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "visionos"
+    )
+))]
+fn with_metal_autoreleasepool<T>(operation: impl FnOnce() -> Result<T>) -> Result<T> {
+    objc::rc::autoreleasepool(operation)
+}
+
+#[cfg(not(all(
+    feature = "metal",
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "visionos"
+    )
+)))]
+fn with_metal_autoreleasepool<T>(operation: impl FnOnce() -> Result<T>) -> Result<T> {
+    operation()
+}
+
+fn validate_scalar_graph_inputs(
+    initial_values: &[f32],
+    opcodes: &[u8],
+    left: &[u32],
+    right: &[u32],
+) -> Result<()> {
+    let len = initial_values.len();
+    if len == 0 || opcodes.len() != len || left.len() != len || right.len() != len {
+        return Err(NeuralError::InvalidArgument(
+            "scalar graph arrays must be non-empty and have identical lengths".to_string(),
+        ));
+    }
+    for index in 0..len {
+        let opcode = opcodes[index];
+        if opcode > 11 {
+            return Err(NeuralError::InvalidArgument(
+                "scalar graph contains an unknown opcode".to_string(),
+            ));
+        }
+        if opcode >= 2 && left[index] as usize >= index {
+            return Err(NeuralError::InvalidArgument(
+                "scalar graph unary dependency must precede its output".to_string(),
+            ));
+        }
+        if matches!(opcode, 2 | 3 | 4 | 10) && right[index] as usize >= index {
+            return Err(NeuralError::InvalidArgument(
+                "scalar graph binary dependency must precede its output".to_string(),
+            ));
+        }
+        if opcode <= 1 && !initial_values[index].is_finite() {
+            return Err(NeuralError::InvalidArgument(
+                "scalar graph leaves must be finite".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(all(
+    feature = "metal",
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "visionos"
+    )
+))]
+fn metal_scalar_graph_f32(
+    initial_values: &[f32],
+    opcodes: &[u8],
+    left: &[u32],
+    right: &[u32],
+) -> Result<Vec<f32>> {
+    use metal::{
+        CommandQueue, CompileOptions, ComputePipelineState, Device, MTLResourceOptions, MTLSize,
+    };
+    use std::cell::RefCell;
+
+    const SOURCE: &str = r#"
+        #include <metal_stdlib>
+        using namespace metal;
+
+        kernel void evaluate_scalar_graph_f32(
+            device float* values [[buffer(0)]],
+            const device uchar* opcodes [[buffer(1)]],
+            const device uint* left [[buffer(2)]],
+            const device uint* right [[buffer(3)]],
+            const device uint* schedule [[buffer(4)]],
+            constant uint& schedule_offset [[buffer(5)]],
+            uint id [[thread_position_in_grid]]
+        ) {
+            uint output = schedule[schedule_offset + id];
+            uchar opcode = opcodes[output];
+            float a = values[left[output]];
+            float b = values[right[output]];
+            switch (opcode) {
+                case 2: values[output] = a + b; break;
+                case 3: values[output] = a * b; break;
+                case 4: values[output] = a / max(b, 1.0e-12f); break;
+                case 5: values[output] = tanh(a); break;
+                case 6: values[output] = exp(a); break;
+                case 7: values[output] = sqrt(max(a, 1.0e-12f)); break;
+                case 8: values[output] = sin(a); break;
+                case 9: values[output] = 1.0f / (1.0f + exp(-a)); break;
+                case 10: values[output] = max(a, b); break;
+                case 11: values[output] = a; break;
+                default: break;
+            }
+        }
+    "#;
+
+    struct MetalScalarContext {
+        device: metal::Device,
+        queue: CommandQueue,
+        pipeline: ComputePipelineState,
+        buffers: Vec<Option<metal::Buffer>>,
+    }
+    impl MetalScalarContext {
+        fn new() -> Result<Self> {
+            let device = Device::system_default().ok_or_else(|| {
+                NeuralError::InvalidArgument("no Metal device is available".to_string())
+            })?;
+            let library = device
+                .new_library_with_source(SOURCE, &CompileOptions::new())
+                .map_err(|error| {
+                    NeuralError::InvalidArgument(format!(
+                        "failed to compile Metal scalar-graph kernel: {error}"
+                    ))
+                })?;
+            let function = library
+                .get_function("evaluate_scalar_graph_f32", None)
+                .map_err(|error| NeuralError::InvalidArgument(error.to_string()))?;
+            let pipeline = device
+                .new_compute_pipeline_state_with_function(&function)
+                .map_err(|error| NeuralError::InvalidArgument(error.to_string()))?;
+            let queue = device.new_command_queue();
+            Ok(Self {
+                device,
+                queue,
+                pipeline,
+                buffers: (0..6).map(|_| None).collect(),
+            })
+        }
+    }
+    fn upload<T>(context: &mut MetalScalarContext, slot: usize, values: &[T]) -> metal::Buffer {
+        let bytes = std::mem::size_of_val(values).max(1) as u64;
+        if context.buffers[slot]
+            .as_ref()
+            .is_none_or(|buffer| buffer.length() < bytes)
+        {
+            context.buffers[slot] = Some(
+                context
+                    .device
+                    .new_buffer(bytes, MTLResourceOptions::StorageModeShared),
+            );
+        }
+        let buffer = context.buffers[slot]
+            .as_ref()
+            .expect("reusable Metal scalar buffer")
+            .clone();
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                values.as_ptr().cast::<u8>(),
+                buffer.contents().cast::<u8>(),
+                std::mem::size_of_val(values),
+            );
+        }
+        buffer
+    }
+    thread_local! {
+        static METAL_SCALAR_CONTEXT: RefCell<Option<MetalScalarContext>> = const { RefCell::new(None) };
+    }
+
+    let mut levels = vec![0usize; opcodes.len()];
+    let mut by_level = vec![Vec::<u32>::new()];
+    for index in 0..opcodes.len() {
+        if opcodes[index] <= 1 {
+            continue;
+        }
+        let mut level = levels[left[index] as usize] + 1;
+        if matches!(opcodes[index], 2 | 3 | 4 | 10) {
+            level = level.max(levels[right[index] as usize] + 1);
+        }
+        levels[index] = level;
+        if by_level.len() <= level {
+            by_level.resize_with(level + 1, Vec::new);
+        }
+        by_level[level].push(index as u32);
+    }
+    let mut schedule = Vec::new();
+    let mut offsets = Vec::with_capacity(by_level.len());
+    for nodes in &by_level {
+        offsets.push(schedule.len() as u32);
+        schedule.extend_from_slice(nodes);
+    }
+
+    METAL_SCALAR_CONTEXT.with(|cell| {
+        let mut maybe_context = cell.borrow_mut();
+        if maybe_context.is_none() {
+            *maybe_context = Some(MetalScalarContext::new()?);
+        }
+        let context = maybe_context
+            .as_mut()
+            .expect("initialized Metal scalar context");
+        let values_buffer = upload(context, 0, initial_values);
+        let opcode_buffer = upload(context, 1, opcodes);
+        let left_buffer = upload(context, 2, left);
+        let right_buffer = upload(context, 3, right);
+        let schedule_buffer = upload(context, 4, &schedule);
+        let offset_buffer = upload(context, 5, &offsets);
+        let command = context.queue.new_command_buffer();
+        for (level, nodes) in by_level.iter().enumerate().skip(1) {
+            if nodes.is_empty() {
+                continue;
+            }
+            let encoder = command.new_compute_command_encoder();
+            encoder.set_compute_pipeline_state(&context.pipeline);
+            encoder.set_buffer(0, Some(&values_buffer), 0);
+            encoder.set_buffer(1, Some(&opcode_buffer), 0);
+            encoder.set_buffer(2, Some(&left_buffer), 0);
+            encoder.set_buffer(3, Some(&right_buffer), 0);
+            encoder.set_buffer(4, Some(&schedule_buffer), 0);
+            encoder.set_buffer(
+                5,
+                Some(&offset_buffer),
+                (level * std::mem::size_of::<u32>()) as u64,
+            );
+            let width = context
+                .pipeline
+                .thread_execution_width()
+                .max(1)
+                .min(nodes.len() as u64);
+            encoder.dispatch_threads(
+                MTLSize::new(nodes.len() as u64, 1, 1),
+                MTLSize::new(width, 1, 1),
+            );
+            encoder.end_encoding();
+        }
+        command.commit();
+        command.wait_until_completed();
+        let output = unsafe {
+            std::slice::from_raw_parts(values_buffer.contents().cast::<f32>(), initial_values.len())
+        };
+        if output.iter().any(|value| !value.is_finite()) {
+            return Err(NeuralError::InvalidArgument(
+                "Metal scalar-graph inference produced a non-finite value".to_string(),
+            ));
+        }
+        Ok(output.to_vec())
+    })
+}
+
+#[cfg(all(
+    feature = "metal",
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "visionos"
+    )
+))]
+#[allow(clippy::too_many_arguments)]
+fn metal_scalar_graph_train_step_f32(
+    initial_values: &[f32],
+    opcodes: &[u8],
+    left: &[u32],
+    right: &[u32],
+    parameter_ids: &[u32],
+    loss: usize,
+    parameters: &mut [f32],
+    first_moment: &mut [f32],
+    second_moment: &mut [f32],
+    step: u64,
+    learning_rate: f32,
+    weight_decay: f32,
+) -> Result<f32> {
+    use metal::{
+        CommandQueue, CompileOptions, ComputePipelineState, Device, MTLResourceOptions, MTLSize,
+    };
+    use std::cell::RefCell;
+
+    let values = metal_scalar_graph_f32(initial_values, opcodes, left, right)?;
+    let loss_value = values[loss];
+    let mut levels = vec![0usize; opcodes.len()];
+    let mut by_level = vec![Vec::<u32>::new()];
+    for index in 0..opcodes.len() {
+        if opcodes[index] <= 1 {
+            continue;
+        }
+        let mut level = levels[left[index] as usize] + 1;
+        if matches!(opcodes[index], 2 | 3 | 4 | 10) {
+            level = level.max(levels[right[index] as usize] + 1);
+        }
+        levels[index] = level;
+        if by_level.len() <= level {
+            by_level.resize_with(level + 1, Vec::new);
+        }
+        by_level[level].push(index as u32);
+    }
+    let mut schedule = Vec::new();
+    let mut offsets = Vec::with_capacity(by_level.len());
+    for nodes in &by_level {
+        offsets.push(schedule.len() as u32);
+        schedule.extend_from_slice(nodes);
+    }
+    let mut gradients = vec![0.0f32; opcodes.len()];
+    gradients[loss] = 1.0;
+    let parameter_gradients = vec![0.0f32; parameters.len()];
+
+    const SOURCE: &str = r#"
+        #include <metal_stdlib>
+        using namespace metal;
+
+        kernel void backward_scalar_graph_f32(
+            const device float* values [[buffer(0)]],
+            const device uchar* opcodes [[buffer(1)]],
+            const device uint* left [[buffer(2)]],
+            const device uint* right [[buffer(3)]],
+            const device uint* schedule [[buffer(4)]],
+            constant uint& schedule_offset [[buffer(5)]],
+            device atomic_float* gradients [[buffer(6)]],
+            uint id [[thread_position_in_grid]]
+        ) {
+            uint node = schedule[schedule_offset + id];
+            float gradient = atomic_load_explicit(&gradients[node], memory_order_relaxed);
+            uint lhs = left[node];
+            uint rhs = right[node];
+            switch (opcodes[node]) {
+                case 2:
+                    atomic_fetch_add_explicit(&gradients[lhs], gradient, memory_order_relaxed);
+                    atomic_fetch_add_explicit(&gradients[rhs], gradient, memory_order_relaxed);
+                    break;
+                case 3:
+                    atomic_fetch_add_explicit(&gradients[lhs], gradient * values[rhs], memory_order_relaxed);
+                    atomic_fetch_add_explicit(&gradients[rhs], gradient * values[lhs], memory_order_relaxed);
+                    break;
+                case 4: {
+                    float denominator = max(values[rhs], 1.0e-12f);
+                    atomic_fetch_add_explicit(&gradients[lhs], gradient / denominator, memory_order_relaxed);
+                    atomic_fetch_add_explicit(&gradients[rhs], -gradient * values[lhs] / (denominator * denominator), memory_order_relaxed);
+                    break;
+                }
+                case 5:
+                    atomic_fetch_add_explicit(&gradients[lhs], gradient * (1.0f - values[node] * values[node]), memory_order_relaxed);
+                    break;
+                case 6:
+                    atomic_fetch_add_explicit(&gradients[lhs], gradient * values[node], memory_order_relaxed);
+                    break;
+                case 7:
+                    atomic_fetch_add_explicit(&gradients[lhs], gradient / (2.0f * max(values[node], 1.0e-12f)), memory_order_relaxed);
+                    break;
+                case 8:
+                    atomic_fetch_add_explicit(&gradients[lhs], gradient * cos(values[lhs]), memory_order_relaxed);
+                    break;
+                case 9:
+                    atomic_fetch_add_explicit(&gradients[lhs], gradient * values[node] * (1.0f - values[node]), memory_order_relaxed);
+                    break;
+                case 10:
+                    atomic_fetch_add_explicit(
+                        &gradients[values[lhs] >= values[rhs] ? lhs : rhs],
+                        gradient,
+                        memory_order_relaxed
+                    );
+                    break;
+                default: break;
+            }
+        }
+
+        kernel void gather_parameter_gradients_f32(
+            const device uchar* opcodes [[buffer(0)]],
+            const device uint* parameter_ids [[buffer(1)]],
+            const device atomic_float* gradients [[buffer(2)]],
+            device atomic_float* parameter_gradients [[buffer(3)]],
+            uint node [[thread_position_in_grid]]
+        ) {
+            if (opcodes[node] == 1) {
+                float gradient = atomic_load_explicit(&gradients[node], memory_order_relaxed);
+                atomic_fetch_add_explicit(
+                    &parameter_gradients[parameter_ids[node]],
+                    gradient,
+                    memory_order_relaxed
+                );
+            }
+        }
+
+        kernel void adamw_scalar_graph_f32(
+            device float* parameters [[buffer(0)]],
+            device float* first [[buffer(1)]],
+            device float* second [[buffer(2)]],
+            const device atomic_float* gradients [[buffer(3)]],
+            constant float& learning_rate [[buffer(4)]],
+            constant float& weight_decay [[buffer(5)]],
+            constant float& first_correction [[buffer(6)]],
+            constant float& second_correction [[buffer(7)]],
+            uint parameter [[thread_position_in_grid]]
+        ) {
+            float gradient = atomic_load_explicit(&gradients[parameter], memory_order_relaxed)
+                + weight_decay * parameters[parameter];
+            float m = 0.9f * first[parameter] + 0.1f * gradient;
+            float v = 0.999f * second[parameter] + 0.001f * gradient * gradient;
+            first[parameter] = m;
+            second[parameter] = v;
+            parameters[parameter] -= learning_rate
+                * (m / first_correction)
+                / (sqrt(v / second_correction) + 1.0e-8f);
+        }
+    "#;
+
+    struct MetalScalarTrainingContext {
+        device: metal::Device,
+        queue: CommandQueue,
+        backward: ComputePipelineState,
+        gather: ComputePipelineState,
+        adam: ComputePipelineState,
+        buffers: Vec<Option<metal::Buffer>>,
+    }
+    impl MetalScalarTrainingContext {
+        fn new() -> Result<Self> {
+            let device = Device::system_default().ok_or_else(|| {
+                NeuralError::InvalidArgument("no Metal device is available".to_string())
+            })?;
+            let library = device
+                .new_library_with_source(SOURCE, &CompileOptions::new())
+                .map_err(|error| {
+                    NeuralError::InvalidArgument(format!(
+                        "failed to compile Metal scalar-graph training kernels: {error}"
+                    ))
+                })?;
+            let pipeline = |name| -> Result<ComputePipelineState> {
+                let function = library
+                    .get_function(name, None)
+                    .map_err(|error| NeuralError::InvalidArgument(error.to_string()))?;
+                device
+                    .new_compute_pipeline_state_with_function(&function)
+                    .map_err(|error| NeuralError::InvalidArgument(error.to_string()))
+            };
+            let backward = pipeline("backward_scalar_graph_f32")?;
+            let gather = pipeline("gather_parameter_gradients_f32")?;
+            let adam = pipeline("adamw_scalar_graph_f32")?;
+            let queue = device.new_command_queue();
+            Ok(Self {
+                device,
+                queue,
+                backward,
+                gather,
+                adam,
+                buffers: (0..16).map(|_| None).collect(),
+            })
+        }
+    }
+    fn upload_training<T>(
+        context: &mut MetalScalarTrainingContext,
+        slot: usize,
+        values: &[T],
+    ) -> metal::Buffer {
+        let bytes = std::mem::size_of_val(values).max(1) as u64;
+        if context.buffers[slot]
+            .as_ref()
+            .is_none_or(|buffer| buffer.length() < bytes)
+        {
+            context.buffers[slot] = Some(
+                context
+                    .device
+                    .new_buffer(bytes, MTLResourceOptions::StorageModeShared),
+            );
+        }
+        let buffer = context.buffers[slot]
+            .as_ref()
+            .expect("reusable Metal training buffer")
+            .clone();
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                values.as_ptr().cast::<u8>(),
+                buffer.contents().cast::<u8>(),
+                std::mem::size_of_val(values),
+            );
+        }
+        buffer
+    }
+    thread_local! {
+        static METAL_SCALAR_TRAINING_CONTEXT: RefCell<Option<MetalScalarTrainingContext>> = const { RefCell::new(None) };
+    }
+
+    METAL_SCALAR_TRAINING_CONTEXT.with(|cell| {
+        let mut maybe_context = cell.borrow_mut();
+        if maybe_context.is_none() {
+            *maybe_context = Some(MetalScalarTrainingContext::new()?);
+        }
+        let context = maybe_context
+            .as_mut()
+            .expect("initialized Metal training context");
+        let values_buffer = upload_training(context, 0, &values);
+        let opcode_buffer = upload_training(context, 1, opcodes);
+        let left_buffer = upload_training(context, 2, left);
+        let right_buffer = upload_training(context, 3, right);
+        let schedule_buffer = upload_training(context, 4, &schedule);
+        let offset_buffer = upload_training(context, 5, &offsets);
+        let gradient_buffer = upload_training(context, 6, &gradients);
+        let parameter_id_buffer = upload_training(context, 7, parameter_ids);
+        let parameter_gradient_buffer = upload_training(context, 8, &parameter_gradients);
+        let parameter_buffer = upload_training(context, 9, parameters);
+        let first_buffer = upload_training(context, 10, first_moment);
+        let second_buffer = upload_training(context, 11, second_moment);
+        let learning_buffer = upload_training(context, 12, std::slice::from_ref(&learning_rate));
+        let weight_decay_buffer = upload_training(context, 13, std::slice::from_ref(&weight_decay));
+        let first_correction = 1.0f32 - 0.9f32.powf(step as f32);
+        let second_correction = 1.0f32 - 0.999f32.powf(step as f32);
+        let first_correction_buffer =
+            upload_training(context, 14, std::slice::from_ref(&first_correction));
+        let second_correction_buffer =
+            upload_training(context, 15, std::slice::from_ref(&second_correction));
+        let command = context.queue.new_command_buffer();
+        for level in (1..by_level.len()).rev() {
+            let nodes = &by_level[level];
+            if nodes.is_empty() {
+                continue;
+            }
+            let encoder = command.new_compute_command_encoder();
+            encoder.set_compute_pipeline_state(&context.backward);
+            encoder.set_buffer(0, Some(&values_buffer), 0);
+            encoder.set_buffer(1, Some(&opcode_buffer), 0);
+            encoder.set_buffer(2, Some(&left_buffer), 0);
+            encoder.set_buffer(3, Some(&right_buffer), 0);
+            encoder.set_buffer(4, Some(&schedule_buffer), 0);
+            encoder.set_buffer(
+                5,
+                Some(&offset_buffer),
+                (level * std::mem::size_of::<u32>()) as u64,
+            );
+            encoder.set_buffer(6, Some(&gradient_buffer), 0);
+            let width = context
+                .backward
+                .thread_execution_width()
+                .max(1)
+                .min(nodes.len() as u64);
+            encoder.dispatch_threads(
+                MTLSize::new(nodes.len() as u64, 1, 1),
+                MTLSize::new(width, 1, 1),
+            );
+            encoder.end_encoding();
+        }
+        let gather_encoder = command.new_compute_command_encoder();
+        gather_encoder.set_compute_pipeline_state(&context.gather);
+        gather_encoder.set_buffer(0, Some(&opcode_buffer), 0);
+        gather_encoder.set_buffer(1, Some(&parameter_id_buffer), 0);
+        gather_encoder.set_buffer(2, Some(&gradient_buffer), 0);
+        gather_encoder.set_buffer(3, Some(&parameter_gradient_buffer), 0);
+        let gather_width = context
+            .gather
+            .thread_execution_width()
+            .max(1)
+            .min(opcodes.len() as u64);
+        gather_encoder.dispatch_threads(
+            MTLSize::new(opcodes.len() as u64, 1, 1),
+            MTLSize::new(gather_width, 1, 1),
+        );
+        gather_encoder.end_encoding();
+        let adam_encoder = command.new_compute_command_encoder();
+        adam_encoder.set_compute_pipeline_state(&context.adam);
+        adam_encoder.set_buffer(0, Some(&parameter_buffer), 0);
+        adam_encoder.set_buffer(1, Some(&first_buffer), 0);
+        adam_encoder.set_buffer(2, Some(&second_buffer), 0);
+        adam_encoder.set_buffer(3, Some(&parameter_gradient_buffer), 0);
+        adam_encoder.set_buffer(4, Some(&learning_buffer), 0);
+        adam_encoder.set_buffer(5, Some(&weight_decay_buffer), 0);
+        adam_encoder.set_buffer(6, Some(&first_correction_buffer), 0);
+        adam_encoder.set_buffer(7, Some(&second_correction_buffer), 0);
+        let adam_width = context
+            .adam
+            .thread_execution_width()
+            .max(1)
+            .min(parameters.len() as u64);
+        adam_encoder.dispatch_threads(
+            MTLSize::new(parameters.len() as u64, 1, 1),
+            MTLSize::new(adam_width, 1, 1),
+        );
+        adam_encoder.end_encoding();
+        command.commit();
+        command.wait_until_completed();
+        unsafe {
+            parameters.copy_from_slice(std::slice::from_raw_parts(
+                parameter_buffer.contents().cast::<f32>(),
+                parameters.len(),
+            ));
+            first_moment.copy_from_slice(std::slice::from_raw_parts(
+                first_buffer.contents().cast::<f32>(),
+                first_moment.len(),
+            ));
+            second_moment.copy_from_slice(std::slice::from_raw_parts(
+                second_buffer.contents().cast::<f32>(),
+                second_moment.len(),
+            ));
+        }
+        if parameters
+            .iter()
+            .chain(first_moment.iter())
+            .chain(second_moment.iter())
+            .any(|value| !value.is_finite())
+        {
+            return Err(NeuralError::InvalidArgument(
+                "Metal scalar-graph optimizer produced non-finite state".to_string(),
+            ));
+        }
+        Ok(loss_value)
+    })
+}
+
+#[cfg(not(all(
+    feature = "metal",
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "visionos"
+    )
+)))]
+fn metal_scalar_graph_f32(
+    _initial_values: &[f32],
+    _opcodes: &[u8],
+    _left: &[u32],
+    _right: &[u32],
+) -> Result<Vec<f32>> {
+    Err(NeuralError::InvalidArgument(
+        "Metal scalar-graph inference is not available in this build".to_string(),
+    ))
+}
+
+#[cfg(not(all(
+    feature = "metal",
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "visionos"
+    )
+)))]
+#[allow(clippy::too_many_arguments)]
+fn metal_scalar_graph_train_step_f32(
+    _initial_values: &[f32],
+    _opcodes: &[u8],
+    _left: &[u32],
+    _right: &[u32],
+    _parameter_ids: &[u32],
+    _loss: usize,
+    _parameters: &mut [f32],
+    _first_moment: &mut [f32],
+    _second_moment: &mut [f32],
+    _step: u64,
+    _learning_rate: f32,
+    _weight_decay: f32,
+) -> Result<f32> {
+    Err(NeuralError::InvalidArgument(
+        "Metal scalar-graph training is not available in this build".to_string(),
+    ))
+}
+
 pub fn backend_dense_layer_f32(
     selection: &BackendSelection,
     features: &[Vec<f32>],
@@ -245,6 +998,101 @@ pub fn backend_pair_sigmoid_scores_f32(
             "backend {other:?} is selectable but does not have a verified pair scoring kernel yet"
         ))),
     }
+}
+
+/// Trains the single-hidden-layer tanh MLP used by the N-BEATS and N-HiTS
+/// experts.  Accelerator implementations keep the complete parameter vector
+/// resident on the selected device for the training loop; CPU callers retain
+/// the model's existing deterministic SGD implementation.
+pub fn backend_train_tanh_mlp_f32(
+    selection: &BackendSelection,
+    inputs: &[Vec<f32>],
+    targets: &[f32],
+    hidden_size: usize,
+    epochs: usize,
+    learning_rate: f32,
+    parameters: &mut [f32],
+) -> Result<()> {
+    validate_tanh_mlp_training_inputs(
+        inputs,
+        targets,
+        hidden_size,
+        epochs,
+        learning_rate,
+        parameters,
+    )?;
+    match selection.selected.as_str() {
+        "metal" => metal_train_tanh_mlp_f32(
+            inputs,
+            targets,
+            hidden_size,
+            epochs,
+            learning_rate,
+            parameters,
+        ),
+        "cuda" => cuda_train_tanh_mlp_f32(
+            inputs,
+            targets,
+            hidden_size,
+            epochs,
+            learning_rate,
+            parameters,
+        ),
+        "rocm" => rocm_train_tanh_mlp_f32(
+            inputs,
+            targets,
+            hidden_size,
+            epochs,
+            learning_rate,
+            parameters,
+        ),
+        other => Err(NeuralError::InvalidArgument(format!(
+            "backend {other:?} does not provide an accelerated tanh-MLP training kernel"
+        ))),
+    }
+}
+
+fn validate_tanh_mlp_training_inputs(
+    inputs: &[Vec<f32>],
+    targets: &[f32],
+    hidden_size: usize,
+    epochs: usize,
+    learning_rate: f32,
+    parameters: &[f32],
+) -> Result<()> {
+    if inputs.is_empty() || inputs.len() != targets.len() {
+        return Err(NeuralError::InvalidArgument(
+            "tanh-MLP training inputs and targets must be non-empty and aligned".to_string(),
+        ));
+    }
+    let input_size = inputs[0].len();
+    if input_size == 0
+        || hidden_size == 0
+        || epochs == 0
+        || !learning_rate.is_finite()
+        || learning_rate <= 0.0
+    {
+        return Err(NeuralError::InvalidArgument(
+            "tanh-MLP input width, hidden width, epochs, and learning rate must be positive"
+                .to_string(),
+        ));
+    }
+    if inputs
+        .iter()
+        .any(|row| row.len() != input_size || row.iter().any(|value| !value.is_finite()))
+        || targets.iter().any(|value| !value.is_finite())
+    {
+        return Err(NeuralError::InvalidArgument(
+            "tanh-MLP training inputs and targets must be finite and rectangular".to_string(),
+        ));
+    }
+    let expected = hidden_size * input_size + hidden_size + hidden_size + 1;
+    if parameters.len() != expected || parameters.iter().any(|value| !value.is_finite()) {
+        return Err(NeuralError::InvalidArgument(
+            "tanh-MLP parameter vector has an invalid shape or non-finite value".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn validate_pair_sigmoid_inputs(embeddings: &[Vec<f32>], pairs: &[(usize, usize)]) -> Result<()> {
@@ -1034,6 +1882,156 @@ fn metal_pair_sigmoid_scores_f32(
     })
 }
 
+#[cfg(all(
+    feature = "metal",
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "visionos"
+    )
+))]
+fn metal_train_tanh_mlp_f32(
+    inputs: &[Vec<f32>],
+    targets: &[f32],
+    hidden_size: usize,
+    epochs: usize,
+    learning_rate: f32,
+    parameters: &mut [f32],
+) -> Result<()> {
+    use metal::{CompileOptions, Device, MTLResourceOptions, MTLSize};
+
+    const SOURCE: &str = r#"
+        #include <metal_stdlib>
+        using namespace metal;
+
+        kernel void train_tanh_mlp_f32(
+            const device float* inputs [[buffer(0)]],
+            const device float* targets [[buffer(1)]],
+            device float* parameters [[buffer(2)]],
+            constant uint& rows [[buffer(3)]],
+            constant uint& input_size [[buffer(4)]],
+            constant uint& hidden_size [[buffer(5)]],
+            constant uint& epochs [[buffer(6)]],
+            constant float& learning_rate [[buffer(7)]],
+            uint id [[thread_position_in_grid]]
+        ) {
+            if (id != 0) return;
+            uint w1_offset = 0;
+            uint b1_offset = hidden_size * input_size;
+            uint w2_offset = b1_offset + hidden_size;
+            uint b2_offset = w2_offset + hidden_size;
+            for (uint epoch = 0; epoch < epochs; ++epoch) {
+                for (uint row = 0; row < rows; ++row) {
+                    float prediction = parameters[b2_offset];
+                    for (uint hidden = 0; hidden < hidden_size; ++hidden) {
+                        float value = parameters[b1_offset + hidden];
+                        for (uint input = 0; input < input_size; ++input) {
+                            value += parameters[w1_offset + hidden * input_size + input]
+                                * inputs[row * input_size + input];
+                        }
+                        prediction += tanh(value) * parameters[w2_offset + hidden];
+                    }
+                    float error_gradient = 2.0f * (prediction - targets[row]);
+                    parameters[b2_offset] -= learning_rate * error_gradient;
+                    for (uint hidden = 0; hidden < hidden_size; ++hidden) {
+                        float value = parameters[b1_offset + hidden];
+                        for (uint input = 0; input < input_size; ++input) {
+                            value += parameters[w1_offset + hidden * input_size + input]
+                                * inputs[row * input_size + input];
+                        }
+                        float activation = tanh(value);
+                        float old_w2 = parameters[w2_offset + hidden];
+                        parameters[w2_offset + hidden] -= learning_rate * error_gradient * activation;
+                        float gradient = error_gradient * old_w2 * (1.0f - activation * activation);
+                        parameters[b1_offset + hidden] -= learning_rate * gradient;
+                        for (uint input = 0; input < input_size; ++input) {
+                            parameters[w1_offset + hidden * input_size + input] -= learning_rate * gradient
+                                * inputs[row * input_size + input];
+                        }
+                    }
+                }
+            }
+        }
+    "#;
+
+    let device = Device::system_default()
+        .ok_or_else(|| NeuralError::InvalidArgument("no Metal device is available".to_string()))?;
+    let library = device
+        .new_library_with_source(SOURCE, &CompileOptions::new())
+        .map_err(|err| {
+            NeuralError::InvalidArgument(format!(
+                "failed to compile Metal tanh-MLP training kernel: {err}"
+            ))
+        })?;
+    let function = library
+        .get_function("train_tanh_mlp_f32", None)
+        .map_err(|err| {
+            NeuralError::InvalidArgument(format!(
+                "failed to load Metal tanh-MLP training kernel: {err}"
+            ))
+        })?;
+    let pipeline = device
+        .new_compute_pipeline_state_with_function(&function)
+        .map_err(|err| {
+            NeuralError::InvalidArgument(format!(
+                "failed to create Metal tanh-MLP training pipeline: {err}"
+            ))
+        })?;
+    let input_size = inputs[0].len() as u32;
+    let rows = inputs.len() as u32;
+    let hidden_size = hidden_size as u32;
+    let epochs = epochs as u32;
+    let flat_inputs = inputs.iter().flatten().copied().collect::<Vec<_>>();
+    let queue = device.new_command_queue();
+    let options = MTLResourceOptions::StorageModeShared;
+    let inputs_buffer = device.new_buffer_with_data(
+        flat_inputs.as_ptr().cast(),
+        std::mem::size_of_val(flat_inputs.as_slice()) as u64,
+        options,
+    );
+    let targets_buffer = device.new_buffer_with_data(
+        targets.as_ptr().cast(),
+        std::mem::size_of_val(targets) as u64,
+        options,
+    );
+    let parameter_buffer = device.new_buffer_with_data(
+        parameters.as_ptr().cast(),
+        std::mem::size_of_val(parameters) as u64,
+        options,
+    );
+    let rows_buffer = device.new_buffer_with_data((&rows as *const u32).cast(), 4, options);
+    let input_buffer = device.new_buffer_with_data((&input_size as *const u32).cast(), 4, options);
+    let hidden_buffer =
+        device.new_buffer_with_data((&hidden_size as *const u32).cast(), 4, options);
+    let epochs_buffer = device.new_buffer_with_data((&epochs as *const u32).cast(), 4, options);
+    let learning_buffer = device.new_buffer_with_data(
+        (&learning_rate as *const f32).cast(),
+        std::mem::size_of::<f32>() as u64,
+        options,
+    );
+    let command = queue.new_command_buffer();
+    let encoder = command.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_buffer(0, Some(&inputs_buffer), 0);
+    encoder.set_buffer(1, Some(&targets_buffer), 0);
+    encoder.set_buffer(2, Some(&parameter_buffer), 0);
+    encoder.set_buffer(3, Some(&rows_buffer), 0);
+    encoder.set_buffer(4, Some(&input_buffer), 0);
+    encoder.set_buffer(5, Some(&hidden_buffer), 0);
+    encoder.set_buffer(6, Some(&epochs_buffer), 0);
+    encoder.set_buffer(7, Some(&learning_buffer), 0);
+    encoder.dispatch_threads(MTLSize::new(1, 1, 1), MTLSize::new(1, 1, 1));
+    encoder.end_encoding();
+    command.commit();
+    command.wait_until_completed();
+    let trained = unsafe {
+        std::slice::from_raw_parts(parameter_buffer.contents().cast::<f32>(), parameters.len())
+    };
+    parameters.copy_from_slice(trained);
+    Ok(())
+}
+
 #[cfg(not(all(
     feature = "metal",
     any(
@@ -1088,6 +2086,28 @@ fn metal_pair_sigmoid_scores_f32(
 ) -> Result<Vec<f64>> {
     Err(NeuralError::InvalidArgument(
         "Metal pair scoring is not available in this build".to_string(),
+    ))
+}
+
+#[cfg(not(all(
+    feature = "metal",
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "visionos"
+    )
+)))]
+fn metal_train_tanh_mlp_f32(
+    _inputs: &[Vec<f32>],
+    _targets: &[f32],
+    _hidden_size: usize,
+    _epochs: usize,
+    _learning_rate: f32,
+    _parameters: &mut [f32],
+) -> Result<()> {
+    Err(NeuralError::InvalidArgument(
+        "Metal tanh-MLP training is not available in this build".to_string(),
     ))
 }
 
@@ -1890,6 +2910,85 @@ fn cuda_pair_sigmoid_scores_f32(
     })
 }
 
+#[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
+fn cuda_train_tanh_mlp_f32(
+    inputs: &[Vec<f32>],
+    targets: &[f32],
+    hidden_size: usize,
+    epochs: usize,
+    learning_rate: f32,
+    parameters: &mut [f32],
+) -> Result<()> {
+    const SOURCE: &str = r#"
+        extern "C" __global__ void train_tanh_mlp_f32(
+            const float* inputs, const float* targets, float* parameters,
+            unsigned int rows, unsigned int input_size, unsigned int hidden_size,
+            unsigned int epochs, float learning_rate
+        ) {
+            if (blockIdx.x != 0 || threadIdx.x != 0) return;
+            unsigned int b1 = hidden_size * input_size;
+            unsigned int w2 = b1 + hidden_size;
+            unsigned int b2 = w2 + hidden_size;
+            for (unsigned int epoch = 0; epoch < epochs; ++epoch) for (unsigned int row = 0; row < rows; ++row) {
+                float prediction = parameters[b2];
+                for (unsigned int hidden = 0; hidden < hidden_size; ++hidden) {
+                    float value = parameters[b1 + hidden];
+                    for (unsigned int input = 0; input < input_size; ++input) value += parameters[hidden * input_size + input] * inputs[row * input_size + input];
+                    prediction += tanhf(value) * parameters[w2 + hidden];
+                }
+                float error = 2.0f * (prediction - targets[row]);
+                parameters[b2] -= learning_rate * error;
+                for (unsigned int hidden = 0; hidden < hidden_size; ++hidden) {
+                    float value = parameters[b1 + hidden];
+                    for (unsigned int input = 0; input < input_size; ++input) value += parameters[hidden * input_size + input] * inputs[row * input_size + input];
+                    float activation = tanhf(value); float old_w2 = parameters[w2 + hidden];
+                    parameters[w2 + hidden] -= learning_rate * error * activation;
+                    float gradient = error * old_w2 * (1.0f - activation * activation);
+                    parameters[b1 + hidden] -= learning_rate * gradient;
+                    for (unsigned int input = 0; input < input_size; ++input) parameters[hidden * input_size + input] -= learning_rate * gradient * inputs[row * input_size + input];
+                }
+            }
+        }
+    "#;
+    let flat_inputs = inputs.iter().flatten().copied().collect::<Vec<_>>();
+    with_cuda_runtime(|runtime| {
+        runtime.with_compiled_kernel(SOURCE, "train_tanh_mlp_f32", |function| {
+            let input_buffer =
+                CudaDeviceBuffer::new(runtime, std::mem::size_of_val(flat_inputs.as_slice()))?;
+            let target_buffer = CudaDeviceBuffer::new(runtime, std::mem::size_of_val(targets))?;
+            let parameter_buffer =
+                CudaDeviceBuffer::new(runtime, std::mem::size_of_val(parameters))?;
+            cuda_copy_to_device(runtime, &input_buffer, &flat_inputs)?;
+            cuda_copy_to_device(runtime, &target_buffer, targets)?;
+            cuda_copy_to_device(runtime, &parameter_buffer, parameters)?;
+            let mut input_ptr = input_buffer.as_device_ptr();
+            let mut target_ptr = target_buffer.as_device_ptr();
+            let mut parameter_ptr = parameter_buffer.as_device_ptr();
+            let mut rows = inputs.len() as u32;
+            let mut input_size = inputs[0].len() as u32;
+            let mut hidden = hidden_size as u32;
+            let mut epochs = epochs as u32;
+            let mut learning = learning_rate;
+            let mut args = [
+                (&mut input_ptr as *mut u64).cast::<c_void>(),
+                (&mut target_ptr as *mut u64).cast::<c_void>(),
+                (&mut parameter_ptr as *mut u64).cast::<c_void>(),
+                (&mut rows as *mut u32).cast::<c_void>(),
+                (&mut input_size as *mut u32).cast::<c_void>(),
+                (&mut hidden as *mut u32).cast::<c_void>(),
+                (&mut epochs as *mut u32).cast::<c_void>(),
+                (&mut learning as *mut f32).cast::<c_void>(),
+            ];
+            cuda_launch_kernel(runtime, function, 1, 1, 1, 1, 1, 1, &mut args)?;
+            runtime.check_cuda(
+                (runtime.cu_ctx_synchronize)(),
+                "failed to synchronize CUDA training",
+            )?;
+            cuda_copy_from_device(runtime, parameters, &parameter_buffer)
+        })
+    })
+}
+
 #[cfg(not(all(feature = "cuda", any(target_os = "linux", target_os = "windows"))))]
 fn cuda_vector_add_report(
     _selection: BackendSelection,
@@ -1930,6 +3029,20 @@ fn cuda_pair_sigmoid_scores_f32(
 ) -> Result<Vec<f64>> {
     Err(NeuralError::InvalidArgument(
         "CUDA pair scoring is not available in this build".to_string(),
+    ))
+}
+
+#[cfg(not(all(feature = "cuda", any(target_os = "linux", target_os = "windows"))))]
+fn cuda_train_tanh_mlp_f32(
+    _inputs: &[Vec<f32>],
+    _targets: &[f32],
+    _hidden_size: usize,
+    _epochs: usize,
+    _learning_rate: f32,
+    _parameters: &mut [f32],
+) -> Result<()> {
+    Err(NeuralError::InvalidArgument(
+        "CUDA tanh-MLP training is not available in this build".to_string(),
     ))
 }
 
@@ -2678,6 +3791,67 @@ fn rocm_pair_sigmoid_scores_f32(
     })
 }
 
+#[cfg(all(feature = "rocm", target_os = "linux"))]
+fn rocm_train_tanh_mlp_f32(
+    inputs: &[Vec<f32>],
+    targets: &[f32],
+    hidden_size: usize,
+    epochs: usize,
+    learning_rate: f32,
+    parameters: &mut [f32],
+) -> Result<()> {
+    const SOURCE: &str = r#"
+        extern "C" __global__ void train_tanh_mlp_f32(const float* inputs, const float* targets, float* parameters, unsigned int rows, unsigned int input_size, unsigned int hidden_size, unsigned int epochs, float learning_rate) {
+            if (blockIdx.x != 0 || threadIdx.x != 0) return;
+            unsigned int b1 = hidden_size * input_size, w2 = b1 + hidden_size, b2 = w2 + hidden_size;
+            for (unsigned int epoch = 0; epoch < epochs; ++epoch) for (unsigned int row = 0; row < rows; ++row) {
+                float prediction = parameters[b2];
+                for (unsigned int h = 0; h < hidden_size; ++h) { float value = parameters[b1+h]; for (unsigned int i = 0; i < input_size; ++i) value += parameters[h*input_size+i]*inputs[row*input_size+i]; prediction += tanhf(value)*parameters[w2+h]; }
+                float error = 2.0f*(prediction-targets[row]); parameters[b2] -= learning_rate*error;
+                for (unsigned int h = 0; h < hidden_size; ++h) { float value = parameters[b1+h]; for (unsigned int i = 0; i < input_size; ++i) value += parameters[h*input_size+i]*inputs[row*input_size+i]; float activation=tanhf(value), old_w2=parameters[w2+h]; parameters[w2+h]-=learning_rate*error*activation; float gradient=error*old_w2*(1.0f-activation*activation); parameters[b1+h]-=learning_rate*gradient; for (unsigned int i=0;i<input_size;++i) parameters[h*input_size+i]-=learning_rate*gradient*inputs[row*input_size+i]; }
+            }
+        }
+    "#;
+    let flat_inputs = inputs.iter().flatten().copied().collect::<Vec<_>>();
+    with_rocm_runtime(|runtime| {
+        runtime.prepare_device()?;
+        runtime.with_compiled_kernel(SOURCE, "train_tanh_mlp_f32", |function| {
+            let input_buffer =
+                RocmDeviceBuffer::new(runtime, std::mem::size_of_val(flat_inputs.as_slice()))?;
+            let target_buffer = RocmDeviceBuffer::new(runtime, std::mem::size_of_val(targets))?;
+            let parameter_buffer =
+                RocmDeviceBuffer::new(runtime, std::mem::size_of_val(parameters))?;
+            rocm_copy_to_device(runtime, &input_buffer, &flat_inputs)?;
+            rocm_copy_to_device(runtime, &target_buffer, targets)?;
+            rocm_copy_to_device(runtime, &parameter_buffer, parameters)?;
+            let mut input_ptr = input_buffer.as_mut_ptr();
+            let mut target_ptr = target_buffer.as_mut_ptr();
+            let mut parameter_ptr = parameter_buffer.as_mut_ptr();
+            let mut rows = inputs.len() as u32;
+            let mut input_size = inputs[0].len() as u32;
+            let mut hidden = hidden_size as u32;
+            let mut epochs = epochs as u32;
+            let mut learning = learning_rate;
+            let mut args = [
+                (&mut input_ptr as *mut *mut c_void).cast::<c_void>(),
+                (&mut target_ptr as *mut *mut c_void).cast::<c_void>(),
+                (&mut parameter_ptr as *mut *mut c_void).cast::<c_void>(),
+                (&mut rows as *mut u32).cast::<c_void>(),
+                (&mut input_size as *mut u32).cast::<c_void>(),
+                (&mut hidden as *mut u32).cast::<c_void>(),
+                (&mut epochs as *mut u32).cast::<c_void>(),
+                (&mut learning as *mut f32).cast::<c_void>(),
+            ];
+            rocm_launch_kernel(runtime, function, 1, 1, 1, 1, 1, 1, &mut args)?;
+            runtime.check_hip(
+                (runtime.hip_device_synchronize)(),
+                "failed to synchronize ROCm training",
+            )?;
+            rocm_copy_from_device(runtime, parameters, &parameter_buffer)
+        })
+    })
+}
+
 #[cfg(not(all(feature = "rocm", target_os = "linux")))]
 fn rocm_vector_add_report(
     _selection: BackendSelection,
@@ -2718,6 +3892,20 @@ fn rocm_pair_sigmoid_scores_f32(
 ) -> Result<Vec<f64>> {
     Err(NeuralError::InvalidArgument(
         "ROCm pair scoring is not available in this build".to_string(),
+    ))
+}
+
+#[cfg(not(all(feature = "rocm", target_os = "linux")))]
+fn rocm_train_tanh_mlp_f32(
+    _inputs: &[Vec<f32>],
+    _targets: &[f32],
+    _hidden_size: usize,
+    _epochs: usize,
+    _learning_rate: f32,
+    _parameters: &mut [f32],
+) -> Result<()> {
+    Err(NeuralError::InvalidArgument(
+        "ROCm tanh-MLP training is not available in this build".to_string(),
     ))
 }
 

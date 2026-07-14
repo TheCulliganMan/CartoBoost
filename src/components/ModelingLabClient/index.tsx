@@ -1090,7 +1090,7 @@ function deepGraphForecastRequest(profile?: string) {
       frequency: 'hourly',
     },
     options: profile
-      ? {profile, lookback: 3, hiddenSize: 4, attentionHeads: 2, graphOrder: 2, experts: 2, periodicity: 3, epochs: 5, backend: 'cpu'}
+      ? {profile, lookback: 3, hiddenSize: 4, attentionHeads: 2, graphOrder: 2, experts: 2, periodicity: 3, recentWindow: 3, epochs: 5, backend: 'cpu'}
       : {diffusionSteps: 1, hiddenSize: 4, epochs: 5, backend: 'cpu'},
   };
 }

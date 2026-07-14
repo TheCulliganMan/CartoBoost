@@ -1,0 +1,111 @@
+{
+  "artifact_type": "cartoboost.traffic_graph_forecasting_evaluation",
+  "dataset": {
+    "name": "user_supplied_traffic_graph",
+    "source_time_rows": 2856,
+    "source_time_rows_before_preprocessing": 34272,
+    "source_nodes": 207,
+    "evaluated_nodes": 207,
+    "directed_edges": 1722
+  },
+  "task": {
+    "target": "traffic_speed",
+    "frequency": "hourly",
+    "forecast_horizon": 168
+  },
+  "split": {
+    "kind": "fixed_origin_temporal_holdout",
+    "origins": [
+      2284
+    ],
+    "train_rows_per_origin": [
+      2284
+    ],
+    "test_rows_per_origin": 168
+  },
+  "source_url": "https://anl.app.box.com/shared/static/plgsv3te0akmqluiuqva34su60nn93c2",
+  "source_artifact_sha256": "82319afd4a2ef3327c0551bf0e1f2adb14395a8ecf65cd393d4fe24cf574d34e",
+  "preprocessing": "mean_12_consecutive_5min_rows_to_hourly",
+  "traffic_values_path": "/tmp/cartoboost-metr-la/metr_la_hourly.npy",
+  "traffic_values_sha256": "d7e30ab900ae9d293e543551e14c79df0bd61ed5b8310a81aaa94d16a07019a3",
+  "traffic_values_format": "time_node_feature_npy",
+  "adjacency_path": "/tmp/cartoboost-metr-la/adj_mat.npy",
+  "adjacency_sha256": "e87344b0a792e1eb5ff884e892ffbfbdd642fbb66c56fd739fd271a55279f825",
+  "adjacency_format": "dense_adjacency_npy",
+  "model": "multi_model_comparison",
+  "models": [
+    "lsttn",
+    "dcrnn",
+    "graph_wavenet",
+    "staeformer"
+  ],
+  "settings": {
+    "backend": "metal",
+    "frequency": "hourly",
+    "lookback": 168,
+    "lsttn_lookback": 672,
+    "horizon": 168,
+    "hidden_size": 4,
+    "attention_heads": 2,
+    "graph_order": 2,
+    "experts": 2,
+    "periodicity": 24,
+    "recent_window": 168,
+    "epochs": 1,
+    "learning_rate": 0.003,
+    "weight_decay": 1e-05,
+    "dilation_depth": 3,
+    "target_feature": 0,
+    "nodes": null,
+    "cutoffs": [
+      2284
+    ]
+  },
+  "origins": [
+    {
+      "model": "lsttn",
+      "cutoff": 2284,
+      "backend": "metal",
+      "backend_execution_scope": "metal_full_graph_training_and_inference_cpu_orchestration",
+      "rmse": 21.79770420813352,
+      "mae": 14.663385046686455,
+      "r2": -0.11982298905218602,
+      "fit_wallclock_seconds": 1306.2642393340066,
+      "predict_wallclock_seconds": 65.71429733399418
+    },
+    {
+      "model": "dcrnn",
+      "cutoff": 2284,
+      "backend": "metal",
+      "backend_execution_scope": "metal_forecast_head_cpu_feature_graph_and_training",
+      "rmse": 39.014140461129536,
+      "mae": 30.986006183060802,
+      "r2": -2.5873351708342676,
+      "fit_wallclock_seconds": 721.8032358339988,
+      "predict_wallclock_seconds": 0.10103304198128171
+    },
+    {
+      "model": "graph_wavenet",
+      "cutoff": 2284,
+      "backend": "metal",
+      "backend_execution_scope": "metal_forecast_head_cpu_feature_graph_and_training",
+      "rmse": 21.70857574818343,
+      "mae": 18.11179266327349,
+      "r2": -0.11068404072913252,
+      "fit_wallclock_seconds": 293.3964976659918,
+      "predict_wallclock_seconds": 0.200085125019541
+    },
+    {
+      "model": "staeformer",
+      "cutoff": 2284,
+      "backend": "metal",
+      "backend_execution_scope": "metal_forecast_head_cpu_feature_graph_and_training",
+      "rmse": 20.31767979565017,
+      "mae": 14.671296947637726,
+      "r2": 0.0270823273559202,
+      "fit_wallclock_seconds": 16286.222502084012,
+      "predict_wallclock_seconds": 8.445312666008249
+    }
+  ],
+  "invocation": "/Users/ryanculligan/GitHub/CartoBoost/.venv/bin/python3 /Users/ryanculligan/GitHub/CartoBoost/benchmarks/runners/traffic_graph_forecasting.py --node-values-npy /tmp/cartoboost-metr-la/metr_la_hourly.npy --adjacency-npy /tmp/cartoboost-metr-la/adj_mat.npy --source-url https://anl.app.box.com/shared/static/plgsv3te0akmqluiuqva34su60nn93c2 --source-artifact-sha256 82319afd4a2ef3327c0551bf0e1f2adb14395a8ecf65cd393d4fe24cf574d34e --source-time-rows-before-preprocessing 34272 --preprocessing mean_12_consecutive_5min_rows_to_hourly --output docs/assets/model_benchmarks/metr_la_hourly_168h_metal.json --models lsttn,dcrnn,graph_wavenet,staeformer --cutoffs 2284 --frequency hourly --horizon 168 --lookback 168 --lsttn-lookback 672 --periodicity 24 --recent-window 168 --hidden-size 4 --attention-heads 2 --graph-order 2 --experts 2 --epochs 1 --learning-rate 0.003 --weight-decay 0.00001 --backend metal"
+}

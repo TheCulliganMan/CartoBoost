@@ -25,9 +25,8 @@ rayon = "1.11"
 serde_json.workspace = true
 
 [features]
-# The published extension is CPU-only.  Accelerator implementations remain
-# explicit preview builds and must never be pulled into the stable wheel by
-# target detection or an unconditional dependency feature.
+# Accelerator implementations are explicit preview builds and must never be
+# pulled into stable wheels by target detection or unconditional features.
 preview-cuda = ["cartoboost-geo-st/cuda", "cartoboost-neural/cuda"]
 preview-rocm = ["cartoboost-geo-st/rocm", "cartoboost-neural/rocm"]
 preview-metal = ["cartoboost-geo-st/metal", "cartoboost-neural/metal"]

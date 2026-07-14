@@ -109,7 +109,8 @@ impl Forecaster for NHiTSForecaster {
             self.config.backend.clone(),
         );
         self.model
-            .fit(&examples, self.config.epochs, self.config.learning_rate);
+            .fit(&examples, self.config.epochs, self.config.learning_rate)
+            .map_err(|err| CartoBoostError::InvalidInput(err.to_string()))?;
         self.scaler = Some(scaler);
         self.frequency = Some(dataset.frequency());
         self.tails = dataset.tails().clone();

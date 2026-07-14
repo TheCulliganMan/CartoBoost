@@ -480,5 +480,21 @@ def test_paper_graph_transformers_are_native_backed_and_persistent(tmp_path):
 def test_lsttn_uses_long_history_defaults():
     model = LSTTNForecaster()
 
-    assert model.get_params()["lookback"] == 4032
-    assert model.get_params()["periodicity"] == 288
+    assert model.get_params()["lookback"] == 24 * 28
+    assert model.get_params()["periodicity"] == 24
+    assert model.get_params()["recent_window"] == 24 * 7
+    assert model.get_params()["horizon"] == 24 * 7
+
+
+def test_lsttn_temporal_widths_are_configurable_in_frame_rows():
+    model = LSTTNForecaster(
+        lookback=24 * 28,
+        periodicity=24,
+        recent_window=24 * 7,
+        horizon=24 * 7,
+    )
+
+    assert model.get_params()["lookback"] == 24 * 28
+    assert model.get_params()["periodicity"] == 24
+    assert model.get_params()["recent_window"] == 24 * 7
+    assert model.get_params()["horizon"] == 24 * 7

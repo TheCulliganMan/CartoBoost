@@ -18,6 +18,7 @@ futures-channel = { version = "0.3", optional = true }
 
 [target.'cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos", target_os = "visionos"))'.dependencies]
 metal = { version = "0.33", optional = true }
+objc = { version = "0.2.7", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
@@ -26,5 +27,5 @@ tempfile = "3"
 default = []
 cuda = ["dep:libloading"]
 rocm = ["dep:libloading"]
-metal = ["dep:metal"]
+metal = ["dep:metal", "dep:objc"]
 webgpu = ["dep:futures-channel", "dep:wgpu"]

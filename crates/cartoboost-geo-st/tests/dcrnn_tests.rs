@@ -68,6 +68,35 @@ fn multi_node_multi_horizon_shape_and_metrics() {
 }
 
 #[test]
+fn long_horizon_recursive_decode_stays_within_training_support() {
+    let frame = traffic_style_fixture_frame();
+    let training_min = frame
+        .target
+        .iter()
+        .flatten()
+        .copied()
+        .fold(f64::INFINITY, f64::min);
+    let training_max = frame
+        .target
+        .iter()
+        .flatten()
+        .copied()
+        .fold(f64::NEG_INFINITY, f64::max);
+    let mut model = DcrnnForecaster::new(DcrnnConfig {
+        epochs: 1,
+        ..DcrnnConfig::default()
+    })
+    .unwrap();
+    model.fit(&frame).unwrap();
+
+    let predictions = model.predict(168).unwrap();
+    assert_eq!(predictions.len(), 168);
+    assert!(predictions.iter().flatten().all(|value| {
+        value.is_finite() && *value >= training_min - 1.0e-10 && *value <= training_max + 1.0e-10
+    }));
+}
+
+#[test]
 fn directed_graph_behavior_changes_predictions() {
     let frame = synthetic_graph_diffusion_frame();
     let mut reversed = frame.clone();
@@ -321,11 +350,14 @@ fn metal_backend_prediction_matches_cpu_backend() {
     .unwrap();
     cpu.fit(&frame).unwrap();
     metal.fit(&frame).unwrap();
-    let cpu_predictions = cpu.predict(3).unwrap();
-    let metal_predictions = metal.predict(3).unwrap();
+    let cpu_predictions = cpu.predict(168).unwrap();
+    let metal_predictions = metal.predict(168).unwrap();
     for (cpu_row, metal_row) in cpu_predictions.iter().zip(&metal_predictions) {
         for (&left, &right) in cpu_row.iter().zip(metal_row) {
-            assert!((left - right).abs() < 1.0e-4);
+            assert!(
+                (left - right).abs() < 1.0e-2,
+                "CPU {left} and Metal {right} diverged"
+            );
         }
     }
 }

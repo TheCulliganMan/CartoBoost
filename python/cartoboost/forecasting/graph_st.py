@@ -761,6 +761,7 @@ class _PaperGraphTransformerForecaster:
         graph_order: int = 2,
         experts: int = 4,
         periodicity: int = 24,
+        recent_window: int = 12,
         epochs: int = 80,
         learning_rate: float = 0.01,
         weight_decay: float = 0.00001,
@@ -778,6 +779,7 @@ class _PaperGraphTransformerForecaster:
             "graph_order": int(graph_order),
             "experts": int(experts),
             "periodicity": int(periodicity),
+            "recent_window": int(recent_window),
             "epochs": int(epochs),
             "learning_rate": float(learning_rate),
             "weight_decay": float(weight_decay),
@@ -888,17 +890,25 @@ class LSTTNForecaster(_PaperGraphTransformerForecaster):
     def __init__(
         self,
         *,
-        lookback: int = 4032,
-        periodicity: int = 288,
+        lookback: int = 24 * 28,
+        periodicity: int = 24,
+        recent_window: int | None = None,
+        horizon: int = 24 * 7,
         **kwargs: Any,
     ) -> None:
-        """Use the paper's 14-day five-minute traffic context by default.
+        """Use a four-week hourly context and one-week horizon by default.
 
-        Callers with another frequency should set both values explicitly (for
-        example, ``lookback=336, periodicity=24`` for 14 days of hourly
-        daily and weekly traffic cycles).
+        Callers with another frequency should set all temporal widths explicitly
+        (for example, ``lookback=672, periodicity=24, recent_window=168`` for
+        four weeks of hourly history, a daily cycle, and one recent week).
         """
-        super().__init__(lookback=lookback, periodicity=periodicity, **kwargs)
+        super().__init__(
+            lookback=lookback,
+            periodicity=periodicity,
+            recent_window=min(24 * 7, lookback) if recent_window is None else recent_window,
+            horizon=horizon,
+            **kwargs,
+        )
 
 
 class SpatialTemporalGraphGatedTransformerForecaster(_PaperGraphTransformerForecaster):
