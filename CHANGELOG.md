@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.3.7 — Full Accelerator Backends
+
+- Published the stable `cuda`, `rocm`, `metal`, and `webgpu` native backend
+  feature names alongside CPython 3.14 and free-threaded CPython support.
+
 ## 0.3.6 — Full Metal LSTTN Forecasting
 
 - Added full Metal execution for LSTTN training and inference, including the
