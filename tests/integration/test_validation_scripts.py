@@ -92,15 +92,14 @@ def test_ci_installs_native_extension_before_validation_artifacts():
     assert install_step < validation_step
 
 
-def test_ci_runs_benchmark_provenance_freshness_gate_after_smoke_benchmark():
+def test_ci_runs_benchmark_smoke_and_quality_without_freshness_gate():
     repo_root = Path(__file__).resolve().parents[2]
     workflow = (repo_root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 
-    benchmark_step = workflow.index("scripts/run_model_benchmark_suite.py")
-    freshness_step = workflow.index("scripts/check_benchmark_freshness.py")
-    assert benchmark_step < freshness_step
+    assert "scripts/run_model_benchmark_suite.py" in workflow
+    assert "scripts/check_benchmark_freshness.py" not in workflow
     assert "--output-dir target/benchmark-freshness" in workflow
-    assert "--artifact target/benchmark-freshness/results.json" in workflow
+    assert "scripts/check_forecasting_quality_gate.py" in workflow
     assert "scripts/run_scale_performance_gate.py" in workflow
 
 

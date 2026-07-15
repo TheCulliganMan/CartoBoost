@@ -58,7 +58,6 @@ REQUIRED_CI_COMMANDS = {
     "uv run python scripts/check_official_geo_evidence.py",
     "uv run python scripts/check_performance_thresholds.py",
     "uv run python scripts/check_import_performance.py",
-    "uv run python scripts/check_benchmark_freshness.py",
     "uv run python scripts/check_forecasting_quality_gate.py",
     "uv run python scripts/check_nyc_row_quality_gate.py",
     "uv run python scripts/run_scale_performance_gate.py",

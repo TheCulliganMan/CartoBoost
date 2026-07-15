@@ -71,11 +71,16 @@ def test_nyc_row_quality_gate_reports_current_evidence_without_overclaiming() ->
     assert report["wins"] >= report["minimum_wins"]
 
 
-def test_sklearn_dependency_is_installed_with_cartoboost() -> None:
+def test_sklearn_dependency_is_an_optional_extra() -> None:
     text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     dependencies_block = re.search(r"dependencies = \[(.*?)\]", text, re.S)
     assert dependencies_block is not None
-    assert "scikit-learn>=1.2" in dependencies_block.group(1)
+    assert "scikit-learn>=1.2" not in dependencies_block.group(1)
+    sklearn_extra = re.search(
+        r"\[project\.optional-dependencies\].*?sklearn = \[(.*?)\]", text, re.S
+    )
+    assert sklearn_extra is not None
+    assert "scikit-learn>=1.2" in sklearn_extra.group(1)
 
 
 def test_benchmark_dependency_group_covers_intended_baselines() -> None:
