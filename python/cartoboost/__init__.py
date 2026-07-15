@@ -5,7 +5,7 @@ from __future__ import annotations
 from importlib import import_module
 from typing import Any
 
-__version__ = "0.3.9"
+__version__ = "0.3.10"
 
 # Every shipped family is reachable directly from ``cartoboost`` and through
 # its named module. There is deliberately no secondary namespace.

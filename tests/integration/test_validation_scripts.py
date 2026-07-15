@@ -12,6 +12,42 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python 3.10 compatibility
+    import tomli as tomllib
+
+
+def test_python_base_install_keeps_integrations_optional():
+    repo_root = Path(__file__).resolve().parents[2]
+    metadata = tomllib.loads((repo_root / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+
+    assert metadata["dependencies"] == [
+        "numpy>=1.23; python_version < '3.13'",
+        "numpy>=2.1; python_version >= '3.13'",
+    ]
+    extras = metadata["optional-dependencies"]
+    assert {
+        "chronos",
+        "duckdb",
+        "explain",
+        "foundation",
+        "h3",
+        "holidays",
+        "moirai",
+        "onnx",
+        "optuna",
+        "pandas",
+        "polars",
+        "s2",
+        "sklearn",
+        "tabpfn",
+        "tensorboard",
+        "timegpt",
+        "timesfm",
+        "visualization",
+    } <= extras.keys()
+
 
 def ordinal_word(rank: int) -> str:
     words = {
@@ -79,6 +115,8 @@ def test_release_workflow_requires_ci_ancestry_and_distribution_smoke():
     assert "workflow_id: 'ci.yml'" in workflow
     assert "wheels-${{ matrix.platform }}-py${{ matrix.python-version }}" in workflow
     assert "smoke-sdist" in workflow
+    assert "Verify minimal wheel dependencies" in workflow
+    assert "unexpected unconditional wheel dependencies" in workflow
     assert "name: pypi" in workflow
     assert "password: ${{ secrets.PYPI_API_TOKEN }}" not in workflow
 

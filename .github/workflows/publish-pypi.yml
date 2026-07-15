@@ -223,6 +223,31 @@ jobs:
           name: wheels-${{ matrix.platform }}-py${{ matrix.python-version }}
           path: dist
 
+      - name: Verify minimal wheel dependencies
+        shell: bash
+        run: |
+          python - <<'PY'
+          from email.parser import BytesParser
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          wheels = list(Path("dist").glob("*.whl"))
+          assert len(wheels) == 1, wheels
+          with ZipFile(wheels[0]) as archive:
+              metadata_path = next(
+                  name for name in archive.namelist() if name.endswith(".dist-info/METADATA")
+              )
+              metadata = BytesParser().parsebytes(archive.read(metadata_path))
+          requirements = metadata.get_all("Requires-Dist", [])
+          unconditional = [requirement for requirement in requirements if "extra ==" not in requirement]
+          if len(unconditional) != 2 or not all(
+              requirement.lower().startswith("numpy") for requirement in unconditional
+          ):
+              raise SystemExit(
+                  f"unexpected unconditional wheel dependencies: {unconditional!r}"
+              )
+          PY
+
       - name: Install and smoke test wheel
         shell: bash
         run: |
