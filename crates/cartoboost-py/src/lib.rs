@@ -4023,9 +4023,18 @@ impl NativePaperGraphTransformerForecaster {
         })
     }
 
-    fn fit(&mut self, py: Python<'_>, frame: &NativeGraphTemporalFrame) -> PyResult<()> {
-        py.detach(|| self.model.fit(&frame.frame))
-            .map_err(to_py_geo_st_error)
+    #[pyo3(signature = (frame, checkpoint_path=None))]
+    fn fit(
+        &mut self,
+        py: Python<'_>,
+        frame: &NativeGraphTemporalFrame,
+        checkpoint_path: Option<PathBuf>,
+    ) -> PyResult<()> {
+        py.detach(|| match checkpoint_path {
+            Some(path) => self.model.fit_checkpointed(&frame.frame, path),
+            None => self.model.fit(&frame.frame),
+        })
+        .map_err(to_py_geo_st_error)
     }
 
     fn fit_checkpointed(

@@ -206,6 +206,35 @@ impl CsrAdjacency {
         .row_normalized()
     }
 
+    /// Adds at most one self candidate per row for learned adaptive graph
+    /// attention. This is deliberately separate from structural diffusion:
+    /// forward/backward CSR propagation retains its explicit zero behavior
+    /// for isolated nodes, while adaptive softmax always has a differentiable
+    /// local candidate without allocating a dense adjacency matrix.
+    fn with_adaptive_self_candidates(&self, node_count: usize) -> Self {
+        let mut indptr = Vec::with_capacity(node_count + 1);
+        let mut indices = Vec::with_capacity(self.indices.len() + node_count);
+        let mut data = Vec::with_capacity(self.data.len() + node_count);
+        indptr.push(0);
+        for row in 0..node_count {
+            let start = self.indptr[row];
+            let end = self.indptr[row + 1];
+            let has_self = self.indices[start..end].contains(&row);
+            indices.extend_from_slice(&self.indices[start..end]);
+            data.extend_from_slice(&self.data[start..end]);
+            if !has_self {
+                indices.push(row);
+                data.push(1.0);
+            }
+            indptr.push(indices.len());
+        }
+        Self {
+            indptr,
+            indices,
+            data,
+        }
+    }
+
     fn matvec(&self, input: &[f64], output: &mut [f64]) {
         output.fill(0.0);
         for (row, value) in output.iter_mut().enumerate() {
@@ -1779,6 +1808,7 @@ impl TrainableGraphTransformerState {
         // normalized reverse graph rather than treating the supplied road
         // graph as undirected.
         let reverse_adjacency = adjacency.transpose(nodes).row_normalized();
+        let adaptive_adjacency = adjacency.with_adaptive_self_candidates(nodes);
         let observed_values = window
             .iter()
             .map(|row| {
@@ -2503,21 +2533,31 @@ impl TrainableGraphTransformerState {
                             layout.lsttn_weekly_adaptive_target,
                         )
                     };
+                    // Adaptive adjacency is learned on the directed CSR
+                    // support, not over every possible node pair. The old
+                    // dense [nodes, nodes] softmax made a 36k-node LSTTN
+                    // infeasible before either CPU or CUDA could reach the
+                    // actual diffusion kernels. Each output row retains a
+                    // row-normalized learned distribution over its existing
+                    // directed neighbors plus one sparse self candidate.
                     let adaptive_weights = (0..nodes)
-                        .map(|source| {
-                            let logits = (0..nodes)
-                                .map(|target| {
+                        .flat_map(|target| {
+                            let range = adaptive_adjacency.indptr[target]
+                                ..adaptive_adjacency.indptr[target + 1];
+                            let logits = range
+                                .map(|edge| {
+                                    let source = adaptive_adjacency.indices[edge];
                                     let score = (0..10).fold(tape.constant(0.0), |sum, latent| {
                                         tape.add(
                                             sum,
                                             tape.mul(
                                                 parameter(
                                                     &tape,
-                                                    adaptive_source + source * 10 + latent,
+                                                    adaptive_source + target * 10 + latent,
                                                 ),
                                                 parameter(
                                                     &tape,
-                                                    adaptive_target + target * 10 + latent,
+                                                    adaptive_target + source * 10 + latent,
                                                 ),
                                             ),
                                         )
@@ -2525,7 +2565,11 @@ impl TrainableGraphTransformerState {
                                     tape.max(score, tape.constant(0.0))
                                 })
                                 .collect::<Vec<_>>();
-                            tape_softmax(&tape, &logits)
+                            if logits.is_empty() {
+                                Vec::new().into_iter()
+                            } else {
+                                tape_softmax(&tape, &logits).into_iter()
+                            }
                         })
                         .collect::<Vec<_>>();
                     let forward_one =
@@ -2551,9 +2595,20 @@ impl TrainableGraphTransformerState {
                         &backward_one,
                         hidden,
                     );
-                    let adaptive_one = tape_dense_diffuse(&tape, &adaptive_weights, values, hidden);
-                    let adaptive_two =
-                        tape_dense_diffuse(&tape, &adaptive_weights, &adaptive_one, hidden);
+                    let adaptive_one = tape_csr_diffuse(
+                        &tape,
+                        &adaptive_adjacency,
+                        &adaptive_weights,
+                        values,
+                        hidden,
+                    );
+                    let adaptive_two = tape_csr_diffuse(
+                        &tape,
+                        &adaptive_adjacency,
+                        &adaptive_weights,
+                        &adaptive_one,
+                        hidden,
+                    );
                     (0..nodes)
                         .map(|node| {
                             let mut concatenated = values[node].clone();
@@ -2774,9 +2829,11 @@ impl TrainableGraphTransformerState {
                             short_sequence.len()
                         ];
                         let short_adaptive = (0..nodes)
-                            .map(|source| {
-                                let logits = (0..nodes)
-                                    .map(|target| {
+                            .flat_map(|target| {
+                                let logits = (adaptive_adjacency.indptr[target]
+                                    ..adaptive_adjacency.indptr[target + 1])
+                                    .map(|edge| {
+                                        let source = adaptive_adjacency.indices[edge];
                                         let score =
                                             (0..10).fold(tape.constant(0.0), |sum, latent| {
                                                 tape.add(
@@ -2785,13 +2842,13 @@ impl TrainableGraphTransformerState {
                                                         parameter(
                                                             &tape,
                                                             layout.lsttn_short_adaptive_source
-                                                                + source * 10
+                                                                + target * 10
                                                                 + latent,
                                                         ),
                                                         parameter(
                                                             &tape,
                                                             layout.lsttn_short_adaptive_target
-                                                                + target * 10
+                                                                + source * 10
                                                                 + latent,
                                                         ),
                                                     ),
@@ -2800,7 +2857,11 @@ impl TrainableGraphTransformerState {
                                         tape.max(score, tape.constant(0.0))
                                     })
                                     .collect::<Vec<_>>();
-                                tape_softmax(&tape, &logits)
+                                if logits.is_empty() {
+                                    Vec::new().into_iter()
+                                } else {
+                                    tape_softmax(&tape, &logits).into_iter()
+                                }
                             })
                             .collect::<Vec<_>>();
                         let layer_width = 12 * hidden * hidden + 6 * hidden;
@@ -2911,14 +2972,16 @@ impl TrainableGraphTransformerState {
                                     &backward_one,
                                     hidden,
                                 );
-                                let adaptive_one = tape_dense_diffuse(
+                                let adaptive_one = tape_csr_diffuse(
                                     &tape,
+                                    &adaptive_adjacency,
                                     &short_adaptive,
                                     &gated[time],
                                     hidden,
                                 );
-                                let adaptive_two = tape_dense_diffuse(
+                                let adaptive_two = tape_csr_diffuse(
                                     &tape,
+                                    &adaptive_adjacency,
                                     &short_adaptive,
                                     &adaptive_one,
                                     hidden,
@@ -3921,27 +3984,6 @@ fn tape_csr_diffuse(
         .collect()
 }
 
-fn tape_dense_diffuse(
-    tape: &AutodiffTape,
-    weights: &[Vec<usize>],
-    values: &[Vec<usize>],
-    hidden: usize,
-) -> Vec<Vec<usize>> {
-    weights
-        .iter()
-        .map(|row| {
-            (0..hidden)
-                .map(|channel| {
-                    row.iter()
-                        .zip(values)
-                        .fold(tape.constant(0.0), |sum, (weight, source)| {
-                            tape.add(sum, tape.mul(*weight, source[channel]))
-                        })
-                })
-                .collect()
-        })
-        .collect()
-}
 fn tape_add_vectors(tape: &AutodiffTape, left: &[usize], right: &[usize]) -> Vec<usize> {
     left.iter()
         .zip(right)
@@ -5111,6 +5153,19 @@ impl PaperGraphTransformerForecaster {
             selected: self.config.backend.selected.clone(),
             available: self.config.backend.available.clone(),
         };
+        if self.config.profile == GraphTransformerProfile::LongShortFusion
+            && backend.selected == "cuda"
+        {
+            // Do not let a CUDA-requested resume run the existing scalar
+            // supervised loop on Rayon. The CUDA LSTTN path is only enabled
+            // once its complete tensor pretraining and forecast executor is
+            // selected below; until then failing is safer than a silent CPU
+            // fallback that would invalidate runtime and checkpoint evidence.
+            return Err(GeoStError::InvalidBackend(
+                "CUDA LSTTN tensor training is not available in this build; refusing to fall back to scalar CPU training"
+                    .to_string(),
+            ));
+        }
         let data_fingerprint = graph_temporal_training_fingerprint(frame);
         let config_json = serde_json::to_string(&self.config)?;
         let resumed = checkpoint_path
@@ -5658,12 +5713,17 @@ impl PaperGraphTransformerForecaster {
         .map(str::to_string)
         .collect::<Vec<_>>();
         if self.config.profile == GraphTransformerProfile::LongShortFusion
-            && self.config.backend.selected != "cpu"
+            && self.config.backend.selected == "metal"
         {
             components.push(format!(
                 "{}_full_graph_training_and_inference",
                 self.config.backend.selected
             ));
+        }
+        if self.config.profile == GraphTransformerProfile::LongShortFusion
+            && self.config.backend.selected == "cuda"
+        {
+            components.push("cuda_tensor_training_pending".to_string());
         }
         PaperGraphTransformerArchitectureReport {
             profile: self.config.profile.clone(),
@@ -6210,6 +6270,34 @@ mod tests {
         assert_eq!(default_selection.selected, "cpu");
     }
 
+    #[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
+    #[test]
+    fn cuda_lsttn_refuses_scalar_cpu_fallback() {
+        let backend = match select_compute_backend(Some("cuda")) {
+            Ok(backend) => backend,
+            Err(_) => return,
+        };
+        let mut model = PaperGraphTransformerForecaster::new(PaperGraphTransformerConfig {
+            profile: GraphTransformerProfile::LongShortFusion,
+            lookback: 8,
+            hidden_size: 4,
+            attention_heads: 2,
+            graph_order: 2,
+            experts: 2,
+            periodicity: 1,
+            recent_window: 4,
+            epochs: 1,
+            learning_rate: 0.01,
+            weight_decay: 0.0,
+            backend,
+        })
+        .unwrap();
+        let error = model.fit(&traffic_style_fixture_frame()).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("refusing to fall back to scalar CPU training"));
+    }
+
     #[test]
     fn webgpu_compute_backend_is_not_selectable() {
         let err = select_compute_backend(Some("webgpu")).unwrap_err();
@@ -6566,6 +6654,12 @@ mod tests {
             adaptive_neighbor_indices(&adjacency, 2, &isolated_fallback),
             &[2]
         );
+
+        let adaptive = adjacency.with_adaptive_self_candidates(3);
+        assert_eq!(adaptive.indptr, vec![0, 3, 5, 6]);
+        assert_eq!(adaptive.indices, vec![1, 2, 0, 0, 1, 2]);
+        // The learned adaptive support remains O(E + N), not N².
+        assert_eq!(adaptive.indices.len(), adjacency.indices.len() + 3);
     }
 
     #[test]

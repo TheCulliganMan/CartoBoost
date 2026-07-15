@@ -76,6 +76,16 @@ pub struct BackendDispatchReport {
     pub accelerated: bool,
 }
 
+/// Gradients for a batched CSR diffusion. `input_grad` has the same layout as
+/// the input (`[batch, nodes, channels]`) and `edge_grad` follows CSR edge
+/// order. Keeping these buffers explicit is the tensor backend's alternative
+/// to building one scalar-autodiff node per multiply/add.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CsrDiffusionBackward {
+    pub input_grad: Vec<f32>,
+    pub edge_grad: Vec<f32>,
+}
+
 impl Default for BackendSelection {
     fn default() -> Self {
         Self {
@@ -208,6 +218,418 @@ pub fn backend_affine_scores(
             "backend {other:?} is selectable but does not have a verified affine scoring kernel yet"
         ))),
     }
+}
+
+/// Applies a directed CSR matrix to a contiguous batch of node features.
+/// Input and output are row-major `[batch, nodes, channels]`. Empty rows are
+/// deliberately zero, which gives isolated nodes a stable, explicit result.
+pub fn backend_csr_diffusion_f32(
+    selection: &BackendSelection,
+    indptr: &[u32],
+    indices: &[u32],
+    weights: &[f32],
+    channels: usize,
+    values: &[f32],
+) -> Result<Vec<f32>> {
+    validate_csr_diffusion_inputs(indptr, indices, weights, channels, values)?;
+    match selection.selected.as_str() {
+        "cpu" => cpu_csr_diffusion_f32(indptr, indices, weights, channels, values),
+        "cuda" => cuda_csr_diffusion_f32(indptr, indices, weights, channels, values),
+        other => Err(NeuralError::InvalidArgument(format!(
+            "backend {other:?} does not provide the CUDA LSTTN CSR diffusion kernel"
+        ))),
+    }
+}
+
+/// Backpropagates through `backend_csr_diffusion_f32`. The edge gradient is
+/// useful for both learned edge weights and adaptive adjacency softmax
+/// backward; callers apply the softmax Jacobian on the same CSR edge order.
+pub fn backend_csr_diffusion_backward_f32(
+    selection: &BackendSelection,
+    indptr: &[u32],
+    indices: &[u32],
+    weights: &[f32],
+    channels: usize,
+    values: &[f32],
+    output_grad: &[f32],
+) -> Result<CsrDiffusionBackward> {
+    validate_csr_diffusion_inputs(indptr, indices, weights, channels, values)?;
+    if output_grad.len() != values.len() || output_grad.iter().any(|value| !value.is_finite()) {
+        return Err(NeuralError::InvalidArgument(
+            "CSR diffusion output gradient must be finite and match input shape".to_string(),
+        ));
+    }
+    match selection.selected.as_str() {
+        "cpu" => {
+            cpu_csr_diffusion_backward_f32(indptr, indices, weights, channels, values, output_grad)
+        }
+        "cuda" => {
+            cuda_csr_diffusion_backward_f32(indptr, indices, weights, channels, values, output_grad)
+        }
+        other => Err(NeuralError::InvalidArgument(format!(
+            "backend {other:?} does not provide the CUDA LSTTN CSR diffusion backward kernel"
+        ))),
+    }
+}
+
+/// Row-wise softmax over CSR edges. Each row is normalized independently and
+/// an empty row contributes no values, preserving sparse isolated-node
+/// semantics without a synthetic dense row.
+pub fn backend_csr_row_softmax_f32(
+    selection: &BackendSelection,
+    indptr: &[u32],
+    logits: &[f32],
+) -> Result<Vec<f32>> {
+    validate_csr_row_inputs(indptr, logits)?;
+    match selection.selected.as_str() {
+        "cpu" => cpu_csr_row_softmax_f32(indptr, logits),
+        "cuda" => cuda_csr_row_softmax_f32(indptr, logits),
+        other => Err(NeuralError::InvalidArgument(format!(
+            "backend {other:?} does not provide the CUDA LSTTN CSR row-softmax kernel"
+        ))),
+    }
+}
+
+/// Backpropagates a CSR row-softmax. `output_grad` is the gradient with
+/// respect to the normalized edge weights and the return is the gradient with
+/// respect to the corresponding row logits.
+pub fn backend_csr_row_softmax_backward_f32(
+    selection: &BackendSelection,
+    indptr: &[u32],
+    weights: &[f32],
+    output_grad: &[f32],
+) -> Result<Vec<f32>> {
+    validate_csr_row_inputs(indptr, weights)?;
+    if output_grad.len() != weights.len() || output_grad.iter().any(|value| !value.is_finite()) {
+        return Err(NeuralError::InvalidArgument(
+            "CSR row-softmax output gradient must be finite and match edge shape".to_string(),
+        ));
+    }
+    match selection.selected.as_str() {
+        "cpu" => cpu_csr_row_softmax_backward_f32(indptr, weights, output_grad),
+        "cuda" => cuda_csr_row_softmax_backward_f32(indptr, weights, output_grad),
+        other => Err(NeuralError::InvalidArgument(format!(
+            "backend {other:?} does not provide the CUDA LSTTN CSR row-softmax backward kernel"
+        ))),
+    }
+}
+
+/// Applies one decoupled AdamW update in-place. Parameter and moment buffers
+/// are contiguous tensor storage so a CUDA batch needs no scalar autograd
+/// graph or host-side per-parameter update loop.
+#[allow(clippy::too_many_arguments)]
+pub fn backend_adamw_step_f32(
+    selection: &BackendSelection,
+    parameters: &mut [f32],
+    first_moment: &mut [f32],
+    second_moment: &mut [f32],
+    gradients: &[f32],
+    step: u64,
+    learning_rate: f32,
+    weight_decay: f32,
+) -> Result<()> {
+    if parameters.is_empty()
+        || first_moment.len() != parameters.len()
+        || second_moment.len() != parameters.len()
+        || gradients.len() != parameters.len()
+        || step == 0
+        || !learning_rate.is_finite()
+        || learning_rate <= 0.0
+        || !weight_decay.is_finite()
+        || parameters
+            .iter()
+            .chain(first_moment.iter())
+            .chain(second_moment.iter())
+            .chain(gradients)
+            .any(|v| !v.is_finite())
+    {
+        return Err(NeuralError::InvalidArgument(
+            "invalid AdamW tensor state".to_string(),
+        ));
+    }
+    match selection.selected.as_str() {
+        "cpu" => cpu_adamw_step_f32(
+            parameters,
+            first_moment,
+            second_moment,
+            gradients,
+            step,
+            learning_rate,
+            weight_decay,
+        ),
+        "cuda" => cuda_adamw_step_f32(
+            parameters,
+            first_moment,
+            second_moment,
+            gradients,
+            step,
+            learning_rate,
+            weight_decay,
+        ),
+        other => Err(NeuralError::InvalidArgument(format!(
+            "backend {other:?} does not provide the CUDA LSTTN AdamW kernel"
+        ))),
+    }
+}
+
+/// Applies affine layer normalization to contiguous `[rows, width]` tensors.
+/// This is the normalization used around LSTTN Transformer attention and FFN
+/// residuals; epsilon is fixed to the model's numerically stable `1e-5`.
+pub fn backend_layer_norm_f32(
+    selection: &BackendSelection,
+    values: &[f32],
+    rows: usize,
+    width: usize,
+    gamma: &[f32],
+    beta: &[f32],
+) -> Result<Vec<f32>> {
+    if rows == 0
+        || width == 0
+        || values.len() != rows * width
+        || gamma.len() != width
+        || beta.len() != width
+        || values
+            .iter()
+            .chain(gamma)
+            .chain(beta)
+            .any(|v| !v.is_finite())
+    {
+        return Err(NeuralError::InvalidArgument(
+            "invalid layer-normalization tensor shape or values".to_string(),
+        ));
+    }
+    match selection.selected.as_str() {
+        "cpu" => cpu_layer_norm_f32(values, rows, width, gamma, beta),
+        "cuda" => cuda_layer_norm_f32(values, rows, width, gamma, beta),
+        other => Err(NeuralError::InvalidArgument(format!(
+            "backend {other:?} does not provide the CUDA LSTTN layer-normalization kernel"
+        ))),
+    }
+}
+
+/// Computes LSTTN's zero-masked inverse-scale MAE and its prediction gradient
+/// for contiguous forecast tensors. Targets equal to `masked_zero` do not
+/// contribute to either value or gradient.
+pub fn masked_inverse_scale_mae_f32(
+    predictions: &[f32],
+    targets: &[f32],
+    masked_zero: f32,
+    target_scale: f32,
+) -> Result<(f32, Vec<f32>)> {
+    if predictions.len() != targets.len()
+        || predictions.is_empty()
+        || !masked_zero.is_finite()
+        || !target_scale.is_finite()
+        || target_scale <= 0.0
+        || predictions.iter().chain(targets).any(|v| !v.is_finite())
+    {
+        return Err(NeuralError::InvalidArgument(
+            "invalid masked MAE tensors".to_string(),
+        ));
+    }
+    let valid = targets
+        .iter()
+        .filter(|target| (**target - masked_zero).abs() > 1.0e-12)
+        .count();
+    let mut gradient = vec![0.0; predictions.len()];
+    if valid == 0 {
+        return Ok((0.0, gradient));
+    }
+    let scale = target_scale / valid as f32;
+    let mut loss = 0.0;
+    for index in 0..predictions.len() {
+        if (targets[index] - masked_zero).abs() > 1.0e-12 {
+            let residual = predictions[index] - targets[index];
+            loss += residual.abs() * scale;
+            gradient[index] = if residual > 0.0 {
+                scale
+            } else if residual < 0.0 {
+                -scale
+            } else {
+                0.0
+            };
+        }
+    }
+    Ok((loss, gradient))
+}
+
+fn cpu_layer_norm_f32(
+    values: &[f32],
+    rows: usize,
+    width: usize,
+    gamma: &[f32],
+    beta: &[f32],
+) -> Result<Vec<f32>> {
+    let mut output = vec![0.0; values.len()];
+    for row in 0..rows {
+        let input = &values[row * width..(row + 1) * width];
+        let mean = input.iter().sum::<f32>() / width as f32;
+        let variance = input.iter().map(|v| (v - mean) * (v - mean)).sum::<f32>() / width as f32;
+        for col in 0..width {
+            output[row * width + col] =
+                (input[col] - mean) / (variance + 1.0e-5).sqrt() * gamma[col] + beta[col];
+        }
+    }
+    Ok(output)
+}
+
+fn cpu_adamw_step_f32(
+    parameters: &mut [f32],
+    first: &mut [f32],
+    second: &mut [f32],
+    gradients: &[f32],
+    step: u64,
+    learning_rate: f32,
+    weight_decay: f32,
+) -> Result<()> {
+    let correction_first = 1.0 - 0.9_f32.powi(step as i32);
+    let correction_second = 1.0 - 0.999_f32.powi(step as i32);
+    for index in 0..parameters.len() {
+        let gradient = gradients[index] + weight_decay * parameters[index];
+        first[index] = 0.9 * first[index] + 0.1 * gradient;
+        second[index] = 0.999 * second[index] + 0.001 * gradient * gradient;
+        parameters[index] -= learning_rate * (first[index] / correction_first)
+            / ((second[index] / correction_second).sqrt() + 1.0e-8);
+    }
+    Ok(())
+}
+
+fn validate_csr_row_inputs(indptr: &[u32], values: &[f32]) -> Result<()> {
+    if indptr.len() < 2
+        || indptr[0] != 0
+        || indptr.last().copied() != Some(values.len() as u32)
+        || indptr.windows(2).any(|pair| pair[0] > pair[1])
+        || values.iter().any(|value| !value.is_finite())
+    {
+        return Err(NeuralError::InvalidArgument(
+            "invalid CSR row tensor inputs".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn cpu_csr_row_softmax_f32(indptr: &[u32], logits: &[f32]) -> Result<Vec<f32>> {
+    let mut weights = vec![0.0; logits.len()];
+    for row in 0..indptr.len() - 1 {
+        let range = indptr[row] as usize..indptr[row + 1] as usize;
+        if range.is_empty() {
+            continue;
+        }
+        let maximum = logits[range.clone()]
+            .iter()
+            .copied()
+            .fold(f32::NEG_INFINITY, f32::max);
+        let denominator = range
+            .clone()
+            .map(|edge| (logits[edge] - maximum).exp())
+            .sum::<f32>();
+        for edge in range {
+            weights[edge] = (logits[edge] - maximum).exp() / denominator;
+        }
+    }
+    Ok(weights)
+}
+
+fn cpu_csr_row_softmax_backward_f32(
+    indptr: &[u32],
+    weights: &[f32],
+    output_grad: &[f32],
+) -> Result<Vec<f32>> {
+    let mut logits_grad = vec![0.0; weights.len()];
+    for row in 0..indptr.len() - 1 {
+        let range = indptr[row] as usize..indptr[row + 1] as usize;
+        let dot = range
+            .clone()
+            .map(|edge| weights[edge] * output_grad[edge])
+            .sum::<f32>();
+        for edge in range {
+            logits_grad[edge] = weights[edge] * (output_grad[edge] - dot);
+        }
+    }
+    Ok(logits_grad)
+}
+
+fn validate_csr_diffusion_inputs(
+    indptr: &[u32],
+    indices: &[u32],
+    weights: &[f32],
+    channels: usize,
+    values: &[f32],
+) -> Result<()> {
+    if indptr.len() < 2
+        || indptr[0] != 0
+        || indptr.last().copied() != Some(indices.len() as u32)
+        || indices.len() != weights.len()
+        || channels == 0
+        || !values.len().is_multiple_of((indptr.len() - 1) * channels)
+        || indptr.windows(2).any(|pair| pair[0] > pair[1])
+        || indices
+            .iter()
+            .any(|index| *index as usize >= indptr.len() - 1)
+        || weights
+            .iter()
+            .chain(values.iter())
+            .any(|value| !value.is_finite())
+    {
+        return Err(NeuralError::InvalidArgument(
+            "invalid contiguous CSR diffusion tensor inputs".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn cpu_csr_diffusion_f32(
+    indptr: &[u32],
+    indices: &[u32],
+    weights: &[f32],
+    channels: usize,
+    values: &[f32],
+) -> Result<Vec<f32>> {
+    let nodes = indptr.len() - 1;
+    let mut output = vec![0.0; values.len()];
+    for batch in 0..values.len() / (nodes * channels) {
+        for row in 0..nodes {
+            for edge in indptr[row] as usize..indptr[row + 1] as usize {
+                let source = indices[edge] as usize;
+                for channel in 0..channels {
+                    output[(batch * nodes + row) * channels + channel] +=
+                        weights[edge] * values[(batch * nodes + source) * channels + channel];
+                }
+            }
+        }
+    }
+    Ok(output)
+}
+
+fn cpu_csr_diffusion_backward_f32(
+    indptr: &[u32],
+    indices: &[u32],
+    weights: &[f32],
+    channels: usize,
+    values: &[f32],
+    output_grad: &[f32],
+) -> Result<CsrDiffusionBackward> {
+    let nodes = indptr.len() - 1;
+    let mut input_grad = vec![0.0; values.len()];
+    let mut edge_grad = vec![0.0; weights.len()];
+    for batch in 0..values.len() / (nodes * channels) {
+        for row in 0..nodes {
+            for edge in indptr[row] as usize..indptr[row + 1] as usize {
+                let source = indices[edge] as usize;
+                for channel in 0..channels {
+                    let gradient = output_grad[(batch * nodes + row) * channels + channel];
+                    input_grad[(batch * nodes + source) * channels + channel] +=
+                        weights[edge] * gradient;
+                    edge_grad[edge] +=
+                        gradient * values[(batch * nodes + source) * channels + channel];
+                }
+            }
+        }
+    }
+    Ok(CsrDiffusionBackward {
+        input_grad,
+        edge_grad,
+    })
 }
 
 /// Evaluates a topologically ordered scalar computation graph on the selected
@@ -2193,6 +2615,7 @@ struct CudaRuntime {
     cu_init: extern "C" fn(u32) -> CudaError,
     cu_device_get_count: extern "C" fn(*mut i32) -> CudaError,
     cu_device_get: extern "C" fn(*mut CudaDevice, i32) -> CudaError,
+    cu_device_get_attribute: extern "C" fn(*mut i32, i32, CudaDevice) -> CudaError,
     cu_ctx_create_v2: extern "C" fn(*mut CudaContext, u32, CudaDevice) -> CudaError,
     cu_ctx_destroy_v2: extern "C" fn(CudaContext) -> CudaError,
     cu_ctx_synchronize: extern "C" fn() -> CudaError,
@@ -2231,6 +2654,7 @@ struct CudaRuntime {
     nvrtc_destroy_program: extern "C" fn(*mut NvrtcProgram) -> CudaError,
     nvrtc_get_program_log_size: extern "C" fn(NvrtcProgram, *mut usize) -> CudaError,
     nvrtc_get_program_log: extern "C" fn(NvrtcProgram, *mut c_char) -> CudaError,
+    context: std::cell::RefCell<Option<CudaContext>>,
 }
 
 #[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
@@ -2284,6 +2708,9 @@ impl CudaRuntime {
             cu_init: unsafe { load_symbol(&driver_library, b"cuInit\0")? },
             cu_device_get_count: unsafe { load_symbol(&driver_library, b"cuDeviceGetCount\0")? },
             cu_device_get: unsafe { load_symbol(&driver_library, b"cuDeviceGet\0")? },
+            cu_device_get_attribute: unsafe {
+                load_symbol(&driver_library, b"cuDeviceGetAttribute\0")?
+            },
             cu_ctx_create_v2: unsafe { load_symbol(&driver_library, b"cuCtxCreate_v2\0")? },
             cu_ctx_destroy_v2: unsafe { load_symbol(&driver_library, b"cuCtxDestroy_v2\0")? },
             cu_ctx_synchronize: unsafe { load_symbol(&driver_library, b"cuCtxSynchronize\0")? },
@@ -2306,6 +2733,7 @@ impl CudaRuntime {
                 load_symbol(&rtc_library, b"nvrtcGetProgramLogSize\0")?
             },
             nvrtc_get_program_log: unsafe { load_symbol(&rtc_library, b"nvrtcGetProgramLog\0")? },
+            context: std::cell::RefCell::new(None),
             _driver_library: driver_library,
             _rtc_library: rtc_library,
         })
@@ -2351,6 +2779,51 @@ impl CudaRuntime {
         Ok(device)
     }
 
+    fn device_compute_capability(&self, device: CudaDevice) -> Result<(i32, i32)> {
+        // CUDA driver attributes 75 and 76 are the stable major/minor
+        // compute-capability identifiers. Compiling for the actual device is
+        // necessary on CUDA 13, which no longer accepts compute_52.
+        const CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR: i32 = 75;
+        const CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR: i32 = 76;
+        let mut major = 0;
+        let mut minor = 0;
+        self.check_cuda(
+            (self.cu_device_get_attribute)(
+                &mut major,
+                CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR,
+                device,
+            ),
+            "failed to query CUDA compute capability major",
+        )?;
+        self.check_cuda(
+            (self.cu_device_get_attribute)(
+                &mut minor,
+                CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR,
+                device,
+            ),
+            "failed to query CUDA compute capability minor",
+        )?;
+        if major <= 0 || minor < 0 {
+            return Err(NeuralError::InvalidArgument(
+                "CUDA device returned an invalid compute capability".to_string(),
+            ));
+        }
+        Ok((major, minor))
+    }
+
+    fn ensure_context(&self, device: CudaDevice) -> Result<()> {
+        if self.context.borrow().is_some() {
+            return Ok(());
+        }
+        let mut context = std::ptr::null_mut();
+        self.check_cuda(
+            (self.cu_ctx_create_v2)(&mut context, 0, device),
+            "failed to create CUDA context",
+        )?;
+        *self.context.borrow_mut() = Some(context);
+        Ok(())
+    }
+
     fn program_log(&self, program: NvrtcProgram) -> String {
         let mut size = 0usize;
         if (self.nvrtc_get_program_log_size)(program, &mut size) != 0 || size == 0 {
@@ -2380,9 +2853,14 @@ impl CudaRuntime {
         let entry_c = CString::new(entry).map_err(|err| {
             NeuralError::InvalidArgument(format!("CUDA kernel entry contains NUL bytes: {err}"))
         })?;
+        let device = self.prepare_device()?;
+        let (major, minor) = self.device_compute_capability(device)?;
+        self.ensure_context(device)?;
+        let architecture = CString::new(format!("--gpu-architecture=compute_{major}{minor}"))
+            .expect("computed CUDA architecture cannot contain NUL");
         let compile_options = [
             CString::new("--std=c++14").expect("static compile option"),
-            CString::new("--gpu-architecture=compute_52").expect("static compile option"),
+            architecture,
         ];
         let option_ptrs = compile_options
             .iter()
@@ -2433,13 +2911,6 @@ impl CudaRuntime {
             "failed to destroy the CUDA NVRTC program",
         )?;
 
-        let device = self.prepare_device()?;
-        let mut context: CudaContext = std::ptr::null_mut();
-        self.check_cuda(
-            (self.cu_ctx_create_v2)(&mut context, 0, device),
-            "failed to create a CUDA context",
-        )?;
-
         let mut module: CudaModule = std::ptr::null_mut();
         let result = (|| -> Result<T> {
             self.check_cuda(
@@ -2462,20 +2933,19 @@ impl CudaRuntime {
                 "failed to unload the CUDA module",
             )
         };
-        let destroy_result = if context.is_null() {
-            Ok(())
-        } else {
-            self.check_cuda(
-                (self.cu_ctx_destroy_v2)(context),
-                "failed to destroy the CUDA context",
-            )
-        };
+        match (result, unload_result) {
+            (Ok(value), Ok(())) => Ok(value),
+            (Ok(_), Err(err)) => Err(err),
+            (Err(err), _) => Err(err),
+        }
+    }
+}
 
-        match (result, unload_result, destroy_result) {
-            (Ok(value), Ok(()), Ok(())) => Ok(value),
-            (Ok(_), Err(err), _) => Err(err),
-            (Ok(_), Ok(()), Err(err)) => Err(err),
-            (Err(err), _, _) => Err(err),
+#[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
+impl Drop for CudaRuntime {
+    fn drop(&mut self) {
+        if let Some(context) = self.context.get_mut().take() {
+            let _ = (self.cu_ctx_destroy_v2)(context);
         }
     }
 }
@@ -2529,7 +2999,10 @@ impl CudaDeviceBuffer {
     fn new(runtime: &CudaRuntime, bytes: usize) -> Result<Self> {
         let mut ptr = 0u64;
         runtime.check_cuda(
-            (runtime.cu_mem_alloc_v2)(&mut ptr, bytes),
+            // CUDA does not permit zero-byte allocations. Empty CSR edge
+            // arrays still need a harmless device pointer; kernels never
+            // dereference it because their row ranges are empty.
+            (runtime.cu_mem_alloc_v2)(&mut ptr, bytes.max(1)),
             "failed to allocate CUDA device memory",
         )?;
         Ok(Self {
@@ -2549,6 +3022,157 @@ impl Drop for CudaDeviceBuffer {
         if self.ptr != 0 {
             let _ = (self.free)(self.ptr);
         }
+    }
+}
+
+/// Reusable device-resident CSR diffusion plan. Graph buffers are uploaded
+/// once and activation buffers only grow when a later batch requires more
+/// capacity. It is deliberately single-threaded: CUDA contexts and the
+/// LSTTN trainer both have deterministic single-stream ownership.
+#[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
+pub struct CudaCsrDiffusionWorkspace {
+    // Keep `runtime` first: Rust drops fields in reverse declaration order,
+    // so buffers are freed before the runtime destroys its CUDA context.
+    runtime: CudaRuntime,
+    indptr: CudaDeviceBuffer,
+    indices: CudaDeviceBuffer,
+    weights: CudaDeviceBuffer,
+    values: Option<CudaDeviceBuffer>,
+    output: Option<CudaDeviceBuffer>,
+    nodes: usize,
+    value_capacity: usize,
+    allocation_count: usize,
+}
+
+#[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
+impl CudaCsrDiffusionWorkspace {
+    pub fn new(indptr: &[u32], indices: &[u32], weights: &[f32]) -> Result<Self> {
+        // A one-channel empty batch exercises graph validation without
+        // allocating a host-sized activation tensor.
+        validate_csr_diffusion_inputs(indptr, indices, weights, 1, &[])?;
+        let runtime = CudaRuntime::new()?;
+        let device = runtime.prepare_device()?;
+        runtime.ensure_context(device)?;
+        let indptr_buffer = CudaDeviceBuffer::new(&runtime, std::mem::size_of_val(indptr))?;
+        let indices_buffer = CudaDeviceBuffer::new(&runtime, std::mem::size_of_val(indices))?;
+        let weights_buffer = CudaDeviceBuffer::new(&runtime, std::mem::size_of_val(weights))?;
+        cuda_copy_to_device(&runtime, &indptr_buffer, indptr)?;
+        cuda_copy_to_device(&runtime, &indices_buffer, indices)?;
+        cuda_copy_to_device(&runtime, &weights_buffer, weights)?;
+        Ok(Self {
+            runtime,
+            indptr: indptr_buffer,
+            indices: indices_buffer,
+            weights: weights_buffer,
+            values: None,
+            output: None,
+            nodes: indptr.len() - 1,
+            value_capacity: 0,
+            allocation_count: 3,
+        })
+    }
+
+    pub fn allocation_count(&self) -> usize {
+        self.allocation_count
+    }
+
+    pub fn value_capacity(&self) -> usize {
+        self.value_capacity
+    }
+
+    fn ensure_value_capacity(&mut self, len: usize) -> Result<()> {
+        if len <= self.value_capacity {
+            return Ok(());
+        }
+        self.values = Some(CudaDeviceBuffer::new(
+            &self.runtime,
+            len * std::mem::size_of::<f32>(),
+        )?);
+        self.output = Some(CudaDeviceBuffer::new(
+            &self.runtime,
+            len * std::mem::size_of::<f32>(),
+        )?);
+        self.value_capacity = len;
+        self.allocation_count += 2;
+        Ok(())
+    }
+
+    /// Executes a contiguous `[batch, nodes, channels]` tensor using the
+    /// resident CSR graph. The host copy is intentionally limited to the
+    /// public primitive boundary; the LSTTN executor keeps intermediate
+    /// tensors device-resident and reuses this same allocation policy.
+    pub fn diffuse(&mut self, channels: usize, values: &[f32]) -> Result<Vec<f32>> {
+        if channels == 0
+            || values.len() % (self.nodes * channels) != 0
+            || values.iter().any(|value| !value.is_finite())
+        {
+            return Err(NeuralError::InvalidArgument(
+                "CSR workspace values must be finite [batch, nodes, channels] data".to_string(),
+            ));
+        }
+        self.ensure_value_capacity(values.len())?;
+        let batches = values.len() / (self.nodes * channels);
+        let values_buffer = self.values.as_ref().expect("allocated value buffer");
+        let output_buffer = self.output.as_ref().expect("allocated output buffer");
+        cuda_copy_to_device(&self.runtime, values_buffer, values)?;
+        const SOURCE: &str = r#"
+            extern "C" __global__ void csr_diffusion_f32(
+                const unsigned int* indptr, const unsigned int* indices,
+                const float* weights, const float* values, float* output,
+                unsigned int batches, unsigned int nodes, unsigned int channels
+            ) {
+                unsigned int item = blockIdx.x * blockDim.x + threadIdx.x;
+                unsigned int total = batches * nodes * channels;
+                if (item >= total) return;
+                unsigned int channel = item % channels;
+                unsigned int node_batch = item / channels;
+                unsigned int row = node_batch % nodes;
+                unsigned int batch = node_batch / nodes;
+                float sum = 0.0f;
+                for (unsigned int edge = indptr[row]; edge < indptr[row + 1]; ++edge)
+                    sum += weights[edge] * values[((batch * nodes + indices[edge]) * channels) + channel];
+                output[item] = sum;
+            }
+        "#;
+        self.runtime
+            .with_compiled_kernel(SOURCE, "csr_diffusion_f32", |function| {
+                let mut indptr_ptr = self.indptr.as_device_ptr();
+                let mut indices_ptr = self.indices.as_device_ptr();
+                let mut weights_ptr = self.weights.as_device_ptr();
+                let mut values_ptr = values_buffer.as_device_ptr();
+                let mut output_ptr = output_buffer.as_device_ptr();
+                let mut batches_param = batches as u32;
+                let mut nodes_param = self.nodes as u32;
+                let mut channels_param = channels as u32;
+                let mut args = [
+                    (&mut indptr_ptr as *mut u64).cast::<c_void>(),
+                    (&mut indices_ptr as *mut u64).cast::<c_void>(),
+                    (&mut weights_ptr as *mut u64).cast::<c_void>(),
+                    (&mut values_ptr as *mut u64).cast::<c_void>(),
+                    (&mut output_ptr as *mut u64).cast::<c_void>(),
+                    (&mut batches_param as *mut u32).cast::<c_void>(),
+                    (&mut nodes_param as *mut u32).cast::<c_void>(),
+                    (&mut channels_param as *mut u32).cast::<c_void>(),
+                ];
+                cuda_launch_kernel(
+                    &self.runtime,
+                    function,
+                    values.len().div_ceil(256) as u32,
+                    1,
+                    1,
+                    256,
+                    1,
+                    1,
+                    &mut args,
+                )?;
+                self.runtime.check_cuda(
+                    (self.runtime.cu_ctx_synchronize)(),
+                    "failed to synchronize CUDA CSR workspace",
+                )?;
+                let mut output = vec![0.0; values.len()];
+                cuda_copy_from_device(&self.runtime, &mut output, output_buffer)?;
+                Ok(output)
+            })
     }
 }
 
@@ -3044,6 +3668,502 @@ fn cuda_train_tanh_mlp_f32(
             cuda_copy_from_device(runtime, parameters, &parameter_buffer)
         })
     })
+}
+
+#[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
+fn cuda_csr_diffusion_f32(
+    indptr: &[u32],
+    indices: &[u32],
+    weights: &[f32],
+    channels: usize,
+    values: &[f32],
+) -> Result<Vec<f32>> {
+    const SOURCE: &str = r#"
+        extern "C" __global__ void csr_diffusion_f32(
+            const unsigned int* indptr, const unsigned int* indices,
+            const float* weights, const float* values, float* output,
+            unsigned int batches, unsigned int nodes, unsigned int channels
+        ) {
+            unsigned int item = blockIdx.x * blockDim.x + threadIdx.x;
+            unsigned int total = batches * nodes * channels;
+            if (item >= total) return;
+            unsigned int channel = item % channels;
+            unsigned int node_batch = item / channels;
+            unsigned int row = node_batch % nodes;
+            unsigned int batch = node_batch / nodes;
+            float sum = 0.0f;
+            for (unsigned int edge = indptr[row]; edge < indptr[row + 1]; ++edge) {
+                sum += weights[edge] * values[((batch * nodes + indices[edge]) * channels) + channel];
+            }
+            output[item] = sum;
+        }
+    "#;
+    let nodes = indptr.len() - 1;
+    let batches = values.len() / (nodes * channels);
+    with_cuda_runtime(|runtime| {
+        runtime.with_compiled_kernel(SOURCE, "csr_diffusion_f32", |function| {
+            let indptr_buffer = CudaDeviceBuffer::new(runtime, std::mem::size_of_val(indptr))?;
+            let indices_buffer = CudaDeviceBuffer::new(runtime, std::mem::size_of_val(indices))?;
+            let weights_buffer = CudaDeviceBuffer::new(runtime, std::mem::size_of_val(weights))?;
+            let values_buffer = CudaDeviceBuffer::new(runtime, std::mem::size_of_val(values))?;
+            let output_buffer = CudaDeviceBuffer::new(runtime, std::mem::size_of_val(values))?;
+            cuda_copy_to_device(runtime, &indptr_buffer, indptr)?;
+            cuda_copy_to_device(runtime, &indices_buffer, indices)?;
+            cuda_copy_to_device(runtime, &weights_buffer, weights)?;
+            cuda_copy_to_device(runtime, &values_buffer, values)?;
+            let mut indptr_ptr = indptr_buffer.as_device_ptr();
+            let mut indices_ptr = indices_buffer.as_device_ptr();
+            let mut weights_ptr = weights_buffer.as_device_ptr();
+            let mut values_ptr = values_buffer.as_device_ptr();
+            let mut output_ptr = output_buffer.as_device_ptr();
+            let mut batches_param = batches as u32;
+            let mut nodes_param = nodes as u32;
+            let mut channels_param = channels as u32;
+            let mut args = [
+                (&mut indptr_ptr as *mut u64).cast::<c_void>(),
+                (&mut indices_ptr as *mut u64).cast::<c_void>(),
+                (&mut weights_ptr as *mut u64).cast::<c_void>(),
+                (&mut values_ptr as *mut u64).cast::<c_void>(),
+                (&mut output_ptr as *mut u64).cast::<c_void>(),
+                (&mut batches_param as *mut u32).cast::<c_void>(),
+                (&mut nodes_param as *mut u32).cast::<c_void>(),
+                (&mut channels_param as *mut u32).cast::<c_void>(),
+            ];
+            cuda_launch_kernel(
+                runtime,
+                function,
+                values.len().div_ceil(256) as u32,
+                1,
+                1,
+                256,
+                1,
+                1,
+                &mut args,
+            )?;
+            runtime.check_cuda(
+                (runtime.cu_ctx_synchronize)(),
+                "failed to synchronize CUDA CSR diffusion",
+            )?;
+            let mut output = vec![0.0; values.len()];
+            cuda_copy_from_device(runtime, &mut output, &output_buffer)?;
+            Ok(output)
+        })
+    })
+}
+
+#[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
+fn cuda_csr_diffusion_backward_f32(
+    indptr: &[u32],
+    indices: &[u32],
+    weights: &[f32],
+    channels: usize,
+    values: &[f32],
+    output_grad: &[f32],
+) -> Result<CsrDiffusionBackward> {
+    const SOURCE: &str = r#"
+        extern "C" __global__ void csr_diffusion_backward_f32(
+            const unsigned int* indptr, const unsigned int* indices, const float* weights,
+            const float* values, const float* output_grad, float* input_grad, float* edge_grad,
+            unsigned int batches, unsigned int nodes, unsigned int channels
+        ) {
+            unsigned int item = blockIdx.x * blockDim.x + threadIdx.x;
+            unsigned int total = batches * nodes * channels;
+            if (item >= total) return;
+            unsigned int channel = item % channels;
+            unsigned int node_batch = item / channels;
+            unsigned int row = node_batch % nodes;
+            unsigned int batch = node_batch / nodes;
+            float gradient = output_grad[item];
+            for (unsigned int edge = indptr[row]; edge < indptr[row + 1]; ++edge) {
+                unsigned int source = indices[edge];
+                atomicAdd(&input_grad[((batch * nodes + source) * channels) + channel], weights[edge] * gradient);
+                atomicAdd(&edge_grad[edge], gradient * values[((batch * nodes + source) * channels) + channel]);
+            }
+        }
+    "#;
+    let nodes = indptr.len() - 1;
+    let batches = values.len() / (nodes * channels);
+    with_cuda_runtime(|runtime| {
+        runtime.with_compiled_kernel(SOURCE, "csr_diffusion_backward_f32", |function| {
+            let indptr_buffer = CudaDeviceBuffer::new(runtime, std::mem::size_of_val(indptr))?;
+            let indices_buffer = CudaDeviceBuffer::new(runtime, std::mem::size_of_val(indices))?;
+            let weights_buffer = CudaDeviceBuffer::new(runtime, std::mem::size_of_val(weights))?;
+            let values_buffer = CudaDeviceBuffer::new(runtime, std::mem::size_of_val(values))?;
+            let output_grad_buffer =
+                CudaDeviceBuffer::new(runtime, std::mem::size_of_val(output_grad))?;
+            let input_grad_buffer = CudaDeviceBuffer::new(runtime, std::mem::size_of_val(values))?;
+            let edge_grad_buffer = CudaDeviceBuffer::new(runtime, std::mem::size_of_val(weights))?;
+            cuda_copy_to_device(runtime, &indptr_buffer, indptr)?;
+            cuda_copy_to_device(runtime, &indices_buffer, indices)?;
+            cuda_copy_to_device(runtime, &weights_buffer, weights)?;
+            cuda_copy_to_device(runtime, &values_buffer, values)?;
+            cuda_copy_to_device(runtime, &output_grad_buffer, output_grad)?;
+            cuda_copy_to_device(runtime, &input_grad_buffer, &vec![0.0f32; values.len()])?;
+            cuda_copy_to_device(runtime, &edge_grad_buffer, &vec![0.0f32; weights.len()])?;
+            let mut indptr_ptr = indptr_buffer.as_device_ptr();
+            let mut indices_ptr = indices_buffer.as_device_ptr();
+            let mut weights_ptr = weights_buffer.as_device_ptr();
+            let mut values_ptr = values_buffer.as_device_ptr();
+            let mut output_grad_ptr = output_grad_buffer.as_device_ptr();
+            let mut input_grad_ptr = input_grad_buffer.as_device_ptr();
+            let mut edge_grad_ptr = edge_grad_buffer.as_device_ptr();
+            let mut batches_param = batches as u32;
+            let mut nodes_param = nodes as u32;
+            let mut channels_param = channels as u32;
+            let mut args = [
+                (&mut indptr_ptr as *mut u64).cast::<c_void>(),
+                (&mut indices_ptr as *mut u64).cast::<c_void>(),
+                (&mut weights_ptr as *mut u64).cast::<c_void>(),
+                (&mut values_ptr as *mut u64).cast::<c_void>(),
+                (&mut output_grad_ptr as *mut u64).cast::<c_void>(),
+                (&mut input_grad_ptr as *mut u64).cast::<c_void>(),
+                (&mut edge_grad_ptr as *mut u64).cast::<c_void>(),
+                (&mut batches_param as *mut u32).cast::<c_void>(),
+                (&mut nodes_param as *mut u32).cast::<c_void>(),
+                (&mut channels_param as *mut u32).cast::<c_void>(),
+            ];
+            cuda_launch_kernel(
+                runtime,
+                function,
+                values.len().div_ceil(256) as u32,
+                1,
+                1,
+                256,
+                1,
+                1,
+                &mut args,
+            )?;
+            runtime.check_cuda(
+                (runtime.cu_ctx_synchronize)(),
+                "failed to synchronize CUDA CSR diffusion backward",
+            )?;
+            let mut input_grad = vec![0.0; values.len()];
+            let mut edge_grad = vec![0.0; weights.len()];
+            cuda_copy_from_device(runtime, &mut input_grad, &input_grad_buffer)?;
+            cuda_copy_from_device(runtime, &mut edge_grad, &edge_grad_buffer)?;
+            Ok(CsrDiffusionBackward {
+                input_grad,
+                edge_grad,
+            })
+        })
+    })
+}
+
+#[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
+fn cuda_csr_row_softmax_f32(indptr: &[u32], logits: &[f32]) -> Result<Vec<f32>> {
+    const SOURCE: &str = r#"
+        extern "C" __global__ void csr_row_softmax_f32(
+            const unsigned int* indptr, const float* logits, float* weights, unsigned int rows
+        ) {
+            unsigned int row = blockIdx.x * blockDim.x + threadIdx.x;
+            if (row >= rows) return;
+            unsigned int start = indptr[row], end = indptr[row + 1];
+            if (start == end) return;
+            float maximum = logits[start];
+            for (unsigned int edge = start + 1; edge < end; ++edge) maximum = fmaxf(maximum, logits[edge]);
+            float sum = 0.0f;
+            for (unsigned int edge = start; edge < end; ++edge) sum += expf(logits[edge] - maximum);
+            for (unsigned int edge = start; edge < end; ++edge) weights[edge] = expf(logits[edge] - maximum) / sum;
+        }
+    "#;
+    let rows = indptr.len() - 1;
+    with_cuda_runtime(|runtime| {
+        runtime.with_compiled_kernel(SOURCE, "csr_row_softmax_f32", |function| {
+            let indptr_buffer = CudaDeviceBuffer::new(runtime, std::mem::size_of_val(indptr))?;
+            let logits_buffer = CudaDeviceBuffer::new(runtime, std::mem::size_of_val(logits))?;
+            let weights_buffer = CudaDeviceBuffer::new(runtime, std::mem::size_of_val(logits))?;
+            cuda_copy_to_device(runtime, &indptr_buffer, indptr)?;
+            cuda_copy_to_device(runtime, &logits_buffer, logits)?;
+            let mut indptr_ptr = indptr_buffer.as_device_ptr();
+            let mut logits_ptr = logits_buffer.as_device_ptr();
+            let mut weights_ptr = weights_buffer.as_device_ptr();
+            let mut rows_param = rows as u32;
+            let mut args = [
+                (&mut indptr_ptr as *mut u64).cast::<c_void>(),
+                (&mut logits_ptr as *mut u64).cast::<c_void>(),
+                (&mut weights_ptr as *mut u64).cast::<c_void>(),
+                (&mut rows_param as *mut u32).cast::<c_void>(),
+            ];
+            cuda_launch_kernel(
+                runtime,
+                function,
+                rows.div_ceil(128) as u32,
+                1,
+                1,
+                128,
+                1,
+                1,
+                &mut args,
+            )?;
+            runtime.check_cuda(
+                (runtime.cu_ctx_synchronize)(),
+                "failed to synchronize CUDA CSR row-softmax",
+            )?;
+            let mut weights = vec![0.0; logits.len()];
+            cuda_copy_from_device(runtime, &mut weights, &weights_buffer)?;
+            Ok(weights)
+        })
+    })
+}
+
+#[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
+fn cuda_csr_row_softmax_backward_f32(
+    indptr: &[u32],
+    weights: &[f32],
+    output_grad: &[f32],
+) -> Result<Vec<f32>> {
+    const SOURCE: &str = r#"
+        extern "C" __global__ void csr_row_softmax_backward_f32(
+            const unsigned int* indptr, const float* weights, const float* output_grad,
+            float* logits_grad, unsigned int rows
+        ) {
+            unsigned int row = blockIdx.x * blockDim.x + threadIdx.x;
+            if (row >= rows) return;
+            unsigned int start = indptr[row], end = indptr[row + 1];
+            float dot = 0.0f;
+            for (unsigned int edge = start; edge < end; ++edge) dot += weights[edge] * output_grad[edge];
+            for (unsigned int edge = start; edge < end; ++edge) logits_grad[edge] = weights[edge] * (output_grad[edge] - dot);
+        }
+    "#;
+    let rows = indptr.len() - 1;
+    with_cuda_runtime(|runtime| {
+        runtime.with_compiled_kernel(SOURCE, "csr_row_softmax_backward_f32", |function| {
+            let indptr_buffer = CudaDeviceBuffer::new(runtime, std::mem::size_of_val(indptr))?;
+            let weights_buffer = CudaDeviceBuffer::new(runtime, std::mem::size_of_val(weights))?;
+            let output_grad_buffer =
+                CudaDeviceBuffer::new(runtime, std::mem::size_of_val(output_grad))?;
+            let logits_grad_buffer =
+                CudaDeviceBuffer::new(runtime, std::mem::size_of_val(weights))?;
+            cuda_copy_to_device(runtime, &indptr_buffer, indptr)?;
+            cuda_copy_to_device(runtime, &weights_buffer, weights)?;
+            cuda_copy_to_device(runtime, &output_grad_buffer, output_grad)?;
+            let mut indptr_ptr = indptr_buffer.as_device_ptr();
+            let mut weights_ptr = weights_buffer.as_device_ptr();
+            let mut output_grad_ptr = output_grad_buffer.as_device_ptr();
+            let mut logits_grad_ptr = logits_grad_buffer.as_device_ptr();
+            let mut rows_param = rows as u32;
+            let mut args = [
+                (&mut indptr_ptr as *mut u64).cast::<c_void>(),
+                (&mut weights_ptr as *mut u64).cast::<c_void>(),
+                (&mut output_grad_ptr as *mut u64).cast::<c_void>(),
+                (&mut logits_grad_ptr as *mut u64).cast::<c_void>(),
+                (&mut rows_param as *mut u32).cast::<c_void>(),
+            ];
+            cuda_launch_kernel(
+                runtime,
+                function,
+                rows.div_ceil(128) as u32,
+                1,
+                1,
+                128,
+                1,
+                1,
+                &mut args,
+            )?;
+            runtime.check_cuda(
+                (runtime.cu_ctx_synchronize)(),
+                "failed to synchronize CUDA CSR row-softmax backward",
+            )?;
+            let mut logits_grad = vec![0.0; weights.len()];
+            cuda_copy_from_device(runtime, &mut logits_grad, &logits_grad_buffer)?;
+            Ok(logits_grad)
+        })
+    })
+}
+
+#[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
+fn cuda_adamw_step_f32(
+    parameters: &mut [f32],
+    first: &mut [f32],
+    second: &mut [f32],
+    gradients: &[f32],
+    step: u64,
+    learning_rate: f32,
+    weight_decay: f32,
+) -> Result<()> {
+    const SOURCE: &str = r#"
+        extern "C" __global__ void adamw_f32(float* p, float* m, float* v, const float* g, unsigned int len, unsigned long long step, float lr, float wd) {
+            unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; if (i >= len) return;
+            float gradient = g[i] + wd * p[i]; m[i] = 0.9f * m[i] + 0.1f * gradient; v[i] = 0.999f * v[i] + 0.001f * gradient * gradient;
+            float m_hat = m[i] / (1.0f - powf(0.9f, (float)step)); float v_hat = v[i] / (1.0f - powf(0.999f, (float)step));
+            p[i] -= lr * m_hat / (sqrtf(v_hat) + 1.0e-8f);
+        }
+    "#;
+    with_cuda_runtime(|runtime| {
+        runtime.with_compiled_kernel(SOURCE, "adamw_f32", |function| {
+            let p = CudaDeviceBuffer::new(runtime, std::mem::size_of_val(parameters))?;
+            let m = CudaDeviceBuffer::new(runtime, std::mem::size_of_val(first))?;
+            let v = CudaDeviceBuffer::new(runtime, std::mem::size_of_val(second))?;
+            let g = CudaDeviceBuffer::new(runtime, std::mem::size_of_val(gradients))?;
+            cuda_copy_to_device(runtime, &p, parameters)?;
+            cuda_copy_to_device(runtime, &m, first)?;
+            cuda_copy_to_device(runtime, &v, second)?;
+            cuda_copy_to_device(runtime, &g, gradients)?;
+            let mut pp = p.as_device_ptr();
+            let mut mp = m.as_device_ptr();
+            let mut vp = v.as_device_ptr();
+            let mut gp = g.as_device_ptr();
+            let mut len = parameters.len() as u32;
+            let mut step = step;
+            let mut lr = learning_rate;
+            let mut wd = weight_decay;
+            let mut args = [
+                (&mut pp as *mut u64).cast::<c_void>(),
+                (&mut mp as *mut u64).cast::<c_void>(),
+                (&mut vp as *mut u64).cast::<c_void>(),
+                (&mut gp as *mut u64).cast::<c_void>(),
+                (&mut len as *mut u32).cast::<c_void>(),
+                (&mut step as *mut u64).cast::<c_void>(),
+                (&mut lr as *mut f32).cast::<c_void>(),
+                (&mut wd as *mut f32).cast::<c_void>(),
+            ];
+            cuda_launch_kernel(
+                runtime,
+                function,
+                parameters.len().div_ceil(256) as u32,
+                1,
+                1,
+                256,
+                1,
+                1,
+                &mut args,
+            )?;
+            runtime.check_cuda(
+                (runtime.cu_ctx_synchronize)(),
+                "failed to synchronize CUDA AdamW",
+            )?;
+            cuda_copy_from_device(runtime, parameters, &p)?;
+            cuda_copy_from_device(runtime, first, &m)?;
+            cuda_copy_from_device(runtime, second, &v)
+        })
+    })
+}
+
+#[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
+fn cuda_layer_norm_f32(
+    values: &[f32],
+    rows: usize,
+    width: usize,
+    gamma: &[f32],
+    beta: &[f32],
+) -> Result<Vec<f32>> {
+    const SOURCE: &str = r#" extern "C" __global__ void layer_norm_f32(const float* x,const float* g,const float* b,float* y,unsigned int rows,unsigned int width){ unsigned int row=blockIdx.x*blockDim.x+threadIdx.x;if(row>=rows)return;float mean=0.0f;for(unsigned int c=0;c<width;++c)mean+=x[row*width+c];mean/=width;float variance=0.0f;for(unsigned int c=0;c<width;++c){float d=x[row*width+c]-mean;variance+=d*d;}variance/=width;float inv=rsqrtf(variance+1.0e-5f);for(unsigned int c=0;c<width;++c)y[row*width+c]=(x[row*width+c]-mean)*inv*g[c]+b[c]; } "#;
+    with_cuda_runtime(|runtime| {
+        runtime.with_compiled_kernel(SOURCE, "layer_norm_f32", |function| {
+            let x = CudaDeviceBuffer::new(runtime, std::mem::size_of_val(values))?;
+            let g = CudaDeviceBuffer::new(runtime, std::mem::size_of_val(gamma))?;
+            let b = CudaDeviceBuffer::new(runtime, std::mem::size_of_val(beta))?;
+            let y = CudaDeviceBuffer::new(runtime, std::mem::size_of_val(values))?;
+            cuda_copy_to_device(runtime, &x, values)?;
+            cuda_copy_to_device(runtime, &g, gamma)?;
+            cuda_copy_to_device(runtime, &b, beta)?;
+            let mut xp = x.as_device_ptr();
+            let mut gp = g.as_device_ptr();
+            let mut bp = b.as_device_ptr();
+            let mut yp = y.as_device_ptr();
+            let mut rp = rows as u32;
+            let mut wp = width as u32;
+            let mut args = [
+                (&mut xp as *mut u64).cast::<c_void>(),
+                (&mut gp as *mut u64).cast::<c_void>(),
+                (&mut bp as *mut u64).cast::<c_void>(),
+                (&mut yp as *mut u64).cast::<c_void>(),
+                (&mut rp as *mut u32).cast::<c_void>(),
+                (&mut wp as *mut u32).cast::<c_void>(),
+            ];
+            cuda_launch_kernel(
+                runtime,
+                function,
+                rows.div_ceil(128) as u32,
+                1,
+                1,
+                128,
+                1,
+                1,
+                &mut args,
+            )?;
+            runtime.check_cuda(
+                (runtime.cu_ctx_synchronize)(),
+                "failed to synchronize CUDA layer normalization",
+            )?;
+            let mut output = vec![0.0; values.len()];
+            cuda_copy_from_device(runtime, &mut output, &y)?;
+            Ok(output)
+        })
+    })
+}
+
+#[cfg(not(all(feature = "cuda", any(target_os = "linux", target_os = "windows"))))]
+fn cuda_csr_diffusion_f32(
+    _indptr: &[u32],
+    _indices: &[u32],
+    _weights: &[f32],
+    _channels: usize,
+    _values: &[f32],
+) -> Result<Vec<f32>> {
+    Err(NeuralError::InvalidArgument(
+        "CUDA LSTTN CSR diffusion is not available in this build".to_string(),
+    ))
+}
+
+#[cfg(not(all(feature = "cuda", any(target_os = "linux", target_os = "windows"))))]
+fn cuda_csr_diffusion_backward_f32(
+    _indptr: &[u32],
+    _indices: &[u32],
+    _weights: &[f32],
+    _channels: usize,
+    _values: &[f32],
+    _output_grad: &[f32],
+) -> Result<CsrDiffusionBackward> {
+    Err(NeuralError::InvalidArgument(
+        "CUDA LSTTN CSR diffusion backward is not available in this build".to_string(),
+    ))
+}
+
+#[cfg(not(all(feature = "cuda", any(target_os = "linux", target_os = "windows"))))]
+fn cuda_csr_row_softmax_f32(_indptr: &[u32], _logits: &[f32]) -> Result<Vec<f32>> {
+    Err(NeuralError::InvalidArgument(
+        "CUDA LSTTN CSR row-softmax is not available in this build".to_string(),
+    ))
+}
+
+#[cfg(not(all(feature = "cuda", any(target_os = "linux", target_os = "windows"))))]
+fn cuda_csr_row_softmax_backward_f32(
+    _indptr: &[u32],
+    _weights: &[f32],
+    _output_grad: &[f32],
+) -> Result<Vec<f32>> {
+    Err(NeuralError::InvalidArgument(
+        "CUDA LSTTN CSR row-softmax backward is not available in this build".to_string(),
+    ))
+}
+
+#[cfg(not(all(feature = "cuda", any(target_os = "linux", target_os = "windows"))))]
+fn cuda_adamw_step_f32(
+    _parameters: &mut [f32],
+    _first: &mut [f32],
+    _second: &mut [f32],
+    _gradients: &[f32],
+    _step: u64,
+    _learning_rate: f32,
+    _weight_decay: f32,
+) -> Result<()> {
+    Err(NeuralError::InvalidArgument(
+        "CUDA LSTTN AdamW is not available in this build".to_string(),
+    ))
+}
+
+#[cfg(not(all(feature = "cuda", any(target_os = "linux", target_os = "windows"))))]
+fn cuda_layer_norm_f32(
+    _values: &[f32],
+    _rows: usize,
+    _width: usize,
+    _gamma: &[f32],
+    _beta: &[f32],
+) -> Result<Vec<f32>> {
+    Err(NeuralError::InvalidArgument(
+        "CUDA LSTTN layer normalization is not available in this build".to_string(),
+    ))
 }
 
 #[cfg(not(all(feature = "cuda", any(target_os = "linux", target_os = "windows"))))]
@@ -5754,5 +6874,291 @@ mod tests {
         for (left, right) in cpu_scores.iter().zip(&metal_scores) {
             assert!((left - right).abs() < 1.0e-5);
         }
+    }
+
+    #[test]
+    fn csr_diffusion_preserves_batch_layout_and_isolated_rows() {
+        let cpu = select_backend(Some("cpu")).unwrap();
+        // Row 2 is intentionally isolated.
+        let indptr = [0, 2, 3, 3];
+        let indices = [0, 1, 2];
+        let weights = [0.25, 0.75, 1.0];
+        let values = [
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, // batch 0
+            2.0, 4.0, 6.0, 8.0, 10.0, 12.0, // batch 1
+        ];
+        let output =
+            backend_csr_diffusion_f32(&cpu, &indptr, &indices, &weights, 2, &values).unwrap();
+        assert_eq!(
+            output,
+            vec![2.5, 3.5, 5.0, 6.0, 0.0, 0.0, 5.0, 7.0, 10.0, 12.0, 0.0, 0.0]
+        );
+    }
+
+    #[test]
+    fn csr_diffusion_backward_matches_central_difference() {
+        let cpu = select_backend(Some("cpu")).unwrap();
+        let indptr = [0, 2, 3];
+        let indices = [0, 1, 0];
+        let weights = [0.25, 0.75, -0.5];
+        let values = [1.0, -2.0, 3.0, 4.0];
+        let output_grad = [0.5, -1.0, 2.0, 0.25];
+        let backward = backend_csr_diffusion_backward_f32(
+            &cpu,
+            &indptr,
+            &indices,
+            &weights,
+            2,
+            &values,
+            &output_grad,
+        )
+        .unwrap();
+        let objective = |input: &[f32], edge_weights: &[f32]| -> f32 {
+            backend_csr_diffusion_f32(&cpu, &indptr, &indices, edge_weights, 2, input)
+                .unwrap()
+                .iter()
+                .zip(output_grad)
+                .map(|(value, gradient)| value * gradient)
+                .sum()
+        };
+        let epsilon = 1.0e-3;
+        for index in 0..values.len() {
+            let mut plus = values;
+            let mut minus = values;
+            plus[index] += epsilon;
+            minus[index] -= epsilon;
+            let numerical =
+                (objective(&plus, &weights) - objective(&minus, &weights)) / (2.0 * epsilon);
+            assert!((numerical - backward.input_grad[index]).abs() < 2.0e-3);
+        }
+        for index in 0..weights.len() {
+            let mut plus = weights;
+            let mut minus = weights;
+            plus[index] += epsilon;
+            minus[index] -= epsilon;
+            let numerical =
+                (objective(&values, &plus) - objective(&values, &minus)) / (2.0 * epsilon);
+            assert!((numerical - backward.edge_grad[index]).abs() < 2.0e-3);
+        }
+    }
+
+    #[test]
+    fn csr_row_softmax_backward_matches_central_difference() {
+        let cpu = select_backend(Some("cpu")).unwrap();
+        let indptr = [0, 2, 2, 5];
+        let logits = [0.25, -0.5, 1.0, 0.0, -0.75];
+        let output_grad = [0.5, -1.0, 0.25, 2.0, -0.5];
+        let weights = backend_csr_row_softmax_f32(&cpu, &indptr, &logits).unwrap();
+        assert!((weights[0] + weights[1] - 1.0).abs() < 1.0e-6);
+        assert!((weights[2] + weights[3] + weights[4] - 1.0).abs() < 1.0e-6);
+        let backward =
+            backend_csr_row_softmax_backward_f32(&cpu, &indptr, &weights, &output_grad).unwrap();
+        let objective = |input: &[f32]| -> f32 {
+            backend_csr_row_softmax_f32(&cpu, &indptr, input)
+                .unwrap()
+                .iter()
+                .zip(output_grad)
+                .map(|(weight, gradient)| weight * gradient)
+                .sum()
+        };
+        let epsilon = 1.0e-3;
+        for index in 0..logits.len() {
+            let mut plus = logits;
+            let mut minus = logits;
+            plus[index] += epsilon;
+            minus[index] -= epsilon;
+            let numerical = (objective(&plus) - objective(&minus)) / (2.0 * epsilon);
+            assert!((numerical - backward[index]).abs() < 2.0e-3);
+        }
+    }
+
+    #[test]
+    fn adamw_updates_contiguous_cpu_tensors() {
+        let cpu = select_backend(Some("cpu")).unwrap();
+        let mut parameters = vec![1.0, -2.0, 0.5];
+        let mut first = vec![0.0; 3];
+        let mut second = vec![0.0; 3];
+        backend_adamw_step_f32(
+            &cpu,
+            &mut parameters,
+            &mut first,
+            &mut second,
+            &[0.5, -0.25, 1.0],
+            1,
+            0.01,
+            0.001,
+        )
+        .unwrap();
+        assert!(parameters
+            .iter()
+            .zip([1.0, -2.0, 0.5])
+            .any(|(actual, initial)| actual != &initial));
+        assert!(
+            first.iter().all(|value| value.is_finite()) && second.iter().all(|value| *value >= 0.0)
+        );
+    }
+
+    #[test]
+    fn masked_inverse_scale_mae_omits_zero_targets() {
+        let (loss, gradient) =
+            masked_inverse_scale_mae_f32(&[2.0, 99.0, -1.0], &[1.0, 0.0, 1.0], 0.0, 2.0).unwrap();
+        assert!((loss - 3.0).abs() < 1.0e-6);
+        assert_eq!(gradient, vec![1.0, 0.0, -1.0]);
+    }
+
+    #[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
+    #[test]
+    fn cuda_csr_diffusion_and_backward_match_cpu() {
+        if !available_backends().iter().any(|backend| backend == "cuda") {
+            return;
+        }
+        let cpu = select_backend(Some("cpu")).unwrap();
+        let cuda = select_backend(Some("cuda")).unwrap();
+        let indptr = [0, 2, 3, 3];
+        let indices = [0, 1, 2];
+        let weights = [0.25, 0.75, -0.5];
+        let values = [
+            1.0, -2.0, 3.0, 4.0, 5.0, -6.0, 2.0, 3.0, 4.0, -5.0, 6.0, 7.0,
+        ];
+        let output_grad = [0.5; 12];
+        let cpu_output =
+            backend_csr_diffusion_f32(&cpu, &indptr, &indices, &weights, 2, &values).unwrap();
+        let cuda_output =
+            backend_csr_diffusion_f32(&cuda, &indptr, &indices, &weights, 2, &values).unwrap();
+        let cpu_backward = backend_csr_diffusion_backward_f32(
+            &cpu,
+            &indptr,
+            &indices,
+            &weights,
+            2,
+            &values,
+            &output_grad,
+        )
+        .unwrap();
+        let cuda_backward = backend_csr_diffusion_backward_f32(
+            &cuda,
+            &indptr,
+            &indices,
+            &weights,
+            2,
+            &values,
+            &output_grad,
+        )
+        .unwrap();
+        for (left, right) in cpu_output.iter().zip(cuda_output) {
+            assert!((left - right).abs() < 1.0e-4);
+        }
+        for (left, right) in cpu_backward.input_grad.iter().zip(cuda_backward.input_grad) {
+            assert!((left - right).abs() < 1.0e-4);
+        }
+        for (left, right) in cpu_backward.edge_grad.iter().zip(cuda_backward.edge_grad) {
+            assert!((left - right).abs() < 1.0e-4);
+        }
+    }
+
+    #[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
+    #[test]
+    fn cuda_csr_row_softmax_and_backward_match_cpu() {
+        if !available_backends().iter().any(|backend| backend == "cuda") {
+            return;
+        }
+        let cpu = select_backend(Some("cpu")).unwrap();
+        let cuda = select_backend(Some("cuda")).unwrap();
+        let indptr = [0, 2, 2, 5];
+        let logits = [0.25, -0.5, 1.0, 0.0, -0.75];
+        let output_grad = [0.5, -1.0, 0.25, 2.0, -0.5];
+        let cpu_weights = backend_csr_row_softmax_f32(&cpu, &indptr, &logits).unwrap();
+        let cuda_weights = backend_csr_row_softmax_f32(&cuda, &indptr, &logits).unwrap();
+        let cpu_backward =
+            backend_csr_row_softmax_backward_f32(&cpu, &indptr, &cpu_weights, &output_grad)
+                .unwrap();
+        let cuda_backward =
+            backend_csr_row_softmax_backward_f32(&cuda, &indptr, &cuda_weights, &output_grad)
+                .unwrap();
+        for (left, right) in cpu_weights.iter().zip(cuda_weights) {
+            assert!((left - right).abs() < 1.0e-5);
+        }
+        for (left, right) in cpu_backward.iter().zip(cuda_backward) {
+            assert!((left - right).abs() < 1.0e-5);
+        }
+    }
+
+    #[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
+    #[test]
+    fn cuda_adamw_matches_cpu() {
+        if !available_backends().iter().any(|backend| backend == "cuda") {
+            return;
+        }
+        let cpu = select_backend(Some("cpu")).unwrap();
+        let cuda = select_backend(Some("cuda")).unwrap();
+        let mut cpu_p = vec![1.0, -2.0, 0.5];
+        let mut cpu_m = vec![0.0; 3];
+        let mut cpu_v = vec![0.0; 3];
+        let mut cuda_p = cpu_p.clone();
+        let mut cuda_m = cpu_m.clone();
+        let mut cuda_v = cpu_v.clone();
+        let gradients = [0.5, -0.25, 1.0];
+        backend_adamw_step_f32(
+            &cpu, &mut cpu_p, &mut cpu_m, &mut cpu_v, &gradients, 1, 0.01, 0.001,
+        )
+        .unwrap();
+        backend_adamw_step_f32(
+            &cuda,
+            &mut cuda_p,
+            &mut cuda_m,
+            &mut cuda_v,
+            &gradients,
+            1,
+            0.01,
+            0.001,
+        )
+        .unwrap();
+        for (left, right) in cpu_p
+            .iter()
+            .zip(cuda_p)
+            .chain(cpu_m.iter().zip(cuda_m))
+            .chain(cpu_v.iter().zip(cuda_v))
+        {
+            assert!((left - right).abs() < 1.0e-5);
+        }
+    }
+
+    #[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
+    #[test]
+    fn cuda_layer_norm_matches_cpu() {
+        if !available_backends().iter().any(|backend| backend == "cuda") {
+            return;
+        }
+        let cpu = select_backend(Some("cpu")).unwrap();
+        let cuda = select_backend(Some("cuda")).unwrap();
+        let values = [1.0, -2.0, 3.0, 4.0, -1.0, 0.5];
+        let gamma = [1.0, 0.5, -0.25];
+        let beta = [0.1, -0.2, 0.3];
+        let expected = backend_layer_norm_f32(&cpu, &values, 2, 3, &gamma, &beta).unwrap();
+        let actual = backend_layer_norm_f32(&cuda, &values, 2, 3, &gamma, &beta).unwrap();
+        for (left, right) in expected.iter().zip(actual) {
+            assert!((left - right).abs() < 1.0e-5);
+        }
+    }
+
+    #[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
+    #[test]
+    fn cuda_csr_workspace_reuses_same_shape_allocations() {
+        if !available_backends().iter().any(|backend| backend == "cuda") {
+            return;
+        }
+        let indptr = [0, 2, 3, 3];
+        let indices = [0, 1, 2];
+        let weights = [0.25, 0.75, -0.5];
+        let values = [
+            1.0, -2.0, 3.0, 4.0, 5.0, -6.0, 2.0, 3.0, 4.0, -5.0, 6.0, 7.0,
+        ];
+        let mut workspace = CudaCsrDiffusionWorkspace::new(&indptr, &indices, &weights).unwrap();
+        let first = workspace.diffuse(2, &values).unwrap();
+        let allocations = workspace.allocation_count();
+        let second = workspace.diffuse(2, &values).unwrap();
+        assert_eq!(workspace.allocation_count(), allocations);
+        assert_eq!(workspace.value_capacity(), values.len());
+        assert_eq!(first, second);
     }
 }

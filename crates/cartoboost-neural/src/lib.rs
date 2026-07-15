@@ -17,11 +17,16 @@ pub use artifact::{
     EmbeddingChecksum, EmbeddingIdType, EmbeddingRow, EmbeddingTable, EmbeddingTableArtifact,
     EmbeddingTableMetadata, FallbackStrategy,
 };
+#[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
+pub use backend::CudaCsrDiffusionWorkspace;
 pub use backend::{
-    available_backends, backend_affine_scores, backend_dense_layer_f32, backend_dispatch_report,
-    backend_pair_sigmoid_scores_f32, backend_scalar_graph_f32, backend_scalar_graph_train_step_f32,
-    backend_train_tanh_mlp_f32, select_backend, BackendDispatchReport, BackendSelection,
-    ComputeBackend,
+    available_backends, backend_adamw_step_f32, backend_affine_scores,
+    backend_csr_diffusion_backward_f32, backend_csr_diffusion_f32,
+    backend_csr_row_softmax_backward_f32, backend_csr_row_softmax_f32, backend_dense_layer_f32,
+    backend_dispatch_report, backend_layer_norm_f32, backend_pair_sigmoid_scores_f32,
+    backend_scalar_graph_f32, backend_scalar_graph_train_step_f32, backend_train_tanh_mlp_f32,
+    masked_inverse_scale_mae_f32, select_backend, BackendDispatchReport, BackendSelection,
+    ComputeBackend, CsrDiffusionBackward,
 };
 #[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
 pub use backend::{webgpu_dense_layer_f32_async, webgpu_dispatch_report_async};
