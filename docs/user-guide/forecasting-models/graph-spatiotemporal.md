@@ -32,19 +32,50 @@ time-ordered split.
 | --- | --- | --- |
 | `STGormerForecaster` | Spatial and temporal behavior differs by node or time regime. | Time2Vec-style temporal features, in/out-degree and path features, three causal spatial-temporal attention stages, and independent spatial/temporal routed MoE states. |
 | `STGformerForecaster` | A large graph needs retained high-order propagation in one efficient block. | Retained propagation orders, shared-QKV scaling-normalized linear space-time interaction at every order, recursive pointwise interaction. |
-| `LSTTNForecaster` | Long history, recurring periods, and immediate dynamics all matter. | Masked-subseries pretraining, contextual patch attention, pooled dilated long trend, forward/backward/adaptive day/week graph periodicity, and an input-conditioned long/short fusion gate. |
+| `LSTTNForecaster` | Long history, recurring periods, and immediate dynamics all matter. | 75%-masked patch pretraining, a frozen four-layer Transformer, four-stage dilated long trend, independent forward/backward/adaptive daily and weekly graph diffusion, an eight-layer causal Graph WaveNet short branch, and two-stage feature fusion. |
 | `SpatialTemporalGraphGatedTransformerForecaster` | Graph signal should be filtered through stable temporal gates. | Graph convolution, causal temporal attention, GRU reset/update gates. |
 | `SpatialShiftGraphonMoEForecaster` | Graph relationships may change between the training and deployment periods. | Input-conditioned graphon experts and softmax graphon mixing. |
 
 `LSTTNForecaster` defaults to a long-horizon hourly configuration: four weeks
 of history, a daily period, one week of recent context, and a one-week forecast.
-Its native pretraining stage
-reconstructs randomly withheld whole patches from the remaining patch context
-before supervised forecast fitting; the long-trend and periodic branches then
-operate on those learned patch-level representations. Learned patch positions
-cover the complete configured history, calendar phase remains aligned across
-rolling origins, and all direct horizon heads are referenced to one forecast
-origin. For another sampling frequency, set `lookback`, `periodicity`,
+Its native pretraining stage follows the paper's masked sub-series Transformer:
+a learned strided patch convolution and learned temporal positions feed four
+multi-head Transformer encoder layers; 75% of whole patches are withheld; and
+a learned mask token, encoder-to-decoder projection, one Transformer decoder
+layer, and linear patch head reconstruct only the masked values with L1 loss.
+The pretrained patch encoder is frozen during forecast fitting.
+
+The forecast path contains each spatial and temporal mechanism described by
+LSTTN. Four stride-two, three-tap dilated convolution stages use dilations 1,
+2, 4, and 8 with GELU and max pooling for long trend. Previous-day and
+previous-week frozen Transformer states each enter their own order-two graph
+convolution with row-normalized forward diffusion, independently normalized
+backward diffusion, and a separate rank-10 learned adaptive adjacency. The
+short branch consumes signal and time-of-day channels through the complete
+four-block, two-layer Graph WaveNet stack: causal gated temporal convolutions,
+structural and adaptive order-two graph diffusion, residual/skip paths, batch
+normalization, and the two output projections. Two MLP stages fuse long trend,
+daily periodicity, weekly periodicity, and the short state into direct
+multi-horizon predictions. Forecast fitting uses every valid rolling origin in
+32-window batches, zero-masked inverse-scale MAE, gradient-norm clipping at 3,
+and the paper's milestone schedule.
+
+When `GraphTemporalFrame.covariates` is supplied, LSTTN uses its first feature
+as the normalized time-of-day channel paired with the traffic signal in Graph
+WaveNet. Without covariates it derives the channel from the configured
+`periodicity` and the absolute row origin. Covariates must have one consistent,
+finite feature width; malformed or empty feature axes are rejected.
+
+Learned patch positions cover the complete configured history. LSTTN rejects a
+configuration that cannot supply a complete previous-week patch instead of
+silently inserting a zero periodic feature. Frozen representations are cached
+only while their estimated size is at most 512 MiB; larger panels use bounded
+per-window reconstruction, so cache size does not grow without limit. These
+mechanisms depend on the supplied directed CSR graph, not on H3: nodes may be
+H3 cells, S2 cells, administrative regions, road sensors, routes, or any other
+geography with stable node ids and explicit directed edges.
+
+For another sampling frequency, set `lookback`, `periodicity`,
 `recent_window`, and `horizon`
 explicitly. All four are measured in frame rows rather than fixed wall-clock
 units. For example, an hourly freight-network forecast can use:
@@ -63,7 +94,7 @@ when the input frame has hourly timestamps. CartoBoost does not assume a
 five-minute sampling interval.
 
 The embedded browser debugger uses an explicitly compact interpretation
-fixture: 48 hourly history rows across eight real H3 cells and a six-hour
+fixture: 192 hourly history rows across eight real H3 cells and a six-hour
 holdout. It runs the native Rust LSTTN forecast four times in WASM: the full
 directed graph, self edges only, recent values replaced by prior-period values,
 and a trend-preserving history with recurring variation removed. Those reruns
@@ -133,7 +164,8 @@ synthetic checks reproduce published benchmark rankings. Validate any accuracy
 claim with your production or real traffic data and a leakage-safe temporal
 holdout. The original papers are [STGormer](https://arxiv.org/abs/2408.10822),
 [STGformer](https://arxiv.org/abs/2410.00385),
-[LSTTN](https://arxiv.org/abs/2403.16495),
+[LSTTN](https://arxiv.org/abs/2403.16495) and the
+[authors' reference implementation](https://github.com/GeoX-Lab/LSTTN),
 [STGGT](https://doi.org/10.1002/ett.5021), and
 [spatial-shift graphon MoE](https://arxiv.org/abs/2410.00373).
 

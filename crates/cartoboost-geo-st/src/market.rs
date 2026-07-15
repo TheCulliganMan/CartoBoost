@@ -288,7 +288,6 @@ impl MarketStructureConfig {
         if self.top_k == 0
             || self.top_k > 8
             || self.neural_hidden_dim == 0
-            || self.neural_epochs == 0
             || self.head_epochs == 0
             || !self.head_learning_rate.is_finite()
             || self.head_learning_rate <= 0.0
@@ -528,21 +527,25 @@ impl MarketStructureForecaster {
             self.config.correlation_floor,
             None,
         )?;
-        self.neural_embeddings = fit_graph_kernel(
-            frame,
-            &self.primary_means,
-            &self.secondary_means,
-            &provisional,
-            self.config.neural_hidden_dim,
-            self.config.neural_epochs,
-        )?;
+        self.neural_embeddings = if self.config.neural_epochs == 0 {
+            Vec::new()
+        } else {
+            fit_graph_kernel(
+                frame,
+                &self.primary_means,
+                &self.secondary_means,
+                &provisional,
+                self.config.neural_hidden_dim,
+                self.config.neural_epochs,
+            )?
+        };
         self.relationships = learn_relationships(
             frame,
             &primary_residuals,
             &primary_observed,
             self.config.top_k,
             self.config.correlation_floor,
-            Some(&self.neural_embeddings),
+            (!self.neural_embeddings.is_empty()).then_some(&self.neural_embeddings),
         )?;
         self.joint_heads = Some(fit_joint_heads(
             frame,
@@ -976,6 +979,33 @@ fn learn_relationships(
     for (idx, lane) in frame.lane_ids.iter().enumerate() {
         index.insert(lane.as_str(), idx);
     }
+    // A market panel may contain every observed origin-to-destination lane.
+    // Comparing each lane with every other lane is quadratic and makes a
+    // 40K+ lane city graph unusable.  Build the candidate topology from the
+    // endpoint relationships that define this model instead: shared origin,
+    // shared destination, reverse lanes, and caller-supplied expert edges.
+    // Residual correlation and the learned kernel still rank those candidates
+    // using train-only values; they are not used to manufacture a dense graph.
+    let mut origins = BTreeMap::<&str, Vec<usize>>::new();
+    let mut destinations = BTreeMap::<&str, Vec<usize>>::new();
+    let mut endpoint_pairs = BTreeMap::<(&str, &str), Vec<usize>>::new();
+    for lane in 0..frame.lane_ids.len() {
+        origins
+            .entry(frame.origin_ids[lane].as_str())
+            .or_default()
+            .push(lane);
+        destinations
+            .entry(frame.destination_ids[lane].as_str())
+            .or_default()
+            .push(lane);
+        endpoint_pairs
+            .entry((
+                frame.origin_ids[lane].as_str(),
+                frame.destination_ids[lane].as_str(),
+            ))
+            .or_default()
+            .push(lane);
+    }
     let mut priors = BTreeMap::<(usize, usize), &ExpertRelationshipPrior>::new();
     for prior in &frame.expert_priors {
         priors.insert(
@@ -992,8 +1022,30 @@ fn learn_relationships(
     }
     let mut output = vec![Vec::new(); frame.lane_ids.len()];
     for source in 0..frame.lane_ids.len() {
+        // Build and release one lane's candidate list at a time. Retaining a
+        // set for every lane would itself duplicate a full city graph.
+        let mut candidate_indices = Vec::new();
+        if let Some(rows) = origins.get(frame.origin_ids[source].as_str()) {
+            candidate_indices.extend(rows.iter().copied());
+        }
+        if let Some(rows) = destinations.get(frame.destination_ids[source].as_str()) {
+            candidate_indices.extend(rows.iter().copied());
+        }
+        if let Some(rows) = endpoint_pairs.get(&(
+            frame.destination_ids[source].as_str(),
+            frame.origin_ids[source].as_str(),
+        )) {
+            candidate_indices.extend(rows.iter().copied());
+        }
+        candidate_indices.extend(
+            priors
+                .keys()
+                .filter_map(|&(prior_source, target)| (prior_source == source).then_some(target)),
+        );
+        candidate_indices.sort_unstable();
+        candidate_indices.dedup();
         let mut candidates = Vec::new();
-        for target in 0..frame.lane_ids.len() {
+        for target in candidate_indices {
             if source == target {
                 continue;
             }
@@ -1081,18 +1133,18 @@ fn fit_graph_kernel(
     epochs: usize,
 ) -> Result<Vec<Vec<f32>>> {
     let features = lane_kernel_features(frame, primary_means, secondary_means);
+    let lane_index = frame
+        .lane_ids
+        .iter()
+        .enumerate()
+        .map(|(index, lane_id)| (lane_id.as_str(), index))
+        .collect::<BTreeMap<_, _>>();
     let edges = relationships
         .iter()
         .flat_map(|rows| rows.iter())
         .filter_map(|edge| {
-            let source = frame
-                .lane_ids
-                .iter()
-                .position(|id| id == &edge.source_lane_id)?;
-            let target = frame
-                .lane_ids
-                .iter()
-                .position(|id| id == &edge.target_lane_id)?;
+            let source = *lane_index.get(edge.source_lane_id.as_str())?;
+            let target = *lane_index.get(edge.target_lane_id.as_str())?;
             Some((source, target))
         })
         .collect::<Vec<_>>();
@@ -1189,12 +1241,28 @@ fn fit_joint_heads(
     embeddings: &[Vec<f32>],
     config: &MarketStructureConfig,
 ) -> Result<JointMarketHeads> {
-    let mut samples = Vec::new();
-    for time in 1..primary.len() {
-        for lane in 0..frame.lane_ids.len() {
-            if !observed[time][lane] || !observed[time - 1][lane] {
-                continue;
-            }
+    let has_samples = (1..primary.len()).any(|time| {
+        (0..frame.lane_ids.len()).any(|lane| observed[time][lane] && observed[time - 1][lane])
+    });
+    if !has_samples {
+        return Err(GeoStError::InvalidFrame(
+            "market joint heads require at least one observed one-step training target".to_string(),
+        ));
+    }
+    let width =
+        embeddings.first().map_or(0, Vec::len) + 6 + frame.calendar.first().map_or(0, Vec::len);
+    let mut heads = JointMarketHeads {
+        primary_huber: vec![0.0; width],
+        secondary_huber: vec![0.0; width],
+        primary_quantiles: vec![vec![0.0; width]; config.quantile_levels.len()],
+        secondary_quantiles: vec![vec![0.0; width]; config.quantile_levels.len()],
+    };
+    // Stream examples through every epoch. Materializing a feature vector for
+    // every lane and timestamp duplicates a full city panel in memory and
+    // prevents all-observed-lane fits. The updates are identical to the
+    // former sample-cache loop, while peak memory stays bounded.
+    for _ in 0..config.head_epochs {
+        for time in 1..primary.len() {
             let calendar = frame.calendar[time].as_slice();
             let mix = frame.mix.as_ref().map(|rows| {
                 rows[time]
@@ -1202,94 +1270,77 @@ fn fit_joint_heads(
                     .map(|features| features[0])
                     .collect::<Vec<_>>()
             });
-            let features = head_features(
-                lane,
-                &primary[time - 1],
-                &secondary[time - 1],
-                primary_means,
-                secondary_means,
-                relationships,
-                &frame.lane_ids,
-                frame.timestamps[time],
-                calendar,
-                mix.as_deref(),
-                embeddings,
-            );
-            let timestamp = frame.timestamps[time];
-            let primary_peer = peer_value(
-                lane,
-                &primary[time - 1],
-                primary_means,
-                relationships,
-                &frame.lane_ids,
-                timestamp,
-            );
-            let secondary_peer = peer_value(
-                lane,
-                &secondary[time - 1],
-                secondary_means,
-                relationships,
-                &frame.lane_ids,
-                timestamp,
-            );
-            let primary_base = primary_means[lane]
-                + weekly_primary[timestamp.rem_euclid(7) as usize][lane]
-                + config.local_strength * (primary[time - 1][lane] - primary_means[lane])
-                + config.graph_strength * primary_peer
-                + calendar_effect(primary_calendar_weights, calendar);
-            let secondary_base = secondary_means[lane]
-                + weekly_secondary[timestamp.rem_euclid(7) as usize][lane]
-                + config.local_strength * (secondary[time - 1][lane] - secondary_means[lane])
-                + config.graph_strength * secondary_peer
-                + calendar_effect(secondary_calendar_weights, calendar)
-                + cross_target_couplings[lane] * (primary[time - 1][lane] - primary_means[lane]);
-            samples.push((
-                features,
-                primary[time][lane] - primary_base,
-                secondary[time][lane] - secondary_base,
-            ));
-        }
-    }
-    let width =
-        embeddings.first().map_or(0, Vec::len) + 6 + frame.calendar.first().map_or(0, Vec::len);
-    if samples.is_empty() {
-        return Err(GeoStError::InvalidFrame(
-            "market joint heads require at least one observed one-step training target".to_string(),
-        ));
-    }
-    let mut heads = JointMarketHeads {
-        primary_huber: vec![0.0; width],
-        secondary_huber: vec![0.0; width],
-        primary_quantiles: vec![vec![0.0; width]; config.quantile_levels.len()],
-        secondary_quantiles: vec![vec![0.0; width]; config.quantile_levels.len()],
-    };
-    // Heads share the exact samples and update in one optimization loop. This
-    // couples rate and supporting-target learning without allowing the latter
-    // to overwrite the primary benchmark path.
-    for _ in 0..config.head_epochs {
-        for (features, primary_target, secondary_target) in &samples {
-            huber_step(&mut heads.primary_huber, features, *primary_target, config);
-            huber_step(
-                &mut heads.secondary_huber,
-                features,
-                *secondary_target,
-                config,
-            );
-            for (idx, level) in config.quantile_levels.iter().enumerate() {
-                pinball_step(
-                    &mut heads.primary_quantiles[idx],
-                    features,
-                    *primary_target,
-                    *level,
+            for lane in 0..frame.lane_ids.len() {
+                if !observed[time][lane] || !observed[time - 1][lane] {
+                    continue;
+                }
+                let features = head_features(
+                    lane,
+                    &primary[time - 1],
+                    &secondary[time - 1],
+                    primary_means,
+                    secondary_means,
+                    relationships,
+                    &frame.lane_ids,
+                    frame.timestamps[time],
+                    calendar,
+                    mix.as_deref(),
+                    embeddings,
+                );
+                let timestamp = frame.timestamps[time];
+                let primary_peer = peer_value(
+                    lane,
+                    &primary[time - 1],
+                    primary_means,
+                    relationships,
+                    &frame.lane_ids,
+                    timestamp,
+                );
+                let secondary_peer = peer_value(
+                    lane,
+                    &secondary[time - 1],
+                    secondary_means,
+                    relationships,
+                    &frame.lane_ids,
+                    timestamp,
+                );
+                let primary_base = primary_means[lane]
+                    + weekly_primary[timestamp.rem_euclid(7) as usize][lane]
+                    + config.local_strength * (primary[time - 1][lane] - primary_means[lane])
+                    + config.graph_strength * primary_peer
+                    + calendar_effect(primary_calendar_weights, calendar);
+                let secondary_base = secondary_means[lane]
+                    + weekly_secondary[timestamp.rem_euclid(7) as usize][lane]
+                    + config.local_strength * (secondary[time - 1][lane] - secondary_means[lane])
+                    + config.graph_strength * secondary_peer
+                    + calendar_effect(secondary_calendar_weights, calendar)
+                    + cross_target_couplings[lane]
+                        * (primary[time - 1][lane] - primary_means[lane]);
+                let primary_target = primary[time][lane] - primary_base;
+                let secondary_target = secondary[time][lane] - secondary_base;
+                huber_step(&mut heads.primary_huber, &features, primary_target, config);
+                huber_step(
+                    &mut heads.secondary_huber,
+                    &features,
+                    secondary_target,
                     config,
                 );
-                pinball_step(
-                    &mut heads.secondary_quantiles[idx],
-                    features,
-                    *secondary_target,
-                    *level,
-                    config,
-                );
+                for (idx, level) in config.quantile_levels.iter().enumerate() {
+                    pinball_step(
+                        &mut heads.primary_quantiles[idx],
+                        &features,
+                        primary_target,
+                        *level,
+                        config,
+                    );
+                    pinball_step(
+                        &mut heads.secondary_quantiles[idx],
+                        &features,
+                        secondary_target,
+                        *level,
+                        config,
+                    );
+                }
             }
         }
     }
@@ -1367,7 +1418,13 @@ fn head_features(
         mix.map_or(0.0, |rows| rows[lane]),
     ];
     values.extend_from_slice(calendar);
-    values.extend(embeddings[lane].iter().map(|value| *value as f64));
+    values.extend(
+        embeddings
+            .get(lane)
+            .into_iter()
+            .flatten()
+            .map(|value| *value as f64),
+    );
     values
 }
 
@@ -2074,17 +2131,32 @@ fn masked_correlation(
     source: usize,
     target: usize,
 ) -> f64 {
-    let (left, right): (Vec<_>, Vec<_>) = residuals
-        .iter()
-        .zip(observed)
-        .filter_map(|(row, mask)| {
-            (mask[source] && mask[target]).then_some((row[source], row[target]))
-        })
-        .unzip();
-    if left.len() < 3 {
+    let (mut count, mut sum_left, mut sum_right, mut sum_sq_left, mut sum_sq_right, mut sum_xy) =
+        (0usize, 0.0, 0.0, 0.0, 0.0, 0.0);
+    for (row, mask) in residuals.iter().zip(observed) {
+        if mask[source] && mask[target] {
+            let left = row[source];
+            let right = row[target];
+            count += 1;
+            sum_left += left;
+            sum_right += right;
+            sum_sq_left += left * left;
+            sum_sq_right += right * right;
+            sum_xy += left * right;
+        }
+    }
+    if count < 3 {
         0.0
     } else {
-        correlation(&left, &right)
+        let count = count as f64;
+        let covariance = sum_xy - sum_left * sum_right / count;
+        let left_variance = sum_sq_left - sum_left * sum_left / count;
+        let right_variance = sum_sq_right - sum_right * sum_right / count;
+        if left_variance <= 1e-12 || right_variance <= 1e-12 {
+            0.0
+        } else {
+            covariance / (left_variance * right_variance).sqrt()
+        }
     }
 }
 

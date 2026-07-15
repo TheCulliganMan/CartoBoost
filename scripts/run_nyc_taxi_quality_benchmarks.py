@@ -12,6 +12,7 @@ import json
 import math
 import os
 import platform
+import shutil
 import struct
 import subprocess
 import sys
@@ -358,6 +359,47 @@ def month_path(cache_dir: Path, taxi_type: str, year: int, month: int) -> Path:
     return cache_dir / f"{taxi_type}_tripdata_{year}-{month:02d}.parquet"
 
 
+def parquet_file_is_complete(path: Path) -> bool:
+    """Check the Parquet file markers before accepting a cached source file."""
+    try:
+        if path.stat().st_size < 12:
+            return False
+        with path.open("rb") as handle:
+            header = handle.read(4)
+            handle.seek(-4, os.SEEK_END)
+            footer = handle.read(4)
+        return header == b"PAR1" and footer == b"PAR1"
+    except OSError:
+        return False
+
+
+def download_parquet_partition(url: str, path: Path) -> None:
+    """Download a TLC partition atomically and reject truncated payloads."""
+    temporary = path.with_suffix(path.suffix + ".part")
+    temporary.unlink(missing_ok=True)
+    for attempt in range(4):
+        try:
+            request = urllib.request.Request(
+                url,
+                headers={"User-Agent": "CartoBoost benchmark downloader/0.3"},
+            )
+            with urllib.request.urlopen(request) as response, temporary.open("wb") as output:
+                shutil.copyfileobj(response, output)
+            if not parquet_file_is_complete(temporary):
+                raise ValueError(f"downloaded TLC partition is not a complete Parquet file: {url}")
+            temporary.replace(path)
+            return
+        except Exception:
+            temporary.unlink(missing_ok=True)
+            if attempt == 3:
+                raise
+            # TLC's CDN can temporarily reject bursty public downloads. A
+            # bounded retry keeps the real-source benchmark deterministic
+            # without accepting a partial file or fabricating an input.
+            time.sleep(2**attempt)
+    temporary.unlink(missing_ok=True)
+
+
 def ensure_parquet_files(
     *,
     taxi_type: str,
@@ -367,17 +409,28 @@ def ensure_parquet_files(
     no_download: bool,
 ) -> list[Path]:
     cache_dir.mkdir(parents=True, exist_ok=True)
-    paths: list[Path] = []
-    for month in months:
-        path = month_path(cache_dir, taxi_type, year, month)
-        if not path.exists():
-            if no_download:
-                raise FileNotFoundError(
-                    f"{path} is missing and --no-download was passed. "
-                    f"Download it from {month_url(taxi_type, year, month)}."
-                )
-            urllib.request.urlretrieve(month_url(taxi_type, year, month), path)
-        paths.append(path)
+    paths = [month_path(cache_dir, taxi_type, year, month) for month in months]
+    incomplete = [
+        (month, path)
+        for month, path in zip(months, paths, strict=True)
+        if not parquet_file_is_complete(path)
+    ]
+    if incomplete and no_download:
+        month, path = incomplete[0]
+        raise FileNotFoundError(
+            f"{path} is missing or incomplete and --no-download was passed. "
+            f"Download a complete partition from {month_url(taxi_type, year, month)}."
+        )
+    # TLC monthly partitions are independent.  A small bounded fan-out keeps
+    # the benchmark responsive for multi-year runs while each write remains
+    # atomic and individually validated by `download_parquet_partition`.
+    with ThreadPoolExecutor(max_workers=min(2, len(incomplete) or 1)) as executor:
+        futures = [
+            executor.submit(download_parquet_partition, month_url(taxi_type, year, month), path)
+            for month, path in incomplete
+        ]
+        for future in as_completed(futures):
+            future.result()
     return paths
 
 
@@ -435,6 +488,50 @@ def ensure_zone_centroids(*, cache_dir: Path, no_download: bool) -> dict[int, tu
     if not centroids:
         raise ValueError(f"taxi zone geometry archive did not contain usable centroids: {path}")
     return centroids
+
+
+def zone_centroid_h3_cells(
+    *, cache_dir: Path, resolution: int, no_download: bool
+) -> dict[int, str]:
+    """Return a stable H3 endpoint for every TLC zone centroid.
+
+    Trip records that carry only TLC zone IDs cannot reveal a trip's exact
+    coordinate.  This preserves that provenance: the H3 value is explicitly
+    the zone-centroid endpoint used to build a directed zone-lane graph.
+    """
+    if not 0 <= resolution <= 15:
+        raise ValueError("H3 resolution must be between 0 and 15")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    path = cache_dir / "taxi_zones.zip"
+    if not path.exists():
+        if no_download:
+            raise FileNotFoundError(
+                f"taxi zone geometry archive is required for H3 endpoints: {path}"
+            )
+        urllib.request.urlretrieve(TAXI_ZONES_ZIP_URL, path)
+    try:
+        geopandas = importlib.import_module("geopandas")
+        h3 = importlib.import_module("h3")
+    except Exception as exc:
+        raise RuntimeError(
+            "H3 zone endpoints require geopandas and h3; install CartoBoost with its geo "
+            "dependencies."
+        ) from exc
+    with zipfile.ZipFile(path) as archive:
+        shp_name = next((name for name in archive.namelist() if name.endswith(".shp")), None)
+    if shp_name is None:
+        raise ValueError(f"taxi zone geometry archive has no shapefile: {path}")
+    zones = geopandas.read_file(f"zip://{path.resolve()}!{shp_name}")
+    if "LocationID" not in zones.columns or zones.crs is None:
+        raise ValueError(
+            f"taxi zone geometry archive is missing LocationID or CRS metadata: {path}"
+        )
+    centroids = geopandas.GeoSeries(zones.geometry.centroid, crs=zones.crs).to_crs("EPSG:4326")
+    return {
+        int(location_id): str(h3.latlng_to_cell(float(point.y), float(point.x), resolution))
+        for location_id, point in zip(zones["LocationID"], centroids, strict=True)
+        if point is not None and not point.is_empty
+    }
 
 
 def taxi_zone_adjacency_from_zip(path: Path) -> dict[int, list[int]]:

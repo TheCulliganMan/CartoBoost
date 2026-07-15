@@ -4028,6 +4028,16 @@ impl NativePaperGraphTransformerForecaster {
             .map_err(to_py_geo_st_error)
     }
 
+    fn fit_checkpointed(
+        &mut self,
+        py: Python<'_>,
+        frame: &NativeGraphTemporalFrame,
+        checkpoint_path: PathBuf,
+    ) -> PyResult<()> {
+        py.detach(|| self.model.fit_checkpointed(&frame.frame, checkpoint_path))
+            .map_err(to_py_geo_st_error)
+    }
+
     fn predict(&self, py: Python<'_>, horizon: usize) -> PyResult<Vec<Vec<f64>>> {
         py.detach(|| self.model.predict(horizon))
             .map_err(to_py_geo_st_error)

@@ -192,7 +192,7 @@ def test_paper_graph_transformers_fit_a_complete_market_lane_panel_through_nativ
                 attention_heads=2,
                 graph_order=1,
                 experts=2,
-                periodicity=6,
+                periodicity=1 if model_type is LSTTNForecaster else 6,
                 epochs=1,
             ).fit(graph_frame)
             prediction = model.predict(2)
@@ -461,7 +461,7 @@ def test_paper_graph_transformers_are_native_backed_and_persistent(tmp_path):
             attention_heads=2,
             graph_order=2,
             experts=3,
-            periodicity=6,
+            periodicity=1 if model_type is LSTTNForecaster else 6,
             epochs=8,
         ).fit(frame)
         prediction = model.predict(3)

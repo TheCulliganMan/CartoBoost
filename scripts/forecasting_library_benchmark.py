@@ -46,11 +46,13 @@ if str(PYTHON_SOURCE) not in sys.path:
 from cartoboost import __version__  # noqa: E402
 from cartoboost import _native  # noqa: E402
 from cartoboost import croston_forecast, sba_forecast, tsb_forecast  # noqa: E402
+from cartoboost.config import Backend  # noqa: E402
 from cartoboost.forecasting.global_models import CartoBoostLagForecaster  # noqa: E402
 from cartoboost.forecasting import (  # noqa: E402
     AutoStatsBank,
     DCRNNForecaster,
     GraphTemporalFrame,
+    LSTTNForecaster,
     LaneNeuralPanelForecaster,
     MarketPanelFrame,
     MarketStructureForecaster,
@@ -264,8 +266,39 @@ def main() -> int:
     )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--year", type=int, default=2024)
+    parser.add_argument(
+        "--years",
+        default=None,
+        help=(
+            "Comma-separated TLC years. When supplied, overrides --year and keeps "
+            "every requested year in the chronological benchmark panel."
+        ),
+    )
     parser.add_argument("--months", default="1", help="Comma-separated month numbers, e.g. 1,2,3")
     parser.add_argument("--taxi-type", default="yellow", choices=["yellow"])
+    parser.add_argument(
+        "--taxi-frequency",
+        choices=["daily", "monthly"],
+        default="daily",
+        help=(
+            "Time bucket for TLC lane panels. Use monthly for all-observed-lane, multi-year "
+            "graphs so the complete panel remains tractable."
+        ),
+    )
+    parser.add_argument(
+        "--all-observed-lanes",
+        action="store_true",
+        help="Use every observed directed pickup-to-dropoff lane instead of only --lanes.",
+    )
+    parser.add_argument(
+        "--h3-resolution",
+        type=int,
+        default=None,
+        help=(
+            "Map TLC pickup and dropoff zones to their centroid H3 cells at this resolution "
+            "for market-structure graph endpoints."
+        ),
+    )
     parser.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR)
     parser.add_argument(
         "--m1-group",
@@ -399,6 +432,22 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--lsttn-h3-splits",
+        action="store_true",
+        help="Train native LSTTN on H3-cell demand with every observed directed OD edge.",
+    )
+    parser.add_argument("--lsttn-epochs", type=int, default=80)
+    parser.add_argument("--lsttn-hidden-size", type=int, default=16)
+    parser.add_argument(
+        "--market-scale-only",
+        action="store_true",
+        help=(
+            "Run only the native learned market graph and last-value reference. "
+            "Use for full all-observed-lane scale tests; dense pairwise baselines and "
+            "repeated diagnostic refits are intentionally excluded."
+        ),
+    )
+    parser.add_argument(
         "--allow-full-m5-roster",
         action="store_true",
         help=(
@@ -475,6 +524,15 @@ def main() -> int:
             source_file_hashes=dataset_source_hashes,
             load_seconds=load_seconds,
             cartoboost_config=cartoboost_config,
+            benchmark_start=benchmark_start,
+        )
+    if args.lsttn_h3_splits:
+        return run_lsttn_h3_taxi_suite(
+            args,
+            table=table,
+            dataset=dataset,
+            source_file_hashes=dataset_source_hashes,
+            load_seconds=load_seconds,
             benchmark_start=benchmark_start,
         )
     benchmark_horizon = int(dataset.get("horizon", args.horizon))
@@ -578,6 +636,21 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--lanes must be positive")
     if args.horizon <= 0:
         raise ValueError("--horizon must be positive")
+    years = getattr(args, "years", None)
+    if years is not None:
+        parse_taxi_years(years, fallback_year=getattr(args, "year", 2024))
+    if getattr(args, "all_observed_lanes", False) and args.source != "nyc-taxi":
+        raise ValueError("--all-observed-lanes requires --source nyc-taxi")
+    h3_resolution = getattr(args, "h3_resolution", None)
+    if h3_resolution is not None:
+        if args.source != "nyc-taxi":
+            raise ValueError("--h3-resolution requires --source nyc-taxi")
+        if not 0 <= h3_resolution <= 15:
+            raise ValueError("--h3-resolution must be between 0 and 15")
+    if getattr(args, "market_scale_only", False) and not getattr(
+        args, "market_structure_splits", False
+    ):
+        raise ValueError("--market-scale-only requires --market-structure-splits")
     if getattr(args, "rolling_origin_folds", 1) <= 0:
         raise ValueError("--rolling-origin-folds must be positive")
     if args.source in {"polars", "duckdb"} and args.days <= args.horizon + max(28, args.horizon):
@@ -647,6 +720,27 @@ def normalize_competition_source(args: argparse.Namespace) -> argparse.Namespace
     else:
         args.source_alias = None
     return args
+
+
+def parse_taxi_years(value: str | None, *, fallback_year: int) -> list[int]:
+    """Parse a deterministic, chronological TLC year selection."""
+    if value is None:
+        return [int(fallback_year)]
+    years = []
+    for raw in value.split(","):
+        token = raw.strip()
+        if not token:
+            raise ValueError("--years must contain comma-separated calendar years")
+        try:
+            year = int(token)
+        except ValueError as exc:
+            raise ValueError(f"invalid TLC year {token!r} in --years") from exc
+        if year < 2009 or year > 2100:
+            raise ValueError("--years values must be between 2009 and 2100")
+        years.append(year)
+    if not years:
+        raise ValueError("--years must select at least one year")
+    return sorted(set(years))
 
 
 def canonical_dataset_hash(table: Any) -> str:
@@ -1551,57 +1645,257 @@ def load_m3_fixture(args: argparse.Namespace) -> tuple[Any, dict[str, Any]]:
     }
 
 
+def aggregate_tlc_lane_partitions(
+    paths: list[Path], *, frequency: str, cache_dir: Path
+) -> tuple[Any, int, int]:
+    """Aggregate each TLC Parquet partition before combining it in memory.
+
+    The all-lane graph consumes lane-time summaries, never individual trips.
+    Each completed partition is persisted before the next raw file is scanned.
+    A cancelled multi-year run therefore resumes from completed aggregates
+    rather than re-reading the raw TLC archive.
+    """
+    pl = require_polars()
+    try:
+        import pyarrow.parquet as pq
+    except Exception as exc:
+        raise RuntimeError("pyarrow is required for NYC TLC Parquet metadata") from exc
+    truncate = "1d" if frequency == "daily" else "1mo"
+    aggregate_cache = cache_dir / "aggregates" / f"lane-{frequency}-v1"
+    aggregate_cache.mkdir(parents=True, exist_ok=True)
+    partitions = []
+    raw_rows = 0
+    clean_rows = 0
+    for ordinal, path in enumerate(paths, start=1):
+        raw_rows += int(pq.ParquetFile(path).metadata.num_rows)
+        cache_path = aggregate_cache / f"{path.stem}.parquet"
+        cache_hit = cache_path.is_file()
+        try:
+            partition = pl.read_parquet(cache_path) if cache_hit else None
+        except Exception as exc:
+            raise RuntimeError(f"invalid persisted TLC aggregate {cache_path}: {exc}") from exc
+        if partition is None:
+            base = (
+                pl.scan_parquet(path)
+                .select(
+                    "tpep_pickup_datetime",
+                    "tpep_dropoff_datetime",
+                    "trip_distance",
+                    "fare_amount",
+                    "total_amount",
+                    "PULocationID",
+                    "DOLocationID",
+                )
+                .with_columns(
+                    (pl.col("tpep_dropoff_datetime") - pl.col("tpep_pickup_datetime"))
+                    .dt.total_seconds()
+                    .alias("duration_sec")
+                )
+                .filter(
+                    pl.col("duration_sec").is_between(60.0, 7200.0)
+                    & pl.col("trip_distance").is_between(0.1, 100.0)
+                    & pl.col("fare_amount").is_between(2.5, 500.0)
+                    & pl.col("total_amount").is_between(2.5, 700.0)
+                    & pl.col("PULocationID").is_between(1, 263)
+                    & pl.col("DOLocationID").is_between(1, 263)
+                )
+                .with_columns(
+                    pl.col("tpep_pickup_datetime").dt.truncate(truncate).alias("date"),
+                    (pl.col("total_amount") / pl.col("trip_distance")).alias(
+                        "effective_fare_per_mile"
+                    ),
+                )
+            )
+            partition = (
+                base.group_by("date", "PULocationID", "DOLocationID")
+                .agg(
+                    pl.len().alias("loads"),
+                    pl.col("effective_fare_per_mile")
+                    .median()
+                    .alias("taxi_effective_fare_per_mile"),
+                    pl.col("trip_distance").sum().alias("distance_sum"),
+                )
+                .collect(engine="streaming")
+            )
+            temporary = cache_path.with_suffix(".parquet.part")
+            partition.write_parquet(temporary)
+            os.replace(temporary, cache_path)
+        # `loads` is the exact number of records passing the filters, so this
+        # avoids a second full raw-partition materialization solely to count
+        # clean records.
+        clean_rows += int(partition.get_column("loads").sum())
+        partitions.append(partition)
+        print(
+            f"TLC aggregate {ordinal}/{len(paths)}: {path.name} "
+            f"({'cache' if cache_hit else 'raw'})",
+            flush=True,
+        )
+    if not partitions:
+        raise ValueError("NYC TLC benchmark requires at least one Parquet partition")
+    return pl.concat(partitions), raw_rows, clean_rows
+
+
 def load_nyc_taxi_fixture(args: argparse.Namespace) -> tuple[Any, dict[str, Any]]:
     pd = require_pandas_for_benchmark()
     pl = require_polars()
     from scripts.run_nyc_taxi_quality_benchmarks import (
         TLC_TRIP_RECORD_PAGE,
-        clean_tlc_frame,
         ensure_parquet_files,
         ensure_zone_centroids,
         ensure_zone_lookup,
-        load_tlc_frame,
         parse_months,
+        zone_centroid_h3_cells,
     )
 
     months = parse_months(args.months)
-    paths = ensure_parquet_files(
-        taxi_type=args.taxi_type,
-        year=args.year,
-        months=months,
-        cache_dir=args.cache_dir,
-        no_download=args.no_download,
-    )
+    years = parse_taxi_years(args.years, fallback_year=args.year)
+    paths = [
+        path
+        for year in years
+        for path in ensure_parquet_files(
+            taxi_type=args.taxi_type,
+            year=year,
+            months=months,
+            cache_dir=args.cache_dir,
+            no_download=args.no_download,
+        )
+    ]
     zone_lookup = ensure_zone_lookup(cache_dir=args.cache_dir, no_download=args.no_download)
     zone_centroids = (
         ensure_zone_centroids(cache_dir=args.cache_dir, no_download=args.no_download)
         if args.market_structure_splits
         else None
     )
-    raw = load_tlc_frame(paths)
-    clean = clean_tlc_frame(raw)
-    pickup_time = pd.to_datetime(clean["tpep_pickup_datetime"])
-    frame = clean.assign(
-        pickup_date=pickup_time.dt.normalize(),
-        lane_id=(
-            "PU"
-            + clean["PULocationID"].astype(int).astype(str)
-            + "->DO"
-            + clean["DOLocationID"].astype(int).astype(str)
-        ),
+    h3_panel_cache: Path | None = None
+    h3_metadata_cache: Path | None = None
+    if args.lsttn_h3_splits:
+        if args.h3_resolution is None:
+            raise ValueError("--lsttn-h3-splits requires --h3-resolution")
+        selection = hashlib.sha256(
+            json.dumps(
+                {
+                    "years": years,
+                    "months": months,
+                    "frequency": args.taxi_frequency,
+                    "resolution": args.h3_resolution,
+                    "taxi_type": args.taxi_type,
+                    "version": 1,
+                },
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()[:20]
+        final_cache_dir = args.cache_dir / "aggregates" / "h3-panel-v1"
+        final_cache_dir.mkdir(parents=True, exist_ok=True)
+        h3_panel_cache = final_cache_dir / f"{selection}.parquet"
+        h3_metadata_cache = final_cache_dir / f"{selection}.json"
+        if h3_panel_cache.is_file() and h3_metadata_cache.is_file():
+            try:
+                cached_result = pl.read_parquet(h3_panel_cache)
+                cached_metadata = json.loads(h3_metadata_cache.read_text())
+            except Exception as exc:
+                raise RuntimeError(
+                    f"invalid persisted H3 panel cache {h3_panel_cache}: {exc}"
+                ) from exc
+            print(f"TLC H3 panel: {h3_panel_cache} (cache)", flush=True)
+            return cached_result, cached_metadata
+    aggregated, raw_rows, clean_rows = aggregate_tlc_lane_partitions(
+        paths, frequency=args.taxi_frequency, cache_dir=args.cache_dir
     )
-    lane_counts = frame.groupby("lane_id").size().sort_values(ascending=False).head(args.lanes)
-    selected = frame[frame["lane_id"].isin(lane_counts.index)].copy()
-    selected["effective_fare_per_mile"] = selected["total_amount"].astype(float) / selected[
-        "trip_distance"
-    ].astype(float)
-    static = (
-        selected.groupby("lane_id", as_index=False)
-        .agg(
-            pickup_zone=("PULocationID", "first"),
-            dropoff_zone=("DOLocationID", "first"),
-            distance_miles=("trip_distance", "mean"),
+    if args.taxi_frequency == "monthly":
+        requested_buckets = [year * 100 + month for year in years for month in months]
+        aggregated = aggregated.filter(
+            (pl.col("date").dt.year() * 100 + pl.col("date").dt.month()).is_in(requested_buckets)
         )
+    aggregated = aggregated.group_by("date", "PULocationID", "DOLocationID").agg(
+        pl.col("loads").sum(),
+        pl.col("taxi_effective_fare_per_mile").median(),
+        pl.col("distance_sum").sum(),
+    )
+    if args.lsttn_h3_splits:
+        if args.h3_resolution is None:
+            raise ValueError("--lsttn-h3-splits requires --h3-resolution")
+        zone_h3 = zone_centroid_h3_cells(
+            cache_dir=args.cache_dir,
+            resolution=args.h3_resolution,
+            no_download=args.no_download,
+        )
+        # This is a separate scale-oriented path.  It deliberately avoids
+        # materialising lane strings or sorting lane volumes: LSTTN consumes
+        # every observed directed PU→DO relation, then coalesces it into H3
+        # endpoints for its sparse graph.
+        result = aggregated.with_columns(
+            pl.col("PULocationID").replace_strict(zone_h3).alias("pickup_h3"),
+            pl.col("DOLocationID").replace_strict(zone_h3).alias("dropoff_h3"),
+        ).select(
+            "date",
+            "PULocationID",
+            "DOLocationID",
+            "pickup_h3",
+            "dropoff_h3",
+            "loads",
+        )
+        metadata = {
+            "series": int(result.select("pickup_h3").unique().height),
+            "days": int(result.select("date").unique().height),
+            "horizon": args.horizon,
+            "season_length": 7 if args.taxi_frequency == "daily" else 12,
+            "frequency": args.taxi_frequency,
+            "source": "nyc_tlc_trip_records",
+            "years": years,
+            "months": months,
+            "raw_rows": raw_rows,
+            "clean_rows": clean_rows,
+            "aggregated_rows": int(result.height),
+            "h3_endpoint_resolution": args.h3_resolution,
+        }
+        if h3_panel_cache is None or h3_metadata_cache is None:
+            raise RuntimeError("LSTTN H3 cache paths were not initialized")
+        temporary_panel = h3_panel_cache.with_suffix(".parquet.part")
+        temporary_metadata = h3_metadata_cache.with_suffix(".json.part")
+        result.write_parquet(temporary_panel)
+        temporary_metadata.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n")
+        os.replace(temporary_panel, h3_panel_cache)
+        os.replace(temporary_metadata, h3_metadata_cache)
+        print(f"TLC H3 panel: {h3_panel_cache} (persisted)", flush=True)
+        return result, metadata
+    aggregated = aggregated.with_columns(
+        (
+            pl.lit("PU")
+            + pl.col("PULocationID").cast(pl.String)
+            + pl.lit("->DO")
+            + pl.col("DOLocationID").cast(pl.String)
+        ).alias("lane_id")
+    )
+    lane_counts = (
+        aggregated.group_by("lane_id")
+        .agg(pl.col("loads").sum().alias("trip_count"))
+        .sort("trip_count", descending=True)
+    )
+    selected_lane_ids = (
+        lane_counts.get_column("lane_id")
+        if args.all_observed_lanes
+        else lane_counts.head(args.lanes).get_column("lane_id")
+    )
+    selected = aggregated.filter(pl.col("lane_id").is_in(selected_lane_ids.implode()))
+    zone_h3 = None
+    if args.h3_resolution is not None:
+        zone_h3 = zone_centroid_h3_cells(
+            cache_dir=args.cache_dir,
+            resolution=args.h3_resolution,
+            no_download=args.no_download,
+        )
+        selected = selected.with_columns(
+            pl.col("PULocationID").replace_strict(zone_h3).alias("pickup_h3"),
+            pl.col("DOLocationID").replace_strict(zone_h3).alias("dropoff_h3"),
+        )
+    static = (
+        selected.group_by("lane_id")
+        .agg(
+            pl.col("PULocationID").first().alias("pickup_zone"),
+            pl.col("DOLocationID").first().alias("dropoff_zone"),
+            (pl.col("distance_sum").sum() / pl.col("loads").sum()).alias("distance_miles"),
+        )
+        .to_pandas()
         .assign(
             airport_lane=lambda data: (
                 data[["pickup_zone", "dropoff_zone"]]
@@ -1629,20 +1923,20 @@ def load_nyc_taxi_fixture(args: argparse.Namespace) -> tuple[Any, dict[str, Any]
                 lambda zone: float(zone_centroids[int(zone)][1])
             ),
         )
-    daily = (
-        selected.groupby(["lane_id", "pickup_date"], as_index=False)
-        .agg(
-            loads=("effective_fare_per_mile", "size"),
-            taxi_effective_fare_per_mile=("effective_fare_per_mile", "median"),
+    if zone_h3 is not None:
+        static = static.assign(
+            pickup_h3=lambda data: data["pickup_zone"].map(zone_h3),
+            dropoff_h3=lambda data: data["dropoff_zone"].map(zone_h3),
         )
-        .rename(columns={"pickup_date": "date"})
-    )
+        if static[["pickup_h3", "dropoff_h3"]].isna().any().any():
+            raise ValueError("TLC zone geometry is missing an H3 centroid for a selected lane")
+    daily = selected.select("lane_id", "date", "loads", "taxi_effective_fare_per_mile").to_pandas()
     dates = pd.DataFrame(
         {
             "date": pd.date_range(
-                selected["pickup_date"].min(),
-                selected["pickup_date"].max(),
-                freq="D",
+                selected.get_column("date").min(),
+                selected.get_column("date").max(),
+                freq="D" if args.taxi_frequency == "daily" else "MS",
             )
         }
     )
@@ -1658,15 +1952,19 @@ def load_nyc_taxi_fixture(args: argparse.Namespace) -> tuple[Any, dict[str, Any]
         "series": int(static.shape[0]),
         "days": int(dates.shape[0]),
         "horizon": args.horizon,
-        "season_length": 7,
+        "season_length": 7 if args.taxi_frequency == "daily" else 12,
         "domain": f"real daily NYC TLC {args.taxi_type} taxi pickup/dropoff lane demand",
         "source": "nyc_tlc_trip_records",
         "source_url": TLC_TRIP_RECORD_PAGE,
         "taxi_type": args.taxi_type,
-        "year": args.year,
+        "year": args.year if len(years) == 1 else None,
+        "years": years,
         "months": months,
-        "raw_rows": int(len(raw)),
-        "clean_rows": int(len(clean)),
+        "all_observed_lanes": bool(args.all_observed_lanes),
+        "h3_endpoint_resolution": args.h3_resolution,
+        "frequency": args.taxi_frequency,
+        "raw_rows": raw_rows,
+        "clean_rows": clean_rows,
         "aggregated_rows": int(result.height),
         "static_covariates": STATIC_COVARIATES,
     }
@@ -2604,6 +2902,143 @@ def run_neural_panel_split_suite(
     return 0
 
 
+def run_lsttn_h3_taxi_suite(
+    args: argparse.Namespace,
+    *,
+    table: Any,
+    dataset: dict[str, Any],
+    source_file_hashes: dict[str, str],
+    load_seconds: float,
+    benchmark_start: float,
+) -> int:
+    """Train LSTTN on H3 demand nodes with the complete directed OD graph."""
+    if args.source != "nyc-taxi" or {"pickup_h3", "dropoff_h3"}.difference(table.columns):
+        raise ValueError("--lsttn-h3-splits requires --source nyc-taxi --h3-resolution")
+    pl = require_polars()
+    node_ids = (
+        pl.concat(
+            [
+                table.select(pl.col("pickup_h3").alias("h3")),
+                table.select(pl.col("dropoff_h3").alias("h3")),
+            ]
+        )
+        .unique()
+        .sort("h3")
+        .get_column("h3")
+        .to_list()
+    )
+    node_index = {node: index for index, node in enumerate(node_ids)}
+    dates = table.select("date").unique().sort("date").get_column("date").to_list()
+    horizon = int(dataset.get("horizon", args.horizon))
+    if len(dates) < horizon + 3:
+        raise ValueError("LSTTN H3 suite requires at least three history buckets plus holdout")
+    edge_rows = table.group_by("pickup_h3", "dropoff_h3").agg(pl.col("loads").sum())
+    neighbors = [[] for _ in node_ids]
+    weights = [[] for _ in node_ids]
+    for pickup_h3, dropoff_h3, loads in edge_rows.iter_rows():
+        source = node_index[pickup_h3]
+        neighbors[source].append(node_index[dropoff_h3])
+        weights[source].append(float(loads))
+    indptr, indices, data = [0], [], []
+    for row_indices, row_weights in zip(neighbors, weights, strict=True):
+        total = sum(row_weights) or 1.0
+        indices.extend(row_indices)
+        data.extend(weight / total for weight in row_weights)
+        indptr.append(len(indices))
+    pickup_demand = table.group_by("date", "pickup_h3").agg(pl.col("loads").sum())
+    demand_wide = pickup_demand.pivot(
+        on="pickup_h3",
+        index="date",
+        values="loads",
+        aggregate_function="sum",
+    ).sort("date")
+    missing_nodes = [node for node in node_ids if node not in demand_wide.columns]
+    if missing_nodes:
+        demand_wide = demand_wide.with_columns([pl.lit(0.0).alias(node) for node in missing_nodes])
+    demand = demand_wide.select(node_ids).fill_null(0.0).to_numpy().astype(float, copy=False)
+    history, actual = demand[:-horizon], demand[-horizon:]
+    frame = GraphTemporalFrame(
+        node_ids=node_ids,
+        timestamps=list(range(len(history))),
+        target=history,
+        indptr=indptr,
+        indices=indices,
+        data=data,
+        horizon=horizon,
+        frequency=str(dataset.get("frequency", "monthly")),
+    )
+    is_daily = str(dataset.get("frequency", "daily")) == "daily"
+    # The reference LSTTN uses a 14-day long context split into 12-step
+    # subseries (336 patches).  With a daily taxi panel each observation is a
+    # subseries, so retain the same 336-token long-history capacity rather
+    # than shrinking the model into a four-week short-window forecaster.
+    lookback = 336 if is_daily else 2
+    periodicity = 1
+    recent_window = 1
+    if len(history) <= lookback + horizon:
+        raise ValueError(
+            "LSTTN H3 suite needs more history than lookback plus horizon; provide more "
+            "months or use --taxi-frequency daily."
+        )
+    start = perf_counter()
+    if args.lsttn_epochs <= 0 or args.lsttn_hidden_size <= 0:
+        raise ValueError("--lsttn-epochs and --lsttn-hidden-size must be positive")
+    if "metal" not in _native.graph_st_available_backends_value():
+        raise RuntimeError(
+            "LSTTN H3 training requires the native Metal build; run "
+            "`uv run --group dev maturin develop --features metal` first."
+        )
+    model = LSTTNForecaster(
+        lookback=lookback,
+        periodicity=periodicity,
+        recent_window=recent_window,
+        horizon=horizon,
+        epochs=args.lsttn_epochs,
+        hidden_size=args.lsttn_hidden_size,
+        attention_heads=1,
+        backend=Backend.METAL,
+    )
+    checkpoint_path = Path(args.output).with_suffix(".checkpoint.json")
+    model.fit(frame, checkpoint_path=checkpoint_path)
+    predicted = model.predict(horizon)
+    elapsed = perf_counter() - start
+    payload = {
+        "benchmark": "nyc_taxi_lsttn_h3_full_od_graph",
+        "dataset": {**dataset, "h3_nodes": len(node_ids), "directed_od_edges": len(indices)},
+        "model": {
+            "architecture": "lsttn",
+            "epochs": args.lsttn_epochs,
+            "hidden_size": args.lsttn_hidden_size,
+            "lookback": lookback,
+            "periodicity": periodicity,
+            "recent_window": recent_window,
+            "pretraining_backend": model.metadata_["backend"],
+            "checkpoint": str(checkpoint_path),
+        },
+        "metrics": {"lsttn": market_metric_set(actual, predicted)},
+        "timing": {
+            "load_seconds": load_seconds,
+            "fit_predict_seconds": elapsed,
+            "total_seconds": perf_counter() - benchmark_start,
+        },
+        "source_file_hashes": source_file_hashes,
+        "artifact_paths": {"json": str(Path(args.output))},
+    }
+    Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+    Path(args.output).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    print(
+        json.dumps(
+            {
+                "dataset": payload["dataset"],
+                "metrics": payload["metrics"],
+                "timing": payload["timing"],
+            },
+            indent=2,
+        )
+    )
+    return 0
+
+
 def run_market_structure_taxi_suite(
     args: argparse.Namespace,
     *,
@@ -2668,27 +3103,53 @@ def run_market_structure_taxi_suite(
     coordinates = static[["origin_x", "origin_y", "destination_x", "destination_y"]].to_numpy(
         dtype=float
     )
+    endpoint_columns = (
+        ("pickup_h3", "dropoff_h3")
+        if {"pickup_h3", "dropoff_h3"}.issubset(static.columns)
+        else ("pickup_zone", "dropoff_zone")
+    )
+    origin_ids = static[endpoint_columns[0]].astype(str).tolist()
+    destination_ids = static[endpoint_columns[1]].astype(str).tolist()
+    if endpoint_columns == ("pickup_h3", "dropoff_h3"):
+        import h3
+
+        def parent_group(cell: str) -> str:
+            resolution = h3.get_resolution(cell)
+            return h3.cell_to_parent(cell, resolution - 1) if resolution else cell
+
+        hierarchy_groups = [
+            [
+                f"origin_h3_parent:{parent_group(origin)}",
+                f"destination_h3_parent:{parent_group(destination)}",
+            ]
+            for origin, destination in zip(origin_ids, destination_ids, strict=True)
+        ]
+    else:
+        hierarchy_groups = [
+            [f"pickup_borough:{int(code)}"]
+            for code in static["pickup_borough_code"].to_numpy(dtype=float)
+        ]
     frame = MarketPanelFrame(
         lane_ids=lane_ids,
         timestamps=list(range(len(history_dates))),
         target_names=["taxi_effective_fare_per_mile", "taxi_trip_count"],
         primary=primary_history,
         secondary=secondary_history,
-        origin_ids=static["pickup_zone"].astype(str).tolist(),
-        destination_ids=static["dropoff_zone"].astype(str).tolist(),
+        origin_ids=origin_ids,
+        destination_ids=destination_ids,
         coordinates=coordinates,
-        # Taxi-only proxy hierarchy: production callers supply their own
-        # multi-resolution spatial parent keys (for example, paired cell
-        # parents followed by endpoint parents).
-        hierarchy_groups=[
-            [f"pickup_borough:{int(code)}"]
-            for code in static["pickup_borough_code"].to_numpy(dtype=float)
-        ],
+        hierarchy_groups=hierarchy_groups,
         horizon=horizon,
-        frequency="daily",
+        frequency=str(dataset.get("frequency", "daily")),
     )
     start = perf_counter()
-    model = MarketStructureForecaster().fit(frame)
+    # Rolling interval calibration deliberately refits the complete graph at
+    # several historical origins. Scale-only mode measures the single native
+    # all-lane fit, so it must not silently multiply that memory footprint.
+    model = MarketStructureForecaster(
+        calibrate_intervals=not args.market_scale_only,
+        neural_epochs=0 if args.market_scale_only else 20,
+    ).fit(frame)
     forecast_rows = model.predict(horizon)
     model_seconds = perf_counter() - start
     predicted_primary = np.asarray([row["primary"] for row in forecast_rows], dtype=float).reshape(
@@ -2703,47 +3164,8 @@ def run_market_structure_taxi_suite(
     predicted_secondary = np.asarray(
         [row["secondary"] for row in forecast_rows], dtype=float
     ).reshape(horizon, len(lane_ids))
-    distance_primary = inverse_distance_last_value(primary_history, coordinates, horizon)
-    distance_secondary = inverse_distance_last_value(secondary_history, coordinates, horizon)
     naive_primary = np.repeat(last_observed_panel_values(primary_history)[None, :], horizon, axis=0)
     naive_secondary = np.repeat(secondary_history[-1:, :], horizon, axis=0)
-    indptr, indices, weights = distance_csr_adjacency(coordinates)
-    if np.isfinite(primary_history).all():
-        fixed_primary = fixed_graph_market_forecast(
-            lane_ids, primary_history, indptr, indices, weights, horizon
-        )
-        fixed_primary_name = "fixed_graph_dcrnn"
-    else:
-        # This deliberately operates on each lane's last *observed* state. It
-        # does not fill the missing daily panel required by a DCRNN baseline.
-        fixed_primary = fixed_graph_last_observed_forecast(
-            primary_history, indptr, indices, weights, horizon
-        )
-        fixed_primary_name = "fixed_graph_last_observed"
-    fixed_secondary = fixed_graph_market_forecast(
-        lane_ids, secondary_history, indptr, indices, weights, horizon
-    )
-    baseline_names = ["cartoboost_lag", NEURAL_PANEL_BENCHMARK_MODEL]
-    primary_baselines = (
-        market_panel_baseline_forecasts(
-            history,
-            "taxi_effective_fare_per_mile",
-            holdout_dates,
-            horizon,
-            cartoboost_config,
-            baseline_names,
-        )
-        if np.isfinite(primary_history).all()
-        else None
-    )
-    secondary_baselines = market_panel_baseline_forecasts(
-        history,
-        "loads",
-        holdout_dates,
-        horizon,
-        cartoboost_config,
-        baseline_names,
-    )
     metrics = {
         "market_structure": {
             "primary": market_metric_set(
@@ -2754,74 +3176,113 @@ def run_market_structure_taxi_suite(
             ),
             "secondary": market_metric_set(secondary_actual, predicted_secondary),
         },
-        "inverse_distance_last_value": {
-            "primary": market_metric_set(primary_actual, distance_primary),
-            "secondary": market_metric_set(secondary_actual, distance_secondary),
-        },
-        fixed_primary_name: {
-            "primary": market_metric_set(primary_actual, fixed_primary),
-            "secondary": market_metric_set(secondary_actual, fixed_secondary),
-        },
-        **{
-            name: {
-                **(
-                    {"primary": market_metric_set(primary_actual, primary_baselines[name])}
-                    if primary_baselines is not None
-                    else {}
-                ),
-                "secondary": market_metric_set(secondary_actual, secondary_baselines[name]),
-            }
-            for name in baseline_names
-        },
         "last_value": {
             "primary": market_metric_set(primary_actual, naive_primary),
             "secondary": market_metric_set(secondary_actual, naive_secondary),
         },
     }
+    primary_baselines = None
+    if not args.market_scale_only:
+        distance_primary = inverse_distance_last_value(primary_history, coordinates, horizon)
+        distance_secondary = inverse_distance_last_value(secondary_history, coordinates, horizon)
+        indptr, indices, weights = distance_csr_adjacency(coordinates)
+        if np.isfinite(primary_history).all():
+            fixed_primary = fixed_graph_market_forecast(
+                lane_ids, primary_history, indptr, indices, weights, horizon
+            )
+            fixed_primary_name = "fixed_graph_dcrnn"
+        else:
+            fixed_primary = fixed_graph_last_observed_forecast(
+                primary_history, indptr, indices, weights, horizon
+            )
+            fixed_primary_name = "fixed_graph_last_observed"
+        fixed_secondary = fixed_graph_market_forecast(
+            lane_ids, secondary_history, indptr, indices, weights, horizon
+        )
+        baseline_names = ["cartoboost_lag", NEURAL_PANEL_BENCHMARK_MODEL]
+        primary_baselines = (
+            market_panel_baseline_forecasts(
+                history,
+                "taxi_effective_fare_per_mile",
+                holdout_dates,
+                horizon,
+                cartoboost_config,
+                baseline_names,
+            )
+            if np.isfinite(primary_history).all()
+            else None
+        )
+        secondary_baselines = market_panel_baseline_forecasts(
+            history,
+            "loads",
+            holdout_dates,
+            horizon,
+            cartoboost_config,
+            baseline_names,
+        )
+        metrics.update(
+            {
+                "inverse_distance_last_value": {
+                    "primary": market_metric_set(primary_actual, distance_primary),
+                    "secondary": market_metric_set(secondary_actual, distance_secondary),
+                },
+                fixed_primary_name: {
+                    "primary": market_metric_set(primary_actual, fixed_primary),
+                    "secondary": market_metric_set(secondary_actual, fixed_secondary),
+                },
+                **{
+                    name: {
+                        **(
+                            {"primary": market_metric_set(primary_actual, primary_baselines[name])}
+                            if primary_baselines is not None
+                            else {}
+                        ),
+                        "secondary": market_metric_set(secondary_actual, secondary_baselines[name]),
+                    }
+                    for name in baseline_names
+                },
+            }
+        )
     explanations = model.nowcast()
     shifts: dict[str, int] = {}
     for row in explanations:
         shifts[row["shift"]] = shifts.get(row["shift"], 0) + 1
-    controlled_mix_shock = evaluate_controlled_mix_shock(
-        lane_ids=lane_ids,
-        primary_history=primary_history,
-        secondary_history=secondary_history,
-        origin_ids=static["pickup_zone"].astype(str).tolist(),
-        destination_ids=static["dropoff_zone"].astype(str).tolist(),
-        coordinates=coordinates,
-        hierarchy_groups=[
-            [f"pickup_borough:{int(code)}"]
-            for code in static["pickup_borough_code"].to_numpy(dtype=float)
-        ],
-        horizon=horizon,
-    )
-    edge_stability = evaluate_edge_stability(
-        lane_ids=lane_ids,
-        primary_history=primary_history,
-        secondary_history=secondary_history,
-        origin_ids=static["pickup_zone"].astype(str).tolist(),
-        destination_ids=static["dropoff_zone"].astype(str).tolist(),
-        coordinates=coordinates,
-        hierarchy_groups=[
-            [f"pickup_borough:{int(code)}"]
-            for code in static["pickup_borough_code"].to_numpy(dtype=float)
-        ],
-        horizon=horizon,
-    )
-    rolling_origin = evaluate_market_rolling_origins(
-        lane_ids=lane_ids,
-        primary=primary_all,
-        secondary=secondary_all,
-        origin_ids=static["pickup_zone"].astype(str).tolist(),
-        destination_ids=static["dropoff_zone"].astype(str).tolist(),
-        coordinates=coordinates,
-        hierarchy_groups=[
-            [f"pickup_borough:{int(code)}"]
-            for code in static["pickup_borough_code"].to_numpy(dtype=float)
-        ],
-        horizon=horizon,
-        folds=args.rolling_origin_folds,
-    )
+    if args.market_scale_only:
+        controlled_mix_shock = None
+        edge_stability = None
+        rolling_origin = None
+    else:
+        controlled_mix_shock = evaluate_controlled_mix_shock(
+            lane_ids=lane_ids,
+            primary_history=primary_history,
+            secondary_history=secondary_history,
+            origin_ids=origin_ids,
+            destination_ids=destination_ids,
+            coordinates=coordinates,
+            hierarchy_groups=hierarchy_groups,
+            horizon=horizon,
+        )
+        edge_stability = evaluate_edge_stability(
+            lane_ids=lane_ids,
+            primary_history=primary_history,
+            secondary_history=secondary_history,
+            origin_ids=origin_ids,
+            destination_ids=destination_ids,
+            coordinates=coordinates,
+            hierarchy_groups=hierarchy_groups,
+            horizon=horizon,
+        )
+        rolling_origin = evaluate_market_rolling_origins(
+            lane_ids=lane_ids,
+            primary=primary_all,
+            secondary=secondary_all,
+            origin_ids=origin_ids,
+            destination_ids=destination_ids,
+            coordinates=coordinates,
+            hierarchy_groups=hierarchy_groups,
+            horizon=horizon,
+            folds=args.rolling_origin_folds,
+        )
     payload = {
         "created_at": datetime.now(timezone.utc).isoformat(),
         "cartoboost_version": __version__,
@@ -2852,12 +3313,17 @@ def run_market_structure_taxi_suite(
         "edge_stability": edge_stability,
         "rolling_origin": rolling_origin,
         "comparability_note": (
-            None
-            if primary_baselines is not None
-            else "Primary CartoBoostLagForecaster, LaneNeuralPanelForecaster, and DCRNN "
-            "require a complete panel and were not evaluated. The sparse-panel fixed graph "
-            "baseline uses only each lane's last observed state; no historical primary values "
-            "were filled."
+            "Scale-only mode scores the learned native graph against last value. It does not "
+            "claim a comparison against dense pairwise graph or repeated-refit baselines."
+            if args.market_scale_only
+            else (
+                None
+                if primary_baselines is not None
+                else "Primary CartoBoostLagForecaster, LaneNeuralPanelForecaster, and DCRNN "
+                "require a complete panel and were not evaluated. The sparse-panel fixed graph "
+                "baseline uses only each lane's last observed state; no historical primary values "
+                "were filled."
+            )
         ),
         "source_file_hashes": source_file_hashes,
         "artifact_paths": {"json": str(Path(args.output))},

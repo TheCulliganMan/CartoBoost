@@ -1035,16 +1035,19 @@ function lsttnDriverSentence(driver?: {label: string; value: number}): string {
 
 function humanizeArchitectureComponent(value: string): string {
   const labels: Record<string, string> = {
-    masked_patch_encoder_decoder_pretraining: 'Masked-patch pretraining reconstructs withheld history blocks.',
-    supervised_contextual_patch_attention: 'Contextual patch attention reads the retained long history.',
-    full_context_learned_patch_positions: 'Learned positions preserve order across the configured context.',
-    absolute_row_periodic_phase: 'Absolute phase keeps recurring cycles aligned across forecast origins.',
-    dilated_long_trend_extractor: 'Dilated convolutions summarize slower long-term movement.',
-    forward_backward_adaptive_graph_day_week_periodicity: 'Directed and adaptive graph paths carry recurring spatial signal.',
-    gated_temporal_adaptive_graph_short_term_branch: 'A gated short branch reacts to immediate graph-local changes.',
-    short_term_graph_forecaster_fusion: 'Input-conditioned fusion combines long and short branches.',
-    nonoverlapping_horizon_block_supervision: 'Direct horizon blocks avoid recursive error accumulation.',
-    shared_origin_direct_horizon_decoder: 'Every horizon is decoded from the same forecast origin.',
+    seventy_five_percent_masked_patch_pretraining: 'Pretraining reconstructs 75%-masked whole history patches.',
+    learned_patch_convolution_and_temporal_positions: 'Learned patch convolution and positions preserve long-history order.',
+    four_layer_multihead_transformer_encoder: 'Four Transformer layers contextualize every visible patch.',
+    one_layer_mask_token_transformer_decoder: 'A Transformer decoder reconstructs learned mask tokens.',
+    frozen_masked_subseries_transformer: 'The pretrained patch Transformer stays frozen during forecasting.',
+    four_stage_dilated_long_trend_convolution: 'Four dilated convolution and max-pool stages extract slow trend.',
+    previous_day_and_week_transformer_states: 'Previous-day and previous-week patch states carry periodic context.',
+    independent_forward_backward_adaptive_periodic_graph_convolutions: 'Independent directed and adaptive graphs propagate daily and weekly signal.',
+    eight_layer_causal_graph_wavenet_short_branch: 'Eight causal Graph WaveNet layers capture immediate graph dynamics.',
+    signal_and_time_of_day_short_term_channels: 'Signal and normalized time-of-day form the short-term inputs.',
+    long_periodic_short_feature_fusion: 'Two MLP stages fuse long trend, periodic graph state, and short dynamics.',
+    zero_masked_direct_multi_horizon_mae: 'Direct horizon heads train with zero-masked inverse-scale MAE.',
+    all_origin_thirty_two_window_supervision: 'Every valid origin trains in 32-window batches.',
   };
   return labels[value] ?? value.replaceAll('_', ' ');
 }
@@ -1512,7 +1515,7 @@ const LSTTN_H3_NODE_IDS = [
   '872a1072dffffff',
   '872a100d6ffffff',
 ];
-const LSTTN_DEBUG_HISTORY_ROWS = 48;
+const LSTTN_DEBUG_HISTORY_ROWS = 192;
 const LSTTN_DEBUG_HORIZON = 6;
 const LSTTN_DEBUG_PERIODICITY = 24;
 const LSTTN_DEBUG_RECENT_WINDOW = 12;
@@ -1598,7 +1601,7 @@ function lsttnH3ForecastRequest(counterfactual: LSTTNCounterfactual) {
     actual: allRows.slice(LSTTN_DEBUG_HISTORY_ROWS),
     options: {
       profile: 'long_short_fusion',
-      lookback: 36,
+      lookback: 169,
       hiddenSize: 4,
       attentionHeads: 2,
       graphOrder: 2,

@@ -2,10 +2,12 @@ use cartoboost_neural::{
     backend_affine_scores, backend_scalar_graph_f32, backend_scalar_graph_train_step_f32,
     BackendSelection,
 };
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::Path;
 
 pub mod market;
@@ -16,6 +18,10 @@ pub use market::{
 };
 
 pub type Result<T> = std::result::Result<T, GeoStError>;
+
+fn unit_scale() -> f64 {
+    1.0
+}
 
 type GraphForwardOutput = (
     AutodiffTape,
@@ -32,7 +38,10 @@ struct GraphForwardContext<'a> {
     excluded_expert: Option<usize>,
     phase_offset: usize,
     long_context_is_pooled: bool,
+    lsttn_frozen_patches: Option<&'a [Vec<Vec<f32>>]>,
+    lsttn_time_features: Option<&'a [Vec<f64>]>,
     deferred: bool,
+    training: bool,
 }
 
 pub fn available_compute_backends() -> Vec<String> {
@@ -277,6 +286,17 @@ impl GraphTemporalFrame {
             {
                 return Err(GeoStError::InvalidFrame(
                     "covariates must have shape [time, node, feature]".to_string(),
+                ));
+            }
+            let feature_count = covariates[0][0].len();
+            if feature_count == 0
+                || covariates.iter().flatten().any(|features| {
+                    features.len() != feature_count
+                        || features.iter().any(|value| !value.is_finite())
+                })
+            {
+                return Err(GeoStError::InvalidFrame(
+                    "covariates must have a non-empty, finite, consistent feature axis".to_string(),
                 ));
             }
         }
@@ -813,8 +833,21 @@ pub struct PaperGraphTransformerForecaster {
     #[serde(default)]
     trainable_state: Option<TrainableGraphTransformerState>,
     history: Vec<Vec<f64>>,
+    #[serde(default)]
+    history_time_features: Option<Vec<Vec<f64>>>,
     target_mean: f64,
     target_scale: f64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct LsttnTrainingCheckpoint {
+    version: u32,
+    data_fingerprint: u64,
+    config_json: String,
+    state: TrainableGraphTransformerState,
+    pretraining_completed: usize,
+    supervised_batches_completed: usize,
+    complete: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -847,6 +880,10 @@ struct TrainableGraphTransformerState {
     horizons: usize,
     experts: usize,
     graph_order: usize,
+    #[serde(default = "unit_scale")]
+    target_scale: f64,
+    #[serde(default)]
+    normalized_zero: f64,
 }
 
 #[derive(Clone, Copy)]
@@ -873,12 +910,29 @@ struct GraphParameterLayout {
     stgformer_pointwise: usize,
     lsttn_adaptive_source: usize,
     lsttn_adaptive_target: usize,
+    lsttn_weekly_adaptive_source: usize,
+    lsttn_weekly_adaptive_target: usize,
+    lsttn_short_adaptive_source: usize,
+    lsttn_short_adaptive_target: usize,
+    lsttn_periodic_projection: usize,
+    lsttn_fusion: usize,
     graphon_nodes: usize,
     graphon_time: usize,
     output: usize,
     pretrain_mask_token: usize,
     pretrain_position: usize,
     pretrain_decoder: usize,
+    lsttn_patch_embedding: usize,
+    lsttn_transformer_ffn: usize,
+    lsttn_transformer_norm: usize,
+    lsttn_transformer_out: usize,
+    lsttn_encoder_decoder: usize,
+    lsttn_decoder_q: usize,
+    lsttn_decoder_k: usize,
+    lsttn_decoder_v: usize,
+    lsttn_decoder_out: usize,
+    lsttn_decoder_ffn: usize,
+    lsttn_decoder_norm: usize,
     total: usize,
 }
 
@@ -908,7 +962,7 @@ impl GraphParameterLayout {
         // STGormer uses three temporal and three spatial transformer blocks.
         // Reserve one independent Q/K/V projection per block; the other
         // profiles use the first stage of these generic attention ranges.
-        let transformer_blocks = 3;
+        let transformer_blocks = 4;
         let temporal_k = temporal_q + transformer_blocks * projection;
         let temporal_v = temporal_k + transformer_blocks * projection;
         let spatial_q = temporal_v + transformer_blocks * projection;
@@ -931,10 +985,23 @@ impl GraphParameterLayout {
         // Graph WaveNet branch.  Each owns a filter and gate convolution,
         // their biases, and a post-adaptive-graph channel projection.
         let lsttn_short_wave = lsttn_dilated_convolution + 4 * (3 * hidden * hidden + hidden);
-        let stgformer_pointwise = lsttn_short_wave + 2 * (7 * hidden * hidden + 3 * hidden);
+        let lsttn_short_layer = 12 * hidden * hidden + 6 * hidden;
+        let stgformer_pointwise = lsttn_short_wave
+            + 2 * hidden
+            + hidden
+            + 8 * lsttn_short_layer
+            + 2 * (hidden * hidden + hidden);
         let lsttn_adaptive_source = stgformer_pointwise + graph_order * hidden * (hidden + 1);
-        let lsttn_adaptive_target = lsttn_adaptive_source + nodes * hidden;
-        let graphon_nodes = lsttn_adaptive_target + nodes * hidden;
+        let lsttn_adaptive_target = lsttn_adaptive_source + nodes * 10;
+        let lsttn_weekly_adaptive_source = lsttn_adaptive_target + nodes * 10;
+        let lsttn_weekly_adaptive_target = lsttn_weekly_adaptive_source + nodes * 10;
+        let lsttn_short_adaptive_source = lsttn_weekly_adaptive_target + nodes * 10;
+        let lsttn_short_adaptive_target = lsttn_short_adaptive_source + nodes * 10;
+        let lsttn_periodic_projection = lsttn_short_adaptive_target + nodes * 10;
+        // LSTTN has three explicit MLP stages: long-trend/day/week fusion,
+        // a second trend-seasonality projection, and short/long fusion.
+        let lsttn_fusion = lsttn_periodic_projection + 2 * (7 * hidden * hidden + hidden);
+        let graphon_nodes = lsttn_fusion + (6 * hidden * hidden + 3 * hidden);
         let graphon_time = graphon_nodes + experts * nodes;
         let output = graphon_time + experts * hidden;
         let pretrain_mask_token = output + horizons * (hidden + 1);
@@ -945,7 +1012,19 @@ impl GraphParameterLayout {
         let pretrain_positions = context_window.div_ceil(patch_width).max(1);
         let pretrain_position = pretrain_mask_token + hidden;
         let pretrain_decoder = pretrain_position + pretrain_positions * hidden;
-        let total = pretrain_decoder + patch_width * (hidden + 1);
+        let lsttn_patch_embedding = pretrain_decoder + patch_width * (hidden + 1);
+        let lsttn_transformer_ffn = lsttn_patch_embedding + patch_width * hidden + hidden;
+        let transformer_ffn = 8 * hidden * hidden + 5 * hidden;
+        let lsttn_transformer_norm = lsttn_transformer_ffn + transformer_blocks * transformer_ffn;
+        let lsttn_transformer_out = lsttn_transformer_norm + transformer_blocks * 4 * hidden;
+        let lsttn_encoder_decoder = lsttn_transformer_out + transformer_blocks * projection;
+        let lsttn_decoder_q = lsttn_encoder_decoder + projection;
+        let lsttn_decoder_k = lsttn_decoder_q + projection;
+        let lsttn_decoder_v = lsttn_decoder_k + projection;
+        let lsttn_decoder_out = lsttn_decoder_v + projection;
+        let lsttn_decoder_ffn = lsttn_decoder_out + projection;
+        let lsttn_decoder_norm = lsttn_decoder_ffn + transformer_ffn;
+        let total = lsttn_decoder_norm + 4 * hidden;
         Self {
             input,
             time2vec_frequency,
@@ -969,12 +1048,29 @@ impl GraphParameterLayout {
             stgformer_pointwise,
             lsttn_adaptive_source,
             lsttn_adaptive_target,
+            lsttn_weekly_adaptive_source,
+            lsttn_weekly_adaptive_target,
+            lsttn_short_adaptive_source,
+            lsttn_short_adaptive_target,
+            lsttn_periodic_projection,
+            lsttn_fusion,
             graphon_nodes,
             graphon_time,
             output,
             pretrain_mask_token,
             pretrain_position,
             pretrain_decoder,
+            lsttn_patch_embedding,
+            lsttn_transformer_ffn,
+            lsttn_transformer_norm,
+            lsttn_transformer_out,
+            lsttn_encoder_decoder,
+            lsttn_decoder_q,
+            lsttn_decoder_k,
+            lsttn_decoder_v,
+            lsttn_decoder_out,
+            lsttn_decoder_ffn,
+            lsttn_decoder_norm,
             total,
         }
     }
@@ -1004,7 +1100,7 @@ impl TrainableGraphTransformerState {
             context_window,
         );
         let mut state = seed;
-        let parameters = (0..layout.total)
+        let mut parameters = (0..layout.total)
             .map(|_| {
                 state ^= state << 13;
                 state ^= state >> 7;
@@ -1012,6 +1108,21 @@ impl TrainableGraphTransformerState {
                 ((state as f64 / u64::MAX as f64) - 0.5) * 0.08
             })
             .collect::<Vec<_>>();
+        for layer in 0..4 {
+            let norm = layout.lsttn_transformer_norm + layer * 4 * hidden;
+            parameters[norm..norm + hidden].fill(1.0);
+            parameters[norm + 2 * hidden..norm + 3 * hidden].fill(1.0);
+        }
+        parameters[layout.lsttn_decoder_norm..layout.lsttn_decoder_norm + hidden].fill(1.0);
+        parameters[layout.lsttn_decoder_norm + 2 * hidden..layout.lsttn_decoder_norm + 3 * hidden]
+            .fill(1.0);
+        let short_layer_width = 12 * hidden * hidden + 6 * hidden;
+        let short_layers = layout.lsttn_short_wave + 2 * hidden + hidden;
+        for layer in 0..8 {
+            let gamma =
+                short_layers + layer * short_layer_width + 12 * hidden * hidden + 4 * hidden;
+            parameters[gamma..gamma + hidden].fill(1.0);
+        }
         Self {
             first_moment: vec![0.0; layout.total],
             second_moment: vec![0.0; layout.total],
@@ -1026,6 +1137,8 @@ impl TrainableGraphTransformerState {
             horizons,
             experts,
             graph_order,
+            target_scale: 1.0,
+            normalized_zero: 0.0,
         }
     }
 
@@ -1039,6 +1152,74 @@ impl TrainableGraphTransformerState {
             self.periodicity,
             self.context_window,
         )
+    }
+
+    fn frozen_lsttn_patch_representations(
+        &self,
+        window: &[Vec<f64>],
+        _adjacency: &CsrAdjacency,
+        _phase_offset: usize,
+    ) -> Vec<Vec<Vec<f32>>> {
+        let layout = self.layout();
+        let patch_width = (self.periodicity / 24).max(1);
+        let position_count = (layout.pretrain_decoder - layout.pretrain_position) / self.hidden;
+        let patch_count = window.len() / patch_width;
+        let projection = self.hidden * (self.hidden + 1);
+        let ffn_width = 8 * self.hidden * self.hidden + 5 * self.hidden;
+        let by_node = (0..self.nodes)
+            .into_par_iter()
+            .map(|node| {
+                let mut sequence = (0..patch_count)
+                    .map(|patch| {
+                        (0..self.hidden)
+                            .map(|channel| {
+                                let mut value = self.parameters[layout.lsttn_patch_embedding
+                                    + patch_width * self.hidden
+                                    + channel];
+                                for offset in 0..patch_width {
+                                    value += self.parameters[layout.lsttn_patch_embedding
+                                        + offset * self.hidden
+                                        + channel]
+                                        * window[patch * patch_width + offset][node];
+                                }
+                                (value
+                                    + self.parameters[layout.pretrain_position
+                                        + (patch % position_count) * self.hidden
+                                        + channel])
+                                    * (self.hidden as f64).sqrt()
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>();
+                for layer in 0..4 {
+                    sequence = numeric_transformer_encoder_layer(
+                        &self.parameters,
+                        &sequence,
+                        layout.temporal_q + layer * projection,
+                        layout.temporal_k + layer * projection,
+                        layout.temporal_v + layer * projection,
+                        layout.lsttn_transformer_out + layer * projection,
+                        layout.lsttn_transformer_ffn + layer * ffn_width,
+                        layout.lsttn_transformer_norm + layer * 4 * self.hidden,
+                        self.hidden,
+                        self.attention_heads,
+                    );
+                }
+                sequence
+            })
+            .collect::<Vec<_>>();
+        (0..patch_count)
+            .map(|patch| {
+                (0..self.nodes)
+                    .map(|node| {
+                        by_node[node][patch]
+                            .iter()
+                            .map(|value| *value as f32)
+                            .collect()
+                    })
+                    .collect()
+            })
+            .collect()
     }
 
     fn adamw_step(&mut self, gradients: &[f64], learning_rate: f64, weight_decay: f64) {
@@ -1056,6 +1237,72 @@ impl TrainableGraphTransformerState {
         }
     }
 
+    /// The paper pretrains MST and freezes it before fitting LSTTN.  These
+    /// ranges own the patch projection, learned patch positions, and the
+    /// temporal Q/K/V projections used to contextualize patch embeddings.
+    fn freeze_lsttn_transformer_gradients(
+        &self,
+        layout: GraphParameterLayout,
+        gradients: &mut [f64],
+    ) {
+        gradients[layout.input..layout.spatial_q].fill(0.0);
+        gradients[layout.pretrain_mask_token..layout.total].fill(0.0);
+    }
+
+    /// Build one paper-style LSTTN training example without mutating model
+    /// state.  This is deliberately separate from Adam so a 32-window batch
+    /// can evaluate on Rayon workers and reduce its gradients deterministically
+    /// before taking one optimizer step, just like the reference mini-batch
+    /// trainer.
+    fn lsttn_example_loss_and_gradients(
+        &self,
+        window: &[Vec<f64>],
+        adjacency: &CsrAdjacency,
+        targets: &[Vec<f64>],
+        phase_offset: usize,
+        frozen_patches: Option<&[Vec<Vec<f32>>]>,
+        time_features: Option<&[Vec<f64>]>,
+    ) -> (f64, Vec<f64>) {
+        let owned_frozen = frozen_patches
+            .is_none()
+            .then(|| self.frozen_lsttn_patch_representations(window, adjacency, phase_offset));
+        let frozen_patches = frozen_patches.or(owned_frozen.as_deref());
+        let (tape, outputs, _, _) = self.forward(GraphForwardContext {
+            profile: &GraphTransformerProfile::LongShortFusion,
+            window,
+            adjacency,
+            excluded_expert: None,
+            phase_offset,
+            long_context_is_pooled: false,
+            lsttn_frozen_patches: frozen_patches,
+            lsttn_time_features: time_features,
+            deferred: false,
+            training: true,
+        });
+        let mut loss = tape.constant(0.0);
+        let valid = targets
+            .iter()
+            .flatten()
+            .filter(|target| (**target - self.normalized_zero).abs() > 1e-12)
+            .count();
+        let scale = tape.constant(1.0 / valid.max(1) as f64);
+        for node in 0..self.nodes {
+            for horizon in 0..self.horizons {
+                if (targets[horizon][node] - self.normalized_zero).abs() <= 1e-12 {
+                    continue;
+                }
+                let residual = tape.add(
+                    outputs[node][horizon],
+                    tape.constant(-targets[horizon][node]),
+                );
+                let residual = tape.mul(residual, tape.constant(self.target_scale));
+                let mae = tape.sqrt(tape.add(tape.mul(residual, residual), tape.constant(1e-12)));
+                loss = tape.add(loss, tape.mul(mae, scale));
+            }
+        }
+        (tape.value(loss), tape.backward(loss, self.parameters.len()))
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn train_example_with_context(
         &mut self,
@@ -1070,8 +1317,13 @@ impl TrainableGraphTransformerState {
         long_context_is_pooled: bool,
         backend: Option<&BackendSelection>,
     ) -> Result<f64> {
-        let accelerated = *profile == GraphTransformerProfile::LongShortFusion
+        // LSTTN freezes its pretrained masked-subseries Transformer during
+        // supervised fitting.  Keep this path on the native tape so the
+        // frozen ranges are enforced identically on every supported host.
+        let accelerated = *profile != GraphTransformerProfile::LongShortFusion
             && backend.is_some_and(|selection| selection.selected != "cpu");
+        let frozen_lsttn = (*profile == GraphTransformerProfile::LongShortFusion)
+            .then(|| self.frozen_lsttn_patch_representations(window, adjacency, phase_offset));
         let (tape, outputs, router_weights, _) = self.forward(GraphForwardContext {
             profile,
             window,
@@ -1079,17 +1331,43 @@ impl TrainableGraphTransformerState {
             excluded_expert,
             phase_offset,
             long_context_is_pooled,
+            lsttn_frozen_patches: frozen_lsttn.as_deref(),
+            lsttn_time_features: None,
             deferred: accelerated,
+            training: true,
         });
         let mut loss = tape.constant(0.0);
-        let scale = tape.constant(1.0 / (self.nodes * self.horizons) as f64);
+        let valid = targets
+            .iter()
+            .flatten()
+            .filter(|target| {
+                *profile != GraphTransformerProfile::LongShortFusion
+                    || (**target - self.normalized_zero).abs() > 1e-12
+            })
+            .count();
+        let scale = tape.constant(1.0 / valid.max(1) as f64);
         for node in 0..self.nodes {
             for horizon in 0..self.horizons {
+                if *profile == GraphTransformerProfile::LongShortFusion
+                    && (targets[horizon][node] - self.normalized_zero).abs() <= 1e-12
+                {
+                    continue;
+                }
                 let residual = tape.add(
                     outputs[node][horizon],
                     tape.constant(-targets[horizon][node]),
                 );
-                loss = tape.add(loss, tape.mul(tape.mul(residual, residual), scale));
+                let point_loss = if *profile == GraphTransformerProfile::LongShortFusion {
+                    let residual = tape.mul(residual, tape.constant(self.target_scale));
+                    // The reference LSTTN trains its forecast stage with
+                    // masked MAE.  The infinitesimal smoothing keeps the
+                    // derivative defined at zero for the native tape while
+                    // preserving the MAE value at reporting precision.
+                    tape.sqrt(tape.add(tape.mul(residual, residual), tape.constant(1e-12)))
+                } else {
+                    tape.mul(residual, residual)
+                };
+                loss = tape.add(loss, tape.mul(point_loss, scale));
             }
         }
         if *profile == GraphTransformerProfile::HeterogeneousMoE && !router_weights.is_empty() {
@@ -1132,11 +1410,11 @@ impl TrainableGraphTransformerState {
             Ok(value)
         } else {
             let value = tape.value(loss);
-            self.adamw_step(
-                &tape.backward(loss, self.parameters.len()),
-                learning_rate,
-                weight_decay,
-            );
+            let mut gradients = tape.backward(loss, self.parameters.len());
+            if *profile == GraphTransformerProfile::LongShortFusion {
+                self.freeze_lsttn_transformer_gradients(self.layout(), &mut gradients);
+            }
+            self.adamw_step(&gradients, learning_rate, weight_decay);
             Ok(value)
         }
     }
@@ -1147,6 +1425,7 @@ impl TrainableGraphTransformerState {
     /// same ones used by the forecasting path, so pretraining transfers a
     /// contextual long-history representation instead of training a detached
     /// auxiliary model.
+    #[allow(clippy::needless_range_loop)]
     fn train_masked_subseries_reconstruction(
         &mut self,
         window: &[Vec<f64>],
@@ -1176,147 +1455,183 @@ impl TrainableGraphTransformerState {
         let position_count = (layout.pretrain_decoder - layout.pretrain_position) / self.hidden;
         let mut total_loss = 0.0;
         let mut gradients = vec![0.0; self.parameters.len()];
+        let valid_reconstruction_values = masked
+            .iter()
+            .flat_map(|patch| {
+                (0..self.nodes).flat_map(move |node| {
+                    (0..patch_width).map(move |offset| window[patch * patch_width + offset][node])
+                })
+            })
+            .filter(|target| (*target - self.normalized_zero).abs() > 1e-12)
+            .count();
         let accelerated = backend.is_some_and(|selection| selection.selected != "cpu");
-        const METAL_PRETRAIN_NODE_BATCH: usize = 256;
+        // Self-attention over the visible long-history patches is independent
+        // per H3 node.  Keep a bounded tape for both CPU and accelerator
+        // execution, while accumulating the exact full-batch gradient before
+        // taking the optimizer step.  This prevents a city-scale panel from
+        // multiplying `nodes × patches × hidden` tape state at once.
+        const CPU_PRETRAIN_NODE_BATCH: usize = 16;
+        const ACCELERATOR_PRETRAIN_NODE_BATCH: usize = 32;
         let node_batch_size = if accelerated {
-            METAL_PRETRAIN_NODE_BATCH
+            ACCELERATOR_PRETRAIN_NODE_BATCH
         } else {
-            self.nodes
-        };
-        for patch in &masked {
-            // Each node's reconstruction is conditionally independent once
-            // the shared mask query and model parameters are fixed. Metal
-            // therefore trains bounded node batches instead of materializing
-            // one tape for every lane in a global panel.
-            for node_start in (0..self.nodes).step_by(node_batch_size) {
-                let node_end = (node_start + node_batch_size).min(self.nodes);
-                let batch_nodes = node_end - node_start;
-                let tape = if accelerated {
-                    AutodiffTape::deferred()
-                } else {
-                    AutodiffTape::new()
-                };
-                let parameter_nodes = self
-                    .parameters
+            CPU_PRETRAIN_NODE_BATCH
+        }
+        .min(self.nodes)
+        .max(1);
+        // One tape now contains every randomly masked patch for a bounded
+        // node batch.  Constructing a tape per patch used to repeat the
+        // visible-context encoder and issue hundreds of tiny accelerator
+        // launches for a long daily history.  Keeping the node dimension
+        // bounded preserves the city-scale memory ceiling while making each
+        // reconstruction pass a single batched objective.
+        for node_start in (0..self.nodes).step_by(node_batch_size) {
+            let node_end = (node_start + node_batch_size).min(self.nodes);
+            let tape = if accelerated {
+                AutodiffTape::deferred()
+            } else {
+                AutodiffTape::new()
+            };
+            let parameter_nodes = self
+                .parameters
+                .iter()
+                .enumerate()
+                .map(|(index, value)| tape.parameter(index, *value))
+                .collect::<Vec<_>>();
+            let parameter = |index: usize| parameter_nodes[index];
+            let mut loss = tape.constant(0.0);
+            let scale = tape.constant(1.0 / valid_reconstruction_values.max(1) as f64);
+            for node in node_start..node_end {
+                let mut encoded = visible
                     .iter()
-                    .enumerate()
-                    .map(|(index, value)| tape.parameter(index, *value))
-                    .collect::<Vec<_>>();
-                let parameter = |index: usize| parameter_nodes[index];
-                let representations = (node_start..node_end)
-                    .map(|node| {
-                        visible
-                            .iter()
-                            .map(|visible_patch| {
-                                let mean = window[visible_patch * patch_width
-                                    ..(visible_patch + 1) * patch_width]
-                                    .iter()
-                                    .map(|row| row[node])
-                                    .sum::<f64>()
-                                    / patch_width as f64;
-                                (0..self.hidden)
-                                    .map(|channel| {
-                                        let projected = tape.add(
-                                            parameter(layout.input + 7 * self.hidden + channel),
-                                            tape.mul(
-                                                parameter(layout.input + channel),
-                                                tape.constant(mean),
-                                            ),
-                                        );
-                                        tape.tanh(tape.add(
-                                            projected,
+                    .map(|patch| {
+                        (0..self.hidden)
+                            .map(|channel| {
+                                let mut value = parameter(
+                                    layout.lsttn_patch_embedding
+                                        + patch_width * self.hidden
+                                        + channel,
+                                );
+                                for offset in 0..patch_width {
+                                    value = tape.add(
+                                        value,
+                                        tape.mul(
                                             parameter(
-                                                layout.pretrain_position
-                                                    + (visible_patch % position_count)
-                                                        * self.hidden
+                                                layout.lsttn_patch_embedding
+                                                    + offset * self.hidden
                                                     + channel,
                                             ),
-                                        ))
-                                    })
-                                    .collect::<Vec<_>>()
-                            })
-                            .collect::<Vec<_>>()
-                    })
-                    .collect::<Vec<_>>();
-                let keys = representations
-                    .iter()
-                    .map(|node_representations| {
-                        node_representations
-                            .iter()
-                            .map(|representation| {
-                                tape_linear(
+                                            tape.constant(
+                                                window[patch * patch_width + offset][node],
+                                            ),
+                                        ),
+                                    );
+                                }
+                                tape_deterministic_dropout(
                                     &tape,
-                                    &parameter_nodes,
-                                    layout.temporal_k,
-                                    representation,
-                                    self.hidden,
-                                    self.hidden,
+                                    tape.mul(
+                                        tape.add(
+                                            value,
+                                            parameter(
+                                                layout.pretrain_position
+                                                    + (patch % position_count) * self.hidden
+                                                    + channel,
+                                            ),
+                                        ),
+                                        tape.constant((self.hidden as f64).sqrt()),
+                                    ),
+                                    self.steps ^ node as u64,
+                                    patch * self.hidden + channel,
+                                    true,
                                 )
                             })
                             .collect::<Vec<_>>()
                     })
                     .collect::<Vec<_>>();
-                let values = representations
+                let projection = self.hidden * (self.hidden + 1);
+                let ffn_width = 8 * self.hidden * self.hidden + 5 * self.hidden;
+                for layer in 0..4 {
+                    encoded = tape_transformer_encoder_layer(
+                        &tape,
+                        &parameter_nodes,
+                        &encoded,
+                        layout.temporal_q + layer * projection,
+                        layout.temporal_k + layer * projection,
+                        layout.temporal_v + layer * projection,
+                        layout.lsttn_transformer_out + layer * projection,
+                        layout.lsttn_transformer_ffn + layer * ffn_width,
+                        layout.lsttn_transformer_norm + layer * 4 * self.hidden,
+                        self.hidden,
+                        self.attention_heads,
+                        self.steps ^ ((node as u64) << 16) ^ layer as u64,
+                        true,
+                    );
+                }
+                let decoder_scale = tape.constant((self.hidden as f64).sqrt());
+                let mut decoder_input = encoded
                     .iter()
-                    .map(|node_representations| {
-                        node_representations
-                            .iter()
-                            .map(|representation| {
-                                tape_linear(
-                                    &tape,
-                                    &parameter_nodes,
-                                    layout.temporal_v,
-                                    representation,
-                                    self.hidden,
-                                    self.hidden,
-                                )
-                            })
-                            .collect::<Vec<_>>()
-                    })
-                    .collect::<Vec<_>>();
-                let mut loss = tape.constant(0.0);
-                let loss_nodes = if accelerated { batch_nodes } else { self.nodes };
-                let scale = tape.constant(1.0 / (masked.len() * loss_nodes * patch_width) as f64);
-                let mask_representation = (0..self.hidden)
-                    .map(|channel| {
-                        tape.add(
-                            parameter(layout.pretrain_mask_token + channel),
-                            parameter(
-                                layout.pretrain_position
-                                    + (patch % position_count) * self.hidden
-                                    + channel,
-                            ),
+                    .map(|token| {
+                        tape_linear(
+                            &tape,
+                            &parameter_nodes,
+                            layout.lsttn_encoder_decoder,
+                            token,
+                            self.hidden,
+                            self.hidden,
                         )
+                        .into_iter()
+                        .map(|value| tape.mul(value, decoder_scale))
+                        .collect::<Vec<_>>()
                     })
                     .collect::<Vec<_>>();
-                let query = tape_linear(
+                decoder_input.extend(masked.iter().map(|patch| {
+                    (0..self.hidden)
+                        .map(|channel| {
+                            tape.mul(
+                                tape_deterministic_dropout(
+                                    &tape,
+                                    tape.add(
+                                        parameter(layout.pretrain_mask_token + channel),
+                                        parameter(
+                                            layout.pretrain_position
+                                                + (patch % position_count) * self.hidden
+                                                + channel,
+                                        ),
+                                    ),
+                                    self.steps ^ ((node as u64) << 32),
+                                    patch * self.hidden + channel,
+                                    true,
+                                ),
+                                decoder_scale,
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                }));
+                let decoded = tape_transformer_encoder_layer(
                     &tape,
                     &parameter_nodes,
-                    layout.temporal_q,
-                    &mask_representation,
+                    &decoder_input,
+                    layout.lsttn_decoder_q,
+                    layout.lsttn_decoder_k,
+                    layout.lsttn_decoder_v,
+                    layout.lsttn_decoder_out,
+                    layout.lsttn_decoder_ffn,
+                    layout.lsttn_decoder_norm,
                     self.hidden,
-                    self.hidden,
+                    self.attention_heads,
+                    self.steps ^ ((node as u64) << 48),
+                    true,
                 );
-                for (batch_node, node) in (node_start..node_end).enumerate() {
-                    let weights = tape_softmax(
-                        &tape,
-                        &keys[batch_node]
-                            .iter()
-                            .map(|key| {
-                                tape.mul(
-                                    tape.constant(1.0 / (self.hidden as f64).sqrt()),
-                                    tape_dot(&tape, &query, key),
-                                )
-                            })
-                            .collect::<Vec<_>>(),
-                    );
-                    let context =
-                        tape_weighted_sum(&tape, &weights, &values[batch_node], self.hidden);
+                for (masked_index, patch) in masked.iter().enumerate() {
+                    let context = &decoded[visible.len() + masked_index];
                     for offset in 0..patch_width {
+                        let target = window[patch * patch_width + offset][node];
+                        if (target - self.normalized_zero).abs() <= 1e-12 {
+                            continue;
+                        }
                         let mut prediction =
                             parameter(layout.pretrain_decoder + patch_width * self.hidden + offset);
-                        for (channel, context_value) in context.iter().enumerate().take(self.hidden)
-                        {
+                        for (channel, context_value) in context.iter().enumerate() {
                             prediction = tape.add(
                                 prediction,
                                 tape.mul(
@@ -1327,35 +1642,34 @@ impl TrainableGraphTransformerState {
                                 ),
                             );
                         }
-                        let residual = tape.add(
-                            prediction,
-                            tape.constant(-window[patch * patch_width + offset][node]),
-                        );
-                        loss = tape.add(loss, tape.mul(scale, tape.mul(residual, residual)));
+                        let residual = tape.add(prediction, tape.constant(-target));
+                        let residual = tape.mul(residual, tape.constant(self.target_scale));
+                        let mae =
+                            tape.sqrt(tape.add(tape.mul(residual, residual), tape.constant(1e-12)));
+                        loss = tape.add(loss, tape.mul(scale, mae));
                     }
                 }
-                if accelerated {
-                    let next_step = self.steps + 1;
-                    total_loss += tape.accelerated_train_step(
-                        backend.expect("non-CPU backend is present"),
-                        loss,
-                        &mut self.parameters,
-                        &mut self.first_moment,
-                        &mut self.second_moment,
-                        next_step,
-                        learning_rate,
-                        weight_decay,
-                    )? * batch_nodes as f64
-                        / self.nodes as f64;
-                    self.steps = next_step;
-                } else {
-                    total_loss += tape.value(loss);
-                    for (total, gradient) in gradients
-                        .iter_mut()
-                        .zip(tape.backward(loss, self.parameters.len()))
-                    {
-                        *total += gradient;
-                    }
+            }
+            if accelerated {
+                let next_step = self.steps + 1;
+                total_loss += tape.accelerated_train_step(
+                    backend.expect("non-CPU backend is present"),
+                    loss,
+                    &mut self.parameters,
+                    &mut self.first_moment,
+                    &mut self.second_moment,
+                    next_step,
+                    learning_rate,
+                    weight_decay,
+                )?;
+                self.steps = next_step;
+            } else {
+                total_loss += tape.value(loss);
+                for (total, gradient) in gradients
+                    .iter_mut()
+                    .zip(tape.backward(loss, self.parameters.len()))
+                {
+                    *total += gradient;
                 }
             }
         }
@@ -1372,10 +1686,11 @@ impl TrainableGraphTransformerState {
         window: &[Vec<f64>],
         adjacency: &CsrAdjacency,
     ) -> Vec<Vec<f64>> {
-        self.predict_window_with_context(profile, window, adjacency, 0, false, None)
+        self.predict_window_with_context(profile, window, adjacency, 0, false, None, None)
             .expect("CPU graph transformer prediction")
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn predict_window_with_context(
         &self,
         profile: &GraphTransformerProfile,
@@ -1384,9 +1699,12 @@ impl TrainableGraphTransformerState {
         phase_offset: usize,
         long_context_is_pooled: bool,
         backend: Option<&BackendSelection>,
+        time_features: Option<&[Vec<f64>]>,
     ) -> Result<Vec<Vec<f64>>> {
         let accelerated = *profile == GraphTransformerProfile::LongShortFusion
             && backend.is_some_and(|selection| selection.selected != "cpu");
+        let frozen_lsttn = (*profile == GraphTransformerProfile::LongShortFusion)
+            .then(|| self.frozen_lsttn_patch_representations(window, adjacency, phase_offset));
         let (tape, outputs, _, _) = self.forward(GraphForwardContext {
             profile,
             window,
@@ -1394,7 +1712,10 @@ impl TrainableGraphTransformerState {
             excluded_expert: None,
             phase_offset,
             long_context_is_pooled,
+            lsttn_frozen_patches: frozen_lsttn.as_deref(),
+            lsttn_time_features: time_features,
             deferred: accelerated,
+            training: false,
         });
         if accelerated {
             let selection = backend.expect("non-CPU backend is present");
@@ -1425,7 +1746,10 @@ impl TrainableGraphTransformerState {
             excluded_expert,
             phase_offset,
             long_context_is_pooled,
+            lsttn_frozen_patches,
+            lsttn_time_features,
             deferred,
+            training,
         } = context;
         let layout = self.layout();
         let tape = if deferred {
@@ -1454,7 +1778,7 @@ impl TrainableGraphTransformerState {
         // diffusions as well as its learned adaptive diffusion.  Preserve a
         // normalized reverse graph rather than treating the supplied road
         // graph as undirected.
-        let reverse_adjacency = adjacency.transpose(nodes);
+        let reverse_adjacency = adjacency.transpose(nodes).row_normalized();
         let observed_values = window
             .iter()
             .map(|row| {
@@ -1473,8 +1797,15 @@ impl TrainableGraphTransformerState {
             .iter()
             .map(|weight| tape.constant(*weight))
             .collect::<Vec<_>>();
+        let mut required_embedding_times = vec![true; times];
+        if *profile == GraphTransformerProfile::LongShortFusion && lsttn_frozen_patches.is_some() {
+            required_embedding_times.fill(false);
+        }
         let mut graph_values = vec![vec![0usize; nodes]; times];
         for time in 0..times {
+            if !required_embedding_times[time] {
+                continue;
+            }
             for target in 0..nodes {
                 graph_values[time][target] = (adjacency.indptr[target]
                     ..adjacency.indptr[target + 1])
@@ -1518,6 +1849,9 @@ impl TrainableGraphTransformerState {
             .collect::<Vec<_>>();
         let mut embedding = vec![vec![vec![0usize; hidden]; nodes]; times];
         for time in 0..times {
+            if !required_embedding_times[time] {
+                continue;
+            }
             let position = positions[time];
             for node in 0..nodes {
                 for channel in 0..hidden {
@@ -1573,8 +1907,8 @@ impl TrainableGraphTransformerState {
 
         let mut temporal = vec![vec![0usize; hidden]; nodes];
         if *profile == GraphTransformerProfile::LongShortFusion {
-            // LSTTN keeps the latest native-resolution embedding for its
-            // short branch and fusion gate. Its long branch builds learned
+            // LSTTN keeps the latest native-resolution embedding available to
+            // its profile path. Its long branch builds learned
             // patch states and one-query contextual attention below;
             // materializing generic all-pairs attention here would make the
             // long-context profile quadratic in history length.
@@ -2113,29 +2447,146 @@ impl TrainableGraphTransformerState {
             } else {
                 native_patch_width
             };
-            let patch_count = embedding.chunks(patch_width).len();
+            let patch_count = lsttn_frozen_patches
+                .map_or_else(|| embedding.chunks(patch_width).len(), <[_]>::len);
             [effective_periodicity, effective_periodicity * 7]
                 .into_iter()
                 .filter_map(|period| {
                     let period_patches = (period / patch_width).max(1);
                     (patch_count > period_patches).then(|| {
                         let patch_index = patch_count - period_patches - 1;
-                        let patch_start = patch_index * patch_width;
-                        let patch = &embedding[patch_start..(patch_start + patch_width).min(times)];
-                        (0..nodes)
-                            .map(|period_node| {
-                                (0..hidden)
-                                    .map(|channel| {
-                                        let sum =
-                                            patch.iter().fold(tape.constant(0.0), |sum, row| {
-                                                tape.add(sum, row[period_node][channel])
-                                            });
-                                        tape.div(sum, tape.constant(patch.len() as f64))
-                                    })
-                                    .collect::<Vec<_>>()
+                        if let Some(cached) = lsttn_frozen_patches {
+                            cached[patch_index]
+                                .iter()
+                                .map(|node_values| {
+                                    node_values
+                                        .iter()
+                                        .map(|value| tape.constant(*value as f64))
+                                        .collect::<Vec<_>>()
+                                })
+                                .collect::<Vec<_>>()
+                        } else {
+                            let patch_start = patch_index * patch_width;
+                            let patch =
+                                &embedding[patch_start..(patch_start + patch_width).min(times)];
+                            (0..nodes)
+                                .map(|period_node| {
+                                    (0..hidden)
+                                        .map(|channel| {
+                                            let sum = patch
+                                                .iter()
+                                                .fold(tape.constant(0.0), |sum, row| {
+                                                    tape.add(sum, row[period_node][channel])
+                                                });
+                                            tape.div(sum, tape.constant(patch.len() as f64))
+                                        })
+                                        .collect::<Vec<_>>()
+                                })
+                                .collect::<Vec<_>>()
+                        }
+                    })
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        let lsttn_periodic_features = if *profile == GraphTransformerProfile::LongShortFusion {
+            lsttn_period_embeddings
+                .iter()
+                .enumerate()
+                .map(|(period, values)| {
+                    let (adaptive_source, adaptive_target) = if period == 0 {
+                        (layout.lsttn_adaptive_source, layout.lsttn_adaptive_target)
+                    } else {
+                        (
+                            layout.lsttn_weekly_adaptive_source,
+                            layout.lsttn_weekly_adaptive_target,
+                        )
+                    };
+                    let adaptive_weights = (0..nodes)
+                        .map(|source| {
+                            let logits = (0..nodes)
+                                .map(|target| {
+                                    let score = (0..10).fold(tape.constant(0.0), |sum, latent| {
+                                        tape.add(
+                                            sum,
+                                            tape.mul(
+                                                parameter(
+                                                    &tape,
+                                                    adaptive_source + source * 10 + latent,
+                                                ),
+                                                parameter(
+                                                    &tape,
+                                                    adaptive_target + target * 10 + latent,
+                                                ),
+                                            ),
+                                        )
+                                    });
+                                    tape.max(score, tape.constant(0.0))
+                                })
+                                .collect::<Vec<_>>();
+                            tape_softmax(&tape, &logits)
+                        })
+                        .collect::<Vec<_>>();
+                    let forward_one =
+                        tape_csr_diffuse(&tape, adjacency, &adjacency_weights, values, hidden);
+                    let forward_two = tape_csr_diffuse(
+                        &tape,
+                        adjacency,
+                        &adjacency_weights,
+                        &forward_one,
+                        hidden,
+                    );
+                    let backward_one = tape_csr_diffuse(
+                        &tape,
+                        &reverse_adjacency,
+                        &reverse_adjacency_weights,
+                        values,
+                        hidden,
+                    );
+                    let backward_two = tape_csr_diffuse(
+                        &tape,
+                        &reverse_adjacency,
+                        &reverse_adjacency_weights,
+                        &backward_one,
+                        hidden,
+                    );
+                    let adaptive_one = tape_dense_diffuse(&tape, &adaptive_weights, values, hidden);
+                    let adaptive_two =
+                        tape_dense_diffuse(&tape, &adaptive_weights, &adaptive_one, hidden);
+                    (0..nodes)
+                        .map(|node| {
+                            let mut concatenated = values[node].clone();
+                            concatenated.extend(&forward_one[node]);
+                            concatenated.extend(&forward_two[node]);
+                            concatenated.extend(&backward_one[node]);
+                            concatenated.extend(&backward_two[node]);
+                            concatenated.extend(&adaptive_one[node]);
+                            concatenated.extend(&adaptive_two[node]);
+                            tape_linear(
+                                &tape,
+                                &parameter_nodes,
+                                layout.lsttn_periodic_projection
+                                    + period * (7 * hidden * hidden + hidden),
+                                &concatenated,
+                                7 * hidden,
+                                hidden,
+                            )
+                            .into_iter()
+                            .enumerate()
+                            .map(|(channel, value)| {
+                                tape_deterministic_dropout_rate(
+                                    &tape,
+                                    value,
+                                    self.steps ^ ((period as u64) << 40),
+                                    node * hidden + channel,
+                                    training,
+                                    0.3,
+                                )
                             })
                             .collect::<Vec<_>>()
-                    })
+                        })
+                        .collect::<Vec<_>>()
                 })
                 .collect::<Vec<_>>()
         } else {
@@ -2170,97 +2621,66 @@ impl TrainableGraphTransformerState {
                     };
                     let position_count =
                         (layout.pretrain_decoder - layout.pretrain_position) / hidden;
-                    let subseries = embedding
-                        .chunks(patch_width)
-                        .enumerate()
-                        .map(|(patch_index, patch)| {
-                            (0..hidden)
-                                .map(|channel| {
-                                    let sum = patch.iter().fold(tape.constant(0.0), |sum, row| {
-                                        tape.add(sum, row[node][channel])
-                                    });
-                                    let pooled = tape.div(sum, tape.constant(patch.len() as f64));
-                                    tape.tanh(tape.add(
-                                        pooled,
-                                        parameter(
-                                            &tape,
-                                            layout.pretrain_position
-                                                + (patch_index % position_count) * hidden
-                                                + channel,
-                                        ),
-                                    ))
-                                })
-                                .collect::<Vec<_>>()
-                        })
-                        .collect::<Vec<_>>();
-                    // Reuse the masked-reconstruction encoder directly in
-                    // supervised fitting. A latest-patch query attends over
-                    // every historical patch using the same Q/K/V projections
-                    // trained during pretraining. This is linear in history
-                    // length and gives the forecast path an explicit global
-                    // context rather than only transferring input weights.
-                    let context_query = tape_linear(
-                        &tape,
-                        &parameter_nodes,
-                        layout.temporal_q,
-                        subseries.last().expect("nonempty LSTTN patch sequence"),
-                        hidden,
-                        hidden,
-                    );
-                    let context_keys = subseries
-                        .iter()
-                        .map(|patch| {
-                            tape_linear(
-                                &tape,
-                                &parameter_nodes,
-                                layout.temporal_k,
-                                patch,
-                                hidden,
-                                hidden,
-                            )
-                        })
-                        .collect::<Vec<_>>();
-                    let context_values = subseries
-                        .iter()
-                        .map(|patch| {
-                            tape_linear(
-                                &tape,
-                                &parameter_nodes,
-                                layout.temporal_v,
-                                patch,
-                                hidden,
-                                hidden,
-                            )
-                        })
-                        .collect::<Vec<_>>();
-                    let context_weights = tape_softmax(
-                        &tape,
-                        &context_keys
+                    let subseries = if let Some(cached) = lsttn_frozen_patches {
+                        cached
                             .iter()
-                            .map(|key| {
-                                tape.mul(
-                                    tape.constant(1.0 / (hidden as f64).sqrt()),
-                                    tape_dot(&tape, &context_query, key),
-                                )
+                            .map(|patch| {
+                                patch[node]
+                                    .iter()
+                                    .map(|value| tape.constant(*value as f64))
+                                    .collect::<Vec<_>>()
                             })
-                            .collect::<Vec<_>>(),
-                    );
-                    let contextual_history =
-                        tape_weighted_sum(&tape, &context_weights, &context_values, hidden);
+                            .collect::<Vec<_>>()
+                    } else {
+                        embedding
+                            .chunks(patch_width)
+                            .enumerate()
+                            .map(|(patch_index, patch)| {
+                                (0..hidden)
+                                    .map(|channel| {
+                                        let sum =
+                                            patch.iter().fold(tape.constant(0.0), |sum, row| {
+                                                tape.add(sum, row[node][channel])
+                                            });
+                                        let pooled =
+                                            tape.div(sum, tape.constant(patch.len() as f64));
+                                        tape.tanh(tape.add(
+                                            pooled,
+                                            parameter(
+                                                &tape,
+                                                layout.pretrain_position
+                                                    + (patch_index % position_count) * hidden
+                                                    + channel,
+                                            ),
+                                        ))
+                                    })
+                                    .collect::<Vec<_>>()
+                            })
+                            .collect::<Vec<_>>()
+                    };
                     let mut long_sequence = subseries.clone();
                     for (layer, dilation) in [1usize, 2, 4, 8].into_iter().enumerate() {
                         let layer_offset = layout.lsttn_dilated_convolution
                             + layer * (3 * hidden * hidden + hidden);
-                        let long_times = long_sequence.len();
-                        let mut next = vec![vec![tape.constant(0.0); hidden]; long_times];
-                        for time in 0..long_times {
+                        let convolution_times = long_sequence.len().div_ceil(2);
+                        let mut convolved =
+                            vec![vec![tape.constant(0.0); hidden]; convolution_times];
+                        for output_time in 0..convolution_times {
                             for output_channel in 0..hidden {
                                 let mut value = parameter(
                                     &tape,
                                     layer_offset + 3 * hidden * hidden + output_channel,
                                 );
                                 for tap in 0..3 {
-                                    if let Some(source_time) = time.checked_sub(tap * dilation) {
+                                    let centered = output_time * 2;
+                                    let source_time = match tap {
+                                        0 => centered.checked_sub(dilation),
+                                        1 => Some(centered),
+                                        _ => centered
+                                            .checked_add(dilation)
+                                            .filter(|time| *time < long_sequence.len()),
+                                    };
+                                    if let Some(source_time) = source_time {
                                         for input_channel in 0..hidden {
                                             value = tape.add(
                                                 value,
@@ -2278,118 +2698,32 @@ impl TrainableGraphTransformerState {
                                         }
                                     }
                                 }
-                                next[time][output_channel] = tape.tanh(value);
+                                convolved[output_time][output_channel] = tape_gelu(&tape, value);
                             }
                         }
-                        // LSTTN pairs each dilated layer with temporal max
-                        // pooling to compact the patch sequence.  Selecting
-                        // the winning tape node gives max-pool's standard
-                        // gradient path without introducing a Python kernel.
-                        long_sequence = if next.len() < 2 {
-                            next
-                        } else {
-                            next.chunks(2)
-                                .map(|pool| {
-                                    (0..hidden)
-                                        .map(|channel| {
-                                            pool.iter()
-                                                .map(|row| row[channel])
-                                                .reduce(|left, right| tape.max(left, right))
-                                                .expect("nonempty pooling window")
-                                        })
-                                        .collect::<Vec<_>>()
-                                })
-                                .collect::<Vec<_>>()
-                        };
-                    }
-                    let mut long = long_sequence[long_sequence.len() - 1]
-                        .iter()
-                        .zip(&contextual_history)
-                        .map(|(local, global)| tape.tanh(tape.add(*local, *global)))
-                        .collect::<Vec<_>>();
-                    // LSTTN's periodic branch uses a separately learned,
-                    // input-conditioned adjacency for the available daily and
-                    // weekly lags.  It is deliberately distinct from the
-                    // supplied road graph: the node embeddings learn a
-                    // dynamic periodic affinity while the current temporal
-                    // state conditions that affinity at each forecast cutoff.
-                    let mut periodic = vec![tape.constant(0.0); hidden];
-                    let mut periodic_count = 0usize;
-                    let fallback = [node];
-                    let adaptive_sources = adaptive_neighbor_indices(adjacency, node, &fallback);
-                    for period_embedding in &lsttn_period_embeddings {
-                        periodic_count += 1;
-                        // Forward and backward graph diffusions from the
-                        // observed road topology.  The adaptive branch
-                        // below is intentionally an additional third
-                        // diffusion, not a replacement for these paths.
-                        for edge in adjacency.indptr[node]..adjacency.indptr[node + 1] {
-                            let source = adjacency.indices[edge];
-                            for channel in 0..hidden {
-                                periodic[channel] = tape.add(
-                                    periodic[channel],
-                                    tape.mul(
-                                        adjacency_weights[edge],
-                                        period_embedding[source][channel],
-                                    ),
-                                );
-                            }
-                        }
-                        for edge in
-                            reverse_adjacency.indptr[node]..reverse_adjacency.indptr[node + 1]
-                        {
-                            let source = reverse_adjacency.indices[edge];
-                            for channel in 0..hidden {
-                                periodic[channel] = tape.add(
-                                    periodic[channel],
-                                    tape.mul(
-                                        reverse_adjacency_weights[edge],
-                                        period_embedding[source][channel],
-                                    ),
-                                );
-                            }
-                        }
-                        // Adaptive diffusion uses the supplied sparse graph
-                        // neighborhood.  All-pairs node affinity is
-                        // quadratic in node count and is not viable for
-                        // global market graphs.
-                        let logits = adaptive_sources
-                            .iter()
-                            .map(|&other| {
-                                (0..hidden).fold(tape.constant(0.0), |score, latent| {
-                                    let source = tape.add(
-                                        parameter(
-                                            &tape,
-                                            layout.lsttn_adaptive_source + node * hidden + latent,
-                                        ),
-                                        temporal[node][latent],
-                                    );
-                                    let target = parameter(
-                                        &tape,
-                                        layout.lsttn_adaptive_target + other * hidden + latent,
-                                    );
-                                    tape.add(score, tape.mul(source, target))
-                                })
+                        let pooled_times = convolved.len().div_ceil(2);
+                        long_sequence = (0..pooled_times)
+                            .map(|output_time| {
+                                (0..hidden)
+                                    .map(|channel| {
+                                        let center = output_time * 2;
+                                        [center.checked_sub(1), Some(center), Some(center + 1)]
+                                            .into_iter()
+                                            .flatten()
+                                            .filter(|time| *time < convolved.len())
+                                            .map(|time| convolved[time][channel])
+                                            .reduce(|left, right| tape.max(left, right))
+                                            .expect("nonempty LSTTN max-pool window")
+                                    })
+                                    .collect::<Vec<_>>()
                             })
-                            .collect::<Vec<_>>();
-                        let adaptive = tape_softmax(&tape, &logits);
-                        for (weight, &other) in adaptive.iter().zip(adaptive_sources) {
-                            for channel in 0..hidden {
-                                periodic[channel] = tape.add(
-                                    periodic[channel],
-                                    tape.mul(*weight, period_embedding[other][channel]),
-                                );
-                            }
-                        }
+                            .collect();
                     }
-                    if periodic_count > 0 {
-                        let denominator =
-                            tape.constant((periodic_count * (adaptive_sources.len() + 2)) as f64);
-                        for channel in 0..hidden {
-                            long[channel] =
-                                tape.add(long[channel], tape.div(periodic[channel], denominator));
-                        }
-                    }
+                    let long = long_sequence[long_sequence.len() - 1].clone();
+                    let periodic_components = lsttn_periodic_features
+                        .iter()
+                        .map(|period| period[node].clone())
+                        .collect::<Vec<_>>();
                     // The short branch is a Graph WaveNet-style stack rather
                     // than a reuse of the generic transformer attention.  A
                     // causal gated temporal convolution learns local traffic
@@ -2399,170 +2733,367 @@ impl TrainableGraphTransformerState {
                     // long/short fusion an actual architectural distinction.
                     if lsttn_short_sequence.is_none() {
                         let short_start = times.saturating_sub(self.recent_window);
-                        let mut short_sequence = embedding[short_start..].to_vec();
-                        for (layer, dilation) in [1usize, 2].into_iter().enumerate() {
-                            let layer_width = 7 * hidden * hidden + 3 * hidden;
-                            let layer_offset = layout.lsttn_short_wave + layer * layer_width;
+                        let start_projection = layout.lsttn_short_wave;
+                        // The reference Graph WaveNet consumes the first two
+                        // traffic-frame channels: the normalized signal and
+                        // normalized time-of-day.  Left padding brings a
+                        // 12-step short history to its 13-step receptive field.
+                        let receptive_field = 13usize;
+                        let raw_short_len = times - short_start;
+                        let padded_len = (raw_short_len + 1).max(receptive_field);
+                        let left_padding = padded_len - raw_short_len;
+                        let mut short_sequence =
+                            vec![vec![vec![tape.constant(0.0); hidden]; nodes]; padded_len];
+                        for (local_time, absolute_time) in (short_start..times).enumerate() {
+                            for current_node in 0..nodes {
+                                let time_of_day = lsttn_time_features
+                                    .map(|features| features[absolute_time][current_node])
+                                    .unwrap_or_else(|| {
+                                        ((phase_offset + absolute_time)
+                                            % effective_periodicity.max(1))
+                                            as f64
+                                            / effective_periodicity.max(1) as f64
+                                    });
+                                let inputs = [
+                                    observed_values[absolute_time][current_node],
+                                    tape.constant(time_of_day),
+                                ];
+                                short_sequence[left_padding + local_time][current_node] =
+                                    tape_linear(
+                                        &tape,
+                                        &parameter_nodes,
+                                        start_projection,
+                                        &inputs,
+                                        2,
+                                        hidden,
+                                    );
+                            }
+                        }
+                        let mut skip = vec![
+                            vec![vec![tape.constant(0.0); hidden]; nodes];
+                            short_sequence.len()
+                        ];
+                        let short_adaptive = (0..nodes)
+                            .map(|source| {
+                                let logits = (0..nodes)
+                                    .map(|target| {
+                                        let score =
+                                            (0..10).fold(tape.constant(0.0), |sum, latent| {
+                                                tape.add(
+                                                    sum,
+                                                    tape.mul(
+                                                        parameter(
+                                                            &tape,
+                                                            layout.lsttn_short_adaptive_source
+                                                                + source * 10
+                                                                + latent,
+                                                        ),
+                                                        parameter(
+                                                            &tape,
+                                                            layout.lsttn_short_adaptive_target
+                                                                + target * 10
+                                                                + latent,
+                                                        ),
+                                                    ),
+                                                )
+                                            });
+                                        tape.max(score, tape.constant(0.0))
+                                    })
+                                    .collect::<Vec<_>>();
+                                tape_softmax(&tape, &logits)
+                            })
+                            .collect::<Vec<_>>();
+                        let layer_width = 12 * hidden * hidden + 6 * hidden;
+                        let layers_start = start_projection + 2 * hidden + hidden;
+                        for (layer, dilation) in
+                            [1usize, 2, 1, 2, 1, 2, 1, 2].into_iter().enumerate()
+                        {
+                            let layer_offset = layers_start + layer * layer_width;
                             let filter_offset = layer_offset;
-                            let gate_offset = filter_offset + 3 * hidden * hidden;
-                            let filter_bias = gate_offset + 3 * hidden * hidden;
+                            let gate_offset = filter_offset + 2 * hidden * hidden;
+                            let filter_bias = gate_offset + 2 * hidden * hidden;
                             let gate_bias = filter_bias + hidden;
                             let graph_projection = gate_bias + hidden;
-                            let graph_bias = graph_projection + hidden * hidden;
-                            let short_times = short_sequence.len();
-                            let mut temporal_next =
-                                vec![vec![vec![tape.constant(0.0); hidden]; nodes]; short_times];
-                            for time in 0..short_times {
+                            let skip_projection = graph_projection + 7 * hidden * hidden + hidden;
+                            let norm = skip_projection + hidden * hidden + hidden;
+                            let output_times = short_sequence.len() - dilation;
+                            let mut gated =
+                                vec![vec![vec![tape.constant(0.0); hidden]; nodes]; output_times];
+                            let skip_offset = skip.len() - output_times;
+                            let mut cropped_skip =
+                                vec![vec![vec![tape.constant(0.0); hidden]; nodes]; output_times];
+                            for time in 0..output_times {
                                 for current_node in 0..nodes {
                                     for output_channel in 0..hidden {
                                         let mut filter =
                                             parameter(&tape, filter_bias + output_channel);
                                         let mut gate = parameter(&tape, gate_bias + output_channel);
-                                        for tap in 0..3 {
-                                            if let Some(source_time) =
-                                                time.checked_sub(tap * dilation)
-                                            {
-                                                for input_channel in 0..hidden {
-                                                    let source = short_sequence[source_time]
-                                                        [current_node][input_channel];
-                                                    filter = tape.add(
-                                                        filter,
-                                                        tape.mul(
-                                                            parameter(
-                                                                &tape,
-                                                                filter_offset
-                                                                    + tap * hidden * hidden
-                                                                    + input_channel * hidden
-                                                                    + output_channel,
-                                                            ),
-                                                            source,
+                                        for tap in 0..2 {
+                                            let source_time = time + tap * dilation;
+                                            for input_channel in 0..hidden {
+                                                let source = short_sequence[source_time]
+                                                    [current_node][input_channel];
+                                                filter = tape.add(
+                                                    filter,
+                                                    tape.mul(
+                                                        parameter(
+                                                            &tape,
+                                                            filter_offset
+                                                                + tap * hidden * hidden
+                                                                + input_channel * hidden
+                                                                + output_channel,
                                                         ),
-                                                    );
-                                                    gate = tape.add(
-                                                        gate,
-                                                        tape.mul(
-                                                            parameter(
-                                                                &tape,
-                                                                gate_offset
-                                                                    + tap * hidden * hidden
-                                                                    + input_channel * hidden
-                                                                    + output_channel,
-                                                            ),
-                                                            source,
+                                                        source,
+                                                    ),
+                                                );
+                                                gate = tape.add(
+                                                    gate,
+                                                    tape.mul(
+                                                        parameter(
+                                                            &tape,
+                                                            gate_offset
+                                                                + tap * hidden * hidden
+                                                                + input_channel * hidden
+                                                                + output_channel,
                                                         ),
-                                                    );
-                                                }
+                                                        source,
+                                                    ),
+                                                );
                                             }
                                         }
-                                        temporal_next[time][current_node][output_channel] =
+                                        gated[time][current_node][output_channel] =
                                             tape.mul(tape.tanh(filter), tape.sigmoid(gate));
+                                    }
+                                    let projected_skip = tape_linear(
+                                        &tape,
+                                        &parameter_nodes,
+                                        skip_projection,
+                                        &gated[time][current_node],
+                                        hidden,
+                                        hidden,
+                                    );
+                                    for channel in 0..hidden {
+                                        cropped_skip[time][current_node][channel] = tape.add(
+                                            skip[skip_offset + time][current_node][channel],
+                                            projected_skip[channel],
+                                        );
                                     }
                                 }
                             }
-                            let mut next =
-                                vec![vec![vec![tape.constant(0.0); hidden]; nodes]; short_times];
-                            for time in 0..short_times {
-                                for target in 0..nodes {
-                                    let source_embedding =
-                                        parameter(&tape, layout.graphon_nodes + target);
-                                    let fallback = [target];
-                                    let adaptive_sources =
-                                        adaptive_neighbor_indices(adjacency, target, &fallback);
-                                    let mut adaptive = vec![tape.constant(0.0); hidden];
-                                    for channel in 0..hidden {
-                                        let logits = adaptive_sources
-                                            .iter()
-                                            .map(|&source| {
-                                                tape.add(
-                                                    tape.mul(
-                                                        source_embedding,
-                                                        parameter(
-                                                            &tape,
-                                                            layout.graphon_nodes + source,
-                                                        ),
-                                                    ),
-                                                    temporal_next[time][source][channel],
-                                                )
-                                            })
-                                            .collect::<Vec<_>>();
-                                        let weights = tape_softmax(&tape, &logits);
-                                        for (weight, &source) in
-                                            weights.iter().zip(adaptive_sources)
-                                        {
-                                            adaptive[channel] = tape.add(
-                                                adaptive[channel],
-                                                tape.mul(
-                                                    *weight,
-                                                    temporal_next[time][source][channel],
-                                                ),
+                            skip = cropped_skip;
+                            let mut next = Vec::with_capacity(output_times);
+                            for time in 0..output_times {
+                                let forward_one = tape_csr_diffuse(
+                                    &tape,
+                                    adjacency,
+                                    &adjacency_weights,
+                                    &gated[time],
+                                    hidden,
+                                );
+                                let forward_two = tape_csr_diffuse(
+                                    &tape,
+                                    adjacency,
+                                    &adjacency_weights,
+                                    &forward_one,
+                                    hidden,
+                                );
+                                let backward_one = tape_csr_diffuse(
+                                    &tape,
+                                    &reverse_adjacency,
+                                    &reverse_adjacency_weights,
+                                    &gated[time],
+                                    hidden,
+                                );
+                                let backward_two = tape_csr_diffuse(
+                                    &tape,
+                                    &reverse_adjacency,
+                                    &reverse_adjacency_weights,
+                                    &backward_one,
+                                    hidden,
+                                );
+                                let adaptive_one = tape_dense_diffuse(
+                                    &tape,
+                                    &short_adaptive,
+                                    &gated[time],
+                                    hidden,
+                                );
+                                let adaptive_two = tape_dense_diffuse(
+                                    &tape,
+                                    &short_adaptive,
+                                    &adaptive_one,
+                                    hidden,
+                                );
+                                next.push(
+                                    (0..nodes)
+                                        .map(|current_node| {
+                                            let mut features = gated[time][current_node].clone();
+                                            features.extend(&forward_one[current_node]);
+                                            features.extend(&forward_two[current_node]);
+                                            features.extend(&backward_one[current_node]);
+                                            features.extend(&backward_two[current_node]);
+                                            features.extend(&adaptive_one[current_node]);
+                                            features.extend(&adaptive_two[current_node]);
+                                            let graph = tape_linear(
+                                                &tape,
+                                                &parameter_nodes,
+                                                graph_projection,
+                                                &features,
+                                                7 * hidden,
+                                                hidden,
                                             );
-                                        }
-                                    }
-                                    for output_channel in 0..hidden {
-                                        let mut value =
-                                            parameter(&tape, graph_bias + output_channel);
-                                        for input_channel in 0..hidden {
-                                            value = tape.add(
-                                                value,
-                                                tape.mul(
-                                                    parameter(
+                                            graph
+                                                .iter()
+                                                .zip(&short_sequence[time + dilation][current_node])
+                                                .enumerate()
+                                                .map(|(channel, (value, residual))| {
+                                                    let value = tape_deterministic_dropout_rate(
                                                         &tape,
-                                                        graph_projection
-                                                            + input_channel * hidden
-                                                            + output_channel,
+                                                        *value,
+                                                        self.steps ^ ((layer as u64) << 48),
+                                                        (time * nodes + current_node) * hidden
+                                                            + channel,
+                                                        training,
+                                                        0.3,
+                                                    );
+                                                    tape.add(value, *residual)
+                                                })
+                                                .collect::<Vec<_>>()
+                                        })
+                                        .collect::<Vec<_>>(),
+                                );
+                            }
+                            for channel in 0..hidden {
+                                let count = (next.len() * nodes) as f64;
+                                let mean = next.iter().flatten().fold(
+                                    tape.constant(0.0),
+                                    |sum, values| {
+                                        tape.add(
+                                            sum,
+                                            tape.mul(values[channel], tape.constant(1.0 / count)),
+                                        )
+                                    },
+                                );
+                                let variance = next.iter().flatten().fold(
+                                    tape.constant(0.0),
+                                    |sum, values| {
+                                        let centered = tape.add(
+                                            values[channel],
+                                            tape.mul(mean, tape.constant(-1.0)),
+                                        );
+                                        tape.add(
+                                            sum,
+                                            tape.mul(
+                                                tape.mul(centered, centered),
+                                                tape.constant(1.0 / count),
+                                            ),
+                                        )
+                                    },
+                                );
+                                let denominator =
+                                    tape.sqrt(tape.add(variance, tape.constant(1e-5)));
+                                for time in &mut next {
+                                    for values in time {
+                                        values[channel] = tape.add(
+                                            tape.mul(
+                                                tape.div(
+                                                    tape.add(
+                                                        values[channel],
+                                                        tape.mul(mean, tape.constant(-1.0)),
                                                     ),
-                                                    adaptive[input_channel],
+                                                    denominator,
                                                 ),
-                                            );
-                                        }
-                                        next[time][target][output_channel] = tape.tanh(value);
+                                                parameter(&tape, norm + channel),
+                                            ),
+                                            parameter(&tape, norm + hidden + channel),
+                                        );
                                     }
                                 }
                             }
                             short_sequence = next;
                         }
-                        lsttn_short_sequence = Some(short_sequence);
+                        let end_one = layers_start + 8 * layer_width;
+                        let end_two = end_one + hidden * hidden + hidden;
+                        let final_short = (0..nodes)
+                            .map(|current_node| {
+                                let activated = skip[skip.len() - 1][current_node]
+                                    .iter()
+                                    .map(|value| tape.max(*value, tape.constant(0.0)))
+                                    .collect::<Vec<_>>();
+                                let hidden_values = tape_linear(
+                                    &tape,
+                                    &parameter_nodes,
+                                    end_one,
+                                    &activated,
+                                    hidden,
+                                    hidden,
+                                )
+                                .into_iter()
+                                .map(|value| tape.max(value, tape.constant(0.0)))
+                                .collect::<Vec<_>>();
+                                tape_linear(
+                                    &tape,
+                                    &parameter_nodes,
+                                    end_two,
+                                    &hidden_values,
+                                    hidden,
+                                    hidden,
+                                )
+                            })
+                            .collect::<Vec<_>>();
+                        lsttn_short_sequence = Some(vec![final_short]);
                     }
                     let short_sequence = lsttn_short_sequence
                         .as_ref()
                         .expect("LSTTN short branch is initialized");
-                    let mut fused = vec![0usize; hidden];
-                    for channel in 0..hidden {
-                        let short = short_sequence[short_sequence.len() - 1][node][channel];
-                        // Let the observed regime decide whether long or
-                        // short context is trustworthy.  A fixed channel gate
-                        // cannot react to congestion onset, while this gate
-                        // conditions on the long state, short state, and the
-                        // latest high-resolution temporal embedding.
-                        let gate_logit = tape.add(
-                            parameter(&tape, layout.recurrence + channel),
-                            tape.add(
-                                tape.mul(
-                                    parameter(&tape, layout.recurrence + hidden + channel),
-                                    long[channel],
-                                ),
-                                tape.add(
-                                    tape.mul(
-                                        parameter(&tape, layout.recurrence + 2 * hidden + channel),
-                                        short,
-                                    ),
-                                    tape.mul(
-                                        parameter(&tape, layout.recurrence + 3 * hidden + channel),
-                                        temporal[node][channel],
-                                    ),
-                                ),
-                            ),
-                        );
-                        let gate = tape.sigmoid(gate_logit);
-                        fused[channel] = tape.add(
-                            tape.mul(gate, long[channel]),
-                            tape.mul(
-                                tape.add(tape.constant(1.0), tape.mul(tape.constant(-1.0), gate)),
-                                short,
-                            ),
-                        );
-                    }
-                    fused
+                    // The paper concatenates the long-trend, weekly, and
+                    // daily graph features, sends them through a two-layer
+                    // trend-seasonality MLP, then concatenates that result
+                    // with the Graph WaveNet short-term state for a final
+                    // MLP.  A learned gate is not equivalent to this path.
+                    let zero = tape.constant(0.0);
+                    let daily = periodic_components
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| vec![zero; hidden]);
+                    let weekly = periodic_components
+                        .get(1)
+                        .cloned()
+                        .unwrap_or_else(|| vec![zero; hidden]);
+                    let mut trend_seasonality_input = long;
+                    trend_seasonality_input.extend(daily);
+                    trend_seasonality_input.extend(weekly);
+                    let first_trend_seasonality = tape_linear(
+                        &tape,
+                        &parameter_nodes,
+                        layout.lsttn_fusion,
+                        &trend_seasonality_input,
+                        3 * hidden,
+                        hidden,
+                    )
+                    .into_iter()
+                    .map(|value| tape.max(value, zero))
+                    .collect::<Vec<_>>();
+                    let trend_seasonality = tape_linear(
+                        &tape,
+                        &parameter_nodes,
+                        layout.lsttn_fusion + (3 * hidden + 1) * hidden,
+                        &first_trend_seasonality,
+                        hidden,
+                        hidden,
+                    );
+                    let mut final_input = short_sequence[short_sequence.len() - 1][node].clone();
+                    final_input.extend(trend_seasonality);
+                    tape_linear(
+                        &tape,
+                        &parameter_nodes,
+                        layout.lsttn_fusion + (4 * hidden * hidden + 2 * hidden),
+                        &final_input,
+                        2 * hidden,
+                        hidden,
+                    )
+                    .into_iter()
+                    .map(|value| tape.max(value, zero))
+                    .collect()
                 }
                 GraphTransformerProfile::GatedGraphTemporal => {
                     let mut gated = vec![0usize; hidden];
@@ -2854,6 +3385,343 @@ fn tape_linear(
         .collect()
 }
 
+fn numeric_linear(
+    parameters: &[f64],
+    offset: usize,
+    input: &[f64],
+    input_width: usize,
+    output_width: usize,
+) -> Vec<f64> {
+    (0..output_width)
+        .map(|output| {
+            input.iter().enumerate().take(input_width).fold(
+                parameters[offset + input_width * output_width + output],
+                |sum, (index, value)| {
+                    sum + parameters[offset + index * output_width + output] * value
+                },
+            )
+        })
+        .collect()
+}
+
+fn numeric_layer_norm(parameters: &[f64], offset: usize, values: &[f64]) -> Vec<f64> {
+    let mean = values.iter().sum::<f64>() / values.len() as f64;
+    let variance = values
+        .iter()
+        .map(|value| (value - mean).powi(2))
+        .sum::<f64>()
+        / values.len() as f64;
+    let denominator = (variance + 1e-5).sqrt();
+    values
+        .iter()
+        .enumerate()
+        .map(|(channel, value)| {
+            (value - mean) / denominator * parameters[offset + channel]
+                + parameters[offset + values.len() + channel]
+        })
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn numeric_transformer_encoder_layer(
+    parameters: &[f64],
+    sequence: &[Vec<f64>],
+    q_offset: usize,
+    k_offset: usize,
+    v_offset: usize,
+    out_offset: usize,
+    ffn_offset: usize,
+    norm_offset: usize,
+    hidden: usize,
+    heads: usize,
+) -> Vec<Vec<f64>> {
+    let queries = sequence
+        .iter()
+        .map(|token| numeric_linear(parameters, q_offset, token, hidden, hidden))
+        .collect::<Vec<_>>();
+    let keys = sequence
+        .iter()
+        .map(|token| numeric_linear(parameters, k_offset, token, hidden, hidden))
+        .collect::<Vec<_>>();
+    let values = sequence
+        .iter()
+        .map(|token| numeric_linear(parameters, v_offset, token, hidden, hidden))
+        .collect::<Vec<_>>();
+    sequence
+        .iter()
+        .enumerate()
+        .map(|(token_index, residual)| {
+            let mut attended = vec![0.0; hidden];
+            for head in 0..heads {
+                let start = head * hidden / heads;
+                let end = (head + 1) * hidden / heads;
+                let scale = 1.0 / ((end - start) as f64).sqrt();
+                let logits = keys
+                    .iter()
+                    .map(|key| {
+                        queries[token_index][start..end]
+                            .iter()
+                            .zip(&key[start..end])
+                            .map(|(left, right)| left * right)
+                            .sum::<f64>()
+                            * scale
+                    })
+                    .collect::<Vec<_>>();
+                let max = logits.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                let mut weights = logits
+                    .iter()
+                    .map(|value| (value - max).exp())
+                    .collect::<Vec<_>>();
+                let denominator = weights.iter().sum::<f64>().max(1e-12);
+                for weight in &mut weights {
+                    *weight /= denominator;
+                }
+                for channel in start..end {
+                    attended[channel] = weights
+                        .iter()
+                        .zip(&values)
+                        .map(|(weight, value)| weight * value[channel])
+                        .sum();
+                }
+            }
+            let projected = numeric_linear(parameters, out_offset, &attended, hidden, hidden);
+            let first = residual
+                .iter()
+                .zip(projected)
+                .map(|(left, right)| left + right)
+                .collect::<Vec<_>>();
+            let normalized = numeric_layer_norm(parameters, norm_offset, &first);
+            let expanded = numeric_linear(parameters, ffn_offset, &normalized, hidden, 4 * hidden)
+                .into_iter()
+                .map(|value| value.max(0.0))
+                .collect::<Vec<_>>();
+            let contracted = numeric_linear(
+                parameters,
+                ffn_offset + (hidden + 1) * 4 * hidden,
+                &expanded,
+                4 * hidden,
+                hidden,
+            );
+            numeric_layer_norm(
+                parameters,
+                norm_offset + 2 * hidden,
+                &normalized
+                    .iter()
+                    .zip(contracted)
+                    .map(|(left, right)| left + right)
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect()
+}
+
+fn tape_layer_norm(
+    tape: &AutodiffTape,
+    parameters: &[usize],
+    offset: usize,
+    values: &[usize],
+) -> Vec<usize> {
+    let width = values.len();
+    let inverse = tape.constant(1.0 / width as f64);
+    let mean = values.iter().fold(tape.constant(0.0), |sum, value| {
+        tape.add(sum, tape.mul(*value, inverse))
+    });
+    let variance = values.iter().fold(tape.constant(0.0), |sum, value| {
+        let centered = tape.add(*value, tape.mul(mean, tape.constant(-1.0)));
+        tape.add(sum, tape.mul(tape.mul(centered, centered), inverse))
+    });
+    let denominator = tape.sqrt(tape.add(variance, tape.constant(1e-5)));
+    values
+        .iter()
+        .enumerate()
+        .map(|(channel, value)| {
+            let centered = tape.add(*value, tape.mul(mean, tape.constant(-1.0)));
+            tape.add(
+                tape.mul(
+                    tape.div(centered, denominator),
+                    parameters[offset + channel],
+                ),
+                parameters[offset + width + channel],
+            )
+        })
+        .collect()
+}
+
+fn tape_deterministic_dropout(
+    tape: &AutodiffTape,
+    value: usize,
+    seed: u64,
+    index: usize,
+    enabled: bool,
+) -> usize {
+    tape_deterministic_dropout_rate(tape, value, seed, index, enabled, 0.1)
+}
+
+fn tape_deterministic_dropout_rate(
+    tape: &AutodiffTape,
+    value: usize,
+    seed: u64,
+    index: usize,
+    enabled: bool,
+    probability: f64,
+) -> usize {
+    if !enabled {
+        return value;
+    }
+    let mut state = seed ^ (index as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    state ^= state << 13;
+    state ^= state >> 7;
+    state ^= state << 17;
+    let threshold = (probability * 10_000.0).round() as u64;
+    if state % 10_000 < threshold {
+        tape.constant(0.0)
+    } else {
+        tape.mul(value, tape.constant(1.0 / (1.0 - probability)))
+    }
+}
+
+fn tape_gelu(tape: &AutodiffTape, value: usize) -> usize {
+    let cube = tape.mul(tape.mul(value, value), value);
+    let inner = tape.mul(
+        tape.constant((2.0 / std::f64::consts::PI).sqrt()),
+        tape.add(value, tape.mul(tape.constant(0.044715), cube)),
+    );
+    tape.mul(
+        tape.constant(0.5),
+        tape.mul(value, tape.add(tape.constant(1.0), tape.tanh(inner))),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn tape_transformer_encoder_layer(
+    tape: &AutodiffTape,
+    parameters: &[usize],
+    sequence: &[Vec<usize>],
+    q_offset: usize,
+    k_offset: usize,
+    v_offset: usize,
+    out_offset: usize,
+    ffn_offset: usize,
+    norm_offset: usize,
+    hidden: usize,
+    heads: usize,
+    dropout_seed: u64,
+    dropout: bool,
+) -> Vec<Vec<usize>> {
+    let queries = sequence
+        .iter()
+        .map(|token| tape_linear(tape, parameters, q_offset, token, hidden, hidden))
+        .collect::<Vec<_>>();
+    let keys = sequence
+        .iter()
+        .map(|token| tape_linear(tape, parameters, k_offset, token, hidden, hidden))
+        .collect::<Vec<_>>();
+    let values = sequence
+        .iter()
+        .map(|token| tape_linear(tape, parameters, v_offset, token, hidden, hidden))
+        .collect::<Vec<_>>();
+    sequence
+        .iter()
+        .enumerate()
+        .map(|(token_index, residual)| {
+            let mut attended = vec![tape.constant(0.0); hidden];
+            for head in 0..heads {
+                let start = head * hidden / heads;
+                let end = (head + 1) * hidden / heads;
+                let scale = tape.constant(1.0 / ((end - start) as f64).sqrt());
+                let logits = keys
+                    .iter()
+                    .map(|key| {
+                        tape.mul(
+                            scale,
+                            tape_dot(tape, &queries[token_index][start..end], &key[start..end]),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let weights = tape_softmax(tape, &logits)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(key_index, weight)| {
+                        tape_deterministic_dropout(
+                            tape,
+                            weight,
+                            dropout_seed ^ 0x6a09_e667_f3bc_c909,
+                            (token_index * sequence.len() + key_index) * heads + head,
+                            dropout,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let head_values = values
+                    .iter()
+                    .map(|value| value[start..end].to_vec())
+                    .collect::<Vec<_>>();
+                attended[start..end].copy_from_slice(&tape_weighted_sum(
+                    tape,
+                    &weights,
+                    &head_values,
+                    end - start,
+                ));
+            }
+            let projected = tape_linear(tape, parameters, out_offset, &attended, hidden, hidden);
+            let first_residual = residual
+                .iter()
+                .zip(projected)
+                .enumerate()
+                .map(|(channel, (skip, value))| {
+                    tape.add(
+                        *skip,
+                        tape_deterministic_dropout(
+                            tape,
+                            value,
+                            dropout_seed,
+                            token_index * hidden + channel,
+                            dropout,
+                        ),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let normalized = tape_layer_norm(tape, parameters, norm_offset, &first_residual);
+            let expanded = tape_linear(
+                tape,
+                parameters,
+                ffn_offset,
+                &normalized,
+                hidden,
+                4 * hidden,
+            )
+            .into_iter()
+            .map(|value| tape.max(value, tape.constant(0.0)))
+            .collect::<Vec<_>>();
+            let contracted = tape_linear(
+                tape,
+                parameters,
+                ffn_offset + (hidden + 1) * 4 * hidden,
+                &expanded,
+                4 * hidden,
+                hidden,
+            );
+            let second_residual = normalized
+                .iter()
+                .zip(contracted)
+                .enumerate()
+                .map(|(channel, (skip, value))| {
+                    tape.add(
+                        *skip,
+                        tape_deterministic_dropout(
+                            tape,
+                            value,
+                            dropout_seed ^ 0xa5a5_a5a5_a5a5_a5a5,
+                            token_index * hidden + channel,
+                            dropout,
+                        ),
+                    )
+                })
+                .collect::<Vec<_>>();
+            tape_layer_norm(tape, parameters, norm_offset + 2 * hidden, &second_residual)
+        })
+        .collect()
+}
+
 fn periodic_phase(absolute_step: usize, period: usize) -> f64 {
     (absolute_step as f64 * std::f64::consts::TAU / period.max(1) as f64).sin()
 }
@@ -2864,6 +3732,20 @@ fn tape_dot(tape: &AutodiffTape, left: &[usize], right: &[usize]) -> usize {
         .fold(tape.constant(0.0), |sum, (a, b)| {
             tape.add(sum, tape.mul(*a, *b))
         })
+}
+
+fn clip_gradient_norm(gradients: &mut [f64], maximum_norm: f64) {
+    let norm = gradients
+        .iter()
+        .map(|value| value * value)
+        .sum::<f64>()
+        .sqrt();
+    if norm > maximum_norm {
+        let scale = maximum_norm / norm;
+        for gradient in gradients {
+            *gradient *= scale;
+        }
+    }
 }
 
 /// Logistic noise obtained from the difference of two Gumbel variates.  With
@@ -2960,6 +3842,7 @@ fn tape_l2_normalize(tape: &AutodiffTape, values: &[usize]) -> Vec<usize> {
     values.iter().map(|value| tape.div(*value, norm)).collect()
 }
 
+#[cfg(test)]
 fn adaptive_neighbor_indices<'a>(
     adjacency: &'a CsrAdjacency,
     node: usize,
@@ -3008,6 +3891,54 @@ fn tape_weighted_sum(
                 .fold(tape.constant(0.0), |sum, (weight, value)| {
                     tape.add(sum, tape.mul(*weight, value[channel]))
                 })
+        })
+        .collect()
+}
+
+fn tape_csr_diffuse(
+    tape: &AutodiffTape,
+    adjacency: &CsrAdjacency,
+    weights: &[usize],
+    values: &[Vec<usize>],
+    hidden: usize,
+) -> Vec<Vec<usize>> {
+    (0..values.len())
+        .map(|target| {
+            (0..hidden)
+                .map(|channel| {
+                    (adjacency.indptr[target]..adjacency.indptr[target + 1]).fold(
+                        tape.constant(0.0),
+                        |sum, edge| {
+                            tape.add(
+                                sum,
+                                tape.mul(weights[edge], values[adjacency.indices[edge]][channel]),
+                            )
+                        },
+                    )
+                })
+                .collect()
+        })
+        .collect()
+}
+
+fn tape_dense_diffuse(
+    tape: &AutodiffTape,
+    weights: &[Vec<usize>],
+    values: &[Vec<usize>],
+    hidden: usize,
+) -> Vec<Vec<usize>> {
+    weights
+        .iter()
+        .map(|row| {
+            (0..hidden)
+                .map(|channel| {
+                    row.iter()
+                        .zip(values)
+                        .fold(tape.constant(0.0), |sum, (weight, source)| {
+                            tape.add(sum, tape.mul(*weight, source[channel]))
+                        })
+                })
+                .collect()
         })
         .collect()
 }
@@ -4097,6 +5028,7 @@ impl PaperGraphTransformerForecaster {
             || config.hidden_size == 0
             || config.attention_heads == 0
             || config.attention_heads > config.hidden_size
+            || !config.hidden_size.is_multiple_of(config.attention_heads)
             || config.graph_order == 0
             || config.experts == 0
             || config.periodicity == 0
@@ -4121,13 +5053,41 @@ impl PaperGraphTransformerForecaster {
             adjacency: None,
             trainable_state: None,
             history: Vec::new(),
+            history_time_features: None,
             target_mean: 0.0,
             target_scale: 1.0,
         })
     }
 
     pub fn fit(&mut self, frame: &GraphTemporalFrame) -> Result<()> {
+        self.fit_internal(frame, None)
+    }
+
+    pub fn fit_checkpointed(
+        &mut self,
+        frame: &GraphTemporalFrame,
+        checkpoint_path: impl AsRef<Path>,
+    ) -> Result<()> {
+        self.fit_internal(frame, Some(checkpoint_path.as_ref()))
+    }
+
+    fn fit_internal(
+        &mut self,
+        frame: &GraphTemporalFrame,
+        checkpoint_path: Option<&Path>,
+    ) -> Result<()> {
         frame.validate()?;
+        if self.config.profile == GraphTransformerProfile::LongShortFusion {
+            let patch_width = (self.config.periodicity / 24).max(1);
+            let patch_count = self.config.lookback / patch_width;
+            let weekly_lag = (self.config.periodicity / patch_width).max(1) * 7;
+            if !self.config.lookback.is_multiple_of(patch_width) || patch_count <= weekly_lag {
+                return Err(GeoStError::InvalidFrame(format!(
+                    "LSTTN lookback must contain complete patches and exceed one weekly lag: lookback={}, patch_width={}, weekly_lag_patches={weekly_lag}",
+                    self.config.lookback, patch_width
+                )));
+            }
+        }
         if frame.target.len() <= self.config.lookback + frame.horizon {
             return Err(GeoStError::InvalidFrame(
                 "target length must exceed lookback plus horizon".to_string(),
@@ -4139,24 +5099,62 @@ impl PaperGraphTransformerForecaster {
             .iter()
             .map(|row| row.iter().map(|v| (v - mean) / scale).collect::<Vec<_>>())
             .collect::<Vec<_>>();
+        let lsttn_time_features = frame.covariates.as_ref().map(|covariates| {
+            covariates
+                .iter()
+                .map(|time| time.iter().map(|node| node[0]).collect::<Vec<_>>())
+                .collect::<Vec<_>>()
+        });
         let adjacency = frame.adjacency.row_normalized();
         let backend = BackendSelection {
             requested: self.config.backend.requested.clone(),
             selected: self.config.backend.selected.clone(),
             available: self.config.backend.available.clone(),
         };
-        let mut state = TrainableGraphTransformerState::initialized(
-            frame.node_ids.len(),
-            self.config.hidden_size,
-            self.config.attention_heads,
-            self.config.periodicity,
-            self.config.recent_window,
-            self.config.lookback,
-            frame.horizon,
-            self.config.experts,
-            self.config.graph_order,
-            0x5354_474d_4f45,
-        );
+        let data_fingerprint = graph_temporal_training_fingerprint(frame);
+        let config_json = serde_json::to_string(&self.config)?;
+        let resumed = checkpoint_path
+            .filter(|path| path.is_file())
+            .map(|path| -> Result<LsttnTrainingCheckpoint> {
+                let checkpoint: LsttnTrainingCheckpoint =
+                    serde_json::from_str(&fs::read_to_string(path)?)?;
+                if checkpoint.version != 2
+                    || checkpoint.data_fingerprint != data_fingerprint
+                    || checkpoint.config_json != config_json
+                {
+                    return Err(GeoStError::InvalidFrame(format!(
+                        "LSTTN checkpoint {} does not match this frame and configuration",
+                        path.display()
+                    )));
+                }
+                Ok(checkpoint)
+            })
+            .transpose()?;
+        let mut state = resumed
+            .as_ref()
+            .map(|checkpoint| checkpoint.state.clone())
+            .unwrap_or_else(|| {
+                TrainableGraphTransformerState::initialized(
+                    frame.node_ids.len(),
+                    self.config.hidden_size,
+                    self.config.attention_heads,
+                    self.config.periodicity,
+                    self.config.recent_window,
+                    self.config.lookback,
+                    frame.horizon,
+                    self.config.experts,
+                    self.config.graph_order,
+                    0x5354_474d_4f45,
+                )
+            });
+        state.target_scale = scale;
+        state.normalized_zero = -mean / scale;
+        let mut pretraining_completed = resumed
+            .as_ref()
+            .map_or(0, |checkpoint| checkpoint.pretraining_completed);
+        let mut supervised_batches_completed = resumed
+            .as_ref()
+            .map_or(0, |checkpoint| checkpoint.supervised_batches_completed);
         let sample_count = normalized.len() - self.config.lookback - frame.horizon + 1;
         let spatial_shift_environments =
             if self.config.profile == GraphTransformerProfile::SpatialShiftGraphonMoE {
@@ -4185,89 +5183,248 @@ impl PaperGraphTransformerForecaster {
             if pretraining_starts.last().copied() != Some(final_start) {
                 pretraining_starts.push(final_start);
             }
-            for _ in 0..(self.config.epochs / 4).max(1) {
-                for start in &pretraining_starts {
+            let pretraining_epochs = (self.config.epochs / 4).max(1);
+            let total_pretraining = pretraining_epochs * pretraining_starts.len();
+            for epoch in 0..pretraining_epochs {
+                for (window_index, start) in pretraining_starts.iter().enumerate() {
+                    let task_index = epoch * pretraining_starts.len() + window_index;
+                    if task_index < pretraining_completed {
+                        continue;
+                    }
                     state.train_masked_subseries_reconstruction(
                         &normalized[*start..*start + self.config.lookback],
                         self.config.learning_rate,
                         self.config.weight_decay,
                         Some(&backend),
                     )?;
+                    pretraining_completed = task_index + 1;
+                    eprintln!(
+                        "LSTTN pretrain epoch {}/{} window {}/{} ({}/{})",
+                        epoch + 1,
+                        pretraining_epochs,
+                        window_index + 1,
+                        pretraining_starts.len(),
+                        pretraining_completed,
+                        total_pretraining
+                    );
+                    if let Some(path) = checkpoint_path {
+                        write_lsttn_checkpoint(
+                            path,
+                            &LsttnTrainingCheckpoint {
+                                version: 2,
+                                data_fingerprint,
+                                config_json: config_json.clone(),
+                                state: state.clone(),
+                                pretraining_completed,
+                                supervised_batches_completed,
+                                complete: false,
+                            },
+                        )?;
+                    }
                 }
             }
         }
-        let supervised_starts = if self.config.profile == GraphTransformerProfile::LongShortFusion {
-            let mut starts = (0..sample_count).step_by(frame.horizon).collect::<Vec<_>>();
-            let final_start = sample_count - 1;
-            if starts.last().copied() != Some(final_start) {
-                starts.push(final_start);
+        let supervised_starts = (0..sample_count).collect::<Vec<_>>();
+        let frozen_lsttn_cache = if self.config.profile == GraphTransformerProfile::LongShortFusion
+        {
+            let patch_width = (self.config.periodicity / 24).max(1);
+            let patches = self.config.lookback / patch_width;
+            let estimated_bytes = supervised_starts
+                .len()
+                .saturating_mul(patches)
+                .saturating_mul(frame.node_ids.len())
+                .saturating_mul(self.config.hidden_size)
+                .saturating_mul(std::mem::size_of::<f32>());
+            const MAX_FROZEN_CACHE_BYTES: usize = 512 * 1024 * 1024;
+            if estimated_bytes <= MAX_FROZEN_CACHE_BYTES {
+                eprintln!(
+                    "LSTTN caching frozen MST patch representations for {} supervised windows ({:.1} MiB)",
+                    supervised_starts.len(),
+                    estimated_bytes as f64 / (1024.0 * 1024.0)
+                );
+                Some(
+                    supervised_starts
+                        .par_iter()
+                        .map(|start| {
+                            let cutoff = *start + self.config.lookback;
+                            state.frozen_lsttn_patch_representations(
+                                &normalized[*start..cutoff],
+                                &adjacency,
+                                *start,
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            } else {
+                eprintln!(
+                    "LSTTN frozen MST cache would require {:.1} GiB; using bounded per-window reconstruction",
+                    estimated_bytes as f64 / (1024.0 * 1024.0 * 1024.0)
+                );
+                None
             }
-            starts
         } else {
-            (0..sample_count).collect::<Vec<_>>()
+            None
         };
-        for _ in 0..self.config.epochs {
-            for start in supervised_starts.iter().copied() {
-                let cutoff = start + self.config.lookback;
-                // Keep the frame's native resolution through the input
-                // projection. The long branch forms learned patches inside
-                // `forward`, while the short branch consumes the configured
-                // number of recent rows instead of pre-averaged values.
-                let long_context_is_pooled = false;
-                let model_window = &normalized[start..cutoff];
-                let baseline = &normalized[cutoff - 1];
-                let targets: Vec<Vec<f64>> = normalized[cutoff..cutoff + frame.horizon]
-                    .iter()
-                    .map(|row| {
-                        row.iter()
-                            .zip(baseline)
-                            .map(|(value, base)| value - base)
-                            .collect()
-                    })
-                    .collect();
-                if let Some(environments) = &spatial_shift_environments {
-                    // First learn each expert graphon on the observed traffic
-                    // environment.  The episodic pass then hides the
-                    // environment's designated expert, forcing the router to
-                    // mix the remaining graphons for that shifted relation.
-                    state.train_example_with_context(
-                        &self.config.profile,
-                        model_window,
-                        &adjacency,
-                        &targets,
-                        None,
-                        self.config.learning_rate * 0.5,
-                        self.config.weight_decay,
-                        start,
-                        long_context_is_pooled,
-                        Some(&backend),
-                    )?;
-                    let environment = environments[cutoff % environments.len()];
-                    state.train_example_with_context(
-                        &self.config.profile,
-                        model_window,
-                        &adjacency,
-                        &targets,
-                        Some(environment),
-                        self.config.learning_rate * 0.5,
-                        self.config.weight_decay,
-                        start,
-                        long_context_is_pooled,
-                        Some(&backend),
-                    )?;
-                } else {
-                    state.train_example_with_context(
-                        &self.config.profile,
-                        model_window,
-                        &adjacency,
-                        &targets,
-                        None,
-                        self.config.learning_rate,
-                        self.config.weight_decay,
-                        start,
-                        long_context_is_pooled,
-                        Some(&backend),
-                    )?;
+        if self.config.profile == GraphTransformerProfile::LongShortFusion {
+            // The reference LSTTN trainer uses 32-example mini-batches. Each
+            // example is independent up to Adam's update, so evaluate all
+            // scalar tapes on Rayon workers, average their gradients in
+            // stable start-order, and take one serialized Adam step.
+            const LSTTN_BATCH_SIZE: usize = 32;
+            let batches_per_epoch = supervised_starts.len().div_ceil(LSTTN_BATCH_SIZE);
+            let total_batches = batches_per_epoch * self.config.epochs;
+            for epoch in 0..self.config.epochs {
+                for (batch_index, starts) in supervised_starts.chunks(LSTTN_BATCH_SIZE).enumerate()
+                {
+                    let task_index = epoch * batches_per_epoch + batch_index;
+                    if task_index < supervised_batches_completed {
+                        continue;
+                    }
+                    let examples = starts
+                        .par_iter()
+                        .map(|start| {
+                            let cutoff = *start + self.config.lookback;
+                            let cache_index = supervised_starts
+                                .binary_search(start)
+                                .expect("supervised start has a frozen MST cache entry");
+                            state.lsttn_example_loss_and_gradients(
+                                &normalized[*start..cutoff],
+                                &adjacency,
+                                &normalized[cutoff..cutoff + frame.horizon],
+                                *start,
+                                frozen_lsttn_cache
+                                    .as_ref()
+                                    .map(|cache| cache[cache_index].as_slice()),
+                                lsttn_time_features
+                                    .as_ref()
+                                    .map(|features| &features[*start..cutoff]),
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    let mut gradients = vec![0.0; state.parameters.len()];
+                    let mut loss = 0.0;
+                    for (example_loss, example_gradients) in examples {
+                        loss += example_loss;
+                        for (total, gradient) in gradients.iter_mut().zip(example_gradients) {
+                            *total += gradient;
+                        }
+                    }
+                    let batch_scale = 1.0 / starts.len() as f64;
+                    for gradient in &mut gradients {
+                        *gradient *= batch_scale;
+                    }
+                    state.freeze_lsttn_transformer_gradients(state.layout(), &mut gradients);
+                    clip_gradient_norm(&mut gradients, 3.0);
+                    let scheduler_steps = [1usize, 18, 36, 54, 72]
+                        .into_iter()
+                        .filter(|milestone| *milestone <= epoch)
+                        .count();
+                    let epoch_learning_rate =
+                        self.config.learning_rate * 0.5_f64.powi(scheduler_steps as i32);
+                    state.adamw_step(&gradients, epoch_learning_rate, self.config.weight_decay);
+                    let mean_batch_loss = loss * batch_scale;
+                    supervised_batches_completed = task_index + 1;
+                    eprintln!(
+                        "LSTTN supervised epoch {}/{} batch {}/{} ({}/{}) loss={:.8}",
+                        epoch + 1,
+                        self.config.epochs,
+                        batch_index + 1,
+                        batches_per_epoch,
+                        supervised_batches_completed,
+                        total_batches,
+                        mean_batch_loss
+                    );
+                    if let Some(path) = checkpoint_path {
+                        write_lsttn_checkpoint(
+                            path,
+                            &LsttnTrainingCheckpoint {
+                                version: 2,
+                                data_fingerprint,
+                                config_json: config_json.clone(),
+                                state: state.clone(),
+                                pretraining_completed,
+                                supervised_batches_completed,
+                                complete: false,
+                            },
+                        )?;
+                    }
+                }
+            }
+        } else {
+            for _ in 0..self.config.epochs {
+                for start in supervised_starts.iter().copied() {
+                    let cutoff = start + self.config.lookback;
+                    // Keep the frame's native resolution through the input
+                    // projection. The long branch forms learned patches inside
+                    // `forward`, while the short branch consumes the configured
+                    // number of recent rows instead of pre-averaged values.
+                    let long_context_is_pooled = false;
+                    let model_window = &normalized[start..cutoff];
+                    // LSTTN's decoder predicts the traffic-flow value at every
+                    // forecast step directly.  Do not turn this profile into a
+                    // residual forecaster: that changes both the paper's output
+                    // equation and the meaning of its multi-step MAE objective.
+                    // Other graph-transformer profiles retain their established
+                    // displacement heads for backward-compatible behaviour.
+                    let targets: Vec<Vec<f64>> =
+                        if self.config.profile == GraphTransformerProfile::LongShortFusion {
+                            normalized[cutoff..cutoff + frame.horizon].to_vec()
+                        } else {
+                            let baseline = &normalized[cutoff - 1];
+                            normalized[cutoff..cutoff + frame.horizon]
+                                .iter()
+                                .map(|row| {
+                                    row.iter()
+                                        .zip(baseline)
+                                        .map(|(value, base)| value - base)
+                                        .collect()
+                                })
+                                .collect()
+                        };
+                    if let Some(environments) = &spatial_shift_environments {
+                        // First learn each expert graphon on the observed traffic
+                        // environment.  The episodic pass then hides the
+                        // environment's designated expert, forcing the router to
+                        // mix the remaining graphons for that shifted relation.
+                        state.train_example_with_context(
+                            &self.config.profile,
+                            model_window,
+                            &adjacency,
+                            &targets,
+                            None,
+                            self.config.learning_rate * 0.5,
+                            self.config.weight_decay,
+                            start,
+                            long_context_is_pooled,
+                            Some(&backend),
+                        )?;
+                        let environment = environments[cutoff % environments.len()];
+                        state.train_example_with_context(
+                            &self.config.profile,
+                            model_window,
+                            &adjacency,
+                            &targets,
+                            Some(environment),
+                            self.config.learning_rate * 0.5,
+                            self.config.weight_decay,
+                            start,
+                            long_context_is_pooled,
+                            Some(&backend),
+                        )?;
+                    } else {
+                        state.train_example_with_context(
+                            &self.config.profile,
+                            model_window,
+                            &adjacency,
+                            &targets,
+                            None,
+                            self.config.learning_rate,
+                            self.config.weight_decay,
+                            start,
+                            long_context_is_pooled,
+                            Some(&backend),
+                        )?;
+                    }
                 }
             }
         }
@@ -4277,8 +5434,27 @@ impl PaperGraphTransformerForecaster {
         self.horizon = frame.horizon;
         self.adjacency = Some(adjacency);
         self.history = normalized;
+        self.history_time_features = lsttn_time_features;
         self.target_mean = mean;
         self.target_scale = scale;
+        if let Some(path) = checkpoint_path {
+            write_lsttn_checkpoint(
+                path,
+                &LsttnTrainingCheckpoint {
+                    version: 2,
+                    data_fingerprint,
+                    config_json,
+                    state: self
+                        .trainable_state
+                        .as_ref()
+                        .expect("fitted trainable state")
+                        .clone(),
+                    pretraining_completed,
+                    supervised_batches_completed,
+                    complete: true,
+                },
+            )?;
+        }
         Ok(())
     }
 
@@ -4296,6 +5472,7 @@ impl PaperGraphTransformerForecaster {
             available: self.config.backend.available.clone(),
         };
         let mut history = self.history.clone();
+        let mut history_time_features = self.history_time_features.clone();
         let mut output = Vec::with_capacity(horizon);
         while output.len() < horizon {
             let start = history.len() - self.config.lookback;
@@ -4312,23 +5489,38 @@ impl PaperGraphTransformerForecaster {
                 start,
                 long_context_is_pooled,
                 Some(&backend),
+                history_time_features
+                    .as_ref()
+                    .map(|features| &features[start..]),
             )?;
-            // Every direct head is trained as a displacement from the same
-            // forecast-origin observation. Rebase the complete direct block
-            // on that one origin; cumulatively rebasing each head on the
-            // preceding prediction would manufacture horizon-dependent drift.
+            // The LSTTN decoder is a direct multi-horizon traffic-flow head,
+            // as in the paper.  The other profiles preserve their residual
+            // decoder contract.
             let baseline = history
                 .last()
                 .expect("forecast history is non-empty")
                 .clone();
             for row in rows.iter().take(self.horizon.min(horizon - output.len())) {
-                let next = row
-                    .iter()
-                    .zip(&baseline)
-                    .map(|(delta, value)| delta + value)
-                    .collect::<Vec<_>>();
+                let next = if self.config.profile == GraphTransformerProfile::LongShortFusion {
+                    row.clone()
+                } else {
+                    row.iter()
+                        .zip(&baseline)
+                        .map(|(delta, value)| delta + value)
+                        .collect::<Vec<_>>()
+                };
                 output.push(next.clone());
                 history.push(next);
+                if let Some(features) = &mut history_time_features {
+                    let increment = 1.0 / self.config.periodicity as f64;
+                    let next_time = features
+                        .last()
+                        .expect("fitted LSTTN time features are non-empty")
+                        .iter()
+                        .map(|value| (value + increment).rem_euclid(1.0))
+                        .collect();
+                    features.push(next_time);
+                }
             }
         }
         Ok(output
@@ -4365,20 +5557,55 @@ impl PaperGraphTransformerForecaster {
     }
 
     pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
+        self.validate_artifact()?;
         fs::write(path, serde_json::to_string_pretty(self)?)?;
         Ok(())
     }
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
-        Ok(serde_json::from_str(&fs::read_to_string(path)?)?)
+        let model: Self = serde_json::from_str(&fs::read_to_string(path)?)?;
+        model.validate_artifact()?;
+        Ok(model)
     }
     pub fn to_json_string(&self) -> Result<String> {
+        self.validate_artifact()?;
         Ok(serde_json::to_string(self)?)
     }
     pub fn from_json_string(value: &str) -> Result<Self> {
-        Ok(serde_json::from_str(value)?)
+        let model: Self = serde_json::from_str(value)?;
+        model.validate_artifact()?;
+        Ok(model)
     }
     pub fn backend(&self) -> String {
         self.config.backend.selected.clone()
+    }
+
+    fn validate_artifact(&self) -> Result<()> {
+        let Some(state) = &self.trainable_state else {
+            return Ok(());
+        };
+        let expected_parameters = state.layout().total;
+        let valid = state.parameters.len() == expected_parameters
+            && state.first_moment.len() == expected_parameters
+            && state.second_moment.len() == expected_parameters
+            && state.nodes == self.node_ids.len()
+            && state.hidden == self.config.hidden_size
+            && state.attention_heads == self.config.attention_heads
+            && state.periodicity == self.config.periodicity
+            && state.recent_window == self.config.recent_window
+            && state.context_window == self.config.lookback
+            && state.horizons == self.horizon
+            && self.history.iter().all(|row| row.len() == state.nodes)
+            && self.history_time_features.as_ref().is_none_or(|features| {
+                features.len() == self.history.len()
+                    && features.iter().all(|row| row.len() == state.nodes)
+            });
+        if !valid {
+            return Err(GeoStError::InvalidFrame(
+                "paper graph-transformer artifact is incompatible with the current native architecture; refit and save the model with this CartoBoost version"
+                    .to_string(),
+            ));
+        }
+        Ok(())
     }
 
     pub fn architecture_report(&self) -> PaperGraphTransformerArchitectureReport {
@@ -4398,16 +5625,19 @@ impl PaperGraphTransformerForecaster {
                 "recursive_pointwise_high_order_interaction",
             ],
             GraphTransformerProfile::LongShortFusion => vec![
-                "masked_patch_encoder_decoder_pretraining",
-                "supervised_contextual_patch_attention",
-                "full_context_learned_patch_positions",
-                "absolute_row_periodic_phase",
-                "dilated_long_trend_extractor",
-                "forward_backward_adaptive_graph_day_week_periodicity",
-                "gated_temporal_adaptive_graph_short_term_branch",
-                "short_term_graph_forecaster_fusion",
-                "nonoverlapping_horizon_block_supervision",
-                "shared_origin_direct_horizon_decoder",
+                "seventy_five_percent_masked_patch_pretraining",
+                "learned_patch_convolution_and_temporal_positions",
+                "four_layer_multihead_transformer_encoder",
+                "one_layer_mask_token_transformer_decoder",
+                "frozen_masked_subseries_transformer",
+                "four_stage_dilated_long_trend_convolution",
+                "previous_day_and_week_transformer_states",
+                "independent_forward_backward_adaptive_periodic_graph_convolutions",
+                "eight_layer_causal_graph_wavenet_short_branch",
+                "signal_and_time_of_day_short_term_channels",
+                "long_periodic_short_feature_fusion",
+                "zero_masked_direct_multi_horizon_mae",
+                "all_origin_thirty_two_window_supervision",
             ],
             GraphTransformerProfile::GatedGraphTemporal => vec![
                 "normalized_graph_convolution",
@@ -4480,6 +5710,36 @@ fn masked_patch_indices(patches: usize, step: u64) -> Vec<usize> {
     indices.truncate(masked_count);
     indices.sort_unstable();
     indices
+}
+
+fn graph_temporal_training_fingerprint(frame: &GraphTemporalFrame) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    frame.node_ids.hash(&mut hasher);
+    frame.timestamps.hash(&mut hasher);
+    frame.horizon.hash(&mut hasher);
+    frame.frequency.hash(&mut hasher);
+    frame.adjacency.indptr.hash(&mut hasher);
+    frame.adjacency.indices.hash(&mut hasher);
+    for value in frame
+        .target
+        .iter()
+        .flatten()
+        .chain(frame.adjacency.data.iter())
+        .chain(frame.covariates.iter().flatten().flatten().flatten())
+    {
+        value.to_bits().hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+fn write_lsttn_checkpoint(path: &Path, checkpoint: &LsttnTrainingCheckpoint) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let temporary = path.with_extension("json.part");
+    fs::write(&temporary, serde_json::to_vec(checkpoint)?)?;
+    fs::rename(temporary, path)?;
+    Ok(())
 }
 
 /// Divide one recurring traffic cycle into contiguous graph environments.  We
@@ -4975,7 +6235,11 @@ mod tests {
                 attention_heads: 2,
                 graph_order: 2,
                 experts: 3,
-                periodicity: 6,
+                periodicity: if profile == GraphTransformerProfile::LongShortFusion {
+                    1
+                } else {
+                    6
+                },
                 recent_window: 4,
                 epochs: 8,
                 learning_rate: 0.01,
@@ -4999,8 +6263,10 @@ mod tests {
                 assert_eq!(model.architecture_report().graphon_expert_count, 3);
             }
             if profile == GraphTransformerProfile::LongShortFusion {
-                let supervised_steps = (48usize - 8 - 4 + 1).div_ceil(4) * 8;
-                let pretraining_steps = 6 * (8 / 4);
+                let supervised_examples = 48usize - 8 - 4 + 1;
+                let supervised_steps = supervised_examples.div_ceil(32) * 8;
+                let pretraining_windows = (48usize - 8).div_ceil(8) + 1;
+                let pretraining_steps = pretraining_windows * (8 / 4);
                 assert_eq!(
                     model.trainable_state.as_ref().unwrap().steps as usize,
                     supervised_steps + pretraining_steps
@@ -5013,7 +6279,7 @@ mod tests {
                     "recursive_pointwise_high_order_interaction"
                 }
                 GraphTransformerProfile::LongShortFusion => {
-                    "masked_patch_encoder_decoder_pretraining"
+                    "seventy_five_percent_masked_patch_pretraining"
                 }
                 GraphTransformerProfile::GatedGraphTemporal => "normalized_graph_convolution",
                 GraphTransformerProfile::SpatialShiftGraphonMoE => {
@@ -5024,6 +6290,72 @@ mod tests {
                 .components
                 .iter()
                 .any(|component| component == required_component));
+        }
+    }
+
+    #[test]
+    fn lsttn_checkpoint_is_resumable_and_fingerprint_guarded() {
+        let frame = traffic_style_fixture_frame();
+        let config = PaperGraphTransformerConfig {
+            profile: GraphTransformerProfile::LongShortFusion,
+            lookback: 8,
+            hidden_size: 4,
+            attention_heads: 2,
+            graph_order: 2,
+            experts: 2,
+            periodicity: 1,
+            recent_window: 4,
+            epochs: 2,
+            learning_rate: 0.01,
+            weight_decay: 0.0,
+            backend: select_compute_backend(Some("cpu")).unwrap(),
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let checkpoint = directory.path().join("lsttn-checkpoint.json");
+        let mut first = PaperGraphTransformerForecaster::new(config.clone()).unwrap();
+        first.fit_checkpointed(&frame, &checkpoint).unwrap();
+        let first_prediction = first.predict(4).unwrap();
+        let first_steps = first.trainable_state.as_ref().unwrap().steps;
+
+        let mut resumed = PaperGraphTransformerForecaster::new(config).unwrap();
+        resumed.fit_checkpointed(&frame, &checkpoint).unwrap();
+        assert_eq!(resumed.trainable_state.as_ref().unwrap().steps, first_steps);
+        assert_eq!(resumed.predict(4).unwrap(), first_prediction);
+
+        let mut changed = frame.clone();
+        changed.target[0][0] += 1.0;
+        assert!(resumed.fit_checkpointed(&changed, checkpoint).is_err());
+    }
+
+    #[test]
+    fn frozen_lsttn_patch_cache_preserves_trainable_gradients() {
+        let frame = traffic_style_fixture_frame();
+        let adjacency = frame.adjacency.row_normalized();
+        let state = TrainableGraphTransformerState::initialized(3, 4, 2, 6, 4, 8, 4, 2, 2, 41);
+        let cache = state.frozen_lsttn_patch_representations(&frame.target[..8], &adjacency, 0);
+        let (uncached_loss, uncached) = state.lsttn_example_loss_and_gradients(
+            &frame.target[..8],
+            &adjacency,
+            &frame.target[8..12],
+            0,
+            None,
+            None,
+        );
+        let (cached_loss, cached) = state.lsttn_example_loss_and_gradients(
+            &frame.target[..8],
+            &adjacency,
+            &frame.target[8..12],
+            0,
+            Some(&cache),
+            None,
+        );
+        assert!((cached_loss - uncached_loss).abs() < 1e-5);
+        let layout = state.layout();
+        for (actual, expected) in cached[layout.spatial_q..layout.pretrain_position]
+            .iter()
+            .zip(&uncached[layout.spatial_q..layout.pretrain_position])
+        {
+            assert!((actual - expected).abs() < 1e-5);
         }
     }
 
@@ -5042,7 +6374,7 @@ mod tests {
             attention_heads: 2,
             graph_order: 2,
             experts: 2,
-            periodicity: 6,
+            periodicity: 1,
             recent_window: 4,
             epochs: 1,
             learning_rate: 0.01,
@@ -5082,7 +6414,7 @@ mod tests {
     fn attention_projection_ranges_include_independent_biases() {
         let layout = GraphParameterLayout::new(3, 4, 2, 2, 1, 6, 8);
         let width = 4 * (4 + 1);
-        let block_width = 3 * width;
+        let block_width = 4 * width;
         assert_eq!(layout.temporal_k, layout.temporal_q + block_width);
         assert_eq!(layout.temporal_v, layout.temporal_k + block_width);
         assert_eq!(layout.spatial_q, layout.temporal_v + block_width);
@@ -5333,7 +6665,7 @@ mod tests {
             attention_heads: 2,
             graph_order: 2,
             experts: 2,
-            periodicity: 6,
+            periodicity: 1,
             recent_window: 4,
             epochs: 1,
             learning_rate: 0.01,
@@ -5356,15 +6688,13 @@ mod tests {
         model.fit(&frame).unwrap();
         let trained = model.trainable_state.as_ref().unwrap();
         let layout = trained.layout();
-        assert!(
-            trained.parameters[layout.graphon_nodes..layout.graphon_time]
-                .iter()
-                .zip(&initial.parameters[layout.graphon_nodes..layout.graphon_time])
-                .any(|(actual, initial)| (actual - initial).abs() > 1e-12)
-        );
         for range in [
             layout.lsttn_adaptive_source..layout.lsttn_adaptive_target,
-            layout.lsttn_adaptive_target..layout.graphon_nodes,
+            layout.lsttn_adaptive_target..layout.lsttn_weekly_adaptive_source,
+            layout.lsttn_weekly_adaptive_source..layout.lsttn_weekly_adaptive_target,
+            layout.lsttn_weekly_adaptive_target..layout.lsttn_short_adaptive_source,
+            layout.lsttn_short_adaptive_source..layout.lsttn_short_adaptive_target,
+            layout.lsttn_short_adaptive_target..layout.lsttn_periodic_projection,
         ] {
             assert!(trained.parameters[range.clone()]
                 .iter()
@@ -5376,9 +6706,9 @@ mod tests {
             .zip(&initial.parameters[layout.pretrain_mask_token..layout.total])
             .any(|(actual, initial)| (actual - initial).abs() > 1e-12));
         assert!(
-            trained.parameters[layout.recurrence..layout.recurrence + 4 * trained.hidden]
+            trained.parameters[layout.lsttn_fusion..layout.graphon_nodes]
                 .iter()
-                .zip(&initial.parameters[layout.recurrence..layout.recurrence + 4 * trained.hidden])
+                .zip(&initial.parameters[layout.lsttn_fusion..layout.graphon_nodes])
                 .any(|(actual, initial)| (actual - initial).abs() > 1e-12)
         );
         assert!(
@@ -5411,7 +6741,93 @@ mod tests {
     }
 
     #[test]
-    fn long_short_supervised_path_trains_pretrained_context_encoder() {
+    fn long_short_fit_requires_a_real_weekly_transformer_state() {
+        let frame = traffic_style_fixture_frame();
+        let config = PaperGraphTransformerConfig {
+            profile: GraphTransformerProfile::LongShortFusion,
+            lookback: 8,
+            periodicity: 2,
+            recent_window: 4,
+            epochs: 1,
+            ..PaperGraphTransformerConfig::default()
+        };
+        let mut model = PaperGraphTransformerForecaster::new(config).unwrap();
+        let error = model.fit(&frame).unwrap_err();
+        assert!(error.to_string().contains("exceed one weekly lag"));
+    }
+
+    #[test]
+    fn long_short_report_exposes_every_paper_spatial_temporal_branch() {
+        let model = PaperGraphTransformerForecaster::new(PaperGraphTransformerConfig {
+            profile: GraphTransformerProfile::LongShortFusion,
+            lookback: 24 * 14,
+            periodicity: 24,
+            recent_window: 12,
+            ..PaperGraphTransformerConfig::default()
+        })
+        .unwrap();
+        let report = model.architecture_report();
+        for component in [
+            "seventy_five_percent_masked_patch_pretraining",
+            "four_layer_multihead_transformer_encoder",
+            "four_stage_dilated_long_trend_convolution",
+            "previous_day_and_week_transformer_states",
+            "independent_forward_backward_adaptive_periodic_graph_convolutions",
+            "eight_layer_causal_graph_wavenet_short_branch",
+            "signal_and_time_of_day_short_term_channels",
+            "long_periodic_short_feature_fusion",
+            "all_origin_thirty_two_window_supervision",
+        ] {
+            assert!(report.components.iter().any(|actual| actual == component));
+        }
+    }
+
+    #[test]
+    fn long_short_graph_wavenet_consumes_supplied_time_of_day_channel() {
+        let frame = traffic_style_fixture_frame();
+        let adjacency = frame.adjacency.row_normalized();
+        let state = TrainableGraphTransformerState::initialized(
+            3,
+            4,
+            2,
+            1,
+            4,
+            8,
+            4,
+            2,
+            2,
+            0x5354_474d_4f45,
+        );
+        let first = vec![vec![0.0; 3]; 8];
+        let second = (0..8)
+            .map(|time| vec![time as f64 / 8.0; 3])
+            .collect::<Vec<_>>();
+        let (first_loss, _) = state.lsttn_example_loss_and_gradients(
+            &frame.target[..8],
+            &adjacency,
+            &frame.target[8..12],
+            0,
+            None,
+            Some(&first),
+        );
+        let (second_loss, second_gradients) = state.lsttn_example_loss_and_gradients(
+            &frame.target[..8],
+            &adjacency,
+            &frame.target[8..12],
+            0,
+            None,
+            Some(&second),
+        );
+        let layout = state.layout();
+        assert!(second_gradients
+            [layout.lsttn_short_wave + state.hidden..layout.lsttn_short_wave + 2 * state.hidden]
+            .iter()
+            .any(|gradient| gradient.abs() > 0.0));
+        assert!(first_loss.is_finite() && second_loss.is_finite());
+    }
+
+    #[test]
+    fn long_short_supervised_path_freezes_pretrained_context_encoder() {
         let frame = traffic_style_fixture_frame();
         let adjacency = frame.adjacency.row_normalized();
         let mut state = TrainableGraphTransformerState::initialized(3, 4, 2, 6, 4, 8, 4, 2, 2, 29);
@@ -5442,12 +6858,12 @@ mod tests {
             assert!(state.parameters[range.clone()]
                 .iter()
                 .zip(&initial[range])
-                .any(|(trained, initial)| (trained - initial).abs() > 1e-12));
+                .all(|(trained, initial)| (trained - initial).abs() < 1e-12));
         }
     }
 
     #[test]
-    fn direct_horizon_deltas_share_one_forecast_origin() {
+    fn long_short_direct_horizon_decoder_does_not_rebase_predictions() {
         let config = PaperGraphTransformerConfig {
             profile: GraphTransformerProfile::LongShortFusion,
             lookback: 2,
@@ -5476,14 +6892,26 @@ mod tests {
             adjacency: Some(CsrAdjacency::new(vec![0, 0], vec![], vec![], 1).unwrap()),
             trainable_state: Some(state),
             history: vec![vec![9.0], vec![10.0]],
+            history_time_features: None,
             target_mean: 0.0,
             target_scale: 1.0,
         };
 
         assert_eq!(
             model.predict(3).unwrap(),
-            vec![vec![11.0], vec![12.0], vec![13.0]]
+            vec![vec![1.0], vec![2.0], vec![3.0]]
         );
+        let mut artifact: serde_json::Value =
+            serde_json::from_str(&model.to_json_string().unwrap()).unwrap();
+        artifact["trainable_state"]["parameters"]
+            .as_array_mut()
+            .unwrap()
+            .pop();
+        let error = PaperGraphTransformerForecaster::from_json_string(
+            &serde_json::to_string(&artifact).unwrap(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("incompatible"));
     }
 
     #[cfg(all(target_os = "macos", feature = "metal"))]
@@ -5497,7 +6925,7 @@ mod tests {
             attention_heads: 2,
             graph_order: 2,
             experts: 2,
-            periodicity: 6,
+            periodicity: 1,
             recent_window: 4,
             epochs: 1,
             learning_rate: 0.01,
@@ -5537,7 +6965,7 @@ mod tests {
             attention_heads: 2,
             graph_order: 2,
             experts: 2,
-            periodicity: 6,
+            periodicity: 1,
             recent_window: 4,
             epochs: 1,
             learning_rate: 0.01,

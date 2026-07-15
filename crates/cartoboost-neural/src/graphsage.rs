@@ -1555,7 +1555,7 @@ fn compute_link_loss(
     if edges.is_empty() || node_count == 0 {
         return 0.0;
     }
-    let negative_candidates = source_negative_candidates(node_count, edges.iter().copied());
+    let observed_targets = source_observed_targets(node_count, edges.iter().copied());
     let mut loss = 0.0_f32;
     let scale = if edges.is_empty() {
         1.0
@@ -1582,9 +1582,11 @@ fn compute_link_loss(
             continue;
         }
 
-        let candidates = &negative_candidates[left];
-        for _ in 0..negative_samples.min(candidates.len()) {
-            let negative = sample_negative_node(rng, candidates);
+        for _ in 0..negative_samples {
+            let Some(negative) = sample_negative_node(rng, node_count, &observed_targets[left])
+            else {
+                break;
+            };
             let mut neg_score = 0.0_f32;
             for (left_value, neg_value) in embeddings[left].iter().zip(embeddings[negative].iter())
             {
@@ -1617,7 +1619,7 @@ fn compute_link_loss_hetero(
         return 0.0;
     }
 
-    let negative_candidates = source_negative_candidates(
+    let observed_targets = source_observed_targets(
         node_count,
         edges.iter().map(|edge| (edge.source, edge.target)),
     );
@@ -1648,9 +1650,11 @@ fn compute_link_loss_hetero(
             continue;
         }
 
-        let candidates = &negative_candidates[left];
-        for _ in 0..negative_samples.min(candidates.len()) {
-            let negative = sample_negative_node(rng, candidates);
+        for _ in 0..negative_samples {
+            let Some(negative) = sample_negative_node(rng, node_count, &observed_targets[left])
+            else {
+                break;
+            };
             let mut neg_score = 0.0_f32;
             for (left_value, neg_value) in embeddings[left].iter().zip(embeddings[negative].iter())
             {
@@ -1685,7 +1689,7 @@ fn sigmoid(value: f32) -> f32 {
     }
 }
 
-fn source_negative_candidates<I>(node_count: usize, edges: I) -> Vec<Vec<usize>>
+fn source_observed_targets<I>(node_count: usize, edges: I) -> Vec<HashSet<usize>>
 where
     I: IntoIterator<Item = (usize, usize)>,
 {
@@ -1695,19 +1699,23 @@ where
     }
 
     observed
-        .into_iter()
-        .collect::<Vec<_>>()
-        .into_par_iter()
-        .map(|targets| {
-            (0..node_count)
-                .filter(|candidate| !targets.contains(candidate))
-                .collect()
-        })
-        .collect()
 }
 
-fn sample_negative_node(rng: &mut SplitMix64, candidates: &[usize]) -> usize {
-    candidates[rng.next_usize(candidates.len())]
+fn sample_negative_node(
+    rng: &mut SplitMix64,
+    node_count: usize,
+    observed: &HashSet<usize>,
+) -> Option<usize> {
+    if observed.len() >= node_count {
+        return None;
+    }
+    for _ in 0..32 {
+        let candidate = rng.next_usize(node_count);
+        if !observed.contains(&candidate) {
+            return Some(candidate);
+        }
+    }
+    (0..node_count).find(|candidate| !observed.contains(candidate))
 }
 
 fn build_directed_neighbors(
@@ -1947,21 +1955,22 @@ impl SplitMix64 {
 
 #[cfg(test)]
 mod tests {
-    use super::source_negative_candidates;
+    use super::source_observed_targets;
 
     #[test]
-    fn negative_candidates_exclude_all_observed_targets_for_source() {
-        let candidates = source_negative_candidates(4, [(0, 1), (0, 2), (1, 3)]);
+    fn observed_targets_capture_edges_without_quadratic_negative_cache() {
+        let observed = source_observed_targets(4, [(0, 1), (0, 2), (1, 3)]);
 
-        assert_eq!(candidates[0], vec![0, 3]);
-        assert_eq!(candidates[1], vec![0, 1, 2]);
-        assert_eq!(candidates[2], vec![0, 1, 2, 3]);
+        assert!(observed[0].contains(&1));
+        assert!(observed[0].contains(&2));
+        assert!(!observed[0].contains(&0));
+        assert!(observed[1].contains(&3));
     }
 
     #[test]
-    fn negative_candidates_can_be_empty_for_dense_source() {
-        let candidates = source_negative_candidates(3, [(0, 0), (0, 1), (0, 2)]);
+    fn observed_targets_can_cover_a_dense_source() {
+        let observed = source_observed_targets(3, [(0, 0), (0, 1), (0, 2)]);
 
-        assert!(candidates[0].is_empty());
+        assert_eq!(observed[0].len(), 3);
     }
 }

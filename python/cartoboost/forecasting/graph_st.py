@@ -794,8 +794,11 @@ class _PaperGraphTransformerForecaster(ArtifactPersistenceMixin):
         )
         self.is_fitted_ = False
 
-    def fit(self, frame: GraphTemporalFrame):
-        self._native_model.fit(_native_frame(frame))
+    def fit(self, frame: GraphTemporalFrame, *, checkpoint_path: str | Path | None = None):
+        if checkpoint_path is None:
+            self._native_model.fit(_native_frame(frame))
+        else:
+            self._native_model.fit_checkpointed(_native_frame(frame), str(Path(checkpoint_path)))
         self.is_fitted_ = True
         return self
 
