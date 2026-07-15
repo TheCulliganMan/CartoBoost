@@ -24,6 +24,11 @@ mod kernels {
     }
 
     #[device]
+    fn device_sinf(value: f32) -> f32 {
+        value.sin()
+    }
+
+    #[device]
     fn device_absf(value: f32) -> f32 {
         if value < 0.0 {
             -value
@@ -48,6 +53,11 @@ mod kernels {
         #[inline(always)]
         pub fn tanhf(value: f32) -> f32 {
             super::device_tanhf(value)
+        }
+
+        #[inline(always)]
+        pub fn sinf(value: f32) -> f32 {
+            super::device_sinf(value)
         }
 
         #[inline(always)]
@@ -879,6 +889,56 @@ mod kernels {
         let index = thread::index_1d();
         if let Some(target_value) = target.get_mut(index) {
             *target_value += *target_value;
+        }
+    }
+
+    #[kernel]
+    pub fn scalar_graph_f32(
+        initial_values: &[f32],
+        opcodes: &[u8],
+        left: &[u32],
+        right: &[u32],
+        mut values: DisjointSlice<f32>,
+        len: u32,
+    ) {
+        let index = thread::index_1d();
+        if index.get() != 0 {
+            return;
+        }
+        let values_ptr = values.as_mut_ptr();
+        let mut item = 0usize;
+        while item < len as usize {
+            unsafe { *values_ptr.add(item) = initial_values[item] };
+            item += 1;
+        }
+        item = 0;
+        while item < len as usize {
+            let opcode = opcodes[item];
+            if opcode >= 2 {
+                let a = unsafe { *values_ptr.add(left[item] as usize) };
+                let b = unsafe { *values_ptr.add(right[item] as usize) };
+                let value = match opcode {
+                    2 => a + b,
+                    3 => a * b,
+                    4 => a / if b > 1.0e-12 { b } else { 1.0e-12 },
+                    5 => libm::tanhf(a),
+                    6 => libm::expf(a),
+                    7 => libm::sqrtf(if a > 1.0e-12 { a } else { 1.0e-12 }),
+                    8 => libm::sinf(a),
+                    9 => 1.0 / (1.0 + libm::expf(-a)),
+                    10 => {
+                        if a > b {
+                            a
+                        } else {
+                            b
+                        }
+                    }
+                    11 => a,
+                    _ => 0.0,
+                };
+                unsafe { *values_ptr.add(item) = value };
+            }
+            item += 1;
         }
     }
 
@@ -8608,9 +8668,9 @@ impl CudaTensorArena {
         channels: usize,
     ) -> Result<()> {
         validate_tail_dimensions(batches, left_times, right_times, nodes, channels)?;
-        if output_gradient == left_gradient || left_gradient == right_gradient {
+        if left_gradient == right_gradient {
             return Err(NeuralError::InvalidArgument(
-                "cuda-oxide tail-add backward requires a distinct left-gradient slot".to_string(),
+                "cuda-oxide tail-add backward requires distinct branch-gradient slots".to_string(),
             ));
         }
         let left_len = checked_product(&[batches, left_times, nodes, channels])?;
@@ -8627,6 +8687,50 @@ impl CudaTensorArena {
         let module = kernels::load(&self.context).map_err(|error| {
             NeuralError::InvalidArgument(format!("failed to load cuda-oxide module: {error}"))
         })?;
+        if output_gradient == left_gradient {
+            if right_gradient == output_gradient {
+                return Err(NeuralError::InvalidArgument(
+                    "cuda-oxide tail-add backward cannot alias all gradient slots".to_string(),
+                ));
+            }
+            {
+                let (output_gradient_values, right_gradient_values) =
+                    get_two_f32_slots(&mut self.f32_slots, output_gradient, right_gradient)?;
+                unsafe {
+                    module.copy_f32(
+                        &self.stream,
+                        LaunchConfig::for_num_elems(right_len as u32),
+                        output_gradient_values,
+                        right_gradient_values,
+                    )
+                }
+                .map_err(|error| {
+                    NeuralError::InvalidArgument(format!(
+                        "failed to preserve cuda-oxide tail-add output gradient: {error}"
+                    ))
+                })?;
+            }
+            let (right_gradient_values, left_gradient_values) =
+                get_two_f32_slots(&mut self.f32_slots, right_gradient, left_gradient)?;
+            unsafe {
+                module.add_tail_time_left_backward_f32(
+                    &self.stream,
+                    LaunchConfig::for_num_elems(left_len as u32),
+                    right_gradient_values,
+                    left_gradient_values,
+                    left_times as u32,
+                    right_times as u32,
+                    nodes as u32,
+                    channels as u32,
+                )
+            }
+            .map_err(|error| {
+                NeuralError::InvalidArgument(format!(
+                    "failed to launch cuda-oxide aliased tail-add left gradient: {error}"
+                ))
+            })?;
+            return Ok(());
+        }
         {
             let (output_gradient_values, left_gradient_values) =
                 get_two_f32_slots(&mut self.f32_slots, output_gradient, left_gradient)?;
@@ -8886,6 +8990,69 @@ impl CudaCsrDiffusionWorkspace {
             ))
         })
     }
+}
+
+pub(super) fn scalar_graph(
+    initial_values: &[f32],
+    opcodes: &[u8],
+    left: &[u32],
+    right: &[u32],
+) -> Result<Vec<f32>> {
+    let context = context()?;
+    let stream = context.default_stream();
+    let initial_values_device =
+        DeviceBuffer::from_host(&stream, initial_values).map_err(|error| {
+            NeuralError::InvalidArgument(format!(
+                "failed to upload CUDA scalar-graph values: {error}"
+            ))
+        })?;
+    let opcodes_device = DeviceBuffer::from_host(&stream, opcodes).map_err(|error| {
+        NeuralError::InvalidArgument(format!(
+            "failed to upload CUDA scalar-graph opcodes: {error}"
+        ))
+    })?;
+    let left_device = DeviceBuffer::from_host(&stream, left).map_err(|error| {
+        NeuralError::InvalidArgument(format!(
+            "failed to upload CUDA scalar-graph left indices: {error}"
+        ))
+    })?;
+    let right_device = DeviceBuffer::from_host(&stream, right).map_err(|error| {
+        NeuralError::InvalidArgument(format!(
+            "failed to upload CUDA scalar-graph right indices: {error}"
+        ))
+    })?;
+    let mut values_device = zeroed(&stream, initial_values.len(), "scalar-graph values")?;
+    let module = kernels::load(&context).map_err(|error| {
+        NeuralError::InvalidArgument(format!("failed to load CUDA scalar-graph module: {error}"))
+    })?;
+    unsafe {
+        module.scalar_graph_f32(
+            &stream,
+            LaunchConfig::for_num_elems(1),
+            &initial_values_device,
+            &opcodes_device,
+            &left_device,
+            &right_device,
+            &mut values_device,
+            initial_values.len() as u32,
+        )
+    }
+    .map_err(|error| {
+        NeuralError::InvalidArgument(format!(
+            "failed to launch CUDA scalar-graph kernel: {error}"
+        ))
+    })?;
+    let values = values_device.to_host_vec(&stream).map_err(|error| {
+        NeuralError::InvalidArgument(format!(
+            "failed to download CUDA scalar-graph values: {error}"
+        ))
+    })?;
+    if values.iter().any(|value| !value.is_finite()) {
+        return Err(NeuralError::InvalidArgument(
+            "CUDA scalar-graph inference produced a non-finite value".to_string(),
+        ));
+    }
+    Ok(values)
 }
 
 pub(super) fn vector_add_report(

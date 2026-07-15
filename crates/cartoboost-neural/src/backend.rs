@@ -650,6 +650,8 @@ pub fn backend_scalar_graph_f32(
         "metal" => with_metal_autoreleasepool(|| {
             metal_scalar_graph_f32(initial_values, opcodes, left, right)
         }),
+        #[cfg(all(feature = "cuda-oxide", target_os = "linux"))]
+        "cuda" => cuda_scalar_graph_f32(initial_values, opcodes, left, right),
         other => Err(NeuralError::InvalidArgument(format!(
             "backend {other:?} does not provide a complete scalar-graph inference kernel"
         ))),
@@ -2700,6 +2702,16 @@ fn cuda_layer_norm_f32(
     beta: &[f32],
 ) -> Result<Vec<f32>> {
     crate::cuda_oxide_backend::layer_norm(values, rows, width, gamma, beta)
+}
+
+#[cfg(all(feature = "cuda-oxide", target_os = "linux"))]
+fn cuda_scalar_graph_f32(
+    initial_values: &[f32],
+    opcodes: &[u8],
+    left: &[u32],
+    right: &[u32],
+) -> Result<Vec<f32>> {
+    crate::cuda_oxide_backend::scalar_graph(initial_values, opcodes, left, right)
 }
 
 #[cfg(all(feature = "cuda-oxide", target_os = "linux"))]
