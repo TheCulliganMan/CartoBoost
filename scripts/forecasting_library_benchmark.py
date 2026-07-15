@@ -2932,7 +2932,15 @@ def run_lsttn_h3_taxi_suite(
     horizon = int(dataset.get("horizon", args.horizon))
     if len(dates) < horizon + 3:
         raise ValueError("LSTTN H3 suite requires at least three history buckets plus holdout")
-    edge_rows = table.group_by("pickup_h3", "dropoff_h3").agg(pl.col("loads").sum())
+    # Polars does not guarantee group-by output order.  The CSR row order is
+    # part of the native training fingerprint, so sort directed lanes before
+    # assembling the graph to make checkpoints resumable across processes and
+    # thread-pool sizes.
+    edge_rows = (
+        table.group_by("pickup_h3", "dropoff_h3")
+        .agg(pl.col("loads").sum())
+        .sort("pickup_h3", "dropoff_h3")
+    )
     neighbors = [[] for _ in node_ids]
     weights = [[] for _ in node_ids]
     for pickup_h3, dropoff_h3, loads in edge_rows.iter_rows():
