@@ -25,7 +25,11 @@ mod kernels {
 
     #[device]
     fn device_absf(value: f32) -> f32 {
-        if value < 0.0 { -value } else { value }
+        if value < 0.0 {
+            -value
+        } else {
+            value
+        }
     }
 
     // Keep existing kernel expressions concise while resolving `libm::...`
@@ -858,6 +862,23 @@ mod kernels {
         let raw_index = index.get();
         if let Some(output_value) = output.get_mut(index) {
             *output_value = left[raw_index] + right[raw_index];
+        }
+    }
+
+    #[kernel]
+    pub fn add_in_place_f32(other: &[f32], mut target: DisjointSlice<f32>) {
+        let index = thread::index_1d();
+        let raw_index = index.get();
+        if let Some(target_value) = target.get_mut(index) {
+            *target_value += other[raw_index];
+        }
+    }
+
+    #[kernel]
+    pub fn double_in_place_f32(mut target: DisjointSlice<f32>) {
+        let index = thread::index_1d();
+        if let Some(target_value) = target.get_mut(index) {
+            *target_value += *target_value;
         }
     }
 
@@ -8134,11 +8155,6 @@ impl CudaTensorArena {
                 "CUDA add length must be non-zero".to_string(),
             ));
         }
-        if output == left || output == right {
-            return Err(NeuralError::InvalidArgument(
-                "cuda-oxide add requires an output slot distinct from both inputs".to_string(),
-            ));
-        }
         self.reserve_f32(output, len)?;
         let left_capacity = self.capacity_f32(left)?;
         let right_capacity = self.capacity_f32(right)?;
@@ -8147,19 +8163,36 @@ impl CudaTensorArena {
                 "CUDA add input slot is smaller than the requested length".to_string(),
             ));
         }
-        let (left_values, right_values, output_values) =
-            get_three_f32_slots(&mut self.f32_slots, left, right, output)?;
         let module = kernels::load(&self.context).map_err(|error| {
             NeuralError::InvalidArgument(format!("failed to load cuda-oxide module: {error}"))
         })?;
-        unsafe {
-            module.add_f32(
-                &self.stream,
-                LaunchConfig::for_num_elems(len as u32),
-                left_values,
-                right_values,
-                output_values,
-            )
+        let launch = LaunchConfig::for_num_elems(len as u32);
+        if output == left && output == right {
+            unsafe {
+                module.double_in_place_f32(
+                    &self.stream,
+                    launch,
+                    get_mut_f32_slot(&mut self.f32_slots, output)?,
+                )
+            }
+        } else if output == left {
+            let (other, target) = get_two_f32_slots(&mut self.f32_slots, right, output)?;
+            unsafe { module.add_in_place_f32(&self.stream, launch, other, target) }
+        } else if output == right {
+            let (other, target) = get_two_f32_slots(&mut self.f32_slots, left, output)?;
+            unsafe { module.add_in_place_f32(&self.stream, launch, other, target) }
+        } else {
+            let (left_values, right_values, output_values) =
+                get_three_f32_slots(&mut self.f32_slots, left, right, output)?;
+            unsafe {
+                module.add_f32(
+                    &self.stream,
+                    launch,
+                    left_values,
+                    right_values,
+                    output_values,
+                )
+            }
         }
         .map_err(|error| {
             NeuralError::InvalidArgument(format!("failed to launch cuda-oxide arena add: {error}"))
@@ -8328,6 +8361,9 @@ impl CudaTensorArena {
     }
 
     pub fn relu_f32(&mut self, input: usize, output: usize, len: usize) -> Result<()> {
+        if input == output {
+            return self.relu_in_place_f32(input, len);
+        }
         self.launch_relu_like_f32(input, output, len, true)
     }
 
@@ -8572,12 +8608,9 @@ impl CudaTensorArena {
         channels: usize,
     ) -> Result<()> {
         validate_tail_dimensions(batches, left_times, right_times, nodes, channels)?;
-        if output_gradient == left_gradient
-            || output_gradient == right_gradient
-            || left_gradient == right_gradient
-        {
+        if output_gradient == left_gradient || left_gradient == right_gradient {
             return Err(NeuralError::InvalidArgument(
-                "cuda-oxide tail-add backward requires distinct slots".to_string(),
+                "cuda-oxide tail-add backward requires a distinct left-gradient slot".to_string(),
             ));
         }
         let left_len = checked_product(&[batches, left_times, nodes, channels])?;
@@ -8588,7 +8621,9 @@ impl CudaTensorArena {
             ));
         }
         self.reserve_f32(left_gradient, left_len)?;
-        self.reserve_f32(right_gradient, right_len)?;
+        if right_gradient != output_gradient {
+            self.reserve_f32(right_gradient, right_len)?;
+        }
         let module = kernels::load(&self.context).map_err(|error| {
             NeuralError::InvalidArgument(format!("failed to load cuda-oxide module: {error}"))
         })?;
@@ -8612,6 +8647,9 @@ impl CudaTensorArena {
                     "failed to launch cuda-oxide tail-add left gradient: {error}"
                 ))
             })?;
+        }
+        if right_gradient == output_gradient {
+            return Ok(());
         }
         let (output_gradient_values, right_gradient_values) =
             get_two_f32_slots(&mut self.f32_slots, output_gradient, right_gradient)?;
@@ -9414,6 +9452,21 @@ fn get_two_f32_slots(
         })?;
         Ok((input, output))
     }
+}
+
+fn get_mut_f32_slot(
+    slots: &mut [Option<DeviceBuffer<f32>>],
+    slot: usize,
+) -> Result<&mut DeviceBuffer<f32>> {
+    slots
+        .get_mut(slot)
+        .ok_or_else(|| {
+            NeuralError::InvalidArgument(format!("CUDA tensor slot {slot} is out of range"))
+        })?
+        .as_mut()
+        .ok_or_else(|| {
+            NeuralError::InvalidArgument(format!("CUDA tensor slot {slot} has not been allocated"))
+        })
 }
 
 fn get_three_f32_slots(
