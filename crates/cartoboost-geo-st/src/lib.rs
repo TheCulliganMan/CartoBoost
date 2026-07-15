@@ -1062,12 +1062,48 @@ impl CudaLsttnTensorExecutor {
     const SHORT_GRAPH_GRAD_REVERSE_TWO: usize = 119;
     const SHORT_GRAPH_GRAD_ADAPTIVE_ONE: usize = 120;
     const SHORT_GRAPH_GRAD_ADAPTIVE_TWO: usize = 121;
+    const PRETRAIN_VISIBLE_TOKENS: usize = 122;
+    const PRETRAIN_DECODER_INPUT: usize = 123;
+    const PRETRAIN_DECODER_Q: usize = 124;
+    const PRETRAIN_DECODER_K: usize = 125;
+    const PRETRAIN_DECODER_V: usize = 126;
+    const PRETRAIN_DECODER_ATTENTION: usize = 127;
+    const PRETRAIN_DECODER_PROJECTED: usize = 128;
+    const PRETRAIN_DECODER_RESIDUAL: usize = 129;
+    const PRETRAIN_DECODER_NORMALIZED: usize = 130;
+    const PRETRAIN_DECODER_FFN_EXPANDED: usize = 131;
+    const PRETRAIN_DECODER_FFN_ACTIVATED: usize = 132;
+    const PRETRAIN_DECODER_FFN_CONTRACTED: usize = 133;
+    const PRETRAIN_DECODER_FFN_RESIDUAL: usize = 134;
+    const PRETRAIN_CONTEXT_GRADIENT: usize = 135;
+    const PRETRAIN_DECODER_INPUT_GRADIENT: usize = 136;
+    const PRETRAIN_VISIBLE_GRADIENT: usize = 137;
+    const PRETRAIN_ENCODER_DECODER_GRADIENT: usize = 138;
+    const PRETRAIN_ENCODER_OUTPUT_GRADIENT: usize = 139;
+    const PRETRAIN_SEQUENCE_GRADIENT: usize = 140;
+    const PRETRAIN_PATCH_LAYOUT_GRADIENT: usize = 141;
+    const PRETRAIN_PATCH_EMBEDDING_GRADIENT: usize = 142;
+    const PRETRAIN_TEMP_A: usize = 143;
+    const PRETRAIN_TEMP_B: usize = 144;
+    const PRETRAIN_TEMP_C: usize = 145;
+    const PRETRAIN_TEMP_D: usize = 146;
+    const PRETRAIN_TEMP_E: usize = 147;
+    const PRETRAIN_TEMP_F: usize = 148;
+    const PRETRAIN_LOSS: usize = 149;
+    const PRETRAIN_LAYER_A: usize = 150;
+    const PRETRAIN_LAYER_B: usize = 151;
+    const PRETRAIN_LAYER_GRAD_A: usize = 152;
+    const PRETRAIN_LAYER_GRAD_B: usize = 153;
+    const PRETRAIN_DECODER_OUTPUT: usize = 154;
+    const PRETRAIN_POSITION_GRADIENT: usize = 155;
     const FORWARD_INDPTR: usize = 0;
     const FORWARD_INDICES: usize = 1;
     const REVERSE_INDPTR: usize = 2;
     const REVERSE_INDICES: usize = 3;
     const ADAPTIVE_INDPTR: usize = 4;
     const ADAPTIVE_INDICES: usize = 5;
+    const VISIBLE_PATCH_INDICES: usize = 6;
+    const MASKED_PATCH_INDICES: usize = 7;
 
     fn new(state: &TrainableGraphTransformerState, adjacency: &CsrAdjacency) -> Result<Self> {
         let nodes = state.nodes;
@@ -1100,7 +1136,7 @@ impl CudaLsttnTensorExecutor {
                 })
                 .collect()
         };
-        let mut arena = CudaTensorArena::new(122)
+        let mut arena = CudaTensorArena::new(156)
             .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
         arena
             .upload_f32(Self::PARAMETERS, &to_f32(&state.parameters, "parameters")?)
@@ -1423,6 +1459,326 @@ impl CudaLsttnTensorExecutor {
                 .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
         }
         Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn transformer_layer_forward_slots(
+        &mut self,
+        input: usize,
+        output: usize,
+        q: usize,
+        k: usize,
+        v: usize,
+        attention: usize,
+        projected: usize,
+        residual: usize,
+        normalized: usize,
+        ffn_expanded: usize,
+        ffn_activated: usize,
+        ffn_contracted: usize,
+        ffn_residual: usize,
+        q_offset: usize,
+        k_offset: usize,
+        v_offset: usize,
+        out_offset: usize,
+        ffn_offset: usize,
+        norm_offset: usize,
+        sequences: usize,
+        tokens: usize,
+        hidden: usize,
+        heads: usize,
+    ) -> Result<()> {
+        let rows = sequences * tokens;
+        let projection = hidden * (hidden + 1);
+        let ffn_width = 8 * hidden * hidden + 5 * hidden;
+        self.affine_projection(input, q, q_offset, rows, hidden, hidden)?;
+        self.affine_projection(input, k, k_offset, rows, hidden, hidden)?;
+        self.affine_projection(input, v, v_offset, rows, hidden, hidden)?;
+        self.arena
+            .attention_f32(
+                q,
+                k,
+                v,
+                attention,
+                sequences,
+                tokens,
+                heads,
+                hidden / heads,
+                false,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        self.affine_projection(attention, projected, out_offset, rows, hidden, hidden)?;
+        self.arena
+            .add_f32(input, projected, residual, rows * hidden)
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        self.arena
+            .layer_norm_parameter_slice_f32(
+                residual,
+                Self::PARAMETERS,
+                norm_offset,
+                norm_offset + hidden,
+                normalized,
+                rows,
+                hidden,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        self.affine_projection(
+            normalized,
+            ffn_expanded,
+            ffn_offset,
+            rows,
+            hidden,
+            4 * hidden,
+        )?;
+        self.arena
+            .relu_f32(ffn_expanded, ffn_activated, rows * 4 * hidden)
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        self.affine_projection(
+            ffn_activated,
+            ffn_contracted,
+            ffn_offset + (hidden + 1) * 4 * hidden,
+            rows,
+            4 * hidden,
+            hidden,
+        )?;
+        self.arena
+            .add_f32(normalized, ffn_contracted, ffn_residual, rows * hidden)
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        self.arena
+            .layer_norm_parameter_slice_f32(
+                ffn_residual,
+                Self::PARAMETERS,
+                norm_offset + 2 * hidden,
+                norm_offset + 3 * hidden,
+                output,
+                rows,
+                hidden,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        let _ = (projection, ffn_width);
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn transformer_layer_backward_slots(
+        &mut self,
+        input: usize,
+        output_gradient: usize,
+        input_gradient: usize,
+        q: usize,
+        k: usize,
+        v: usize,
+        attention: usize,
+        projected: usize,
+        residual: usize,
+        normalized: usize,
+        ffn_expanded: usize,
+        ffn_activated: usize,
+        ffn_contracted: usize,
+        ffn_residual: usize,
+        q_offset: usize,
+        k_offset: usize,
+        v_offset: usize,
+        out_offset: usize,
+        ffn_offset: usize,
+        norm_offset: usize,
+        sequences: usize,
+        tokens: usize,
+        hidden: usize,
+        heads: usize,
+    ) -> Result<()> {
+        let rows = sequences * tokens;
+        self.transformer_layer_forward_slots(
+            input,
+            Self::PRETRAIN_TEMP_F,
+            q,
+            k,
+            v,
+            attention,
+            projected,
+            residual,
+            normalized,
+            ffn_expanded,
+            ffn_activated,
+            ffn_contracted,
+            ffn_residual,
+            q_offset,
+            k_offset,
+            v_offset,
+            out_offset,
+            ffn_offset,
+            norm_offset,
+            sequences,
+            tokens,
+            hidden,
+            heads,
+        )?;
+        self.arena
+            .layer_norm_parameter_slice_backward_f32(
+                ffn_residual,
+                Self::PARAMETERS,
+                norm_offset + 2 * hidden,
+                norm_offset + 3 * hidden,
+                output_gradient,
+                Self::PRETRAIN_TEMP_A,
+                Self::PARAMETER_GRADIENT,
+                rows,
+                hidden,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        self.arena
+            .affine_backward_parameter_slice_f32(
+                ffn_activated,
+                Self::PARAMETERS,
+                ffn_offset + (hidden + 1) * 4 * hidden,
+                ffn_offset + (hidden + 1) * 4 * hidden + 4 * hidden * hidden,
+                Self::PRETRAIN_TEMP_A,
+                Self::PRETRAIN_TEMP_B,
+                Self::PARAMETER_GRADIENT,
+                rows,
+                4 * hidden,
+                hidden,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        self.arena
+            .relu_backward_f32(
+                ffn_expanded,
+                Self::PRETRAIN_TEMP_B,
+                Self::PRETRAIN_TEMP_C,
+                rows * 4 * hidden,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        self.arena
+            .affine_backward_parameter_slice_f32(
+                normalized,
+                Self::PARAMETERS,
+                ffn_offset,
+                ffn_offset + hidden * 4 * hidden,
+                Self::PRETRAIN_TEMP_C,
+                Self::PRETRAIN_TEMP_B,
+                Self::PARAMETER_GRADIENT,
+                rows,
+                hidden,
+                4 * hidden,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        self.arena
+            .add_f32(
+                Self::PRETRAIN_TEMP_A,
+                Self::PRETRAIN_TEMP_B,
+                Self::PRETRAIN_TEMP_C,
+                rows * hidden,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        self.arena
+            .layer_norm_parameter_slice_backward_f32(
+                residual,
+                Self::PARAMETERS,
+                norm_offset,
+                norm_offset + hidden,
+                Self::PRETRAIN_TEMP_C,
+                Self::PRETRAIN_TEMP_A,
+                Self::PARAMETER_GRADIENT,
+                rows,
+                hidden,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        self.arena
+            .affine_backward_parameter_slice_f32(
+                attention,
+                Self::PARAMETERS,
+                out_offset,
+                out_offset + hidden * hidden,
+                Self::PRETRAIN_TEMP_A,
+                Self::PRETRAIN_TEMP_B,
+                Self::PARAMETER_GRADIENT,
+                rows,
+                hidden,
+                hidden,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        self.arena
+            .attention_backward_f32(
+                q,
+                k,
+                v,
+                Self::PRETRAIN_TEMP_B,
+                Self::PRETRAIN_TEMP_C,
+                Self::PRETRAIN_TEMP_D,
+                Self::PRETRAIN_TEMP_E,
+                sequences,
+                tokens,
+                heads,
+                hidden / heads,
+                false,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        self.arena
+            .affine_backward_parameter_slice_f32(
+                input,
+                Self::PARAMETERS,
+                q_offset,
+                q_offset + hidden * hidden,
+                Self::PRETRAIN_TEMP_C,
+                input_gradient,
+                Self::PARAMETER_GRADIENT,
+                rows,
+                hidden,
+                hidden,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        self.arena
+            .affine_backward_parameter_slice_f32(
+                input,
+                Self::PARAMETERS,
+                k_offset,
+                k_offset + hidden * hidden,
+                Self::PRETRAIN_TEMP_D,
+                Self::PRETRAIN_TEMP_C,
+                Self::PARAMETER_GRADIENT,
+                rows,
+                hidden,
+                hidden,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        self.arena
+            .add_f32(
+                input_gradient,
+                Self::PRETRAIN_TEMP_C,
+                input_gradient,
+                rows * hidden,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        self.arena
+            .affine_backward_parameter_slice_f32(
+                input,
+                Self::PARAMETERS,
+                v_offset,
+                v_offset + hidden * hidden,
+                Self::PRETRAIN_TEMP_E,
+                Self::PRETRAIN_TEMP_C,
+                Self::PARAMETER_GRADIENT,
+                rows,
+                hidden,
+                hidden,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        self.arena
+            .add_f32(
+                input_gradient,
+                Self::PRETRAIN_TEMP_C,
+                input_gradient,
+                rows * hidden,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        self.arena
+            .add_f32(
+                input_gradient,
+                Self::PRETRAIN_TEMP_A,
+                input_gradient,
+                rows * hidden,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))
     }
 
     /// Materializes the learned directed adaptive CSR weights on-device. The
@@ -3800,6 +4156,380 @@ impl CudaLsttnTensorExecutor {
         self.arena
             .reserve_f32(Self::DIRECT_OUTPUT, target.len())
             .map_err(|error| GeoStError::InvalidBackend(error.to_string()))
+    }
+
+    fn upload_pretraining_window(&mut self, window: &[Vec<f64>], channels: usize) -> Result<()> {
+        if window.is_empty() || channels == 0 || window.iter().any(|row| row.len() != self.nodes) {
+            return Err(GeoStError::InvalidFrame(
+                "CUDA LSTTN pretraining window must match the resident graph".to_string(),
+            ));
+        }
+        let mut input = Vec::with_capacity(window.len() * self.nodes * channels);
+        for row in window {
+            for value in row {
+                let value = *value as f32;
+                if !value.is_finite() {
+                    return Err(GeoStError::InvalidFrame(
+                        "CUDA LSTTN pretraining window contains a non-finite f32 value".to_string(),
+                    ));
+                }
+                input.push(value);
+            }
+        }
+        self.arena
+            .upload_f32(Self::SUPERVISED_INPUT, &input)
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))
+    }
+
+    fn pretraining_encoder_prefix(
+        &mut self,
+        layout: GraphParameterLayout,
+        layers: usize,
+        visible: usize,
+        hidden: usize,
+        heads: usize,
+    ) -> Result<usize> {
+        if layers == 0 {
+            return Ok(Self::PRETRAIN_VISIBLE_TOKENS);
+        }
+        let projection = hidden * (hidden + 1);
+        let ffn_width = 8 * hidden * hidden + 5 * hidden;
+        let mut input = Self::PRETRAIN_VISIBLE_TOKENS;
+        let mut output = Self::PRETRAIN_LAYER_A;
+        for layer in 0..layers {
+            self.transformer_layer_forward_slots(
+                input,
+                output,
+                Self::ENCODER_Q,
+                Self::ENCODER_K,
+                Self::ENCODER_V,
+                Self::ENCODER_ATTENTION,
+                Self::ENCODER_PROJECTED,
+                Self::ENCODER_RESIDUAL,
+                Self::ENCODER_NORMALIZED,
+                Self::ENCODER_FFN_EXPANDED,
+                Self::ENCODER_FFN_ACTIVATED,
+                Self::ENCODER_FFN_CONTRACTED,
+                Self::ENCODER_FFN_RESIDUAL,
+                layout.temporal_q + layer * projection,
+                layout.temporal_k + layer * projection,
+                layout.temporal_v + layer * projection,
+                layout.lsttn_transformer_out + layer * projection,
+                layout.lsttn_transformer_ffn + layer * ffn_width,
+                layout.lsttn_transformer_norm + layer * 4 * hidden,
+                self.nodes,
+                visible,
+                hidden,
+                heads,
+            )?;
+            input = output;
+            output = if output == Self::PRETRAIN_LAYER_A {
+                Self::PRETRAIN_LAYER_B
+            } else {
+                Self::PRETRAIN_LAYER_A
+            };
+        }
+        Ok(input)
+    }
+
+    fn cuda_train_masked_subseries_reconstruction(
+        &mut self,
+        state: &mut TrainableGraphTransformerState,
+        window: &[Vec<f64>],
+        learning_rate: f64,
+        weight_decay: f64,
+    ) -> Result<f64> {
+        let patch_width = (state.periodicity / 24).max(1);
+        if !window.len().is_multiple_of(patch_width) {
+            return Err(GeoStError::InvalidFrame(format!(
+                "LSTTN long-history window length {} must be divisible by patch width {}",
+                window.len(),
+                patch_width
+            )));
+        }
+        let patches = window.len() / patch_width;
+        if patches < 2 {
+            return Err(GeoStError::InvalidFrame(
+                "LSTTN masked-subseries pretraining requires at least two patches".to_string(),
+            ));
+        }
+        let masked = masked_patch_indices(patches, state.steps);
+        let visible = (0..patches)
+            .filter(|patch| !masked.contains(patch))
+            .collect::<Vec<_>>();
+        let masked_u32 = masked
+            .iter()
+            .map(|patch| u32::try_from(*patch))
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|_| {
+                GeoStError::InvalidFrame("CUDA LSTTN patch index exceeds u32".to_string())
+            })?;
+        let visible_u32 = visible
+            .iter()
+            .map(|patch| u32::try_from(*patch))
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|_| {
+                GeoStError::InvalidFrame("CUDA LSTTN patch index exceeds u32".to_string())
+            })?;
+        let layout = state.layout();
+        let hidden = state.hidden;
+        let heads = state.attention_heads;
+        let position_count = (layout.pretrain_decoder - layout.pretrain_position) / hidden;
+        let scale = (hidden as f32).sqrt();
+        let projection = hidden * (hidden + 1);
+        let ffn_width = 8 * hidden * hidden + 5 * hidden;
+
+        self.upload_pretraining_window(window, 1)?;
+        self.arena
+            .upload_u32(Self::VISIBLE_PATCH_INDICES, &visible_u32)
+            .and_then(|_| {
+                self.arena
+                    .upload_u32(Self::MASKED_PATCH_INDICES, &masked_u32)
+            })
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        self.begin_supervised_gradient()?;
+        self.patch_embedding(layout, 1, window.len(), self.nodes, 1, patch_width, hidden)?;
+        self.add_patch_positions(layout, 1, patches, self.nodes, hidden)?;
+        self.patch_attention_layout(1, patches, self.nodes, hidden)?;
+        self.arena
+            .gather_patch_tokens_f32(
+                Self::ATTENTION_SEQUENCE,
+                Self::VISIBLE_PATCH_INDICES,
+                Self::PRETRAIN_VISIBLE_TOKENS,
+                1,
+                self.nodes,
+                patches,
+                visible.len(),
+                hidden,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        let encoded = self.pretraining_encoder_prefix(layout, 4, visible.len(), hidden, heads)?;
+        self.affine_projection(
+            encoded,
+            Self::PRETRAIN_LAYER_GRAD_A,
+            layout.lsttn_encoder_decoder,
+            self.nodes * visible.len(),
+            hidden,
+            hidden,
+        )?;
+        self.arena
+            .assemble_masked_decoder_tokens_f32(
+                Self::PRETRAIN_LAYER_GRAD_A,
+                Self::MASKED_PATCH_INDICES,
+                Self::PARAMETERS,
+                layout.pretrain_mask_token,
+                layout.pretrain_position,
+                Self::PRETRAIN_DECODER_INPUT,
+                1,
+                self.nodes,
+                visible.len(),
+                masked.len(),
+                hidden,
+                position_count,
+                scale,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        self.transformer_layer_forward_slots(
+            Self::PRETRAIN_DECODER_INPUT,
+            Self::PRETRAIN_DECODER_OUTPUT,
+            Self::PRETRAIN_DECODER_Q,
+            Self::PRETRAIN_DECODER_K,
+            Self::PRETRAIN_DECODER_V,
+            Self::PRETRAIN_DECODER_ATTENTION,
+            Self::PRETRAIN_DECODER_PROJECTED,
+            Self::PRETRAIN_DECODER_RESIDUAL,
+            Self::PRETRAIN_DECODER_NORMALIZED,
+            Self::PRETRAIN_DECODER_FFN_EXPANDED,
+            Self::PRETRAIN_DECODER_FFN_ACTIVATED,
+            Self::PRETRAIN_DECODER_FFN_CONTRACTED,
+            Self::PRETRAIN_DECODER_FFN_RESIDUAL,
+            layout.lsttn_decoder_q,
+            layout.lsttn_decoder_k,
+            layout.lsttn_decoder_v,
+            layout.lsttn_decoder_out,
+            layout.lsttn_decoder_ffn,
+            layout.lsttn_decoder_norm,
+            self.nodes,
+            visible.len() + masked.len(),
+            hidden,
+            heads,
+        )?;
+        self.arena
+            .masked_patch_reconstruction_loss_backward_f32(
+                Self::PRETRAIN_DECODER_OUTPUT,
+                Self::SUPERVISED_INPUT,
+                Self::MASKED_PATCH_INDICES,
+                Self::PARAMETERS,
+                layout.pretrain_decoder,
+                layout.pretrain_decoder + patch_width * hidden,
+                Self::PRETRAIN_CONTEXT_GRADIENT,
+                Self::PARAMETER_GRADIENT,
+                Self::PRETRAIN_LOSS,
+                1,
+                window.len(),
+                self.nodes,
+                1,
+                visible.len(),
+                masked.len(),
+                patch_width,
+                hidden,
+                state.normalized_zero as f32,
+                state.target_scale as f32,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        self.transformer_layer_backward_slots(
+            Self::PRETRAIN_DECODER_INPUT,
+            Self::PRETRAIN_CONTEXT_GRADIENT,
+            Self::PRETRAIN_DECODER_INPUT_GRADIENT,
+            Self::PRETRAIN_DECODER_Q,
+            Self::PRETRAIN_DECODER_K,
+            Self::PRETRAIN_DECODER_V,
+            Self::PRETRAIN_DECODER_ATTENTION,
+            Self::PRETRAIN_DECODER_PROJECTED,
+            Self::PRETRAIN_DECODER_RESIDUAL,
+            Self::PRETRAIN_DECODER_NORMALIZED,
+            Self::PRETRAIN_DECODER_FFN_EXPANDED,
+            Self::PRETRAIN_DECODER_FFN_ACTIVATED,
+            Self::PRETRAIN_DECODER_FFN_CONTRACTED,
+            Self::PRETRAIN_DECODER_FFN_RESIDUAL,
+            layout.lsttn_decoder_q,
+            layout.lsttn_decoder_k,
+            layout.lsttn_decoder_v,
+            layout.lsttn_decoder_out,
+            layout.lsttn_decoder_ffn,
+            layout.lsttn_decoder_norm,
+            self.nodes,
+            visible.len() + masked.len(),
+            hidden,
+            heads,
+        )?;
+        self.arena
+            .assemble_masked_decoder_tokens_backward_f32(
+                Self::PRETRAIN_DECODER_INPUT_GRADIENT,
+                Self::MASKED_PATCH_INDICES,
+                Self::PARAMETER_GRADIENT,
+                layout.pretrain_mask_token,
+                layout.pretrain_position,
+                Self::PRETRAIN_VISIBLE_GRADIENT,
+                1,
+                self.nodes,
+                visible.len(),
+                masked.len(),
+                hidden,
+                position_count,
+                scale,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        self.arena
+            .affine_backward_parameter_slice_f32(
+                encoded,
+                Self::PARAMETERS,
+                layout.lsttn_encoder_decoder,
+                layout.lsttn_encoder_decoder + hidden * hidden,
+                Self::PRETRAIN_VISIBLE_GRADIENT,
+                Self::PRETRAIN_ENCODER_OUTPUT_GRADIENT,
+                Self::PARAMETER_GRADIENT,
+                self.nodes * visible.len(),
+                hidden,
+                hidden,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        let mut output_gradient = Self::PRETRAIN_ENCODER_OUTPUT_GRADIENT;
+        for layer in (0..4).rev() {
+            let input =
+                self.pretraining_encoder_prefix(layout, layer, visible.len(), hidden, heads)?;
+            let input_gradient = if output_gradient == Self::PRETRAIN_LAYER_GRAD_A {
+                Self::PRETRAIN_LAYER_GRAD_B
+            } else {
+                Self::PRETRAIN_LAYER_GRAD_A
+            };
+            self.transformer_layer_backward_slots(
+                input,
+                output_gradient,
+                input_gradient,
+                Self::ENCODER_Q,
+                Self::ENCODER_K,
+                Self::ENCODER_V,
+                Self::ENCODER_ATTENTION,
+                Self::ENCODER_PROJECTED,
+                Self::ENCODER_RESIDUAL,
+                Self::ENCODER_NORMALIZED,
+                Self::ENCODER_FFN_EXPANDED,
+                Self::ENCODER_FFN_ACTIVATED,
+                Self::ENCODER_FFN_CONTRACTED,
+                Self::ENCODER_FFN_RESIDUAL,
+                layout.temporal_q + layer * projection,
+                layout.temporal_k + layer * projection,
+                layout.temporal_v + layer * projection,
+                layout.lsttn_transformer_out + layer * projection,
+                layout.lsttn_transformer_ffn + layer * ffn_width,
+                layout.lsttn_transformer_norm + layer * 4 * hidden,
+                self.nodes,
+                visible.len(),
+                hidden,
+                heads,
+            )?;
+            output_gradient = input_gradient;
+        }
+        self.arena
+            .gather_patch_tokens_backward_f32(
+                output_gradient,
+                Self::VISIBLE_PATCH_INDICES,
+                Self::PRETRAIN_SEQUENCE_GRADIENT,
+                1,
+                self.nodes,
+                patches,
+                visible.len(),
+                hidden,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        self.arena
+            .attention_sequences_to_patches_f32(
+                Self::PRETRAIN_SEQUENCE_GRADIENT,
+                Self::PRETRAIN_PATCH_LAYOUT_GRADIENT,
+                1,
+                patches,
+                self.nodes,
+                hidden,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        self.arena
+            .add_patch_positions_backward_f32(
+                Self::PRETRAIN_PATCH_LAYOUT_GRADIENT,
+                Self::PRETRAIN_PATCH_EMBEDDING_GRADIENT,
+                Self::PARAMETER_GRADIENT,
+                layout.pretrain_position,
+                1,
+                patches,
+                self.nodes,
+                hidden,
+                scale,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        self.arena
+            .patch_embedding_parameter_slice_backward_f32(
+                Self::SUPERVISED_INPUT,
+                Self::PRETRAIN_PATCH_EMBEDDING_GRADIENT,
+                Self::PARAMETER_GRADIENT,
+                layout.lsttn_patch_embedding,
+                layout.lsttn_patch_embedding + patch_width * hidden,
+                1,
+                window.len(),
+                self.nodes,
+                1,
+                patch_width,
+                hidden,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        let next_step = state.steps + 1;
+        self.adamw_supervised_step(next_step, learning_rate, weight_decay)?;
+        state.steps = next_step;
+        let mut loss = [0.0_f32; 2];
+        self.arena
+            .download_f32(Self::PRETRAIN_LOSS, &mut loss)
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        self.synchronize_portable_state(state)?;
+        Ok(f64::from(loss[0]))
     }
 
     /// Copies only portable f32 optimizer/model state back into the native
@@ -8176,6 +8906,14 @@ impl PaperGraphTransformerForecaster {
             } else {
                 None
             };
+        #[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
+        let mut cuda_executor = if self.config.profile == GraphTransformerProfile::LongShortFusion
+            && backend.selected == "cuda"
+        {
+            Some(CudaLsttnTensorExecutor::new(&state, &adjacency)?)
+        } else {
+            None
+        };
         if self.config.profile == GraphTransformerProfile::LongShortFusion {
             // LSTTN first reconstructs randomly withheld whole patches from
             // the unmasked long-history context, then fine-tunes those shared
@@ -8201,6 +8939,26 @@ impl PaperGraphTransformerForecaster {
                     if task_index < pretraining_completed {
                         continue;
                     }
+                    #[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
+                    if let Some(executor) = cuda_executor.as_mut() {
+                        executor.cuda_train_masked_subseries_reconstruction(
+                            &mut state,
+                            &normalized[*start..*start + self.config.lookback],
+                            self.config.learning_rate,
+                            self.config.weight_decay,
+                        )?;
+                    } else {
+                        state.train_masked_subseries_reconstruction(
+                            &normalized[*start..*start + self.config.lookback],
+                            self.config.learning_rate,
+                            self.config.weight_decay,
+                            Some(&backend),
+                        )?;
+                    }
+                    #[cfg(not(all(
+                        feature = "cuda",
+                        any(target_os = "linux", target_os = "windows")
+                    )))]
                     state.train_masked_subseries_reconstruction(
                         &normalized[*start..*start + self.config.lookback],
                         self.config.learning_rate,
@@ -8284,12 +9042,6 @@ impl PaperGraphTransformerForecaster {
             const LSTTN_BATCH_SIZE: usize = 32;
             let batches_per_epoch = supervised_starts.len().div_ceil(LSTTN_BATCH_SIZE);
             let total_batches = batches_per_epoch * self.config.epochs;
-            #[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
-            let mut cuda_executor = if backend.selected == "cuda" {
-                Some(CudaLsttnTensorExecutor::new(&state, &adjacency)?)
-            } else {
-                None
-            };
             for epoch in 0..self.config.epochs {
                 for (batch_index, starts) in supervised_starts.chunks(LSTTN_BATCH_SIZE).enumerate()
                 {
@@ -9275,7 +10027,7 @@ mod tests {
 
     #[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
     #[test]
-    fn cuda_lsttn_refuses_scalar_cpu_fallback() {
+    fn cuda_lsttn_fit_uses_tensor_executor_without_scalar_fallback() {
         let backend = match select_compute_backend(Some("cuda")) {
             Ok(backend) => backend,
             Err(_) => return,
@@ -9295,10 +10047,38 @@ mod tests {
             backend,
         })
         .unwrap();
-        let error = model.fit(&traffic_style_fixture_frame()).unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("refusing to fall back to scalar CPU training"));
+        model.fit(&traffic_style_fixture_frame()).unwrap();
+        assert!(model
+            .trainable_state
+            .as_ref()
+            .is_some_and(|state| state.steps > 0));
+    }
+
+    #[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
+    #[test]
+    fn cuda_lsttn_pretraining_updates_mst_parameters_on_device() {
+        if select_compute_backend(Some("cuda")).is_err() {
+            return;
+        }
+        let frame = traffic_style_fixture_frame();
+        let adjacency = frame.adjacency.row_normalized();
+        let mut state = TrainableGraphTransformerState::initialized(3, 4, 2, 1, 4, 8, 4, 2, 2, 17);
+        state.target_scale = 1.0;
+        state.normalized_zero = 0.0;
+        let before = state.parameters.clone();
+        let mut executor = CudaLsttnTensorExecutor::new(&state, &adjacency).unwrap();
+        let loss = executor
+            .cuda_train_masked_subseries_reconstruction(&mut state, &frame.target[..8], 0.001, 0.0)
+            .unwrap();
+        assert!(loss.is_finite(), "{loss}");
+        assert_eq!(state.steps, 1);
+        let layout = state.layout();
+        let changed_pretrain = (layout.pretrain_mask_token..layout.total)
+            .any(|idx| (state.parameters[idx] - before[idx]).abs() > 1.0e-9);
+        assert!(
+            changed_pretrain,
+            "CUDA pretraining must update MST/pretraining parameters"
+        );
     }
 
     #[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]

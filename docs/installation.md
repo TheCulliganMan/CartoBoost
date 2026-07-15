@@ -67,6 +67,42 @@ from cartoboost import CartoBoostRegressor
 model = CartoBoostRegressor(n_estimators=10, max_depth=2)
 ```
 
+## CUDA Development Build
+
+CartoBoost's CUDA kernels are built with [cuda-oxide](https://nvlabs.github.io/cuda-oxide/).
+This path is for native development and validation; published Python wheels do
+not require a local CUDA toolkit unless they are built from source.
+
+Install a CUDA toolkit, an NVIDIA driver, Rust nightly, and `cargo-oxide`. Make
+the toolkit compiler visible before building:
+
+```sh
+rustup toolchain install nightly-2026-04-03
+cargo install cargo-oxide
+export PATH=/usr/local/cuda/bin:$PATH
+```
+
+Build for the installed GPU's compute capability. The command below derives the
+target from `nvidia-smi`; use the resulting `sm_XX` value explicitly when the
+machine does not expose `nvidia-smi` to the build environment.
+
+```sh
+CUDA_ARCH="sm_$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1 | tr -d '.')"
+CUDA_OXIDE_DEBUG=off RUSTUP_TOOLCHAIN=nightly-2026-04-03 \
+  cargo oxide build --arch "$CUDA_ARCH" -- -p cartoboost-neural --features cuda
+```
+
+Run the native dispatch check on the same architecture:
+
+```sh
+CUDA_OXIDE_DEBUG=off RUSTUP_TOOLCHAIN=nightly-2026-04-03 \
+  cargo oxide test --arch "$CUDA_ARCH" -- \
+  -p cartoboost-neural --features cuda cuda_dispatch_report_runs_vector_add_kernel -- --nocapture
+```
+
+The CUDA target must not exceed the installed GPU's capability. For example, a
+Turing GPU uses `sm_75`; an `sm_80` artifact cannot run there.
+
 ## Troubleshooting
 
 | Symptom | Fix |
@@ -74,3 +110,4 @@ model = CartoBoostRegressor(n_estimators=10, max_depth=2)
 | `ImportError` during import | Reinstall CartoBoost in a clean Python environment. |
 | `uv` tries to compile from source | Use CPython 3.10-3.14 on a supported platform, or install the project build toolchain before building. |
 | `examples/quickstart.py` cannot import CartoBoost | Make sure the Python environment where `cartoboost` was installed is active. |
+| cuda-oxide reports an artifact for a newer GPU architecture | Rebuild with `cargo oxide ... --arch sm_XX`, where `sm_XX` matches `nvidia-smi --query-gpu=compute_cap --format=csv,noheader`. |
