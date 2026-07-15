@@ -8,31 +8,19 @@ use std::time::Instant;
 mod kernels {
     use super::*;
 
-    // CUDA-Oxide emits these declarations as libdevice calls in the device
-    // artifact. Calling host `libm` directly is not valid device code: its
-    // x86 implementation contains inline assembly before CUDA-Oxide can lower
-    // it. Keep the calls behind device externs so the runtime LTOIR path links
-    // them from CUDA's libdevice.
-    #[device]
-    extern "C" {
-        fn __nv_sqrtf(value: f32) -> f32;
-        fn __nv_expf(value: f32) -> f32;
-        fn __nv_tanhf(value: f32) -> f32;
-    }
-
     #[device]
     fn device_sqrtf(value: f32) -> f32 {
-        unsafe { __nv_sqrtf(value) }
+        value.sqrt()
     }
 
     #[device]
     fn device_expf(value: f32) -> f32 {
-        unsafe { __nv_expf(value) }
+        value.exp()
     }
 
     #[device]
     fn device_tanhf(value: f32) -> f32 {
-        unsafe { __nv_tanhf(value) }
+        value.tanh()
     }
 
     #[device]
