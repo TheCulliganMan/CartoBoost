@@ -1,3 +1,5 @@
+#[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
+use cartoboost_neural::CudaTensorArena;
 use cartoboost_neural::{
     backend_affine_scores, backend_scalar_graph_f32, backend_scalar_graph_train_step_f32,
     BackendSelection,
@@ -909,10 +911,2956 @@ struct TrainableGraphTransformerState {
     horizons: usize,
     experts: usize,
     graph_order: usize,
+    /// Native cadence for the first periodic branch. Zero preserves legacy
+    /// non-weekly checkpoints, where it is derived from `periodicity`.
+    #[serde(default)]
+    periodic_short_lag: usize,
     #[serde(default = "unit_scale")]
     target_scale: f64,
     #[serde(default)]
     normalized_zero: f64,
+}
+
+/// CUDA-owned, portable-state bridge for LSTTN.  It deliberately owns no
+/// serialized driver object: parameters and Adam moments are uploaded from
+/// `TrainableGraphTransformerState` on construction and copied back only at a
+/// checkpoint boundary.  CSR topology and structural weights remain resident
+/// for every pretraining/supervised batch.
+#[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
+#[allow(dead_code)]
+struct CudaLsttnTensorExecutor {
+    arena: CudaTensorArena,
+    nodes: usize,
+    node_tile_size: usize,
+    forward_edges: usize,
+    reverse_edges: usize,
+    adaptive_edges: usize,
+}
+
+#[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
+#[allow(dead_code)]
+impl CudaLsttnTensorExecutor {
+    const PARAMETERS: usize = 0;
+    const FIRST_MOMENT: usize = 1;
+    const SECOND_MOMENT: usize = 2;
+    const FORWARD_WEIGHTS: usize = 3;
+    const REVERSE_WEIGHTS: usize = 4;
+    const ADAPTIVE_WEIGHTS: usize = 5;
+    const SUPERVISED_INPUT: usize = 6;
+    const SUPERVISED_TARGET: usize = 7;
+    const DIRECT_OUTPUT: usize = 8;
+    const PATCH_EMBEDDING: usize = 9;
+    const PATCH_WITH_POSITION: usize = 10;
+    const ATTENTION_SEQUENCE: usize = 11;
+    const ENCODER_Q: usize = 12;
+    const ENCODER_K: usize = 13;
+    const ENCODER_V: usize = 14;
+    const ENCODER_ATTENTION: usize = 15;
+    const ENCODER_PROJECTED: usize = 16;
+    const ENCODER_RESIDUAL: usize = 17;
+    const ENCODER_NORMALIZED: usize = 18;
+    const ENCODER_FFN_EXPANDED: usize = 19;
+    const ENCODER_FFN_ACTIVATED: usize = 20;
+    const ENCODER_FFN_CONTRACTED: usize = 21;
+    const ENCODER_FFN_RESIDUAL: usize = 22;
+    const ADAPTIVE_LOGITS: usize = 23;
+    const LONG_TEMPORAL: usize = 24;
+    const LONG_STAGE_A: usize = 25;
+    const LONG_STAGE_B: usize = 26;
+    const SHORT_INPUT: usize = 27;
+    const SHORT_FILTER: usize = 28;
+    const SHORT_GATE: usize = 29;
+    const SHORT_GATED: usize = 30;
+    const SHORT_SKIP_PROJECTION: usize = 31;
+    const SHORT_FORWARD_ONE: usize = 32;
+    const SHORT_FORWARD_TWO: usize = 33;
+    const SHORT_BACKWARD_ONE: usize = 34;
+    const SHORT_BACKWARD_TWO: usize = 35;
+    const SHORT_ADAPTIVE_ONE: usize = 36;
+    const SHORT_ADAPTIVE_TWO: usize = 37;
+    const SHORT_CONCAT_A: usize = 38;
+    const SHORT_CONCAT_B: usize = 39;
+    const SHORT_CONCAT_C: usize = 40;
+    const SHORT_CONCAT_D: usize = 41;
+    const SHORT_CONCAT_E: usize = 42;
+    const SHORT_CONCAT_F: usize = 43;
+    const SHORT_GRAPH: usize = 44;
+    const SHORT_RESIDUAL: usize = 45;
+    const SHORT_SKIP_A: usize = 46;
+    const SHORT_NORMALIZED: usize = 47;
+    const SHORT_SKIP_B: usize = 48;
+    const SHORT_BATCH_STATS: usize = 49;
+    const PARAMETER_GRADIENT: usize = 50;
+    const GRADIENT_NORM: usize = 51;
+    const SUPERVISED_LOSS: usize = 52;
+    const PERIODIC_SHORT: usize = 53;
+    const PERIODIC_SEASONAL: usize = 54;
+    const FUSION_A: usize = 55;
+    const FUSION_B: usize = 56;
+    const FUSION_C: usize = 57;
+    const FUSION_D: usize = 58;
+    const FUSION_OUTPUT: usize = 59;
+    const DIRECT_NODE_MAJOR: usize = 60;
+    const FUSED_DIRECT_OUTPUT: usize = 61;
+    const DIRECT_OUTPUT_GRADIENT: usize = 62;
+    const DIRECT_NODE_MAJOR_GRADIENT: usize = 63;
+    const FUSION_REPRESENTATION_GRADIENT: usize = 64;
+    const FUSION_RELU_GRADIENT: usize = 65;
+    const FUSION_CONCAT_GRADIENT: usize = 66;
+    const SHORT_GRADIENT: usize = 67;
+    const TREND_GRADIENT: usize = 68;
+    const FUSION_SECOND_GRADIENT: usize = 69;
+    const FUSION_FIRST_RELU_GRADIENT: usize = 70;
+    const FUSION_INPUT_GRADIENT: usize = 71;
+    const LONG_GRADIENT: usize = 72;
+    const PERIODIC_PAIR_GRADIENT: usize = 73;
+    const PERIODIC_SHORT_GRADIENT: usize = 74;
+    const PERIODIC_SEASONAL_GRADIENT: usize = 75;
+    const PERIODIC_SHORT_INPUT: usize = 76;
+    const PERIODIC_SEASONAL_INPUT: usize = 77;
+    const PERIODIC_SHORT_INPUT_GRADIENT: usize = 78;
+    const PERIODIC_SEASONAL_INPUT_GRADIENT: usize = 79;
+    const PERIODIC_GRAD_IDENTITY: usize = 80;
+    const PERIODIC_GRAD_FORWARD_ONE: usize = 81;
+    const PERIODIC_GRAD_FORWARD_TWO: usize = 82;
+    const PERIODIC_GRAD_REVERSE_ONE: usize = 83;
+    const PERIODIC_GRAD_REVERSE_TWO: usize = 84;
+    const PERIODIC_GRAD_ADAPTIVE_ONE: usize = 85;
+    const PERIODIC_GRAD_ADAPTIVE_TWO: usize = 86;
+    const PERIODIC_TEMP_A: usize = 87;
+    const PERIODIC_TEMP_B: usize = 88;
+    const PERIODIC_TEMP_C: usize = 89;
+    const PERIODIC_BASE_GRADIENT: usize = 90;
+    const PERIODIC_FORWARD_BASE_GRADIENT: usize = 91;
+    const PERIODIC_REVERSE_BASE_GRADIENT: usize = 92;
+    const PERIODIC_ADAPTIVE_BASE_GRADIENT: usize = 93;
+    const PERIODIC_ADAPTIVE_EDGE_GRADIENT: usize = 94;
+    const PERIODIC_ADAPTIVE_LOGIT_GRADIENT: usize = 95;
+    const LONG_BACKWARD_A: usize = 96;
+    const LONG_BACKWARD_B: usize = 97;
+    const SHORT_REVERSE_INPUT_GRADIENT_A: usize = 98;
+    const SHORT_REVERSE_INPUT_GRADIENT_B: usize = 99;
+    const SHORT_REVERSE_SKIP_GRADIENT_A: usize = 100;
+    const SHORT_REVERSE_SKIP_GRADIENT_B: usize = 101;
+    const SHORT_REVERSE_GRAPH_GRADIENT: usize = 102;
+    const SHORT_REVERSE_CONCAT_GRADIENT: usize = 103;
+    const SHORT_REVERSE_SPLIT_A: usize = 104;
+    const SHORT_REVERSE_SPLIT_B: usize = 105;
+    const SHORT_REVERSE_SPLIT_C: usize = 106;
+    const SHORT_REVERSE_SPLIT_D: usize = 107;
+    const SHORT_REVERSE_SPLIT_E: usize = 108;
+    const SHORT_REVERSE_SPLIT_F: usize = 109;
+    const SHORT_REVERSE_GATED_GRADIENT: usize = 110;
+    const SHORT_REVERSE_FILTER_GRADIENT: usize = 111;
+    const SHORT_REVERSE_GATE_GRADIENT: usize = 112;
+    const SHORT_REVERSE_EDGE_GRADIENT: usize = 113;
+    const SHORT_REVERSE_LOGIT_GRADIENT: usize = 114;
+    const SHORT_GRAPH_GRAD_IDENTITY: usize = 115;
+    const SHORT_GRAPH_GRAD_FORWARD_ONE: usize = 116;
+    const SHORT_GRAPH_GRAD_FORWARD_TWO: usize = 117;
+    const SHORT_GRAPH_GRAD_REVERSE_ONE: usize = 118;
+    const SHORT_GRAPH_GRAD_REVERSE_TWO: usize = 119;
+    const SHORT_GRAPH_GRAD_ADAPTIVE_ONE: usize = 120;
+    const SHORT_GRAPH_GRAD_ADAPTIVE_TWO: usize = 121;
+    const FORWARD_INDPTR: usize = 0;
+    const FORWARD_INDICES: usize = 1;
+    const REVERSE_INDPTR: usize = 2;
+    const REVERSE_INDICES: usize = 3;
+    const ADAPTIVE_INDPTR: usize = 4;
+    const ADAPTIVE_INDICES: usize = 5;
+
+    fn new(state: &TrainableGraphTransformerState, adjacency: &CsrAdjacency) -> Result<Self> {
+        let nodes = state.nodes;
+        let reverse = adjacency.transpose(nodes).row_normalized();
+        let adaptive = adjacency.with_adaptive_self_candidates(nodes);
+        let u32_values = |values: &[usize], label: &str| -> Result<Vec<u32>> {
+            values
+                .iter()
+                .map(|value| {
+                    u32::try_from(*value).map_err(|_| {
+                        GeoStError::InvalidFrame(format!(
+                            "LSTTN CUDA {label} exceeds the u32 CSR address range"
+                        ))
+                    })
+                })
+                .collect()
+        };
+        let to_f32 = |values: &[f64], label: &str| -> Result<Vec<f32>> {
+            values
+                .iter()
+                .map(|value| {
+                    let value = *value as f32;
+                    if value.is_finite() {
+                        Ok(value)
+                    } else {
+                        Err(GeoStError::InvalidFrame(format!(
+                            "LSTTN CUDA {label} contains a non-finite f32 value"
+                        )))
+                    }
+                })
+                .collect()
+        };
+        let mut arena = CudaTensorArena::new(122)
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        arena
+            .upload_f32(Self::PARAMETERS, &to_f32(&state.parameters, "parameters")?)
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        arena
+            .upload_f32(
+                Self::FIRST_MOMENT,
+                &to_f32(&state.first_moment, "first moments")?,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        arena
+            .upload_f32(
+                Self::SECOND_MOMENT,
+                &to_f32(&state.second_moment, "second moments")?,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        arena
+            .fill_f32(Self::PARAMETER_GRADIENT, state.parameters.len(), 0.0)
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        let upload_graph = |arena: &mut CudaTensorArena,
+                            indptr_slot: usize,
+                            indices_slot: usize,
+                            weights_slot: usize,
+                            graph: &CsrAdjacency,
+                            label: &str|
+         -> Result<()> {
+            arena
+                .upload_u32(indptr_slot, &u32_values(&graph.indptr, label)?)
+                .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+            arena
+                .upload_u32(indices_slot, &u32_values(&graph.indices, label)?)
+                .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+            arena
+                .upload_f32(weights_slot, &to_f32(&graph.data, label)?)
+                .map_err(|error| GeoStError::InvalidBackend(error.to_string()))
+        };
+        upload_graph(
+            &mut arena,
+            Self::FORWARD_INDPTR,
+            Self::FORWARD_INDICES,
+            Self::FORWARD_WEIGHTS,
+            adjacency,
+            "forward CSR",
+        )?;
+        upload_graph(
+            &mut arena,
+            Self::REVERSE_INDPTR,
+            Self::REVERSE_INDICES,
+            Self::REVERSE_WEIGHTS,
+            &reverse,
+            "reverse CSR",
+        )?;
+        upload_graph(
+            &mut arena,
+            Self::ADAPTIVE_INDPTR,
+            Self::ADAPTIVE_INDICES,
+            Self::ADAPTIVE_WEIGHTS,
+            &adaptive,
+            "adaptive CSR",
+        )?;
+        Ok(Self {
+            arena,
+            nodes,
+            // A 1,024-node physical tile keeps a `[32, 52, tile, 32]`
+            // hidden activation below 208 MiB. Logical batches remain 32 and
+            // gradients are reduced across every tile before AdamW.
+            node_tile_size: 1_024.min(nodes).max(1),
+            forward_edges: adjacency.indices.len(),
+            reverse_edges: reverse.indices.len(),
+            adaptive_edges: adaptive.indices.len(),
+        })
+    }
+
+    fn allocation_count(&self) -> usize {
+        self.arena.allocation_count()
+    }
+
+    fn node_tiles(&self) -> impl Iterator<Item = std::ops::Range<usize>> + '_ {
+        (0..self.nodes)
+            .step_by(self.node_tile_size)
+            .map(|start| start..(start + self.node_tile_size).min(self.nodes))
+    }
+
+    fn affine_projection(
+        &mut self,
+        input_slot: usize,
+        output_slot: usize,
+        parameter_offset: usize,
+        rows: usize,
+        input_width: usize,
+        output_width: usize,
+    ) -> Result<()> {
+        self.arena
+            .affine_parameter_slice_f32(
+                input_slot,
+                Self::PARAMETERS,
+                parameter_offset,
+                parameter_offset + input_width * output_width,
+                output_slot,
+                rows,
+                input_width,
+                output_width,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))
+    }
+
+    fn patch_embedding(
+        &mut self,
+        layout: GraphParameterLayout,
+        batches: usize,
+        times: usize,
+        tile_nodes: usize,
+        channels: usize,
+        patch_width: usize,
+        hidden: usize,
+    ) -> Result<()> {
+        self.arena
+            .patch_embedding_f32(
+                Self::SUPERVISED_INPUT,
+                Self::PARAMETERS,
+                layout.lsttn_patch_embedding,
+                layout.lsttn_patch_embedding + patch_width * hidden,
+                Self::PATCH_EMBEDDING,
+                batches,
+                times,
+                tile_nodes,
+                channels,
+                patch_width,
+                hidden,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))
+    }
+
+    fn add_patch_positions(
+        &mut self,
+        layout: GraphParameterLayout,
+        batches: usize,
+        patches: usize,
+        tile_nodes: usize,
+        hidden: usize,
+    ) -> Result<()> {
+        self.arena
+            .add_patch_positions_f32(
+                Self::PATCH_EMBEDDING,
+                Self::PARAMETERS,
+                layout.pretrain_position,
+                Self::PATCH_WITH_POSITION,
+                batches,
+                patches,
+                tile_nodes,
+                hidden,
+                (hidden as f32).sqrt(),
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))
+    }
+
+    fn patch_attention_layout(
+        &mut self,
+        batches: usize,
+        patches: usize,
+        tile_nodes: usize,
+        hidden: usize,
+    ) -> Result<()> {
+        self.arena
+            .patches_to_attention_sequences_f32(
+                Self::PATCH_WITH_POSITION,
+                Self::ATTENTION_SEQUENCE,
+                batches,
+                patches,
+                tile_nodes,
+                hidden,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))
+    }
+
+    fn encoder_attention(
+        &mut self,
+        layout: GraphParameterLayout,
+        layer: usize,
+        batches: usize,
+        patches: usize,
+        tile_nodes: usize,
+        hidden: usize,
+        heads: usize,
+    ) -> Result<()> {
+        let projection = hidden * (hidden + 1);
+        let rows = batches * patches * tile_nodes;
+        self.affine_projection(
+            Self::ATTENTION_SEQUENCE,
+            Self::ENCODER_Q,
+            layout.temporal_q + layer * projection,
+            rows,
+            hidden,
+            hidden,
+        )?;
+        self.affine_projection(
+            Self::ATTENTION_SEQUENCE,
+            Self::ENCODER_K,
+            layout.temporal_k + layer * projection,
+            rows,
+            hidden,
+            hidden,
+        )?;
+        self.affine_projection(
+            Self::ATTENTION_SEQUENCE,
+            Self::ENCODER_V,
+            layout.temporal_v + layer * projection,
+            rows,
+            hidden,
+            hidden,
+        )?;
+        self.arena
+            .attention_f32(
+                Self::ENCODER_Q,
+                Self::ENCODER_K,
+                Self::ENCODER_V,
+                Self::ENCODER_ATTENTION,
+                batches * tile_nodes,
+                patches,
+                heads,
+                hidden / heads,
+                false,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))
+    }
+
+    /// Runs all four frozen MST encoder layers on contiguous device tensors.
+    /// The input and final representation are both `[batch * nodes, patches,
+    /// hidden]`; no activation crosses PCIe between blocks.  These parameters
+    /// are frozen during supervised fitting, but the device computation is
+    /// still the representation consumed by the CUDA LSTTN branches.
+    fn frozen_encoder(
+        &mut self,
+        layout: GraphParameterLayout,
+        batches: usize,
+        patches: usize,
+        tile_nodes: usize,
+        hidden: usize,
+        heads: usize,
+    ) -> Result<()> {
+        if hidden == 0 || heads == 0 || hidden % heads != 0 {
+            return Err(GeoStError::InvalidFrame(
+                "CUDA LSTTN attention hidden size must divide evenly across heads".to_string(),
+            ));
+        }
+        let rows = batches * patches * tile_nodes;
+        let projection = hidden * (hidden + 1);
+        let ffn_width = 8 * hidden * hidden + 5 * hidden;
+        for layer in 0..4 {
+            self.encoder_attention(layout, layer, batches, patches, tile_nodes, hidden, heads)?;
+            self.affine_projection(
+                Self::ENCODER_ATTENTION,
+                Self::ENCODER_PROJECTED,
+                layout.lsttn_transformer_out + layer * projection,
+                rows,
+                hidden,
+                hidden,
+            )?;
+            self.arena
+                .add_f32(
+                    Self::ATTENTION_SEQUENCE,
+                    Self::ENCODER_PROJECTED,
+                    Self::ENCODER_RESIDUAL,
+                    rows * hidden,
+                )
+                .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+            let norm = layout.lsttn_transformer_norm + layer * 4 * hidden;
+            self.arena
+                .layer_norm_parameter_slice_f32(
+                    Self::ENCODER_RESIDUAL,
+                    Self::PARAMETERS,
+                    norm,
+                    norm + hidden,
+                    Self::ENCODER_NORMALIZED,
+                    rows,
+                    hidden,
+                )
+                .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+            self.affine_projection(
+                Self::ENCODER_NORMALIZED,
+                Self::ENCODER_FFN_EXPANDED,
+                layout.lsttn_transformer_ffn + layer * ffn_width,
+                rows,
+                hidden,
+                4 * hidden,
+            )?;
+            self.arena
+                .relu_f32(
+                    Self::ENCODER_FFN_EXPANDED,
+                    Self::ENCODER_FFN_ACTIVATED,
+                    rows * 4 * hidden,
+                )
+                .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+            self.affine_projection(
+                Self::ENCODER_FFN_ACTIVATED,
+                Self::ENCODER_FFN_CONTRACTED,
+                layout.lsttn_transformer_ffn + layer * ffn_width + (hidden + 1) * 4 * hidden,
+                rows,
+                4 * hidden,
+                hidden,
+            )?;
+            self.arena
+                .add_f32(
+                    Self::ENCODER_NORMALIZED,
+                    Self::ENCODER_FFN_CONTRACTED,
+                    Self::ENCODER_FFN_RESIDUAL,
+                    rows * hidden,
+                )
+                .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+            self.arena
+                .layer_norm_parameter_slice_f32(
+                    Self::ENCODER_FFN_RESIDUAL,
+                    Self::PARAMETERS,
+                    norm + 2 * hidden,
+                    norm + 3 * hidden,
+                    Self::ATTENTION_SEQUENCE,
+                    rows,
+                    hidden,
+                )
+                .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        }
+        Ok(())
+    }
+
+    /// Materializes the learned directed adaptive CSR weights on-device. The
+    /// row softmax writes directly into the graph-weight slot consumed by the
+    /// two-hop diffusion stages, keeping the O(edges) adaptive graph sparse.
+    fn adaptive_weights(&mut self, source_offset: usize, target_offset: usize) -> Result<()> {
+        self.arena
+            .csr_adaptive_logits_parameter_slice_f32(
+                Self::ADAPTIVE_INDPTR,
+                Self::ADAPTIVE_INDICES,
+                Self::PARAMETERS,
+                source_offset,
+                target_offset,
+                Self::ADAPTIVE_LOGITS,
+                self.nodes,
+                self.adaptive_edges,
+                10,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        self.arena
+            .csr_row_softmax_f32(
+                Self::ADAPTIVE_INDPTR,
+                Self::ADAPTIVE_LOGITS,
+                Self::ADAPTIVE_WEIGHTS,
+                self.nodes,
+                self.adaptive_edges,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))
+    }
+
+    /// Executes the four-stage exponentially dilated long-trend stack from
+    /// the frozen patch encoder. The final tensor is `[batch, 1, tile_nodes,
+    /// hidden]` for the normal LSTTN context sizes and remains resident for
+    /// the daily/weekly/short fusion stage.
+    fn long_branch(
+        &mut self,
+        layout: GraphParameterLayout,
+        batches: usize,
+        patches: usize,
+        tile_nodes: usize,
+        hidden: usize,
+    ) -> Result<usize> {
+        self.arena
+            .transpose_node_time_f32(
+                Self::ATTENTION_SEQUENCE,
+                Self::LONG_TEMPORAL,
+                batches,
+                tile_nodes,
+                patches,
+                hidden,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        let mut input = Self::LONG_TEMPORAL;
+        let mut output = Self::LONG_STAGE_A;
+        let mut times = patches;
+        for (layer, dilation) in [1usize, 2, 4, 8].into_iter().enumerate() {
+            let offset = layout.lsttn_dilated_convolution + layer * (3 * hidden * hidden + hidden);
+            self.arena
+                .lsttn_long_conv_pool_parameter_slice_f32(
+                    input,
+                    Self::PARAMETERS,
+                    offset,
+                    offset + 3 * hidden * hidden,
+                    output,
+                    batches,
+                    times,
+                    tile_nodes,
+                    hidden,
+                    dilation,
+                )
+                .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+            times = times.div_ceil(2).div_ceil(2);
+            input = output;
+            output = if output == Self::LONG_STAGE_A {
+                Self::LONG_STAGE_B
+            } else {
+                Self::LONG_STAGE_A
+            };
+        }
+        debug_assert_eq!(times, 1);
+        Ok(input)
+    }
+
+    fn short_input_projection(
+        &mut self,
+        layout: GraphParameterLayout,
+        batches: usize,
+        lookback: usize,
+        tile_nodes: usize,
+        channels: usize,
+        recent_window: usize,
+        hidden: usize,
+        phase_offset: usize,
+        periodicity: usize,
+    ) -> Result<usize> {
+        self.arena
+            .lsttn_short_input_projection_parameter_slice_f32(
+                Self::SUPERVISED_INPUT,
+                Self::PARAMETERS,
+                layout.lsttn_short_wave,
+                layout.lsttn_short_wave + 2 * hidden,
+                Self::SHORT_INPUT,
+                batches,
+                lookback,
+                tile_nodes,
+                channels,
+                recent_window,
+                hidden,
+                phase_offset,
+                periodicity,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn short_wave_layer_forward(
+        &mut self,
+        input: usize,
+        skip: usize,
+        next_skip: usize,
+        layer: usize,
+        dilation: usize,
+        layout: GraphParameterLayout,
+        batches: usize,
+        times: usize,
+        hidden: usize,
+        training: bool,
+        step: u64,
+    ) -> Result<usize> {
+        let nodes = self.nodes;
+        let layer_width = 12 * hidden * hidden + 6 * hidden;
+        let layers_start = layout.lsttn_short_wave + 3 * hidden;
+        let base = layers_start + layer * layer_width;
+        let filter = base;
+        let gate = filter + 2 * hidden * hidden;
+        let filter_bias = gate + 2 * hidden * hidden;
+        let gate_bias = filter_bias + hidden;
+        let graph_projection = gate_bias + hidden;
+        let skip_projection = graph_projection + 7 * hidden * hidden + hidden;
+        let norm = skip_projection + hidden * hidden + hidden;
+        let out_times = times - dilation;
+        let seq_batches = batches * out_times;
+        let seq_len = seq_batches * nodes * hidden;
+        self.arena
+            .causal_conv2_parameter_slice_f32(
+                input,
+                Self::PARAMETERS,
+                filter,
+                filter_bias,
+                Self::SHORT_FILTER,
+                batches,
+                times,
+                nodes,
+                hidden,
+                hidden,
+                dilation,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .causal_conv2_parameter_slice_f32(
+                input,
+                Self::PARAMETERS,
+                gate,
+                gate_bias,
+                Self::SHORT_GATE,
+                batches,
+                times,
+                nodes,
+                hidden,
+                hidden,
+                dilation,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .gated_tanh_sigmoid_f32(
+                Self::SHORT_FILTER,
+                Self::SHORT_GATE,
+                Self::SHORT_GATED,
+                seq_len,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.affine_projection(
+            Self::SHORT_GATED,
+            Self::SHORT_SKIP_PROJECTION,
+            skip_projection,
+            seq_batches * nodes,
+            hidden,
+            hidden,
+        )?;
+        self.arena
+            .add_tail_time_f32(
+                skip,
+                Self::SHORT_SKIP_PROJECTION,
+                next_skip,
+                batches,
+                times,
+                out_times,
+                nodes,
+                hidden,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .csr_diffuse_f32(
+                Self::FORWARD_INDPTR,
+                Self::FORWARD_INDICES,
+                Self::FORWARD_WEIGHTS,
+                Self::SHORT_GATED,
+                Self::SHORT_FORWARD_ONE,
+                seq_batches,
+                nodes,
+                hidden,
+                self.forward_edges,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .csr_diffuse_f32(
+                Self::FORWARD_INDPTR,
+                Self::FORWARD_INDICES,
+                Self::FORWARD_WEIGHTS,
+                Self::SHORT_FORWARD_ONE,
+                Self::SHORT_FORWARD_TWO,
+                seq_batches,
+                nodes,
+                hidden,
+                self.forward_edges,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .csr_diffuse_f32(
+                Self::REVERSE_INDPTR,
+                Self::REVERSE_INDICES,
+                Self::REVERSE_WEIGHTS,
+                Self::SHORT_GATED,
+                Self::SHORT_BACKWARD_ONE,
+                seq_batches,
+                nodes,
+                hidden,
+                self.reverse_edges,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .csr_diffuse_f32(
+                Self::REVERSE_INDPTR,
+                Self::REVERSE_INDICES,
+                Self::REVERSE_WEIGHTS,
+                Self::SHORT_BACKWARD_ONE,
+                Self::SHORT_BACKWARD_TWO,
+                seq_batches,
+                nodes,
+                hidden,
+                self.reverse_edges,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .csr_diffuse_f32(
+                Self::ADAPTIVE_INDPTR,
+                Self::ADAPTIVE_INDICES,
+                Self::ADAPTIVE_WEIGHTS,
+                Self::SHORT_GATED,
+                Self::SHORT_ADAPTIVE_ONE,
+                seq_batches,
+                nodes,
+                hidden,
+                self.adaptive_edges,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .csr_diffuse_f32(
+                Self::ADAPTIVE_INDPTR,
+                Self::ADAPTIVE_INDICES,
+                Self::ADAPTIVE_WEIGHTS,
+                Self::SHORT_ADAPTIVE_ONE,
+                Self::SHORT_ADAPTIVE_TWO,
+                seq_batches,
+                nodes,
+                hidden,
+                self.adaptive_edges,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .concat_channels_f32(
+                Self::SHORT_GATED,
+                Self::SHORT_FORWARD_ONE,
+                Self::SHORT_CONCAT_A,
+                seq_batches * nodes,
+                hidden,
+                hidden,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .concat_channels_f32(
+                Self::SHORT_CONCAT_A,
+                Self::SHORT_FORWARD_TWO,
+                Self::SHORT_CONCAT_B,
+                seq_batches * nodes,
+                2 * hidden,
+                hidden,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .concat_channels_f32(
+                Self::SHORT_CONCAT_B,
+                Self::SHORT_BACKWARD_ONE,
+                Self::SHORT_CONCAT_C,
+                seq_batches * nodes,
+                3 * hidden,
+                hidden,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .concat_channels_f32(
+                Self::SHORT_CONCAT_C,
+                Self::SHORT_BACKWARD_TWO,
+                Self::SHORT_CONCAT_D,
+                seq_batches * nodes,
+                4 * hidden,
+                hidden,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .concat_channels_f32(
+                Self::SHORT_CONCAT_D,
+                Self::SHORT_ADAPTIVE_ONE,
+                Self::SHORT_CONCAT_E,
+                seq_batches * nodes,
+                5 * hidden,
+                hidden,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .concat_channels_f32(
+                Self::SHORT_CONCAT_E,
+                Self::SHORT_ADAPTIVE_TWO,
+                Self::SHORT_CONCAT_F,
+                seq_batches * nodes,
+                6 * hidden,
+                hidden,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.affine_projection(
+            Self::SHORT_CONCAT_F,
+            Self::SHORT_GRAPH,
+            graph_projection,
+            seq_batches * nodes,
+            7 * hidden,
+            hidden,
+        )?;
+        self.arena
+            .add_tail_time_f32(
+                input,
+                Self::SHORT_GRAPH,
+                Self::SHORT_RESIDUAL,
+                batches,
+                times,
+                out_times,
+                nodes,
+                hidden,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .deterministic_dropout_f32(
+                Self::SHORT_RESIDUAL,
+                Self::SHORT_INPUT,
+                seq_len,
+                step ^ ((layer as u64) << 48),
+                0,
+                training,
+                0.3,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .batch_norm_channels_parameter_slice_f32(
+                Self::SHORT_INPUT,
+                Self::PARAMETERS,
+                norm,
+                norm + hidden,
+                Self::SHORT_BATCH_STATS,
+                Self::SHORT_NORMALIZED,
+                batches,
+                out_times,
+                nodes,
+                hidden,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        Ok(out_times)
+    }
+
+    /// Full-node Graph WaveNet executor. CSR diffusion is global by design;
+    /// callers must not use this after a node-tile upload.
+    #[allow(clippy::too_many_arguments)]
+    fn short_branch(
+        &mut self,
+        layout: GraphParameterLayout,
+        batches: usize,
+        lookback: usize,
+        channels: usize,
+        recent_window: usize,
+        hidden: usize,
+        phase_offset: usize,
+        periodicity: usize,
+        training: bool,
+        step: u64,
+    ) -> Result<usize> {
+        let nodes = self.nodes;
+        let mut times = self.short_input_projection(
+            layout,
+            batches,
+            lookback,
+            nodes,
+            channels,
+            recent_window,
+            hidden,
+            phase_offset,
+            periodicity,
+        )?;
+        self.adaptive_weights(
+            layout.lsttn_short_adaptive_source,
+            layout.lsttn_short_adaptive_target,
+        )?;
+        self.arena
+            .fill_f32(Self::SHORT_SKIP_A, batches * times * nodes * hidden, 0.0)
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        let mut input = Self::SHORT_INPUT;
+        let mut skip = Self::SHORT_SKIP_A;
+        let layer_width = 12 * hidden * hidden + 6 * hidden;
+        let layers_start = layout.lsttn_short_wave + 3 * hidden;
+        for (layer, dilation) in [1usize, 2, 1, 2, 1, 2, 1, 2].into_iter().enumerate() {
+            let base = layers_start + layer * layer_width;
+            let filter = base;
+            let gate = filter + 2 * hidden * hidden;
+            let filter_bias = gate + 2 * hidden * hidden;
+            let gate_bias = filter_bias + hidden;
+            let graph_projection = gate_bias + hidden;
+            let skip_projection = graph_projection + 7 * hidden * hidden + hidden;
+            let norm = skip_projection + hidden * hidden + hidden;
+            let out_times = times - dilation;
+            let seq_batches = batches * out_times;
+            let seq_len = seq_batches * nodes * hidden;
+            self.arena
+                .causal_conv2_parameter_slice_f32(
+                    input,
+                    Self::PARAMETERS,
+                    filter,
+                    filter_bias,
+                    Self::SHORT_FILTER,
+                    batches,
+                    times,
+                    nodes,
+                    hidden,
+                    hidden,
+                    dilation,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .causal_conv2_parameter_slice_f32(
+                    input,
+                    Self::PARAMETERS,
+                    gate,
+                    gate_bias,
+                    Self::SHORT_GATE,
+                    batches,
+                    times,
+                    nodes,
+                    hidden,
+                    hidden,
+                    dilation,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .gated_tanh_sigmoid_f32(
+                    Self::SHORT_FILTER,
+                    Self::SHORT_GATE,
+                    Self::SHORT_GATED,
+                    seq_len,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.affine_projection(
+                Self::SHORT_GATED,
+                Self::SHORT_SKIP_PROJECTION,
+                skip_projection,
+                seq_batches * nodes,
+                hidden,
+                hidden,
+            )?;
+            let next_skip = if skip == Self::SHORT_SKIP_A {
+                Self::SHORT_SKIP_B
+            } else {
+                Self::SHORT_SKIP_A
+            };
+            self.arena
+                .add_tail_time_f32(
+                    skip,
+                    Self::SHORT_SKIP_PROJECTION,
+                    next_skip,
+                    batches,
+                    times,
+                    out_times,
+                    nodes,
+                    hidden,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .csr_diffuse_f32(
+                    Self::FORWARD_INDPTR,
+                    Self::FORWARD_INDICES,
+                    Self::FORWARD_WEIGHTS,
+                    Self::SHORT_GATED,
+                    Self::SHORT_FORWARD_ONE,
+                    seq_batches,
+                    nodes,
+                    hidden,
+                    self.forward_edges,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .csr_diffuse_f32(
+                    Self::FORWARD_INDPTR,
+                    Self::FORWARD_INDICES,
+                    Self::FORWARD_WEIGHTS,
+                    Self::SHORT_FORWARD_ONE,
+                    Self::SHORT_FORWARD_TWO,
+                    seq_batches,
+                    nodes,
+                    hidden,
+                    self.forward_edges,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .csr_diffuse_f32(
+                    Self::REVERSE_INDPTR,
+                    Self::REVERSE_INDICES,
+                    Self::REVERSE_WEIGHTS,
+                    Self::SHORT_GATED,
+                    Self::SHORT_BACKWARD_ONE,
+                    seq_batches,
+                    nodes,
+                    hidden,
+                    self.reverse_edges,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .csr_diffuse_f32(
+                    Self::REVERSE_INDPTR,
+                    Self::REVERSE_INDICES,
+                    Self::REVERSE_WEIGHTS,
+                    Self::SHORT_BACKWARD_ONE,
+                    Self::SHORT_BACKWARD_TWO,
+                    seq_batches,
+                    nodes,
+                    hidden,
+                    self.reverse_edges,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .csr_diffuse_f32(
+                    Self::ADAPTIVE_INDPTR,
+                    Self::ADAPTIVE_INDICES,
+                    Self::ADAPTIVE_WEIGHTS,
+                    Self::SHORT_GATED,
+                    Self::SHORT_ADAPTIVE_ONE,
+                    seq_batches,
+                    nodes,
+                    hidden,
+                    self.adaptive_edges,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .csr_diffuse_f32(
+                    Self::ADAPTIVE_INDPTR,
+                    Self::ADAPTIVE_INDICES,
+                    Self::ADAPTIVE_WEIGHTS,
+                    Self::SHORT_ADAPTIVE_ONE,
+                    Self::SHORT_ADAPTIVE_TWO,
+                    seq_batches,
+                    nodes,
+                    hidden,
+                    self.adaptive_edges,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .concat_channels_f32(
+                    Self::SHORT_GATED,
+                    Self::SHORT_FORWARD_ONE,
+                    Self::SHORT_CONCAT_A,
+                    seq_batches * nodes,
+                    hidden,
+                    hidden,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .concat_channels_f32(
+                    Self::SHORT_CONCAT_A,
+                    Self::SHORT_FORWARD_TWO,
+                    Self::SHORT_CONCAT_B,
+                    seq_batches * nodes,
+                    2 * hidden,
+                    hidden,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .concat_channels_f32(
+                    Self::SHORT_CONCAT_B,
+                    Self::SHORT_BACKWARD_ONE,
+                    Self::SHORT_CONCAT_C,
+                    seq_batches * nodes,
+                    3 * hidden,
+                    hidden,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .concat_channels_f32(
+                    Self::SHORT_CONCAT_C,
+                    Self::SHORT_BACKWARD_TWO,
+                    Self::SHORT_CONCAT_D,
+                    seq_batches * nodes,
+                    4 * hidden,
+                    hidden,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .concat_channels_f32(
+                    Self::SHORT_CONCAT_D,
+                    Self::SHORT_ADAPTIVE_ONE,
+                    Self::SHORT_CONCAT_E,
+                    seq_batches * nodes,
+                    5 * hidden,
+                    hidden,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .concat_channels_f32(
+                    Self::SHORT_CONCAT_E,
+                    Self::SHORT_ADAPTIVE_TWO,
+                    Self::SHORT_CONCAT_F,
+                    seq_batches * nodes,
+                    6 * hidden,
+                    hidden,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.affine_projection(
+                Self::SHORT_CONCAT_F,
+                Self::SHORT_GRAPH,
+                graph_projection,
+                seq_batches * nodes,
+                7 * hidden,
+                hidden,
+            )?;
+            self.arena
+                .add_tail_time_f32(
+                    input,
+                    Self::SHORT_GRAPH,
+                    Self::SHORT_RESIDUAL,
+                    batches,
+                    times,
+                    out_times,
+                    nodes,
+                    hidden,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .deterministic_dropout_f32(
+                    Self::SHORT_RESIDUAL,
+                    Self::SHORT_INPUT,
+                    seq_len,
+                    step ^ ((layer as u64) << 48),
+                    0,
+                    training,
+                    0.3,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .batch_norm_channels_parameter_slice_f32(
+                    Self::SHORT_INPUT,
+                    Self::PARAMETERS,
+                    norm,
+                    norm + hidden,
+                    Self::SHORT_BATCH_STATS,
+                    Self::SHORT_NORMALIZED,
+                    batches,
+                    out_times,
+                    nodes,
+                    hidden,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            input = Self::SHORT_NORMALIZED;
+            skip = next_skip;
+            times = out_times;
+        }
+        let end_one = layers_start + 8 * layer_width;
+        let end_two = end_one + hidden * hidden + hidden;
+        let rows = batches * times * nodes;
+        self.arena
+            .relu_f32(skip, Self::SHORT_FILTER, rows * hidden)
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.affine_projection(
+            Self::SHORT_FILTER,
+            Self::SHORT_GATE,
+            end_one,
+            rows,
+            hidden,
+            hidden,
+        )?;
+        self.arena
+            .relu_f32(Self::SHORT_GATE, Self::SHORT_GATED, rows * hidden)
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.affine_projection(
+            Self::SHORT_GATED,
+            Self::SHORT_SKIP_PROJECTION,
+            end_two,
+            rows,
+            hidden,
+            hidden,
+        )?;
+        Ok(Self::SHORT_SKIP_PROJECTION)
+    }
+
+    fn periodic_feature(
+        &mut self,
+        layout: GraphParameterLayout,
+        output: usize,
+        batches: usize,
+        patches: usize,
+        hidden: usize,
+        lag_patches: usize,
+        seasonal: bool,
+    ) -> Result<()> {
+        if lag_patches >= patches {
+            return Err(GeoStError::InvalidFrame(
+                "CUDA LSTTN periodic lag exceeds frozen patch context".to_string(),
+            ));
+        }
+        let nodes = self.nodes;
+        self.arena
+            .select_node_major_time_f32(
+                Self::ATTENTION_SEQUENCE,
+                Self::SHORT_FILTER,
+                batches,
+                nodes,
+                patches,
+                hidden,
+                patches - lag_patches - 1,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        let (source, target, projection) = if seasonal {
+            (
+                layout.lsttn_weekly_adaptive_source,
+                layout.lsttn_weekly_adaptive_target,
+                layout.lsttn_periodic_projection + (7 * hidden * hidden + hidden),
+            )
+        } else {
+            (
+                layout.lsttn_adaptive_source,
+                layout.lsttn_adaptive_target,
+                layout.lsttn_periodic_projection,
+            )
+        };
+        self.adaptive_weights(source, target)?;
+        self.arena
+            .csr_diffuse_f32(
+                Self::FORWARD_INDPTR,
+                Self::FORWARD_INDICES,
+                Self::FORWARD_WEIGHTS,
+                Self::SHORT_FILTER,
+                Self::SHORT_FORWARD_ONE,
+                batches,
+                nodes,
+                hidden,
+                self.forward_edges,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .csr_diffuse_f32(
+                Self::FORWARD_INDPTR,
+                Self::FORWARD_INDICES,
+                Self::FORWARD_WEIGHTS,
+                Self::SHORT_FORWARD_ONE,
+                Self::SHORT_FORWARD_TWO,
+                batches,
+                nodes,
+                hidden,
+                self.forward_edges,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .csr_diffuse_f32(
+                Self::REVERSE_INDPTR,
+                Self::REVERSE_INDICES,
+                Self::REVERSE_WEIGHTS,
+                Self::SHORT_FILTER,
+                Self::SHORT_BACKWARD_ONE,
+                batches,
+                nodes,
+                hidden,
+                self.reverse_edges,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .csr_diffuse_f32(
+                Self::REVERSE_INDPTR,
+                Self::REVERSE_INDICES,
+                Self::REVERSE_WEIGHTS,
+                Self::SHORT_BACKWARD_ONE,
+                Self::SHORT_BACKWARD_TWO,
+                batches,
+                nodes,
+                hidden,
+                self.reverse_edges,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .csr_diffuse_f32(
+                Self::ADAPTIVE_INDPTR,
+                Self::ADAPTIVE_INDICES,
+                Self::ADAPTIVE_WEIGHTS,
+                Self::SHORT_FILTER,
+                Self::SHORT_ADAPTIVE_ONE,
+                batches,
+                nodes,
+                hidden,
+                self.adaptive_edges,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .csr_diffuse_f32(
+                Self::ADAPTIVE_INDPTR,
+                Self::ADAPTIVE_INDICES,
+                Self::ADAPTIVE_WEIGHTS,
+                Self::SHORT_ADAPTIVE_ONE,
+                Self::SHORT_ADAPTIVE_TWO,
+                batches,
+                nodes,
+                hidden,
+                self.adaptive_edges,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .concat_channels_f32(
+                Self::SHORT_FILTER,
+                Self::SHORT_FORWARD_ONE,
+                Self::SHORT_CONCAT_A,
+                batches * nodes,
+                hidden,
+                hidden,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .concat_channels_f32(
+                Self::SHORT_CONCAT_A,
+                Self::SHORT_FORWARD_TWO,
+                Self::SHORT_CONCAT_B,
+                batches * nodes,
+                2 * hidden,
+                hidden,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .concat_channels_f32(
+                Self::SHORT_CONCAT_B,
+                Self::SHORT_BACKWARD_ONE,
+                Self::SHORT_CONCAT_C,
+                batches * nodes,
+                3 * hidden,
+                hidden,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .concat_channels_f32(
+                Self::SHORT_CONCAT_C,
+                Self::SHORT_BACKWARD_TWO,
+                Self::SHORT_CONCAT_D,
+                batches * nodes,
+                4 * hidden,
+                hidden,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .concat_channels_f32(
+                Self::SHORT_CONCAT_D,
+                Self::SHORT_ADAPTIVE_ONE,
+                Self::SHORT_CONCAT_E,
+                batches * nodes,
+                5 * hidden,
+                hidden,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .concat_channels_f32(
+                Self::SHORT_CONCAT_E,
+                Self::SHORT_ADAPTIVE_TWO,
+                Self::SHORT_CONCAT_F,
+                batches * nodes,
+                6 * hidden,
+                hidden,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        let saved_input = if seasonal {
+            Self::PERIODIC_SEASONAL_INPUT
+        } else {
+            Self::PERIODIC_SHORT_INPUT
+        };
+        self.arena
+            .deterministic_dropout_f32(
+                Self::SHORT_CONCAT_F,
+                saved_input,
+                batches * nodes * 7 * hidden,
+                0,
+                0,
+                false,
+                0.0,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.affine_projection(
+            saved_input,
+            output,
+            projection,
+            batches * nodes,
+            7 * hidden,
+            hidden,
+        )
+    }
+
+    fn fuse_and_direct_output(
+        &mut self,
+        layout: GraphParameterLayout,
+        long: usize,
+        short: usize,
+        batches: usize,
+        hidden: usize,
+        horizons: usize,
+    ) -> Result<usize> {
+        let rows = batches * self.nodes;
+        self.arena
+            .concat_channels_f32(
+                long,
+                Self::PERIODIC_SHORT,
+                Self::FUSION_A,
+                rows,
+                hidden,
+                hidden,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .concat_channels_f32(
+                Self::FUSION_A,
+                Self::PERIODIC_SEASONAL,
+                Self::FUSION_B,
+                rows,
+                2 * hidden,
+                hidden,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.affine_projection(
+            Self::FUSION_B,
+            Self::FUSION_C,
+            layout.lsttn_fusion,
+            rows,
+            3 * hidden,
+            hidden,
+        )?;
+        self.arena
+            .relu_f32(Self::FUSION_C, Self::FUSION_D, rows * hidden)
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.affine_projection(
+            Self::FUSION_D,
+            Self::FUSION_C,
+            layout.lsttn_fusion + (3 * hidden + 1) * hidden,
+            rows,
+            hidden,
+            hidden,
+        )?;
+        self.arena
+            .concat_channels_f32(short, Self::FUSION_C, Self::FUSION_A, rows, hidden, hidden)
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.affine_projection(
+            Self::FUSION_A,
+            Self::FUSION_OUTPUT,
+            layout.lsttn_fusion + (4 * hidden * hidden + 2 * hidden),
+            rows,
+            2 * hidden,
+            hidden,
+        )?;
+        self.arena
+            .relu_f32(Self::FUSION_OUTPUT, Self::FUSION_OUTPUT, rows * hidden)
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.affine_projection(
+            Self::FUSION_OUTPUT,
+            Self::DIRECT_NODE_MAJOR,
+            layout.output,
+            rows,
+            hidden,
+            horizons,
+        )?;
+        self.arena
+            .node_major_horizons_to_output_f32(
+                Self::DIRECT_NODE_MAJOR,
+                Self::FUSED_DIRECT_OUTPUT,
+                batches,
+                self.nodes,
+                horizons,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        Ok(Self::FUSED_DIRECT_OUTPUT)
+    }
+
+    fn supervised_forward(
+        &mut self,
+        state: &TrainableGraphTransformerState,
+        batches: usize,
+        channels: usize,
+        phase_offset: usize,
+        training: bool,
+    ) -> Result<usize> {
+        if batches == 0 || batches > 32 {
+            return Err(GeoStError::InvalidFrame(
+                "CUDA LSTTN batches must be 1..=32".to_string(),
+            ));
+        }
+        let layout = state.layout();
+        let patch_width = (state.periodicity / 24).max(1);
+        let patches = state.context_window / patch_width;
+        let hidden = state.hidden;
+        self.patch_embedding(
+            layout,
+            batches,
+            state.context_window,
+            self.nodes,
+            channels,
+            patch_width,
+            hidden,
+        )?;
+        self.add_patch_positions(layout, batches, patches, self.nodes, hidden)?;
+        self.patch_attention_layout(batches, patches, self.nodes, hidden)?;
+        self.frozen_encoder(
+            layout,
+            batches,
+            patches,
+            self.nodes,
+            hidden,
+            state.attention_heads,
+        )?;
+        let long = self.long_branch(layout, batches, patches, self.nodes, hidden)?;
+        let short = self.short_branch(
+            layout,
+            batches,
+            state.context_window,
+            channels,
+            state.recent_window,
+            hidden,
+            phase_offset,
+            state.periodicity,
+            training,
+            state.steps,
+        )?;
+        let short_lag = (if state.periodic_short_lag == 0 {
+            state.periodicity
+        } else {
+            state.periodic_short_lag
+        } / patch_width)
+            .max(1);
+        let seasonal_lag = (state.periodicity / patch_width).max(1);
+        self.periodic_feature(
+            layout,
+            Self::PERIODIC_SHORT,
+            batches,
+            patches,
+            hidden,
+            short_lag,
+            false,
+        )?;
+        self.periodic_feature(
+            layout,
+            Self::PERIODIC_SEASONAL,
+            batches,
+            patches,
+            hidden,
+            seasonal_lag,
+            true,
+        )?;
+        self.fuse_and_direct_output(layout, long, short, batches, hidden, state.horizons)
+    }
+
+    fn direct_head_loss_and_backward(
+        &mut self,
+        state: &TrainableGraphTransformerState,
+        batches: usize,
+    ) -> Result<()> {
+        let layout = state.layout();
+        let len = batches * state.horizons * self.nodes;
+        self.begin_supervised_gradient()?;
+        self.arena
+            .masked_inverse_scale_mae_loss_backward_f32(
+                Self::FUSED_DIRECT_OUTPUT,
+                Self::SUPERVISED_TARGET,
+                Self::DIRECT_OUTPUT_GRADIENT,
+                Self::SUPERVISED_LOSS,
+                len,
+                state.normalized_zero as f32,
+                state.target_scale as f32,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .output_to_node_major_horizons_f32(
+                Self::DIRECT_OUTPUT_GRADIENT,
+                Self::DIRECT_NODE_MAJOR_GRADIENT,
+                batches,
+                self.nodes,
+                state.horizons,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .affine_backward_parameter_slice_f32(
+                Self::FUSION_OUTPUT,
+                Self::PARAMETERS,
+                layout.output,
+                layout.output + state.hidden * state.horizons,
+                Self::DIRECT_NODE_MAJOR_GRADIENT,
+                Self::FUSION_REPRESENTATION_GRADIENT,
+                Self::PARAMETER_GRADIENT,
+                batches * self.nodes,
+                state.hidden,
+                state.horizons,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        Ok(())
+    }
+
+    fn supervised_backward(
+        &mut self,
+        state: &TrainableGraphTransformerState,
+        batches: usize,
+        channels: usize,
+        phase_offset: usize,
+        training: bool,
+    ) -> Result<()> {
+        self.direct_head_loss_and_backward(state, batches)?;
+        self.fusion_backward(state, batches)?;
+        self.short_branch_backward(state, batches, channels, phase_offset, training)?;
+        self.long_branch_backward(state, batches)?;
+        self.periodic_projection_backward(state, batches, false)?;
+        self.periodic_projection_backward(state, batches, true)?;
+        let patch_width = (state.periodicity / 24).max(1);
+        let short_lag = (if state.periodic_short_lag == 0 {
+            state.periodicity
+        } else {
+            state.periodic_short_lag
+        } / patch_width)
+            .max(1);
+        let seasonal_lag = (state.periodicity / patch_width).max(1);
+        self.periodic_graph_backward(state, batches, short_lag, false)?;
+        self.periodic_graph_backward(state, batches, seasonal_lag, true)
+    }
+
+    fn fusion_backward(
+        &mut self,
+        state: &TrainableGraphTransformerState,
+        batches: usize,
+    ) -> Result<()> {
+        let layout = state.layout();
+        let rows = batches * self.nodes;
+        let h = state.hidden;
+        self.arena
+            .relu_backward_f32(
+                Self::FUSION_OUTPUT,
+                Self::FUSION_REPRESENTATION_GRADIENT,
+                Self::FUSION_RELU_GRADIENT,
+                rows * h,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .affine_backward_parameter_slice_f32(
+                Self::FUSION_A,
+                Self::PARAMETERS,
+                layout.lsttn_fusion + (4 * h * h + 2 * h),
+                layout.lsttn_fusion + (4 * h * h + 2 * h) + 2 * h * h,
+                Self::FUSION_RELU_GRADIENT,
+                Self::FUSION_CONCAT_GRADIENT,
+                Self::PARAMETER_GRADIENT,
+                rows,
+                2 * h,
+                h,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .split_channels_f32(
+                Self::FUSION_CONCAT_GRADIENT,
+                Self::SHORT_GRADIENT,
+                Self::TREND_GRADIENT,
+                rows,
+                h,
+                h,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .affine_backward_parameter_slice_f32(
+                Self::FUSION_D,
+                Self::PARAMETERS,
+                layout.lsttn_fusion + (3 * h + 1) * h,
+                layout.lsttn_fusion + (3 * h + 1) * h + h * h,
+                Self::TREND_GRADIENT,
+                Self::FUSION_SECOND_GRADIENT,
+                Self::PARAMETER_GRADIENT,
+                rows,
+                h,
+                h,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .relu_backward_f32(
+                Self::FUSION_D,
+                Self::FUSION_SECOND_GRADIENT,
+                Self::FUSION_FIRST_RELU_GRADIENT,
+                rows * h,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .affine_backward_parameter_slice_f32(
+                Self::FUSION_B,
+                Self::PARAMETERS,
+                layout.lsttn_fusion,
+                layout.lsttn_fusion + 3 * h * h,
+                Self::FUSION_FIRST_RELU_GRADIENT,
+                Self::FUSION_INPUT_GRADIENT,
+                Self::PARAMETER_GRADIENT,
+                rows,
+                3 * h,
+                h,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .split_channels_f32(
+                Self::FUSION_INPUT_GRADIENT,
+                Self::LONG_GRADIENT,
+                Self::PERIODIC_PAIR_GRADIENT,
+                rows,
+                h,
+                2 * h,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .split_channels_f32(
+                Self::PERIODIC_PAIR_GRADIENT,
+                Self::PERIODIC_SHORT_GRADIENT,
+                Self::PERIODIC_SEASONAL_GRADIENT,
+                rows,
+                h,
+                h,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))
+    }
+
+    fn periodic_projection_backward(
+        &mut self,
+        state: &TrainableGraphTransformerState,
+        batches: usize,
+        seasonal: bool,
+    ) -> Result<()> {
+        let layout = state.layout();
+        let h = state.hidden;
+        let projection =
+            layout.lsttn_periodic_projection + if seasonal { 7 * h * h + h } else { 0 };
+        let (input, output_gradient, input_gradient) = if seasonal {
+            (
+                Self::PERIODIC_SEASONAL_INPUT,
+                Self::PERIODIC_SEASONAL_GRADIENT,
+                Self::PERIODIC_SEASONAL_INPUT_GRADIENT,
+            )
+        } else {
+            (
+                Self::PERIODIC_SHORT_INPUT,
+                Self::PERIODIC_SHORT_GRADIENT,
+                Self::PERIODIC_SHORT_INPUT_GRADIENT,
+            )
+        };
+        self.arena
+            .affine_backward_parameter_slice_f32(
+                input,
+                Self::PARAMETERS,
+                projection,
+                projection + 7 * h * h,
+                output_gradient,
+                input_gradient,
+                Self::PARAMETER_GRADIENT,
+                batches * self.nodes,
+                7 * h,
+                h,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))
+    }
+
+    fn periodic_graph_backward(
+        &mut self,
+        state: &TrainableGraphTransformerState,
+        batches: usize,
+        lag_patches: usize,
+        seasonal: bool,
+    ) -> Result<()> {
+        let layout = state.layout();
+        let h = state.hidden;
+        let patches = state.context_window / (state.periodicity / 24).max(1);
+        let rows = batches * self.nodes;
+        let (source, target, output, input_gradient) = if seasonal {
+            (
+                layout.lsttn_weekly_adaptive_source,
+                layout.lsttn_weekly_adaptive_target,
+                Self::PERIODIC_SEASONAL,
+                Self::PERIODIC_SEASONAL_INPUT_GRADIENT,
+            )
+        } else {
+            (
+                layout.lsttn_adaptive_source,
+                layout.lsttn_adaptive_target,
+                Self::PERIODIC_SHORT,
+                Self::PERIODIC_SHORT_INPUT_GRADIENT,
+            )
+        };
+        self.periodic_feature(layout, output, batches, patches, h, lag_patches, seasonal)?;
+        self.arena
+            .split_channels_f32(
+                input_gradient,
+                Self::PERIODIC_GRAD_IDENTITY,
+                Self::PERIODIC_TEMP_A,
+                rows,
+                h,
+                6 * h,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .split_channels_f32(
+                Self::PERIODIC_TEMP_A,
+                Self::PERIODIC_GRAD_FORWARD_ONE,
+                Self::PERIODIC_TEMP_B,
+                rows,
+                h,
+                5 * h,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .split_channels_f32(
+                Self::PERIODIC_TEMP_B,
+                Self::PERIODIC_GRAD_FORWARD_TWO,
+                Self::PERIODIC_TEMP_A,
+                rows,
+                h,
+                4 * h,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .split_channels_f32(
+                Self::PERIODIC_TEMP_A,
+                Self::PERIODIC_GRAD_REVERSE_ONE,
+                Self::PERIODIC_TEMP_B,
+                rows,
+                h,
+                3 * h,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .split_channels_f32(
+                Self::PERIODIC_TEMP_B,
+                Self::PERIODIC_GRAD_REVERSE_TWO,
+                Self::PERIODIC_TEMP_A,
+                rows,
+                h,
+                2 * h,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .split_channels_f32(
+                Self::PERIODIC_TEMP_A,
+                Self::PERIODIC_GRAD_ADAPTIVE_ONE,
+                Self::PERIODIC_GRAD_ADAPTIVE_TWO,
+                rows,
+                h,
+                h,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+
+        self.arena
+            .csr_diffuse_backward_f32(
+                Self::FORWARD_INDPTR,
+                Self::FORWARD_INDICES,
+                Self::FORWARD_WEIGHTS,
+                Self::SHORT_FORWARD_ONE,
+                Self::PERIODIC_GRAD_FORWARD_TWO,
+                Self::PERIODIC_TEMP_A,
+                Self::PERIODIC_TEMP_B,
+                batches,
+                self.nodes,
+                h,
+                self.forward_edges,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .add_f32(
+                Self::PERIODIC_GRAD_FORWARD_ONE,
+                Self::PERIODIC_TEMP_A,
+                Self::PERIODIC_TEMP_C,
+                rows * h,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .csr_diffuse_backward_f32(
+                Self::FORWARD_INDPTR,
+                Self::FORWARD_INDICES,
+                Self::FORWARD_WEIGHTS,
+                Self::SHORT_FILTER,
+                Self::PERIODIC_TEMP_C,
+                Self::PERIODIC_FORWARD_BASE_GRADIENT,
+                Self::PERIODIC_TEMP_B,
+                batches,
+                self.nodes,
+                h,
+                self.forward_edges,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+
+        self.arena
+            .csr_diffuse_backward_f32(
+                Self::REVERSE_INDPTR,
+                Self::REVERSE_INDICES,
+                Self::REVERSE_WEIGHTS,
+                Self::SHORT_BACKWARD_ONE,
+                Self::PERIODIC_GRAD_REVERSE_TWO,
+                Self::PERIODIC_TEMP_A,
+                Self::PERIODIC_TEMP_B,
+                batches,
+                self.nodes,
+                h,
+                self.reverse_edges,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .add_f32(
+                Self::PERIODIC_GRAD_REVERSE_ONE,
+                Self::PERIODIC_TEMP_A,
+                Self::PERIODIC_TEMP_C,
+                rows * h,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .csr_diffuse_backward_f32(
+                Self::REVERSE_INDPTR,
+                Self::REVERSE_INDICES,
+                Self::REVERSE_WEIGHTS,
+                Self::SHORT_FILTER,
+                Self::PERIODIC_TEMP_C,
+                Self::PERIODIC_REVERSE_BASE_GRADIENT,
+                Self::PERIODIC_TEMP_B,
+                batches,
+                self.nodes,
+                h,
+                self.reverse_edges,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+
+        self.arena
+            .csr_diffuse_backward_f32(
+                Self::ADAPTIVE_INDPTR,
+                Self::ADAPTIVE_INDICES,
+                Self::ADAPTIVE_WEIGHTS,
+                Self::SHORT_ADAPTIVE_ONE,
+                Self::PERIODIC_GRAD_ADAPTIVE_TWO,
+                Self::PERIODIC_TEMP_A,
+                Self::PERIODIC_ADAPTIVE_EDGE_GRADIENT,
+                batches,
+                self.nodes,
+                h,
+                self.adaptive_edges,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .add_f32(
+                Self::PERIODIC_GRAD_ADAPTIVE_ONE,
+                Self::PERIODIC_TEMP_A,
+                Self::PERIODIC_TEMP_C,
+                rows * h,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .csr_diffuse_backward_f32(
+                Self::ADAPTIVE_INDPTR,
+                Self::ADAPTIVE_INDICES,
+                Self::ADAPTIVE_WEIGHTS,
+                Self::SHORT_FILTER,
+                Self::PERIODIC_TEMP_C,
+                Self::PERIODIC_ADAPTIVE_BASE_GRADIENT,
+                Self::PERIODIC_TEMP_B,
+                batches,
+                self.nodes,
+                h,
+                self.adaptive_edges,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .add_f32(
+                Self::PERIODIC_ADAPTIVE_EDGE_GRADIENT,
+                Self::PERIODIC_TEMP_B,
+                Self::PERIODIC_ADAPTIVE_EDGE_GRADIENT,
+                self.adaptive_edges,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .csr_row_softmax_backward_f32(
+                Self::ADAPTIVE_INDPTR,
+                Self::ADAPTIVE_WEIGHTS,
+                Self::PERIODIC_ADAPTIVE_EDGE_GRADIENT,
+                Self::PERIODIC_ADAPTIVE_LOGIT_GRADIENT,
+                self.nodes,
+                self.adaptive_edges,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .csr_adaptive_logits_parameter_slice_backward_f32(
+                Self::ADAPTIVE_INDPTR,
+                Self::ADAPTIVE_INDICES,
+                Self::PARAMETERS,
+                source,
+                target,
+                Self::PERIODIC_ADAPTIVE_LOGIT_GRADIENT,
+                Self::PARAMETER_GRADIENT,
+                self.nodes,
+                self.adaptive_edges,
+                h,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+
+        self.arena
+            .add_f32(
+                Self::PERIODIC_GRAD_IDENTITY,
+                Self::PERIODIC_FORWARD_BASE_GRADIENT,
+                Self::PERIODIC_BASE_GRADIENT,
+                rows * h,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .add_f32(
+                Self::PERIODIC_BASE_GRADIENT,
+                Self::PERIODIC_REVERSE_BASE_GRADIENT,
+                Self::PERIODIC_BASE_GRADIENT,
+                rows * h,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .add_f32(
+                Self::PERIODIC_BASE_GRADIENT,
+                Self::PERIODIC_ADAPTIVE_BASE_GRADIENT,
+                Self::PERIODIC_BASE_GRADIENT,
+                rows * h,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))
+    }
+
+    fn recompute_long_input_for_layer(
+        &mut self,
+        layout: GraphParameterLayout,
+        batches: usize,
+        patches: usize,
+        hidden: usize,
+        layer_limit: usize,
+    ) -> Result<(usize, usize)> {
+        self.arena
+            .transpose_node_time_f32(
+                Self::ATTENTION_SEQUENCE,
+                Self::LONG_TEMPORAL,
+                batches,
+                self.nodes,
+                patches,
+                hidden,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        let mut input = Self::LONG_TEMPORAL;
+        let mut output = Self::LONG_STAGE_A;
+        let mut times = patches;
+        for (layer, dilation) in [1usize, 2, 4, 8].into_iter().enumerate().take(layer_limit) {
+            let offset = layout.lsttn_dilated_convolution + layer * (3 * hidden * hidden + hidden);
+            self.arena
+                .lsttn_long_conv_pool_parameter_slice_f32(
+                    input,
+                    Self::PARAMETERS,
+                    offset,
+                    offset + 3 * hidden * hidden,
+                    output,
+                    batches,
+                    times,
+                    self.nodes,
+                    hidden,
+                    dilation,
+                )
+                .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+            times = times.div_ceil(2).div_ceil(2);
+            input = output;
+            output = if output == Self::LONG_STAGE_A {
+                Self::LONG_STAGE_B
+            } else {
+                Self::LONG_STAGE_A
+            };
+        }
+        Ok((input, times))
+    }
+
+    fn long_branch_backward(
+        &mut self,
+        state: &TrainableGraphTransformerState,
+        batches: usize,
+    ) -> Result<()> {
+        let layout = state.layout();
+        let patch_width = (state.periodicity / 24).max(1);
+        let patches = state.context_window / patch_width;
+        let hidden = state.hidden;
+        let mut output_gradient = Self::LONG_GRADIENT;
+        for layer in (0..4).rev() {
+            let (input, times) =
+                self.recompute_long_input_for_layer(layout, batches, patches, hidden, layer)?;
+            let input_gradient = if output_gradient == Self::LONG_BACKWARD_A {
+                Self::LONG_BACKWARD_B
+            } else {
+                Self::LONG_BACKWARD_A
+            };
+            let offset = layout.lsttn_dilated_convolution + layer * (3 * hidden * hidden + hidden);
+            let dilation = [1usize, 2, 4, 8][layer];
+            self.arena
+                .lsttn_long_conv_pool_parameter_slice_backward_f32(
+                    input,
+                    Self::PARAMETERS,
+                    offset,
+                    offset + 3 * hidden * hidden,
+                    output_gradient,
+                    input_gradient,
+                    Self::PARAMETER_GRADIENT,
+                    batches,
+                    times,
+                    self.nodes,
+                    hidden,
+                    dilation,
+                )
+                .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+            output_gradient = input_gradient;
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn recompute_short_prefix(
+        &mut self,
+        layout: GraphParameterLayout,
+        batches: usize,
+        lookback: usize,
+        channels: usize,
+        recent_window: usize,
+        hidden: usize,
+        phase_offset: usize,
+        periodicity: usize,
+        training: bool,
+        step: u64,
+        layer_limit: usize,
+    ) -> Result<(usize, usize, usize)> {
+        let mut times = self.short_input_projection(
+            layout,
+            batches,
+            lookback,
+            self.nodes,
+            channels,
+            recent_window,
+            hidden,
+            phase_offset,
+            periodicity,
+        )?;
+        self.adaptive_weights(
+            layout.lsttn_short_adaptive_source,
+            layout.lsttn_short_adaptive_target,
+        )?;
+        self.arena
+            .fill_f32(
+                Self::SHORT_SKIP_A,
+                batches * times * self.nodes * hidden,
+                0.0,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        let mut input = Self::SHORT_INPUT;
+        let mut skip = Self::SHORT_SKIP_A;
+        for (layer, dilation) in [1usize, 2, 1, 2, 1, 2, 1, 2]
+            .into_iter()
+            .enumerate()
+            .take(layer_limit)
+        {
+            let next_skip = if skip == Self::SHORT_SKIP_A {
+                Self::SHORT_SKIP_B
+            } else {
+                Self::SHORT_SKIP_A
+            };
+            times = self.short_wave_layer_forward(
+                input, skip, next_skip, layer, dilation, layout, batches, times, hidden, training,
+                step,
+            )?;
+            input = Self::SHORT_NORMALIZED;
+            skip = next_skip;
+        }
+        Ok((input, skip, times))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn short_branch_backward(
+        &mut self,
+        state: &TrainableGraphTransformerState,
+        batches: usize,
+        channels: usize,
+        phase_offset: usize,
+        training: bool,
+    ) -> Result<()> {
+        let layout = state.layout();
+        let h = state.hidden;
+        let nodes = self.nodes;
+        let layer_width = 12 * h * h + 6 * h;
+        let layers_start = layout.lsttn_short_wave + 3 * h;
+        let (mut input, mut skip, mut times) = self.recompute_short_prefix(
+            layout,
+            batches,
+            state.context_window,
+            channels,
+            state.recent_window,
+            h,
+            phase_offset,
+            state.periodicity,
+            training,
+            state.steps,
+            8,
+        )?;
+        let rows = batches * times * nodes;
+        let end_one = layers_start + 8 * layer_width;
+        let end_two = end_one + h * h + h;
+        self.arena
+            .relu_f32(skip, Self::SHORT_FILTER, rows * h)
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.affine_projection(Self::SHORT_FILTER, Self::SHORT_GATE, end_one, rows, h, h)?;
+        self.arena
+            .relu_f32(Self::SHORT_GATE, Self::SHORT_GATED, rows * h)
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.affine_projection(
+            Self::SHORT_GATED,
+            Self::SHORT_SKIP_PROJECTION,
+            end_two,
+            rows,
+            h,
+            h,
+        )?;
+        self.arena
+            .affine_backward_parameter_slice_f32(
+                Self::SHORT_GATED,
+                Self::PARAMETERS,
+                end_two,
+                end_two + h * h,
+                Self::SHORT_GRADIENT,
+                Self::SHORT_REVERSE_GATED_GRADIENT,
+                Self::PARAMETER_GRADIENT,
+                rows,
+                h,
+                h,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .relu_backward_f32(
+                Self::SHORT_GATE,
+                Self::SHORT_REVERSE_GATED_GRADIENT,
+                Self::SHORT_REVERSE_GRAPH_GRADIENT,
+                rows * h,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .affine_backward_parameter_slice_f32(
+                Self::SHORT_FILTER,
+                Self::PARAMETERS,
+                end_one,
+                end_one + h * h,
+                Self::SHORT_REVERSE_GRAPH_GRADIENT,
+                Self::SHORT_REVERSE_SKIP_GRADIENT_A,
+                Self::PARAMETER_GRADIENT,
+                rows,
+                h,
+                h,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        self.arena
+            .relu_backward_f32(
+                skip,
+                Self::SHORT_REVERSE_SKIP_GRADIENT_A,
+                Self::SHORT_REVERSE_SKIP_GRADIENT_B,
+                rows * h,
+            )
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        let mut skip_gradient = Self::SHORT_REVERSE_SKIP_GRADIENT_B;
+        let mut output_gradient = Self::SHORT_REVERSE_INPUT_GRADIENT_A;
+        self.arena
+            .fill_f32(output_gradient, batches * times * nodes * h, 0.0)
+            .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+        for layer in (0..8).rev() {
+            let dilation = [1usize, 2, 1, 2, 1, 2, 1, 2][layer];
+            let (layer_input, layer_skip, layer_times) = self.recompute_short_prefix(
+                layout,
+                batches,
+                state.context_window,
+                channels,
+                state.recent_window,
+                h,
+                phase_offset,
+                state.periodicity,
+                training,
+                state.steps,
+                layer,
+            )?;
+            let layer_next_skip = if layer_skip == Self::SHORT_SKIP_A {
+                Self::SHORT_SKIP_B
+            } else {
+                Self::SHORT_SKIP_A
+            };
+            let out_times = self.short_wave_layer_forward(
+                layer_input,
+                layer_skip,
+                layer_next_skip,
+                layer,
+                dilation,
+                layout,
+                batches,
+                layer_times,
+                h,
+                training,
+                state.steps,
+            )?;
+            debug_assert_eq!(out_times, times);
+            let base = layers_start + layer * layer_width;
+            let filter = base;
+            let gate = filter + 2 * h * h;
+            let filter_bias = gate + 2 * h * h;
+            let gate_bias = filter_bias + h;
+            let graph_projection = gate_bias + h;
+            let skip_projection = graph_projection + 7 * h * h + h;
+            let norm = skip_projection + h * h + h;
+            let seq_rows = batches * out_times * nodes;
+            self.arena
+                .batch_norm_channels_parameter_slice_backward_f32(
+                    Self::SHORT_INPUT,
+                    Self::PARAMETERS,
+                    norm,
+                    norm + h,
+                    Self::SHORT_BATCH_STATS,
+                    output_gradient,
+                    Self::SHORT_REVERSE_SPLIT_A,
+                    Self::PARAMETER_GRADIENT,
+                    batches,
+                    out_times,
+                    nodes,
+                    h,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .deterministic_dropout_f32(
+                    Self::SHORT_REVERSE_SPLIT_A,
+                    Self::SHORT_REVERSE_SPLIT_B,
+                    batches * out_times * nodes * h,
+                    state.steps ^ ((layer as u64) << 48),
+                    0,
+                    training,
+                    0.3,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .add_tail_time_backward_f32(
+                    Self::SHORT_REVERSE_SPLIT_B,
+                    Self::SHORT_REVERSE_INPUT_GRADIENT_B,
+                    Self::SHORT_REVERSE_GRAPH_GRADIENT,
+                    batches,
+                    layer_times,
+                    out_times,
+                    nodes,
+                    h,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .affine_backward_parameter_slice_f32(
+                    Self::SHORT_CONCAT_F,
+                    Self::PARAMETERS,
+                    graph_projection,
+                    graph_projection + 7 * h * h,
+                    Self::SHORT_REVERSE_GRAPH_GRADIENT,
+                    Self::SHORT_REVERSE_CONCAT_GRADIENT,
+                    Self::PARAMETER_GRADIENT,
+                    seq_rows,
+                    7 * h,
+                    h,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .split_channels_f32(
+                    Self::SHORT_REVERSE_CONCAT_GRADIENT,
+                    Self::SHORT_GRAPH_GRAD_IDENTITY,
+                    Self::SHORT_REVERSE_SPLIT_A,
+                    seq_rows,
+                    h,
+                    6 * h,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .split_channels_f32(
+                    Self::SHORT_REVERSE_SPLIT_A,
+                    Self::SHORT_GRAPH_GRAD_FORWARD_ONE,
+                    Self::SHORT_REVERSE_SPLIT_C,
+                    seq_rows,
+                    h,
+                    5 * h,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .split_channels_f32(
+                    Self::SHORT_REVERSE_SPLIT_C,
+                    Self::SHORT_GRAPH_GRAD_FORWARD_TWO,
+                    Self::SHORT_REVERSE_SPLIT_E,
+                    seq_rows,
+                    h,
+                    4 * h,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .split_channels_f32(
+                    Self::SHORT_REVERSE_SPLIT_E,
+                    Self::SHORT_GRAPH_GRAD_REVERSE_ONE,
+                    Self::SHORT_REVERSE_SPLIT_A,
+                    seq_rows,
+                    h,
+                    3 * h,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .split_channels_f32(
+                    Self::SHORT_REVERSE_SPLIT_A,
+                    Self::SHORT_GRAPH_GRAD_REVERSE_TWO,
+                    Self::SHORT_REVERSE_SPLIT_E,
+                    seq_rows,
+                    h,
+                    2 * h,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .split_channels_f32(
+                    Self::SHORT_REVERSE_SPLIT_E,
+                    Self::SHORT_GRAPH_GRAD_ADAPTIVE_ONE,
+                    Self::SHORT_GRAPH_GRAD_ADAPTIVE_TWO,
+                    seq_rows,
+                    h,
+                    h,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .deterministic_dropout_f32(
+                    Self::SHORT_GRAPH_GRAD_IDENTITY,
+                    Self::SHORT_REVERSE_GATED_GRADIENT,
+                    seq_rows * h,
+                    0,
+                    0,
+                    false,
+                    0.0,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .csr_diffuse_backward_f32(
+                    Self::FORWARD_INDPTR,
+                    Self::FORWARD_INDICES,
+                    Self::FORWARD_WEIGHTS,
+                    Self::SHORT_FORWARD_ONE,
+                    Self::SHORT_GRAPH_GRAD_FORWARD_TWO,
+                    Self::SHORT_REVERSE_SPLIT_E,
+                    Self::SHORT_REVERSE_EDGE_GRADIENT,
+                    batches * out_times,
+                    nodes,
+                    h,
+                    self.forward_edges,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .add_f32(
+                    Self::SHORT_GRAPH_GRAD_FORWARD_ONE,
+                    Self::SHORT_REVERSE_SPLIT_E,
+                    Self::SHORT_REVERSE_SPLIT_B,
+                    seq_rows * h,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .csr_diffuse_backward_f32(
+                    Self::FORWARD_INDPTR,
+                    Self::FORWARD_INDICES,
+                    Self::FORWARD_WEIGHTS,
+                    Self::SHORT_GATED,
+                    Self::SHORT_REVERSE_SPLIT_B,
+                    Self::SHORT_REVERSE_SPLIT_E,
+                    Self::SHORT_REVERSE_EDGE_GRADIENT,
+                    batches * out_times,
+                    nodes,
+                    h,
+                    self.forward_edges,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .add_f32(
+                    Self::SHORT_REVERSE_GATED_GRADIENT,
+                    Self::SHORT_REVERSE_SPLIT_E,
+                    Self::SHORT_REVERSE_GATED_GRADIENT,
+                    seq_rows * h,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .csr_diffuse_backward_f32(
+                    Self::REVERSE_INDPTR,
+                    Self::REVERSE_INDICES,
+                    Self::REVERSE_WEIGHTS,
+                    Self::SHORT_BACKWARD_ONE,
+                    Self::SHORT_GRAPH_GRAD_REVERSE_TWO,
+                    Self::SHORT_REVERSE_SPLIT_E,
+                    Self::SHORT_REVERSE_EDGE_GRADIENT,
+                    batches * out_times,
+                    nodes,
+                    h,
+                    self.reverse_edges,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .add_f32(
+                    Self::SHORT_GRAPH_GRAD_REVERSE_ONE,
+                    Self::SHORT_REVERSE_SPLIT_E,
+                    Self::SHORT_REVERSE_SPLIT_F,
+                    seq_rows * h,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .csr_diffuse_backward_f32(
+                    Self::REVERSE_INDPTR,
+                    Self::REVERSE_INDICES,
+                    Self::REVERSE_WEIGHTS,
+                    Self::SHORT_GATED,
+                    Self::SHORT_REVERSE_SPLIT_F,
+                    Self::SHORT_REVERSE_SPLIT_E,
+                    Self::SHORT_REVERSE_EDGE_GRADIENT,
+                    batches * out_times,
+                    nodes,
+                    h,
+                    self.reverse_edges,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .add_f32(
+                    Self::SHORT_REVERSE_GATED_GRADIENT,
+                    Self::SHORT_REVERSE_SPLIT_E,
+                    Self::SHORT_REVERSE_GATED_GRADIENT,
+                    seq_rows * h,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .csr_diffuse_backward_f32(
+                    Self::ADAPTIVE_INDPTR,
+                    Self::ADAPTIVE_INDICES,
+                    Self::ADAPTIVE_WEIGHTS,
+                    Self::SHORT_ADAPTIVE_ONE,
+                    Self::SHORT_GRAPH_GRAD_ADAPTIVE_TWO,
+                    Self::SHORT_REVERSE_SPLIT_E,
+                    Self::SHORT_REVERSE_EDGE_GRADIENT,
+                    batches * out_times,
+                    nodes,
+                    h,
+                    self.adaptive_edges,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .add_f32(
+                    Self::SHORT_GRAPH_GRAD_ADAPTIVE_ONE,
+                    Self::SHORT_REVERSE_SPLIT_E,
+                    Self::SHORT_REVERSE_SPLIT_A,
+                    seq_rows * h,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .csr_diffuse_backward_f32(
+                    Self::ADAPTIVE_INDPTR,
+                    Self::ADAPTIVE_INDICES,
+                    Self::ADAPTIVE_WEIGHTS,
+                    Self::SHORT_GATED,
+                    Self::SHORT_REVERSE_SPLIT_A,
+                    Self::SHORT_REVERSE_SPLIT_E,
+                    Self::SHORT_REVERSE_LOGIT_GRADIENT,
+                    batches * out_times,
+                    nodes,
+                    h,
+                    self.adaptive_edges,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .add_f32(
+                    Self::SHORT_REVERSE_EDGE_GRADIENT,
+                    Self::SHORT_REVERSE_LOGIT_GRADIENT,
+                    Self::SHORT_REVERSE_EDGE_GRADIENT,
+                    self.adaptive_edges,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .csr_row_softmax_backward_f32(
+                    Self::ADAPTIVE_INDPTR,
+                    Self::ADAPTIVE_WEIGHTS,
+                    Self::SHORT_REVERSE_EDGE_GRADIENT,
+                    Self::SHORT_REVERSE_LOGIT_GRADIENT,
+                    nodes,
+                    self.adaptive_edges,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .csr_adaptive_logits_parameter_slice_backward_f32(
+                    Self::ADAPTIVE_INDPTR,
+                    Self::ADAPTIVE_INDICES,
+                    Self::PARAMETERS,
+                    layout.lsttn_short_adaptive_source,
+                    layout.lsttn_short_adaptive_target,
+                    Self::SHORT_REVERSE_LOGIT_GRADIENT,
+                    Self::PARAMETER_GRADIENT,
+                    nodes,
+                    self.adaptive_edges,
+                    h,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .add_f32(
+                    Self::SHORT_REVERSE_GATED_GRADIENT,
+                    Self::SHORT_REVERSE_SPLIT_E,
+                    Self::SHORT_REVERSE_GATED_GRADIENT,
+                    seq_rows * h,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .affine_backward_parameter_slice_f32(
+                    Self::SHORT_GATED,
+                    Self::PARAMETERS,
+                    skip_projection,
+                    skip_projection + h * h,
+                    skip_gradient,
+                    Self::SHORT_REVERSE_SPLIT_B,
+                    Self::PARAMETER_GRADIENT,
+                    seq_rows,
+                    h,
+                    h,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .add_tail_time_backward_f32(
+                    skip_gradient,
+                    Self::SHORT_REVERSE_SKIP_GRADIENT_A,
+                    Self::SHORT_REVERSE_SPLIT_C,
+                    batches,
+                    layer_times,
+                    out_times,
+                    nodes,
+                    h,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .add_f32(
+                    Self::SHORT_REVERSE_GATED_GRADIENT,
+                    Self::SHORT_REVERSE_SPLIT_B,
+                    Self::SHORT_REVERSE_GATED_GRADIENT,
+                    seq_rows * h,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .add_f32(
+                    Self::SHORT_REVERSE_GATED_GRADIENT,
+                    Self::SHORT_REVERSE_SPLIT_C,
+                    Self::SHORT_REVERSE_GATED_GRADIENT,
+                    seq_rows * h,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .gated_tanh_sigmoid_backward_f32(
+                    Self::SHORT_FILTER,
+                    Self::SHORT_GATE,
+                    Self::SHORT_REVERSE_GATED_GRADIENT,
+                    Self::SHORT_REVERSE_FILTER_GRADIENT,
+                    Self::SHORT_REVERSE_GATE_GRADIENT,
+                    seq_rows * h,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .causal_conv2_parameter_slice_backward_f32(
+                    layer_input,
+                    Self::PARAMETERS,
+                    filter,
+                    filter_bias,
+                    Self::SHORT_REVERSE_FILTER_GRADIENT,
+                    Self::SHORT_REVERSE_SPLIT_B,
+                    Self::PARAMETER_GRADIENT,
+                    batches,
+                    layer_times,
+                    nodes,
+                    h,
+                    h,
+                    dilation,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .causal_conv2_parameter_slice_backward_f32(
+                    layer_input,
+                    Self::PARAMETERS,
+                    gate,
+                    gate_bias,
+                    Self::SHORT_REVERSE_GATE_GRADIENT,
+                    Self::SHORT_REVERSE_SPLIT_C,
+                    Self::PARAMETER_GRADIENT,
+                    batches,
+                    layer_times,
+                    nodes,
+                    h,
+                    h,
+                    dilation,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .add_f32(
+                    Self::SHORT_REVERSE_INPUT_GRADIENT_B,
+                    Self::SHORT_REVERSE_SPLIT_B,
+                    Self::SHORT_REVERSE_INPUT_GRADIENT_B,
+                    batches * layer_times * nodes * h,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            self.arena
+                .add_f32(
+                    Self::SHORT_REVERSE_INPUT_GRADIENT_B,
+                    Self::SHORT_REVERSE_SPLIT_C,
+                    Self::SHORT_REVERSE_INPUT_GRADIENT_B,
+                    batches * layer_times * nodes * h,
+                )
+                .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
+            output_gradient = Self::SHORT_REVERSE_INPUT_GRADIENT_B;
+            skip_gradient = Self::SHORT_REVERSE_SKIP_GRADIENT_A;
+            input = layer_input;
+            skip = layer_skip;
+            times = layer_times;
+        }
+        let _ = (input, skip, times);
+        Ok(())
+    }
+
+    /// Starts a deterministic reduced-batch gradient accumulation and applies
+    /// its single AdamW update. Every caller contributes into the same
+    /// resident vector between these calls; checkpoints later copy only the
+    /// portable parameter/moment vectors back to Rust.
+    fn begin_supervised_gradient(&mut self) -> Result<()> {
+        let len = self
+            .arena
+            .capacity_f32(Self::PARAMETERS)
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        self.arena
+            .fill_f32(Self::PARAMETER_GRADIENT, len, 0.0)
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))
+    }
+
+    fn adamw_supervised_step(
+        &mut self,
+        step: u64,
+        learning_rate: f64,
+        weight_decay: f64,
+    ) -> Result<()> {
+        let len = self
+            .arena
+            .capacity_f32(Self::PARAMETERS)
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        self.arena
+            .clip_gradient_l2_f32(Self::PARAMETER_GRADIENT, Self::GRADIENT_NORM, len, 5.0)
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        self.arena
+            .adamw_step_f32(
+                Self::PARAMETERS,
+                Self::FIRST_MOMENT,
+                Self::SECOND_MOMENT,
+                Self::PARAMETER_GRADIENT,
+                len,
+                step,
+                learning_rate as f32,
+                weight_decay as f32,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))
+    }
+
+    /// Packs the real supervised contract without per-node host dispatch:
+    /// inputs are row-major `[batch, lookback, nodes, channels]`, targets
+    /// are `[batch, horizon, nodes]`. `windows` and `targets` retain the
+    /// native graph-frame row representation at the API boundary only.
+    fn upload_supervised_batch(
+        &mut self,
+        windows: &[&[Vec<f64>]],
+        targets: &[&[Vec<f64>]],
+        channels: usize,
+    ) -> Result<()> {
+        self.upload_supervised_node_tile(windows, targets, channels, 0..self.nodes)
+    }
+
+    /// Physical node-tile upload for the global logical batch.  Rows remain
+    /// ordered as the original global node axis; the range is merely a
+    /// checkpointing boundary and never changes graph/node identity.
+    fn upload_supervised_node_tile(
+        &mut self,
+        windows: &[&[Vec<f64>]],
+        targets: &[&[Vec<f64>]],
+        channels: usize,
+        node_range: std::ops::Range<usize>,
+    ) -> Result<()> {
+        if windows.is_empty()
+            || windows.len() > 32
+            || windows.len() != targets.len()
+            || channels == 0
+            || node_range.start >= node_range.end
+            || node_range.end > self.nodes
+        {
+            return Err(GeoStError::InvalidFrame(
+                "CUDA LSTTN supervised batches require 1..=32 matching windows and targets"
+                    .to_string(),
+            ));
+        }
+        let lookback = windows[0].len();
+        let horizon = targets[0].len();
+        if lookback == 0 || horizon == 0 {
+            return Err(GeoStError::InvalidFrame(
+                "CUDA LSTTN supervised windows and targets must be non-empty".to_string(),
+            ));
+        }
+        let nodes = windows[0].first().map_or(0, |row| row.len() / channels);
+        if nodes != self.nodes {
+            return Err(GeoStError::InvalidFrame(
+                "CUDA LSTTN input channels do not match the resident graph nodes".to_string(),
+            ));
+        }
+        let finite_f32 = |value: f64| -> Result<f32> {
+            let value = value as f32;
+            if value.is_finite() {
+                Ok(value)
+            } else {
+                Err(GeoStError::InvalidFrame(
+                    "CUDA LSTTN batch contains a non-finite f32 value".to_string(),
+                ))
+            }
+        };
+        let tile_nodes = node_range.len();
+        let mut input = Vec::with_capacity(windows.len() * lookback * tile_nodes * channels);
+        let mut target = Vec::with_capacity(targets.len() * horizon * tile_nodes);
+        for (window, target_rows) in windows.iter().zip(targets) {
+            if window.len() != lookback
+                || target_rows.len() != horizon
+                || window.iter().any(|row| row.len() != nodes * channels)
+                || target_rows.iter().any(|row| row.len() != nodes)
+            {
+                return Err(GeoStError::InvalidFrame(
+                    "CUDA LSTTN batch has inconsistent tensor rows".to_string(),
+                ));
+            }
+            for row in window.iter() {
+                for node in node_range.clone() {
+                    for channel in 0..channels {
+                        input.push(finite_f32(row[node * channels + channel])?);
+                    }
+                }
+            }
+            for row in target_rows.iter() {
+                for node in node_range.clone() {
+                    target.push(finite_f32(row[node])?);
+                }
+            }
+        }
+        self.arena
+            .upload_f32(Self::SUPERVISED_INPUT, &input)
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        self.arena
+            .upload_f32(Self::SUPERVISED_TARGET, &target)
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        self.arena
+            .reserve_f32(Self::DIRECT_OUTPUT, target.len())
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))
+    }
+
+    /// Copies only portable f32 optimizer/model state back into the native
+    /// checkpoint representation. CUDA buffers and contexts remain owned by
+    /// the executor and are recreated from this state on resume.
+    fn synchronize_portable_state(&self, state: &mut TrainableGraphTransformerState) -> Result<()> {
+        if state.parameters.len() != state.first_moment.len()
+            || state.parameters.len() != state.second_moment.len()
+        {
+            return Err(GeoStError::InvalidFrame(
+                "CUDA LSTTN checkpoint state has inconsistent optimizer lengths".to_string(),
+            ));
+        }
+        let len = state.parameters.len();
+        let mut parameters = vec![0.0_f32; len];
+        let mut first = vec![0.0_f32; len];
+        let mut second = vec![0.0_f32; len];
+        self.arena
+            .download_f32(Self::PARAMETERS, &mut parameters)
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        self.arena
+            .download_f32(Self::FIRST_MOMENT, &mut first)
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        self.arena
+            .download_f32(Self::SECOND_MOMENT, &mut second)
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        state.parameters = parameters.into_iter().map(f64::from).collect();
+        state.first_moment = first.into_iter().map(f64::from).collect();
+        state.second_moment = second.into_iter().map(f64::from).collect();
+        Ok(())
+    }
+
+    /// LSTTN pretrains its masked-subseries transformer, then keeps that
+    /// encoder frozen during direct forecasting.  The CUDA executor owns the
+    /// gradient buffer, so enforce the same parameter contract there before
+    /// AdamW rather than allowing a CUDA-only fine-tuning variant.
+    fn freeze_pretrained_transformer_gradients(
+        &mut self,
+        state: &TrainableGraphTransformerState,
+    ) -> Result<()> {
+        let layout = state.layout();
+        let mut gradients = vec![0.0_f32; state.parameters.len()];
+        self.arena
+            .download_f32(Self::PARAMETER_GRADIENT, &mut gradients)
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        gradients[layout.input..layout.spatial_q].fill(0.0);
+        gradients[layout.pretrain_mask_token..layout.total].fill(0.0);
+        self.arena
+            .upload_f32(Self::PARAMETER_GRADIENT, &gradients)
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))
+    }
+
+    fn mean_supervised_loss(&self) -> Result<f64> {
+        // The CUDA loss kernel reduces all examples, horizons, and nodes into
+        // one MAE scalar (plus an internal valid-value count).
+        let mut losses = [0.0_f32; 2];
+        self.arena
+            .download_f32(Self::SUPERVISED_LOSS, &mut losses)
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        Ok(f64::from(losses[0]))
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -1166,6 +4114,7 @@ impl TrainableGraphTransformerState {
             horizons,
             experts,
             graph_order,
+            periodic_short_lag: 0,
             target_scale: 1.0,
             normalized_zero: 0.0,
         }
@@ -1803,6 +4752,12 @@ impl TrainableGraphTransformerState {
             1
         };
         let effective_periodicity = (self.periodicity / time_scale).max(1);
+        let effective_short_periodicity = (if self.periodic_short_lag == 0 {
+            self.periodicity
+        } else {
+            self.periodic_short_lag
+        } / time_scale)
+            .max(1);
         // LSTTN's periodic graph convolution uses both directed structural
         // diffusions as well as its learned adaptive diffusion.  Preserve a
         // normalized reverse graph rather than treating the supplied road
@@ -1860,11 +4815,11 @@ impl TrainableGraphTransformerState {
                 [
                     tape.constant(periodic_phase(
                         phase_offset + time + 1,
-                        effective_periodicity,
+                        effective_short_periodicity,
                     )),
                     tape.constant(periodic_phase(
                         phase_offset + time + 1,
-                        effective_periodicity * 7,
+                        effective_periodicity,
                     )),
                 ]
             })
@@ -2479,7 +5434,7 @@ impl TrainableGraphTransformerState {
             };
             let patch_count = lsttn_frozen_patches
                 .map_or_else(|| embedding.chunks(patch_width).len(), <[_]>::len);
-            [effective_periodicity, effective_periodicity * 7]
+            [effective_short_periodicity, effective_periodicity]
                 .into_iter()
                 .filter_map(|period| {
                     let period_patches = (period / patch_width).max(1);
@@ -5122,10 +8077,18 @@ impl PaperGraphTransformerForecaster {
         if self.config.profile == GraphTransformerProfile::LongShortFusion {
             let patch_width = (self.config.periodicity / 24).max(1);
             let patch_count = self.config.lookback / patch_width;
-            let weekly_lag = (self.config.periodicity / patch_width).max(1) * 7;
-            if !self.config.lookback.is_multiple_of(patch_width) || patch_count <= weekly_lag {
+            let seasonal_lag = if frame.frequency.eq_ignore_ascii_case("weekly") {
+                // Weekly DAT has no seven-times-faster daily samples. Its two
+                // periodic paths are one weekly cadence and the configured
+                // seasonal cadence (for example 13 weeks), not a fictitious
+                // 91-week `13 * 7` requirement.
+                (self.config.periodicity / patch_width).max(1)
+            } else {
+                (self.config.periodicity / patch_width).max(1) * 7
+            };
+            if !self.config.lookback.is_multiple_of(patch_width) || patch_count <= seasonal_lag {
                 return Err(GeoStError::InvalidFrame(format!(
-                    "LSTTN lookback must contain complete patches and exceed one weekly lag: lookback={}, patch_width={}, weekly_lag_patches={weekly_lag}",
+                    "LSTTN lookback must contain complete patches and exceed its seasonal lag: lookback={}, patch_width={}, seasonal_lag_patches={seasonal_lag}",
                     self.config.lookback, patch_width
                 )));
             }
@@ -5153,19 +8116,6 @@ impl PaperGraphTransformerForecaster {
             selected: self.config.backend.selected.clone(),
             available: self.config.backend.available.clone(),
         };
-        if self.config.profile == GraphTransformerProfile::LongShortFusion
-            && backend.selected == "cuda"
-        {
-            // Do not let a CUDA-requested resume run the existing scalar
-            // supervised loop on Rayon. The CUDA LSTTN path is only enabled
-            // once its complete tensor pretraining and forecast executor is
-            // selected below; until then failing is safer than a silent CPU
-            // fallback that would invalidate runtime and checkpoint evidence.
-            return Err(GeoStError::InvalidBackend(
-                "CUDA LSTTN tensor training is not available in this build; refusing to fall back to scalar CPU training"
-                    .to_string(),
-            ));
-        }
         let data_fingerprint = graph_temporal_training_fingerprint(frame);
         let config_json = serde_json::to_string(&self.config)?;
         let resumed = checkpoint_path
@@ -5204,6 +8154,11 @@ impl PaperGraphTransformerForecaster {
             });
         state.target_scale = scale;
         state.normalized_zero = -mean / scale;
+        state.periodic_short_lag = if frame.frequency.eq_ignore_ascii_case("weekly") {
+            1
+        } else {
+            0
+        };
         let mut pretraining_completed = resumed
             .as_ref()
             .map_or(0, |checkpoint| checkpoint.pretraining_completed);
@@ -5281,6 +8236,7 @@ impl PaperGraphTransformerForecaster {
         }
         let supervised_starts = (0..sample_count).collect::<Vec<_>>();
         let frozen_lsttn_cache = if self.config.profile == GraphTransformerProfile::LongShortFusion
+            && backend.selected != "cuda"
         {
             let patch_width = (self.config.periodicity / 24).max(1);
             let patches = self.config.lookback / patch_width;
@@ -5328,6 +8284,12 @@ impl PaperGraphTransformerForecaster {
             const LSTTN_BATCH_SIZE: usize = 32;
             let batches_per_epoch = supervised_starts.len().div_ceil(LSTTN_BATCH_SIZE);
             let total_batches = batches_per_epoch * self.config.epochs;
+            #[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
+            let mut cuda_executor = if backend.selected == "cuda" {
+                Some(CudaLsttnTensorExecutor::new(&state, &adjacency)?)
+            } else {
+                None
+            };
             for epoch in 0..self.config.epochs {
                 for (batch_index, starts) in supervised_starts.chunks(LSTTN_BATCH_SIZE).enumerate()
                 {
@@ -5335,49 +8297,90 @@ impl PaperGraphTransformerForecaster {
                     if task_index < supervised_batches_completed {
                         continue;
                     }
-                    let examples = starts
-                        .par_iter()
-                        .map(|start| {
-                            let cutoff = *start + self.config.lookback;
-                            let cache_index = supervised_starts
-                                .binary_search(start)
-                                .expect("supervised start has a frozen MST cache entry");
-                            state.lsttn_example_loss_and_gradients(
-                                &normalized[*start..cutoff],
-                                &adjacency,
-                                &normalized[cutoff..cutoff + frame.horizon],
-                                *start,
-                                frozen_lsttn_cache
-                                    .as_ref()
-                                    .map(|cache| cache[cache_index].as_slice()),
-                                lsttn_time_features
-                                    .as_ref()
-                                    .map(|features| &features[*start..cutoff]),
-                            )
-                        })
-                        .collect::<Vec<_>>();
-                    let mut gradients = vec![0.0; state.parameters.len()];
-                    let mut loss = 0.0;
-                    for (example_loss, example_gradients) in examples {
-                        loss += example_loss;
-                        for (total, gradient) in gradients.iter_mut().zip(example_gradients) {
-                            *total += gradient;
-                        }
-                    }
-                    let batch_scale = 1.0 / starts.len() as f64;
-                    for gradient in &mut gradients {
-                        *gradient *= batch_scale;
-                    }
-                    state.freeze_lsttn_transformer_gradients(state.layout(), &mut gradients);
-                    clip_gradient_norm(&mut gradients, 3.0);
                     let scheduler_steps = [1usize, 18, 36, 54, 72]
                         .into_iter()
                         .filter(|milestone| *milestone <= epoch)
                         .count();
                     let epoch_learning_rate =
                         self.config.learning_rate * 0.5_f64.powi(scheduler_steps as i32);
-                    state.adamw_step(&gradients, epoch_learning_rate, self.config.weight_decay);
-                    let mean_batch_loss = loss * batch_scale;
+                    #[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
+                    let cuda_batch_loss = if let Some(executor) = cuda_executor.as_mut() {
+                        let windows = starts
+                            .iter()
+                            .map(|start| {
+                                let cutoff = *start + self.config.lookback;
+                                &normalized[*start..cutoff]
+                            })
+                            .collect::<Vec<_>>();
+                        let targets = starts
+                            .iter()
+                            .map(|start| {
+                                let cutoff = *start + self.config.lookback;
+                                &normalized[cutoff..cutoff + frame.horizon]
+                            })
+                            .collect::<Vec<_>>();
+                        executor.upload_supervised_batch(&windows, &targets, 1)?;
+                        executor.supervised_forward(&state, starts.len(), 1, starts[0], true)?;
+                        executor.supervised_backward(&state, starts.len(), 1, starts[0], true)?;
+                        executor.freeze_pretrained_transformer_gradients(&state)?;
+                        executor.adamw_supervised_step(
+                            state.steps + 1,
+                            epoch_learning_rate,
+                            self.config.weight_decay,
+                        )?;
+                        state.steps += 1;
+                        let loss = executor.mean_supervised_loss()?;
+                        executor.synchronize_portable_state(&mut state)?;
+                        Some(loss)
+                    } else {
+                        None
+                    };
+                    #[cfg(not(all(
+                        feature = "cuda",
+                        any(target_os = "linux", target_os = "windows")
+                    )))]
+                    let cuda_batch_loss: Option<f64> = None;
+                    let mean_batch_loss = if let Some(loss) = cuda_batch_loss {
+                        loss
+                    } else {
+                        let examples = starts
+                            .par_iter()
+                            .map(|start| {
+                                let cutoff = *start + self.config.lookback;
+                                let cache_index = supervised_starts
+                                    .binary_search(start)
+                                    .expect("supervised start has a frozen MST cache entry");
+                                state.lsttn_example_loss_and_gradients(
+                                    &normalized[*start..cutoff],
+                                    &adjacency,
+                                    &normalized[cutoff..cutoff + frame.horizon],
+                                    *start,
+                                    frozen_lsttn_cache
+                                        .as_ref()
+                                        .map(|cache| cache[cache_index].as_slice()),
+                                    lsttn_time_features
+                                        .as_ref()
+                                        .map(|features| &features[*start..cutoff]),
+                                )
+                            })
+                            .collect::<Vec<_>>();
+                        let mut gradients = vec![0.0; state.parameters.len()];
+                        let mut loss = 0.0;
+                        for (example_loss, example_gradients) in examples {
+                            loss += example_loss;
+                            for (total, gradient) in gradients.iter_mut().zip(example_gradients) {
+                                *total += gradient;
+                            }
+                        }
+                        let batch_scale = 1.0 / starts.len() as f64;
+                        for gradient in &mut gradients {
+                            *gradient *= batch_scale;
+                        }
+                        state.freeze_lsttn_transformer_gradients(state.layout(), &mut gradients);
+                        clip_gradient_norm(&mut gradients, 3.0);
+                        state.adamw_step(&gradients, epoch_learning_rate, self.config.weight_decay);
+                        loss * batch_scale
+                    };
                     supervised_batches_completed = task_index + 1;
                     eprintln!(
                         "LSTTN supervised epoch {}/{} batch {}/{} ({}/{}) loss={:.8}",
@@ -6298,6 +9301,352 @@ mod tests {
             .contains("refusing to fall back to scalar CPU training"));
     }
 
+    #[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
+    #[test]
+    fn cuda_lsttn_executor_keeps_model_and_all_three_graphs_resident() {
+        if select_compute_backend(Some("cuda")).is_err() {
+            return;
+        }
+        let frame = traffic_style_fixture_frame();
+        let adjacency = frame.adjacency.row_normalized();
+        let mut state = TrainableGraphTransformerState::initialized(3, 4, 2, 1, 4, 8, 4, 2, 2, 17);
+        let layout = state.layout();
+        for offset in [
+            layout.lsttn_adaptive_source,
+            layout.lsttn_adaptive_target,
+            layout.lsttn_weekly_adaptive_source,
+            layout.lsttn_weekly_adaptive_target,
+            layout.lsttn_short_adaptive_source,
+            layout.lsttn_short_adaptive_target,
+        ] {
+            for (idx, value) in state.parameters[offset..offset + state.nodes * state.hidden]
+                .iter_mut()
+                .enumerate()
+            {
+                *value = 0.05 + (idx % state.hidden) as f64 * 0.01;
+            }
+        }
+        let mut executor = CudaLsttnTensorExecutor::new(&state, &adjacency).unwrap();
+        assert_eq!(executor.forward_edges, adjacency.indices.len());
+        assert_eq!(executor.reverse_edges, adjacency.indices.len());
+        assert!(executor.adaptive_edges >= adjacency.indices.len());
+        assert_eq!(executor.node_tiles().collect::<Vec<_>>(), vec![0..3]);
+        // Parameters, moments, and six CSR buffers were allocated during the
+        // one-time construction; no batch activation has been allocated yet.
+        assert!(executor.allocation_count() >= 9);
+        executor
+            .upload_supervised_batch(&[&frame.target[..8]], &[&frame.target[8..12]], 1)
+            .unwrap();
+        assert_eq!(
+            executor
+                .short_input_projection(state.layout(), 1, 8, 3, 1, 4, 4, 0, 1)
+                .unwrap(),
+            13
+        );
+        let short = executor
+            .short_branch(state.layout(), 1, 8, 1, 4, 4, 0, 1, true, state.steps)
+            .unwrap();
+        assert!(
+            executor.arena.capacity_f32(short).unwrap() >= 12,
+            "eight dilated short layers must retain [batch, one step, nodes, hidden]"
+        );
+        assert_eq!(
+            executor
+                .arena
+                .capacity_f32(CudaLsttnTensorExecutor::SUPERVISED_INPUT)
+                .unwrap(),
+            24
+        );
+        assert_eq!(
+            executor
+                .arena
+                .capacity_f32(CudaLsttnTensorExecutor::SUPERVISED_TARGET)
+                .unwrap(),
+            12
+        );
+        executor
+            .patch_embedding(state.layout(), 1, 8, 3, 1, 1, 4)
+            .unwrap();
+        assert_eq!(
+            executor
+                .arena
+                .capacity_f32(CudaLsttnTensorExecutor::PATCH_EMBEDDING)
+                .unwrap(),
+            96
+        );
+        executor
+            .add_patch_positions(state.layout(), 1, 8, 3, 4)
+            .unwrap();
+        executor.patch_attention_layout(1, 8, 3, 4).unwrap();
+        executor
+            .frozen_encoder(state.layout(), 1, 8, 3, 4, 2)
+            .unwrap();
+        assert_eq!(
+            executor
+                .arena
+                .capacity_f32(CudaLsttnTensorExecutor::ATTENTION_SEQUENCE)
+                .unwrap(),
+            96
+        );
+        let mut cuda_encoder = vec![0.0_f32; 96];
+        executor
+            .arena
+            .download_f32(
+                CudaLsttnTensorExecutor::ATTENTION_SEQUENCE,
+                &mut cuda_encoder,
+            )
+            .unwrap();
+        let cpu_encoder =
+            state.frozen_lsttn_patch_representations(&frame.target[..8], &adjacency, 0);
+        for node in 0..3 {
+            for patch in 0..8 {
+                for channel in 0..4 {
+                    let device = cuda_encoder[(node * 8 + patch) * 4 + channel];
+                    let host = cpu_encoder[patch][node][channel];
+                    assert!(
+                        (device - host).abs() < 2e-4,
+                        "encoder mismatch node={node} patch={patch} channel={channel}: {device} vs {host}"
+                    );
+                }
+            }
+        }
+        executor
+            .adaptive_weights(
+                layout.lsttn_short_adaptive_source,
+                layout.lsttn_short_adaptive_target,
+            )
+            .unwrap();
+        let mut adaptive_weights = vec![0.0_f32; executor.adaptive_edges];
+        executor
+            .arena
+            .download_f32(
+                CudaLsttnTensorExecutor::ADAPTIVE_WEIGHTS,
+                &mut adaptive_weights,
+            )
+            .unwrap();
+        let adaptive = adjacency.with_adaptive_self_candidates(3);
+        for row in 0..3 {
+            let sum = adaptive_weights[adaptive.indptr[row]..adaptive.indptr[row + 1]]
+                .iter()
+                .sum::<f32>();
+            assert!((sum - 1.0).abs() < 1e-5);
+        }
+        let long = executor.long_branch(layout, 1, 8, 3, 4).unwrap();
+        assert!(
+            executor.arena.capacity_f32(long).unwrap() >= 12,
+            "long branch must retain [batch, final_time, nodes, hidden]"
+        );
+        executor
+            .periodic_feature(
+                layout,
+                CudaLsttnTensorExecutor::PERIODIC_SHORT,
+                1,
+                8,
+                4,
+                1,
+                false,
+            )
+            .unwrap();
+        executor
+            .periodic_feature(
+                layout,
+                CudaLsttnTensorExecutor::PERIODIC_SEASONAL,
+                1,
+                8,
+                4,
+                2,
+                true,
+            )
+            .unwrap();
+        assert_eq!(
+            executor
+                .arena
+                .capacity_f32(CudaLsttnTensorExecutor::PERIODIC_SHORT)
+                .unwrap(),
+            12
+        );
+        let direct = executor
+            .fuse_and_direct_output(layout, long, short, 1, 4, 4)
+            .unwrap();
+        assert_eq!(executor.arena.capacity_f32(direct).unwrap(), 12);
+        let direct = executor.supervised_forward(&state, 1, 1, 0, true).unwrap();
+        assert_eq!(executor.arena.capacity_f32(direct).unwrap(), 12);
+        executor.direct_head_loss_and_backward(&state, 1).unwrap();
+        executor.fusion_backward(&state, 1).unwrap();
+        executor
+            .short_branch_backward(&state, 1, 1, 0, true)
+            .unwrap();
+        let mut gradient_after_short = vec![0.0_f32; state.parameters.len()];
+        executor
+            .arena
+            .download_f32(
+                CudaLsttnTensorExecutor::PARAMETER_GRADIENT,
+                &mut gradient_after_short,
+            )
+            .unwrap();
+        let short_width =
+            3 * state.hidden + 8 * (12 * state.hidden * state.hidden + 6 * state.hidden);
+        assert!(
+            gradient_after_short[layout.lsttn_short_wave..layout.lsttn_short_wave + short_width]
+                .iter()
+                .any(|value| value.abs() > 1.0e-8),
+            "Graph WaveNet short-branch reverse must accumulate short-wave gradients"
+        );
+        executor.long_branch_backward(&state, 1).unwrap();
+        let mut gradient_after_long = vec![0.0_f32; state.parameters.len()];
+        executor
+            .arena
+            .download_f32(
+                CudaLsttnTensorExecutor::PARAMETER_GRADIENT,
+                &mut gradient_after_long,
+            )
+            .unwrap();
+        assert!(
+            gradient_after_long[layout.lsttn_dilated_convolution
+                ..layout.lsttn_dilated_convolution
+                    + 4 * (3 * state.hidden * state.hidden + state.hidden)]
+                .iter()
+                .any(|value| value.abs() > 1.0e-8),
+            "long branch reverse must accumulate dilated-convolution gradients"
+        );
+        executor
+            .periodic_projection_backward(&state, 1, false)
+            .unwrap();
+        executor
+            .periodic_projection_backward(&state, 1, true)
+            .unwrap();
+        let mut gradient_before_periodic_graph = vec![0.0_f32; state.parameters.len()];
+        executor
+            .arena
+            .download_f32(
+                CudaLsttnTensorExecutor::PARAMETER_GRADIENT,
+                &mut gradient_before_periodic_graph,
+            )
+            .unwrap();
+        executor
+            .arena
+            .deterministic_dropout_f32(
+                CudaLsttnTensorExecutor::PERIODIC_SHORT_INPUT,
+                CudaLsttnTensorExecutor::PERIODIC_SHORT_INPUT_GRADIENT,
+                state.nodes * 7 * state.hidden,
+                0,
+                0,
+                false,
+                0.0,
+            )
+            .unwrap();
+        executor
+            .arena
+            .deterministic_dropout_f32(
+                CudaLsttnTensorExecutor::PERIODIC_SEASONAL_INPUT,
+                CudaLsttnTensorExecutor::PERIODIC_SEASONAL_INPUT_GRADIENT,
+                state.nodes * 7 * state.hidden,
+                0,
+                0,
+                false,
+                0.0,
+            )
+            .unwrap();
+        executor
+            .periodic_graph_backward(&state, 1, 1, false)
+            .unwrap();
+        executor
+            .periodic_graph_backward(&state, 1, 1, true)
+            .unwrap();
+        let mut gradient_after_periodic_graph = vec![0.0_f32; state.parameters.len()];
+        executor
+            .arena
+            .download_f32(
+                CudaLsttnTensorExecutor::PARAMETER_GRADIENT,
+                &mut gradient_after_periodic_graph,
+            )
+            .unwrap();
+        let adaptive_gradient_changed = [
+            layout.lsttn_adaptive_source,
+            layout.lsttn_adaptive_target,
+            layout.lsttn_weekly_adaptive_source,
+            layout.lsttn_weekly_adaptive_target,
+        ]
+        .into_iter()
+        .any(|offset| {
+            gradient_after_periodic_graph[offset..offset + state.nodes * state.hidden]
+                .iter()
+                .zip(&gradient_before_periodic_graph[offset..offset + state.nodes * state.hidden])
+                .any(|(after, before)| (after - before).abs() > 1.0e-8)
+        });
+        assert!(
+            adaptive_gradient_changed,
+            "periodic graph reverse must backpropagate through adaptive CSR logits"
+        );
+        let mut loss = [0.0_f32; 2];
+        executor
+            .arena
+            .download_f32(CudaLsttnTensorExecutor::SUPERVISED_LOSS, &mut loss)
+            .unwrap();
+        assert!(loss[0].is_finite());
+        let expected = state
+            .parameters
+            .iter()
+            .map(|value| *value as f32 as f64)
+            .collect::<Vec<_>>();
+        let mut checkpoint_state = state.clone();
+        checkpoint_state.parameters.fill(0.0);
+        checkpoint_state.first_moment.fill(0.0);
+        checkpoint_state.second_moment.fill(0.0);
+        executor
+            .synchronize_portable_state(&mut checkpoint_state)
+            .unwrap();
+        assert_eq!(checkpoint_state.parameters, expected);
+
+        let mut supervised = CudaLsttnTensorExecutor::new(&state, &adjacency).unwrap();
+        supervised
+            .upload_supervised_batch(&[&frame.target[..8]], &[&frame.target[8..12]], 1)
+            .unwrap();
+        supervised
+            .supervised_forward(&state, 1, 1, 0, true)
+            .unwrap();
+        supervised
+            .supervised_backward(&state, 1, 1, 0, true)
+            .unwrap();
+        let mut supervised_gradient = vec![0.0_f32; state.parameters.len()];
+        supervised
+            .arena
+            .download_f32(
+                CudaLsttnTensorExecutor::PARAMETER_GRADIENT,
+                &mut supervised_gradient,
+            )
+            .unwrap();
+        assert!(
+            supervised_gradient.iter().any(|value| value.abs() > 1.0e-8),
+            "consolidated CUDA supervised backward must accumulate model gradients"
+        );
+
+        let mut tiled = CudaLsttnTensorExecutor::new(&state, &adjacency).unwrap();
+        tiled
+            .upload_supervised_node_tile(&[&frame.target[..8]], &[&frame.target[8..12]], 1, 1..3)
+            .unwrap();
+        let mut input_tile = vec![0.0_f32; 16];
+        let mut target_tile = vec![0.0_f32; 8];
+        tiled
+            .arena
+            .download_f32(CudaLsttnTensorExecutor::SUPERVISED_INPUT, &mut input_tile)
+            .unwrap();
+        tiled
+            .arena
+            .download_f32(CudaLsttnTensorExecutor::SUPERVISED_TARGET, &mut target_tile)
+            .unwrap();
+        let expected_input = frame.target[..8]
+            .iter()
+            .flat_map(|row| row[1..3].iter().map(|value| *value as f32))
+            .collect::<Vec<_>>();
+        let expected_target = frame.target[8..12]
+            .iter()
+            .flat_map(|row| row[1..3].iter().map(|value| *value as f32))
+            .collect::<Vec<_>>();
+        assert_eq!(input_tile, expected_input);
+        assert_eq!(target_tile, expected_target);
+    }
+
     #[test]
     fn webgpu_compute_backend_is_not_selectable() {
         let err = select_compute_backend(Some("webgpu")).unwrap_err();
@@ -6847,7 +10196,7 @@ mod tests {
         };
         let mut model = PaperGraphTransformerForecaster::new(config).unwrap();
         let error = model.fit(&frame).unwrap_err();
-        assert!(error.to_string().contains("exceed one weekly lag"));
+        assert!(error.to_string().contains("exceed its seasonal lag"));
     }
 
     #[test]

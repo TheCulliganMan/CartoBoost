@@ -101,7 +101,7 @@ Issues = "https://github.com/theculliganman/cartoboost/issues"
 manifest-path = "crates/cartoboost-py/Cargo.toml"
 module-name = "cartoboost._native"
 python-source = "python"
-features = ["pyo3/extension-module"]
+features = ["pyo3/extension-module", "cuda"]
 bindings = "pyo3"
 strip = true
 

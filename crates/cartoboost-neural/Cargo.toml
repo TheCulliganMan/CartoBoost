@@ -16,6 +16,10 @@ libloading = { version = "0.8", optional = true }
 wgpu = { version = "29", optional = true }
 futures-channel = { version = "0.3", optional = true }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+cuda-core = { git = "https://github.com/NVlabs/cuda-oxide.git", package = "cuda-core", optional = true }
+cuda-device = { git = "https://github.com/NVlabs/cuda-oxide.git", package = "cuda-device", optional = true }
+
 [target.'cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos", target_os = "visionos"))'.dependencies]
 metal = { version = "0.33", optional = true }
 objc = { version = "0.2.7", optional = true }
@@ -26,6 +30,7 @@ tempfile = "3"
 [features]
 default = []
 cuda = ["dep:libloading"]
+cuda-oxide = ["cuda", "dep:cuda-core", "dep:cuda-device"]
 rocm = ["dep:libloading"]
 metal = ["dep:metal", "dep:objc"]
 webgpu = ["dep:futures-channel", "dep:wgpu"]

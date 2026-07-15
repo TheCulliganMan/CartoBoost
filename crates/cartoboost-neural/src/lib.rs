@@ -1,5 +1,7 @@
 pub mod artifact;
 pub mod backend;
+#[cfg(all(feature = "cuda-oxide", target_os = "linux"))]
+mod cuda_oxide_backend;
 pub mod deep;
 pub mod encoder;
 mod error;
@@ -17,8 +19,6 @@ pub use artifact::{
     EmbeddingChecksum, EmbeddingIdType, EmbeddingRow, EmbeddingTable, EmbeddingTableArtifact,
     EmbeddingTableMetadata, FallbackStrategy,
 };
-#[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
-pub use backend::CudaCsrDiffusionWorkspace;
 pub use backend::{
     available_backends, backend_adamw_step_f32, backend_affine_scores,
     backend_csr_diffusion_backward_f32, backend_csr_diffusion_f32,
@@ -30,6 +30,8 @@ pub use backend::{
 };
 #[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
 pub use backend::{webgpu_dense_layer_f32_async, webgpu_dispatch_report_async};
+#[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
+pub use backend::{CudaCsrDiffusionWorkspace, CudaTensorArena};
 pub use deep::{
     choice_set_transformer_report, choice_set_transformer_report_json, constrained_decision_select,
     constrained_decision_select_with_options, directional_pair_fit,
