@@ -27,9 +27,9 @@ external learned baseline (`lightgbm_lag`) across the three rolling origins. It
 does not beat the seasonal-naive library baseline, so the artifact does not
 claim a win against every forecasting library. The external-baseline gate is
 recorded directly in the JSON artifact and passes the v0.3 within-5% RMSE rule.
-The current run loaded and aggregated 13,069,067 source rows in 4.746 seconds
-and completed in 11.201 seconds. It recorded 42.092 CPU-seconds and a 9,833
-MiB peak resident set; per-fold fit and prediction timings remain in the JSON
+The current run loaded and aggregated 13,069,067 source rows in 2.050 seconds
+and completed in 22.379 seconds. It recorded 71.205 CPU-seconds and a 925 MiB
+peak resident set; per-fold fit and prediction timings remain in the JSON
 artifact.
 
 Reproduce the maintained artifact with:
