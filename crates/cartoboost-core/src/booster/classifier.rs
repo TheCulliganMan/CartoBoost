@@ -213,11 +213,10 @@ impl Classifier {
                     .into_par_iter()
                     .map(|row| tree.predict_dataset_row(x, row))
                     .collect::<Vec<_>>();
-                super::fit::accelerated_prediction_update(
+                super::fit::parallel_prediction_update(
                     &mut margins,
                     &updates,
                     self.config.learning_rate,
-                    &self.backend,
                 )?;
                 for (row, value) in margins.into_iter().enumerate() {
                     raw_predictions[row * output_dimension + output] = value;

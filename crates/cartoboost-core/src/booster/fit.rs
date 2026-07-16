@@ -10,13 +10,9 @@ use crate::tree::{
     TrainingConfigMetadata, TrainingMetric, TreeBuilder, MODEL_ARTIFACT_VERSION,
 };
 use crate::{CartoBoostError, Result};
-use cartoboost_accelerator::{
-    backend_dense_layer_f32, select_backend_for, BackendOperation, BackendSelection,
-};
+use cartoboost_accelerator::{select_backend_for, BackendOperation, BackendSelection};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-
-const BOOSTER_DENSE_DISPATCH_MIN_ROWS: usize = 16_384;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BoosterConfig {
@@ -175,12 +171,11 @@ impl Booster {
         };
         for iteration in 0..tree_count {
             profile::timed(profile::RESIDUAL, || {
-                accelerated_pseudo_residuals(
+                parallel_pseudo_residuals(
                     &mut residuals,
                     training_targets,
                     &pred,
                     &self.config.loss,
-                    &self.backend,
                 )
             })?;
             let use_leaf_updates = !self.config.fuzzy
@@ -194,12 +189,7 @@ impl Booster {
                     builder.fit_with_leaf_updates_in_context(x, &residuals, &weights, &fit_context)
                 });
                 profile::timed(profile::PRED_UPDATE, || {
-                    accelerated_prediction_update(
-                        &mut pred,
-                        &updates,
-                        self.config.learning_rate,
-                        &self.backend,
-                    )
+                    parallel_prediction_update(&mut pred, &updates, self.config.learning_rate)
                 })?;
                 tree
             } else {
@@ -216,12 +206,7 @@ impl Booster {
                         .into_par_iter()
                         .map(|row| tree.predict_dataset_row(x, row))
                         .collect::<Vec<_>>();
-                    accelerated_prediction_update(
-                        &mut pred,
-                        &updates,
-                        self.config.learning_rate,
-                        &self.backend,
-                    )
+                    parallel_prediction_update(&mut pred, &updates, self.config.learning_rate)
                 })?;
             }
             trees.push(tree);
@@ -270,75 +255,49 @@ impl Booster {
     }
 }
 
-fn accelerated_pseudo_residuals(
+fn parallel_pseudo_residuals(
     residuals: &mut [f64],
     targets: &[f64],
     predictions: &[f64],
     loss: &LossConfig,
-    backend: &BackendSelection,
 ) -> Result<()> {
-    if backend.selected == "cpu"
-        || targets.len() < BOOSTER_DENSE_DISPATCH_MIN_ROWS
-        || !matches!(loss, LossConfig::L2 | LossConfig::LogL2(_))
-    {
-        residuals
-            .par_iter_mut()
-            .zip(targets.par_iter())
-            .zip(predictions.par_iter())
-            .for_each(|((residual, target), prediction)| {
-                *residual = pseudo_residual_for_loss(loss, *target, *prediction);
-            });
-        return Ok(());
-    }
-    let features = targets
-        .iter()
-        .zip(predictions)
-        .map(|(&target, &prediction)| vec![target as f32, prediction as f32])
-        .collect::<Vec<_>>();
-    let output = backend_dense_layer_f32(backend, &features, &[1.0, -1.0], &[0.0])
-        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
-    for (residual, row) in residuals.iter_mut().zip(output) {
-        *residual = f64::from(row[0]);
-    }
+    residuals
+        .par_iter_mut()
+        .zip(targets.par_iter())
+        .zip(predictions.par_iter())
+        .for_each(|((residual, target), prediction)| {
+            *residual = pseudo_residual_for_loss(loss, *target, *prediction);
+        });
     Ok(())
 }
 
-pub(crate) fn accelerated_prediction_update(
+pub(crate) fn parallel_prediction_update(
     predictions: &mut [f64],
     updates: &[f64],
     learning_rate: f64,
-    backend: &BackendSelection,
 ) -> Result<()> {
-    if backend.selected == "cpu" || predictions.len() < BOOSTER_DENSE_DISPATCH_MIN_ROWS {
-        predictions
-            .par_iter_mut()
-            .zip(updates.par_iter())
-            .for_each(|(prediction, update)| {
-                *prediction += learning_rate * update;
-            });
-        return Ok(());
-    }
-    let features = predictions
-        .iter()
-        .zip(updates)
-        .map(|(&prediction, &update)| vec![prediction as f32, update as f32])
-        .collect::<Vec<_>>();
-    let output = backend_dense_layer_f32(backend, &features, &[1.0, learning_rate as f32], &[0.0])
-        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
-    for (prediction, row) in predictions.iter_mut().zip(output) {
-        *prediction = f64::from(row[0]);
-    }
+    predictions
+        .par_iter_mut()
+        .zip(updates.par_iter())
+        .for_each(|(prediction, update)| {
+            *prediction += learning_rate * update;
+        });
     Ok(())
 }
 
 fn weighted_rmse(targets: &[f64], predictions: &[f64], weights: &[f64]) -> f64 {
-    let mut loss = 0.0;
-    let mut weight_sum = 0.0;
-    for ((target, prediction), weight) in targets.iter().zip(predictions).zip(weights) {
-        let residual = target - prediction;
-        loss += weight * residual * residual;
-        weight_sum += weight;
-    }
+    let (loss, weight_sum) = targets
+        .par_iter()
+        .zip(predictions.par_iter())
+        .zip(weights.par_iter())
+        .map(|((&target, &prediction), &weight)| {
+            let residual = target - prediction;
+            (weight * residual * residual, weight)
+        })
+        .reduce(
+            || (0.0, 0.0),
+            |left, right| (left.0 + right.0, left.1 + right.1),
+        );
     if weight_sum <= 0.0 {
         0.0
     } else {
@@ -711,11 +670,12 @@ mod tests {
     }
 
     #[test]
-    fn accelerated_l2_residual_generation_matches_cpu_on_every_backend() {
-        let targets = (0..BOOSTER_DENSE_DISPATCH_MIN_ROWS)
+    fn parallel_l2_residual_generation_matches_reference() {
+        const ROWS: usize = 16_384;
+        let targets = (0..ROWS)
             .map(|index| (index % 19) as f64 - 4.0)
             .collect::<Vec<_>>();
-        let predictions = (0..BOOSTER_DENSE_DISPATCH_MIN_ROWS)
+        let predictions = (0..ROWS)
             .map(|index| (index % 7) as f64 * 0.25)
             .collect::<Vec<_>>();
         let expected = targets
@@ -723,25 +683,10 @@ mod tests {
             .zip(&predictions)
             .map(|(target, prediction)| target - prediction)
             .collect::<Vec<_>>();
-        for backend in cartoboost_accelerator::available_backends() {
-            let selection =
-                cartoboost_accelerator::select_backend_for(Some(&backend), BackendOperation::Dense)
-                    .unwrap();
-            let mut actual = vec![0.0; targets.len()];
-            accelerated_pseudo_residuals(
-                &mut actual,
-                &targets,
-                &predictions,
-                &LossConfig::L2,
-                &selection,
-            )
-            .unwrap_or_else(|error| panic!("{backend} residual dispatch failed: {error}"));
-            for (left, right) in actual.iter().zip(&expected) {
-                assert!(
-                    (left - right).abs() < 1.0e-5,
-                    "{backend}: {left} != {right}"
-                );
-            }
+        let mut actual = vec![0.0; targets.len()];
+        parallel_pseudo_residuals(&mut actual, &targets, &predictions, &LossConfig::L2).unwrap();
+        for (left, right) in actual.iter().zip(&expected) {
+            assert!((left - right).abs() < 1.0e-12, "{left} != {right}");
         }
     }
 

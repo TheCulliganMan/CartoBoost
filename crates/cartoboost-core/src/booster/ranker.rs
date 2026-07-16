@@ -193,11 +193,10 @@ impl Ranker {
                 .into_par_iter()
                 .map(|row| tree.predict_dataset_row(x, row))
                 .collect::<Vec<_>>();
-            super::fit::accelerated_prediction_update(
+            super::fit::parallel_prediction_update(
                 &mut scores,
                 &updates,
                 self.config.learning_rate,
-                &self.backend,
             )?;
             trees.push(tree);
             let metrics = ranking_metrics(y, &scores, groups)?;
