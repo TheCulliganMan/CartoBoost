@@ -310,10 +310,40 @@ impl Node2VecRegressor {
             self.config.clone(),
             Some(&self.booster_config.backend),
         )?;
-        let embeddings = self
-            .encoder
-            .fit(node_count, edges, edge_weights)?
-            .into_inner();
+        self.encoder.fit(node_count, edges, edge_weights)?;
+        self.fit_with_fitted_encoder(row_nodes, row_targets, dense, target)
+    }
+
+    pub fn fit_with_encoder(
+        &mut self,
+        encoder: Node2VecEncoder,
+        row_nodes: &[usize],
+        row_targets: Option<&[usize]>,
+        dense: Option<&[Vec<f64>]>,
+        target: &[f64],
+    ) -> Result<()> {
+        if encoder.output_dim() != self.config.dim {
+            return Err(NeuralError::InvalidArgument(
+                "pretrained Node2Vec encoder width does not match regressor config".to_string(),
+            ));
+        }
+        self.encoder = encoder;
+        self.fit_with_fitted_encoder(row_nodes, row_targets, dense, target)
+    }
+
+    fn fit_with_fitted_encoder(
+        &mut self,
+        row_nodes: &[usize],
+        row_targets: Option<&[usize]>,
+        dense: Option<&[Vec<f64>]>,
+        target: &[f64],
+    ) -> Result<()> {
+        validate_targets(target)?;
+        validate_row_count(row_nodes.len(), target.len(), "row_nodes", "target")?;
+        if let Some(row_targets) = row_targets {
+            validate_row_count(row_targets.len(), target.len(), "row_targets", "target")?;
+        }
+        let embeddings = self.encoder.encode()?.into_inner();
         let features = graph_rows_with_dense(&embeddings, row_nodes, row_targets, dense)?;
         let dataset = Dataset::from_rows(features).map_err(core_to_neural)?;
         self.model = Some(

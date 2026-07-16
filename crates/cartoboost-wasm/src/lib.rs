@@ -91,7 +91,7 @@ use cartoboost_neural::{
     webgpu_dense_layer_f32_async, webgpu_dispatch_report_async, webgpu_layer_norm_f32_async,
     webgpu_pair_sigmoid_scores_f32_async, webgpu_pairwise_squared_distances_f32_async,
     webgpu_scalar_graph_f32_async, webgpu_scalar_graph_train_step_f32_async,
-    webgpu_train_tanh_mlp_f32_async,
+    webgpu_train_tanh_mlp_f32_async, Node2VecEncoder,
 };
 use cartoboost_prob::{
     conditional_flow_fit_with_backend_json as deep_conditional_flow_fit_json,
@@ -2262,6 +2262,23 @@ pub fn run_neural_model(request: JsValue) -> std::result::Result<JsValue, JsValu
         .map_err(|error| JsValue::from_str(&format!("could not encode neural response: {error}")))
 }
 
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+#[wasm_bindgen(js_name = runNode2VecModelWebgpu)]
+pub async fn run_node2vec_model_webgpu(request: JsValue) -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    let request: BrowserNeuralRequest = serde_wasm_bindgen::from_value(request)
+        .map_err(|error| JsValue::from_str(&format!("invalid Node2Vec request: {error}")))?;
+    let response = run_node2vec_webgpu_request(request)
+        .await
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    let serializer = serde_wasm_bindgen::Serializer::json_compatible();
+    response.serialize(&serializer).map_err(|error| {
+        JsValue::from_str(&format!(
+            "could not encode Node2Vec WebGPU response: {error}"
+        ))
+    })
+}
+
 #[wasm_bindgen(js_name = runSequence)]
 pub fn run_sequence(request: JsValue) -> std::result::Result<JsValue, JsValue> {
     let request: BrowserSequenceRequest = serde_wasm_bindgen::from_value(request)
@@ -4392,6 +4409,170 @@ fn run_regression_request(request: BrowserRegressionRequest) -> Result<BrowserRe
                     &request.sparse_feature_names,
                 )
             }),
+    })
+}
+
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+async fn run_node2vec_webgpu_request(
+    request: BrowserNeuralRequest,
+) -> Result<BrowserNeuralResponse> {
+    if request.rows.len() < 4 {
+        return Err(CartoBoostError::InvalidInput(
+            "Node2Vec modeling requires at least four rows".to_string(),
+        ));
+    }
+    let requested_backend = request
+        .options
+        .backend
+        .as_deref()
+        .unwrap_or("webgpu")
+        .to_ascii_lowercase();
+    if !matches!(requested_backend.as_str(), "auto" | "webgpu") {
+        return Err(CartoBoostError::InvalidInput(format!(
+            "runNode2VecModelWebgpu requires backend='webgpu' or 'auto', got {requested_backend:?}"
+        )));
+    }
+    if !request.options.holdout_fraction.is_finite()
+        || request.options.holdout_fraction <= 0.0
+        || request.options.holdout_fraction >= 0.8
+    {
+        return Err(CartoBoostError::InvalidInput(
+            "holdout_fraction must be finite and between 0 and 0.8".to_string(),
+        ));
+    }
+    let dense_width = request.dense_feature_names.len();
+    let mut dense = Vec::with_capacity(request.rows.len());
+    let mut targets = Vec::with_capacity(request.rows.len());
+    for row in &request.rows {
+        if row.dense.len() != dense_width
+            || row.dense.iter().any(|value| !value.is_finite())
+            || !row.target.is_finite()
+        {
+            return Err(CartoBoostError::InvalidInput(
+                "Node2Vec dense features must match dense_feature_names and be finite".to_string(),
+            ));
+        }
+        dense.push(row.dense.clone());
+        targets.push(row.target);
+    }
+    let sources = request
+        .rows
+        .iter()
+        .map(|row| {
+            row.source.ok_or_else(|| {
+                CartoBoostError::InvalidInput(
+                    "Node2Vec WebGPU requires a source column".to_string(),
+                )
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let target_nodes = request
+        .rows
+        .iter()
+        .map(|row| row.target_node)
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| {
+            CartoBoostError::InvalidInput(
+                "Node2Vec WebGPU requires a target node column".to_string(),
+            )
+        })?;
+    let edges = sources
+        .iter()
+        .zip(&target_nodes)
+        .map(|(source, target)| (*source, *target))
+        .collect::<Vec<_>>();
+    let edge_weights = request
+        .rows
+        .iter()
+        .map(|row| row.edge_weight.unwrap_or(1.0))
+        .collect::<Vec<_>>();
+    let node_count = edges
+        .iter()
+        .flat_map(|(source, target)| [*source, *target])
+        .max()
+        .map(|node| node + 1)
+        .unwrap_or(0);
+    let requested_holdout =
+        ((dense.len() as f64) * request.options.holdout_fraction).round() as usize;
+    let holdout_rows = requested_holdout.clamp(1, dense.len().saturating_sub(2));
+    let train_rows = dense.len() - holdout_rows;
+    let node2vec = node2vec_config(&request.options);
+    let mut encoder = Node2VecEncoder::new(node2vec.clone()).map_err(neural_to_core)?;
+    encoder
+        .fit_webgpu(node_count, &edges, Some(&edge_weights))
+        .await
+        .map_err(neural_to_core)?;
+    let mut booster = standalone_booster_config(&request.options);
+    booster.backend = "cpu".to_string();
+    let mut model = Node2VecRegressor::new(node2vec, booster).map_err(neural_to_core)?;
+    model
+        .fit_with_encoder(
+            encoder,
+            &sources[..train_rows],
+            Some(&target_nodes[..train_rows]),
+            Some(&dense[..train_rows]),
+            &targets[..train_rows],
+        )
+        .map_err(neural_to_core)?;
+    let predictions = model
+        .predict(
+            &sources[train_rows..],
+            Some(&target_nodes[train_rows..]),
+            Some(&dense[train_rows..]),
+        )
+        .map_err(neural_to_core)?;
+    let artifact = model.to_artifact().map_err(neural_to_core)?;
+    let holdout_y = &targets[train_rows..];
+    let metrics = regression_metrics(holdout_y, &predictions, train_rows, holdout_rows)?;
+    let prediction_rows = predictions
+        .iter()
+        .zip(holdout_y)
+        .enumerate()
+        .map(
+            |(offset, (prediction, actual))| BrowserRegressionPrediction {
+                row_index: train_rows + offset,
+                actual: *actual,
+                prediction: *prediction,
+                lower_prediction: None,
+                upper_prediction: None,
+                residual: actual - prediction,
+            },
+        )
+        .collect::<Vec<_>>();
+    let feature_names = embedding_feature_names(
+        "node2vec",
+        artifact.encoder.output_dim,
+        &request.dense_feature_names,
+        Some("target_node2vec"),
+    );
+    let feature_importance = feature_importance(&artifact.model.trees, &feature_names, &[]);
+    Ok(BrowserNeuralResponse {
+        metadata: json!({
+            "model": "node2vec_regressor",
+            "pipeline": "node2vec",
+            "backend": {
+                "requested": requested_backend,
+                "selected": "webgpu",
+                "stages": {"embeddingTraining": "webgpu", "treeBoosting": "cpu"},
+            },
+            "denseFeatureNames": request.dense_feature_names,
+            "treeCount": artifact.model.trees.len(),
+            "details": {
+                "embeddingDim": artifact.encoder.output_dim,
+                "nodeCount": artifact.encoder.node_count,
+                "edgeCount": edges.len(),
+                "lossCurve": artifact.encoder.loss_curve,
+                "denseWidth": artifact.dense_width,
+            },
+        }),
+        metrics,
+        predictions: prediction_rows,
+        feature_importance,
+        model_visualization: request
+            .options
+            .include_model_visualization
+            .unwrap_or(false)
+            .then(|| model_visualization(&artifact.model.trees, &feature_names, &[])),
     })
 }
 

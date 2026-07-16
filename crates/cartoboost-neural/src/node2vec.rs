@@ -400,6 +400,31 @@ impl Node2VecEncoder {
         Ok(GraphSageEmbedding::new(self.embeddings.clone()))
     }
 
+    #[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+    pub async fn fit_webgpu(
+        &mut self,
+        node_count: usize,
+        edges: &[(usize, usize)],
+        edge_weights: Option<&[f32]>,
+    ) -> Result<GraphSageEmbedding> {
+        validate_node_count(node_count)?;
+        let weights = validate_weights(edges.len(), edge_weights)?;
+        let adjacency = WeightedGraph::from_edges(node_count, edges, &weights)?;
+        let walks = generate_walks(&self.config, &adjacency);
+        let mut model = SkipGramState::new(node_count, &self.config);
+        self.losses = model
+            .fit_accelerated_webgpu(&self.config, &walks, &adjacency)
+            .await?;
+        self.embeddings = finalize_embeddings(model.embeddings, self.config.normalize);
+        self.context_embeddings = model.context_embeddings;
+        self.backend = BackendSelection {
+            requested: "webgpu".to_string(),
+            selected: "webgpu".to_string(),
+            available: vec!["cpu".to_string(), "webgpu".to_string()],
+        };
+        Ok(GraphSageEmbedding::new(self.embeddings.clone()))
+    }
+
     pub fn encode(&self) -> Result<GraphSageEmbedding> {
         if self.embeddings.is_empty() {
             return Err(NeuralError::InvalidArgument(
@@ -658,6 +683,99 @@ impl SkipGramState {
                     learning_rate,
                     config.l2_regularization,
                 )? * batch.len() as f32;
+                sample_count += batch.len();
+            }
+            losses.push(epoch_loss / sample_count.max(1) as f32);
+        }
+        let embedding_values = node_count * config.dim;
+        self.embeddings = parameters[..embedding_values]
+            .chunks(config.dim)
+            .map(<[f32]>::to_vec)
+            .collect();
+        self.context_embeddings = parameters[embedding_values..]
+            .chunks(config.dim)
+            .map(<[f32]>::to_vec)
+            .collect();
+        Ok(losses)
+    }
+
+    #[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+    async fn fit_accelerated_webgpu(
+        &mut self,
+        config: &Node2VecConfig,
+        walks: &[Vec<usize>],
+        graph: &WeightedGraph,
+    ) -> Result<Vec<f32>> {
+        const BATCH_SIZE: usize = 128;
+        let pairs = context_pairs(walks, config.window_size);
+        if pairs.is_empty() {
+            return Ok(vec![0.0; config.epochs]);
+        }
+        let negative_distribution = AliasSampler::new(&negative_distribution(graph))
+            .expect("negative distribution is positive");
+        let node_count = self.embeddings.len();
+        let mut parameters = self
+            .embeddings
+            .iter()
+            .flatten()
+            .copied()
+            .chain(self.context_embeddings.iter().flatten().copied())
+            .collect::<Vec<_>>();
+        let mut first_moment = vec![0.0_f32; parameters.len()];
+        let mut second_moment = vec![0.0_f32; parameters.len()];
+        let mut order = (0..pairs.len()).collect::<Vec<_>>();
+        let total_batches = config
+            .epochs
+            .saturating_mul(
+                pairs
+                    .len()
+                    .saturating_mul(config.negative_samples + 1)
+                    .div_ceil(BATCH_SIZE),
+            )
+            .max(1);
+        let mut optimizer_step = 0_u64;
+        let mut losses = Vec::with_capacity(config.epochs);
+        for _ in 0..config.epochs {
+            shuffle(&mut order, &mut self.rng);
+            let mut samples = Vec::with_capacity(pairs.len() * (config.negative_samples + 1));
+            for &pair_index in &order {
+                let (source, target) = pairs[pair_index];
+                samples.push((source, target, 1.0_f32));
+                for _ in 0..config.negative_samples {
+                    let negative = negative_distribution.sample_with_rng(&mut self.rng);
+                    if negative != target {
+                        samples.push((source, negative, 0.0_f32));
+                    }
+                }
+            }
+            let mut epoch_loss = 0.0_f32;
+            let mut sample_count = 0_usize;
+            for batch in samples.chunks(BATCH_SIZE) {
+                optimizer_step += 1;
+                let progress = (optimizer_step - 1) as f32 / total_batches as f32;
+                let learning_rate = config
+                    .min_learning_rate
+                    .max(config.learning_rate * (1.0 - progress));
+                let scalar_graph = SkipGramScalarGraph::new(batch, node_count, config.dim);
+                let state = crate::webgpu_scalar_graph_train_step_f32_async(
+                    &scalar_graph.values,
+                    &scalar_graph.opcodes,
+                    &scalar_graph.left,
+                    &scalar_graph.right,
+                    &scalar_graph.parameter_ids,
+                    scalar_graph.loss,
+                    &parameters,
+                    &first_moment,
+                    &second_moment,
+                    optimizer_step,
+                    learning_rate,
+                    config.l2_regularization,
+                )
+                .await?;
+                epoch_loss += state.0 * batch.len() as f32;
+                parameters = state.1;
+                first_moment = state.2;
+                second_moment = state.3;
                 sample_count += batch.len();
             }
             losses.push(epoch_loss / sample_count.max(1) as f32);

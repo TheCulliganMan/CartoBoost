@@ -72,6 +72,13 @@ route performs window training with the WebGPU tanh-MLP kernel and dispatches
 every recursive hidden layer through WebGPU dense inference; its response uses
 the same forecast and backend-metadata shape as `runForecast`.
 
+Browser Node2Vec pipelines can use `runNode2VecModelWebgpu`. The asynchronous
+route batches skip-gram pairs into the shared scalar-graph training kernel,
+including reverse-mode gradients and optimizer updates on WebGPU. Random-walk
+generation and the branch-heavy CartoBoost tree stage remain on CPU, and the
+response metadata reports both stages instead of claiming the entire pipeline
+ran on the GPU.
+
 `runGraphDiffusionWebgpu` accepts the standard browser graph-temporal frame,
 normalizes its CSR edge weights, and keeps every configured diffusion and
 horizon step on browser WebGPU. It returns the normal graph forecast response,
