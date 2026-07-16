@@ -10643,6 +10643,36 @@ fn geo_initial_bearing_unit_vector_latlng_value(
     .map(|vector| (vector[0], vector[1]))
 }
 
+#[pyfunction(signature = (origins, destinations, backend="cpu"))]
+fn geo_initial_bearing_unit_vector_rows_latlng_value(
+    py: Python<'_>,
+    origins: Vec<(f64, f64)>,
+    destinations: Vec<(f64, f64)>,
+    backend: &str,
+) -> PyResult<Vec<Option<(f64, f64)>>> {
+    let origins = origins
+        .into_iter()
+        .map(|(latitude, longitude)| [latitude, longitude])
+        .collect::<Vec<_>>();
+    let destinations = destinations
+        .into_iter()
+        .map(|(latitude, longitude)| [latitude, longitude])
+        .collect::<Vec<_>>();
+    py.detach(|| {
+        cartoboost_geo_core::initial_bearing_unit_vector_rows_latlng_with_backend(
+            &origins,
+            &destinations,
+            Some(backend),
+        )
+    })
+    .map_err(to_py_geo_core_error)
+    .map(|rows| {
+        rows.into_iter()
+            .map(|row| row.map(|values| (values[0], values[1])))
+            .collect()
+    })
+}
+
 #[pyfunction]
 fn geo_route_feature_vector_value(
     origin_x: f64,
@@ -10652,6 +10682,56 @@ fn geo_route_feature_vector_value(
 ) -> Option<(f64, f64, f64, f64, f64)> {
     cartoboost_geo_core::route_feature_vector([origin_x, origin_y], [destination_x, destination_y])
         .map(|vector| (vector[0], vector[1], vector[2], vector[3], vector[4]))
+}
+
+#[pyfunction(signature = (origins, destinations, backend="cpu"))]
+fn geo_route_feature_rows_value(
+    py: Python<'_>,
+    origins: Vec<(f64, f64)>,
+    destinations: Vec<(f64, f64)>,
+    backend: &str,
+) -> PyResult<Vec<Option<(f64, f64, f64, f64, f64)>>> {
+    let origins = origins.into_iter().map(|(x, y)| [x, y]).collect::<Vec<_>>();
+    let destinations = destinations
+        .into_iter()
+        .map(|(x, y)| [x, y])
+        .collect::<Vec<_>>();
+    py.detach(|| {
+        cartoboost_geo_core::route_feature_rows_with_backend(&origins, &destinations, Some(backend))
+    })
+    .map_err(to_py_geo_core_error)
+    .map(|rows| {
+        rows.into_iter()
+            .map(|row| row.map(|values| (values[0], values[1], values[2], values[3], values[4])))
+            .collect()
+    })
+}
+
+#[pyfunction(signature = (origins, destinations, backend="cpu"))]
+fn geo_clockwise_bearing_unit_vector_rows_value(
+    py: Python<'_>,
+    origins: Vec<(f64, f64)>,
+    destinations: Vec<(f64, f64)>,
+    backend: &str,
+) -> PyResult<Vec<Option<(f64, f64)>>> {
+    let origins = origins.into_iter().map(|(x, y)| [x, y]).collect::<Vec<_>>();
+    let destinations = destinations
+        .into_iter()
+        .map(|(x, y)| [x, y])
+        .collect::<Vec<_>>();
+    py.detach(|| {
+        cartoboost_geo_core::clockwise_bearing_unit_vector_rows_with_backend(
+            &origins,
+            &destinations,
+            Some(backend),
+        )
+    })
+    .map_err(to_py_geo_core_error)
+    .map(|rows| {
+        rows.into_iter()
+            .map(|row| row.map(|values| (values[0], values[1])))
+            .collect()
+    })
 }
 
 #[pyfunction(signature = (point_x, point_y, anchors, backend="cpu"))]
@@ -13014,6 +13094,15 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     m.add_function(wrap_pyfunction!(geo_route_feature_vector_value, m)?)?;
     m.add_function(wrap_pyfunction!(geo_radial_anchor_distances_value, m)?)?;
+    m.add_function(wrap_pyfunction!(geo_route_feature_rows_value, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        geo_clockwise_bearing_unit_vector_rows_value,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        geo_initial_bearing_unit_vector_rows_latlng_value,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(geo_rbf_anchor_features_value, m)?)?;
     m.add_function(wrap_pyfunction!(geo_radial_anchor_distance_rows_value, m)?)?;
     m.add_function(wrap_pyfunction!(geo_rbf_anchor_feature_rows_value, m)?)?;

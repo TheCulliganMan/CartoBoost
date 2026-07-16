@@ -189,6 +189,72 @@ def test_spatial_conformal_uses_group_specific_widths():
     assert interval.upper[1] - interval.lower[1] > interval.upper[0] - interval.lower[0]
 
 
+def test_spatial_conformal_routes_coordinate_local_widths_through_backend():
+    x_train = np.arange(4).reshape(-1, 1)
+    y_train = np.full(4, 10.0)
+    x_cal = np.arange(4).reshape(-1, 1)
+    y_cal = np.array([9.0, 11.0, 5.0, 15.0])
+    model = SpatialConformalRegressor(
+        MeanEstimator(),
+        alpha=0.25,
+        neighbor_count=2,
+        backend="cpu",
+    ).fit(
+        x_train,
+        y_train,
+        x_cal,
+        y_cal,
+        calibration_coordinates=[[0.0, 0.0], [0.1, 0.1], [10.0, 10.0], [10.1, 10.1]],
+        train_end_exclusive=4,
+        calibration_start=4,
+        calibration_end_exclusive=8,
+        test_start=8,
+    )
+
+    interval = model.predict_interval(
+        [[0], [1]],
+        test_start=8,
+        coordinates=[[0.0, 0.0], [10.0, 10.0]],
+    )
+
+    assert interval.metadata["method"] == "spatial_nearest_conformal"
+    assert interval.metadata["backend"] == "cpu"
+    assert interval.upper[1] - interval.lower[1] > interval.upper[0] - interval.lower[0]
+    assert model.metadata_["coordinate_calibration"] is True
+
+
+def test_spatial_conformal_coordinate_backend_round_trips(tmp_path):
+    model = SpatialConformalRegressor(
+        SerializableMeanEstimator(),
+        alpha=0.25,
+        neighbor_count=1,
+        backend="cpu",
+    ).fit(
+        [[0], [1]],
+        [10.0, 10.0],
+        [[2], [3]],
+        [9.0, 15.0],
+        calibration_coordinates=[[0.0, 0.0], [10.0, 10.0]],
+        train_end_exclusive=2,
+        calibration_start=2,
+        calibration_end_exclusive=4,
+        test_start=4,
+    )
+    path = tmp_path / "spatial-conformal.json"
+    model.save(path)
+
+    restored = SpatialConformalRegressor.load(path)
+    interval = restored.predict_interval(
+        [[4], [5]],
+        test_start=4,
+        coordinates=[[0.0, 0.0], [10.0, 10.0]],
+    )
+
+    assert restored.get_params()["backend"] == "cpu"
+    assert restored.get_params()["neighbor_count"] == 1
+    assert interval.metadata["method"] == "spatial_nearest_conformal"
+
+
 def test_forecast_conformal_uses_only_past_cutoff_residuals():
     calibrator = ForecastConformalCalibrator(alpha=0.1).fit(
         actual=[10.0, 11.0, 14.0, 50.0],

@@ -230,6 +230,8 @@ def clockwise_bearing_unit_vector(
 def clockwise_bearing_unit_vectors(
     origins: Sequence[tuple[Any, Any]],
     destinations: Sequence[tuple[Any, Any]],
+    *,
+    backend: Backend | str = Backend.CPU,
 ) -> list[tuple[float, float] | None]:
     """Vectorized planar clockwise bearing unit features for paired coordinates."""
 
@@ -237,9 +239,20 @@ def clockwise_bearing_unit_vectors(
     destination_values = list(destinations)
     if len(origin_values) != len(destination_values):
         raise ValueError("origins and destinations must have the same number of rows")
+    normalized_origins = [
+        _coordinate_pair(origin, f"origins[{idx}]") for idx, origin in enumerate(origin_values)
+    ]
+    normalized_destinations = [
+        _coordinate_pair(destination, f"destinations[{idx}]")
+        for idx, destination in enumerate(destination_values)
+    ]
     return [
-        clockwise_bearing_unit_vector(origin, destination)
-        for origin, destination in zip(origin_values, destination_values, strict=True)
+        None if row is None else (float(row[0]), float(row[1]))
+        for row in _native_geo_feature("geo_clockwise_bearing_unit_vector_rows_value")(
+            normalized_origins,
+            normalized_destinations,
+            str(backend),
+        )
     ]
 
 
@@ -267,6 +280,8 @@ def initial_bearing_unit_vector_latlng(
 def initial_bearing_unit_vectors_latlng(
     origins: Sequence[tuple[Any, Any]],
     destinations: Sequence[tuple[Any, Any]],
+    *,
+    backend: Backend | str = Backend.CPU,
 ) -> list[tuple[float, float] | None]:
     """Vectorized great-circle initial bearing unit features for lat/lng pairs."""
 
@@ -274,9 +289,20 @@ def initial_bearing_unit_vectors_latlng(
     destination_values = list(destinations)
     if len(origin_values) != len(destination_values):
         raise ValueError("origins and destinations must have the same number of rows")
+    normalized_origins = [
+        _coordinate_pair(origin, f"origins[{idx}]") for idx, origin in enumerate(origin_values)
+    ]
+    normalized_destinations = [
+        _coordinate_pair(destination, f"destinations[{idx}]")
+        for idx, destination in enumerate(destination_values)
+    ]
     return [
-        initial_bearing_unit_vector_latlng(origin, destination)
-        for origin, destination in zip(origin_values, destination_values, strict=True)
+        None if row is None else (float(row[0]), float(row[1]))
+        for row in _native_geo_feature("geo_initial_bearing_unit_vector_rows_latlng_value")(
+            normalized_origins,
+            normalized_destinations,
+            str(backend),
+        )
     ]
 
 
@@ -299,6 +325,8 @@ def route_feature_vector(
 def route_feature_rows(
     origins: Sequence[tuple[Any, Any]],
     destinations: Sequence[tuple[Any, Any]],
+    *,
+    backend: Backend | str = Backend.CPU,
 ) -> list[tuple[float, float, float, float, float] | None]:
     """Vectorized route midpoint, distance, and bearing features."""
 
@@ -306,9 +334,20 @@ def route_feature_rows(
     destination_values = list(destinations)
     if len(origin_values) != len(destination_values):
         raise ValueError("origins and destinations must have the same number of rows")
+    normalized_origins = [
+        _coordinate_pair(origin, f"origins[{idx}]") for idx, origin in enumerate(origin_values)
+    ]
+    normalized_destinations = [
+        _coordinate_pair(destination, f"destinations[{idx}]")
+        for idx, destination in enumerate(destination_values)
+    ]
     return [
-        route_feature_vector(origin, destination)
-        for origin, destination in zip(origin_values, destination_values, strict=True)
+        None if row is None else tuple(float(value) for value in row)
+        for row in _native_geo_feature("geo_route_feature_rows_value")(
+            normalized_origins,
+            normalized_destinations,
+            str(backend),
+        )
     ]
 
 

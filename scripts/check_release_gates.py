@@ -225,14 +225,18 @@ def check_stable_cpu_backend_policy() -> dict[str, Any]:
     unconditional_accelerators = [
         line
         for line in dependency_lines
-        if any(name in line for name in ("cuda", "rocm", "metal", "webgpu")) and "features" in line
+        if any(
+            name in line
+            for name in ("cuda", "rocm", "hip", "metal", "directml", "webgpu")
+        )
+        and "features" in line
     ]
     optional_backend_features = {
         line.split(" = ", 1)[0].strip()
         for line in manifest.splitlines()
-        if line.startswith(("cuda =", "rocm =", "metal =", "webgpu ="))
+        if line.startswith(("cuda =", "rocm =", "hip =", "metal =", "directml =", "webgpu ="))
     }
-    expected_features = {"cuda", "rocm", "metal", "webgpu"}
+    expected_features = {"cuda", "rocm", "hip", "metal", "directml", "webgpu"}
     missing_features = sorted(expected_features - optional_backend_features)
     return {
         "passed": not unconditional_accelerators and not missing_features,

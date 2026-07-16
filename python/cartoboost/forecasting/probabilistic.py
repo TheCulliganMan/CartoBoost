@@ -222,6 +222,23 @@ class ConformalIntervalRegressor(ArtifactPersistenceMixin):
         )
         if isinstance(self, SpatialConformalRegressor):
             payload["group_residual_quantiles"] = dict(self.group_residual_quantiles_)
+            payload["backend"] = self.backend
+            payload["neighbor_count"] = self.neighbor_count
+            payload["calibration_actual"] = (
+                None
+                if self.calibration_actual_ is None
+                else self.calibration_actual_.tolist()
+            )
+            payload["calibration_prediction"] = (
+                None
+                if self.calibration_prediction_ is None
+                else self.calibration_prediction_.tolist()
+            )
+            payload["calibration_coordinates"] = (
+                None
+                if self.calibration_coordinates_ is None
+                else self.calibration_coordinates_.tolist()
+            )
         Path(path).write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
 
     @classmethod
@@ -234,7 +251,18 @@ class ConformalIntervalRegressor(ArtifactPersistenceMixin):
         target_cls: type[ConformalIntervalRegressor] = (
             SpatialConformalRegressor if artifact_type == "SpatialConformalRegressor" else cls
         )
-        obj = target_cls(load_model_artifact(payload["estimator"]), alpha=float(payload["alpha"]))
+        if target_cls is SpatialConformalRegressor:
+            obj = target_cls(
+                load_model_artifact(payload["estimator"]),
+                alpha=float(payload["alpha"]),
+                neighbor_count=int(payload.get("neighbor_count", 16)),
+                backend=str(payload.get("backend", Backend.CPU.value)),
+            )
+        else:
+            obj = target_cls(
+                load_model_artifact(payload["estimator"]),
+                alpha=float(payload["alpha"]),
+            )
         obj.calibrator_.residual_quantile_ = float(payload["residual_quantile"])
         obj.calibrator_._test_start = int(payload["test_start"])
         if isinstance(obj, SpatialConformalRegressor):
@@ -242,6 +270,14 @@ class ConformalIntervalRegressor(ArtifactPersistenceMixin):
                 str(key): float(value)
                 for key, value in payload.get("group_residual_quantiles", {}).items()
             }
+            obj.calibration_actual_ = _optional_vector(payload.get("calibration_actual"))
+            obj.calibration_prediction_ = _optional_vector(payload.get("calibration_prediction"))
+            coordinates = payload.get("calibration_coordinates")
+            obj.calibration_coordinates_ = (
+                None
+                if coordinates is None
+                else _coordinate_matrix(coordinates, "calibration_coordinates")
+            )
         return obj
 
 
@@ -371,6 +407,24 @@ class QuantileCartoBoostRegressor(ArtifactPersistenceMixin):
 
 
 class SpatialConformalRegressor(ConformalIntervalRegressor):
+    def __init__(
+        self,
+        estimator: Any,
+        *,
+        alpha: float = 0.1,
+        neighbor_count: int = 16,
+        backend: Backend | str = Backend.CPU,
+    ) -> None:
+        super().__init__(estimator, alpha=alpha)
+        if int(neighbor_count) <= 0:
+            raise ValueError("neighbor_count must be positive")
+        self.neighbor_count = int(neighbor_count)
+        self.backend = str(backend)
+        self.group_residual_quantiles_: dict[str, float] = {}
+        self.calibration_actual_: np.ndarray | None = None
+        self.calibration_prediction_: np.ndarray | None = None
+        self.calibration_coordinates_: np.ndarray | None = None
+
     def fit(
         self,
         x_train: Any,
@@ -379,6 +433,7 @@ class SpatialConformalRegressor(ConformalIntervalRegressor):
         y_calibration: Any,
         *,
         groups: Any | None = None,
+        calibration_coordinates: Any | None = None,
         train_end_exclusive: int,
         calibration_start: int,
         calibration_end_exclusive: int,
@@ -394,19 +449,31 @@ class SpatialConformalRegressor(ConformalIntervalRegressor):
             calibration_end_exclusive=calibration_end_exclusive,
             test_start=test_start,
         )
-        if groups is None:
-            raise ValueError("groups are required for spatial conformal calibration")
-        group_arr = np.asarray(groups)
-        if group_arr.shape[0] != _vector(y_calibration, "y_calibration").shape[0]:
-            raise ValueError("groups length must match calibration rows")
-        residuals = np.abs(
-            _vector(y_calibration, "y_calibration")
-            - _vector(self.estimator.predict(x_calibration), "calibration_prediction")
-        )
-        self.group_residual_quantiles_ = {
-            str(group): _conformal_quantile(residuals[group_arr == group], self.alpha)
-            for group in np.unique(group_arr)
-        }
+        actual = _vector(y_calibration, "y_calibration")
+        prediction = _vector(self.estimator.predict(x_calibration), "calibration_prediction")
+        if groups is None and calibration_coordinates is None:
+            raise ValueError(
+                "groups or calibration_coordinates are required for spatial conformal calibration"
+            )
+        if groups is not None:
+            group_arr = np.asarray(groups)
+            if group_arr.shape[0] != actual.shape[0]:
+                raise ValueError("groups length must match calibration rows")
+            residuals = np.abs(actual - prediction)
+            self.group_residual_quantiles_ = {
+                str(group): _conformal_quantile(residuals[group_arr == group], self.alpha)
+                for group in np.unique(group_arr)
+            }
+        if calibration_coordinates is not None:
+            coordinates = _coordinate_matrix(
+                calibration_coordinates,
+                "calibration_coordinates",
+            )
+            if coordinates.shape[0] != actual.shape[0]:
+                raise ValueError("calibration_coordinates row count must match calibration rows")
+            self.calibration_actual_ = actual
+            self.calibration_prediction_ = prediction
+            self.calibration_coordinates_ = coordinates
         return self
 
     def predict_interval(
@@ -415,8 +482,42 @@ class SpatialConformalRegressor(ConformalIntervalRegressor):
         *,
         test_start: int,
         groups: Any | None = None,
+        coordinates: Any | None = None,
     ) -> ConformalInterval:
         base = super().predict_interval(x, test_start=test_start)
+        if coordinates is not None:
+            if (
+                self.calibration_actual_ is None
+                or self.calibration_prediction_ is None
+                or self.calibration_coordinates_ is None
+            ):
+                raise ValueError(
+                    "fit with calibration_coordinates before coordinate-local prediction"
+                )
+            prediction = self.predict(x)
+            quantiles = nearest_conformal_residual_quantiles(
+                self.calibration_actual_,
+                self.calibration_prediction_,
+                self.calibration_coordinates_,
+                coordinates,
+                neighbor_count=self.neighbor_count,
+                alpha=self.alpha,
+                backend=self.backend,
+            )
+            if quantiles.shape[0] != prediction.shape[0]:
+                raise ValueError("coordinates length must match prediction rows")
+            return ConformalInterval(
+                lower=prediction - quantiles,
+                upper=prediction + quantiles,
+                residual_quantile=base.residual_quantile,
+                alpha=base.alpha,
+                metadata={
+                    **base.metadata,
+                    "method": "spatial_nearest_conformal",
+                    "backend": self.backend,
+                    "neighbor_count": self.neighbor_count,
+                },
+            )
         if groups is None:
             return base
         group_arr = np.asarray(groups)
@@ -436,6 +537,25 @@ class SpatialConformalRegressor(ConformalIntervalRegressor):
             alpha=base.alpha,
             metadata={**base.metadata, "method": "spatial_group_conformal"},
         )
+
+    def get_params(self, deep: bool = True) -> dict[str, Any]:
+        del deep
+        return {
+            "estimator": self.estimator,
+            "alpha": self.alpha,
+            "neighbor_count": self.neighbor_count,
+            "backend": self.backend,
+        }
+
+    @property
+    def metadata_(self) -> dict[str, Any]:
+        return {
+            **super().metadata_,
+            "backend": self.backend,
+            "neighbor_count": self.neighbor_count,
+            "coordinate_calibration": self.calibration_coordinates_ is not None,
+            "group_calibration": bool(self.group_residual_quantiles_),
+        }
 
 
 class ForecastConformalCalibrator:
@@ -857,6 +977,10 @@ def _vector(values: Any, name: str) -> np.ndarray:
     if not np.all(np.isfinite(arr)):
         raise ValueError(f"{name} must contain only finite values")
     return arr
+
+
+def _optional_vector(values: Any) -> np.ndarray | None:
+    return None if values is None else _vector(values, "artifact_vector")
 
 
 def _coordinate_matrix(values: Any, name: str) -> np.ndarray:

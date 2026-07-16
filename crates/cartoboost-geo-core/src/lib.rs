@@ -818,6 +818,87 @@ pub fn route_feature_vector(origin: [f64; 2], destination: [f64; 2]) -> Option<[
     ])
 }
 
+pub fn route_feature_rows_with_backend(
+    origins: &[[f64; 2]],
+    destinations: &[[f64; 2]],
+    backend: Option<&str>,
+) -> Result<Vec<Option<[f64; 5]>>> {
+    if origins.len() != destinations.len() {
+        return Err(GeoCoreError::InvalidInput(
+            "origins and destinations must have the same number of rows".to_string(),
+        ));
+    }
+    if origins
+        .iter()
+        .chain(destinations)
+        .flatten()
+        .any(|value| !value.is_finite())
+    {
+        return Err(GeoCoreError::InvalidInput(
+            "origins and destinations must be finite".to_string(),
+        ));
+    }
+    let selection = select_backend_for(backend.or(Some("cpu")), BackendOperation::Dense)
+        .map_err(|error| GeoCoreError::InvalidInput(error.to_string()))?;
+    if selection.selected == "cpu" || origins.len().saturating_mul(16) < GEO_DENSE_DISPATCH_MIN_OPS
+    {
+        return Ok(origins
+            .par_iter()
+            .zip(destinations.par_iter())
+            .map(|(&origin, &destination)| route_feature_vector(origin, destination))
+            .collect());
+    }
+    let input = origins
+        .iter()
+        .zip(destinations)
+        .map(|(origin, destination)| {
+            vec![
+                origin[0] as f32,
+                origin[1] as f32,
+                destination[0] as f32,
+                destination[1] as f32,
+            ]
+        })
+        .collect::<Vec<_>>();
+    // Produce midpoint x/y and route dx/dy in one device dispatch. Distance
+    // and unit-vector normalization remain a compact row-wise reduction.
+    let weights = vec![
+        0.5, 0.0, -1.0, 0.0, 0.0, 0.5, 0.0, -1.0, 0.5, 0.0, 1.0, 0.0, 0.0, 0.5, 0.0, 1.0,
+    ];
+    backend_dense_layer_f32(&selection, &input, &weights, &[0.0; 4])
+        .map_err(|error| GeoCoreError::InvalidInput(error.to_string()))
+        .map(|rows| {
+            rows.into_iter()
+                .map(|row| {
+                    let dx = f64::from(row[2]);
+                    let dy = f64::from(row[3]);
+                    let distance = dx.hypot(dy);
+                    (distance > 0.0 && distance.is_finite()).then(|| {
+                        [
+                            f64::from(row[0]),
+                            f64::from(row[1]),
+                            distance,
+                            dx / distance,
+                            dy / distance,
+                        ]
+                    })
+                })
+                .collect()
+        })
+}
+
+pub fn clockwise_bearing_unit_vector_rows_with_backend(
+    origins: &[[f64; 2]],
+    destinations: &[[f64; 2]],
+    backend: Option<&str>,
+) -> Result<Vec<Option<[f64; 2]>>> {
+    route_feature_rows_with_backend(origins, destinations, backend).map(|rows| {
+        rows.into_iter()
+            .map(|row| row.map(|features| [features[3], features[4]]))
+            .collect()
+    })
+}
+
 pub fn radial_anchor_distances(point: [f64; 2], anchors: &[[f64; 2]]) -> Vec<f64> {
     anchors
         .iter()
@@ -1049,6 +1130,40 @@ pub fn initial_bearing_unit_vector_latlng(
     Some([east / norm, north / norm])
 }
 
+pub fn initial_bearing_unit_vector_rows_latlng_with_backend(
+    origins: &[[f64; 2]],
+    destinations: &[[f64; 2]],
+    backend: Option<&str>,
+) -> Result<Vec<Option<[f64; 2]>>> {
+    if origins.len() != destinations.len() {
+        return Err(GeoCoreError::InvalidInput(
+            "origins and destinations must have the same number of rows".to_string(),
+        ));
+    }
+    if origins
+        .iter()
+        .chain(destinations)
+        .flatten()
+        .any(|value| !value.is_finite())
+    {
+        return Err(GeoCoreError::InvalidInput(
+            "origins and destinations must be finite".to_string(),
+        ));
+    }
+    // Validate explicit backend selection consistently. The trigonometric
+    // reduction remains on the parallel CPU path until a fused kernel can beat
+    // it without round-tripping intermediate tensors.
+    select_backend_for(backend.or(Some("cpu")), BackendOperation::VectorDispatch)
+        .map_err(|error| GeoCoreError::InvalidInput(error.to_string()))?;
+    Ok(origins
+        .par_iter()
+        .zip(destinations.par_iter())
+        .map(|(origin, destination)| {
+            initial_bearing_unit_vector_latlng(origin[0], origin[1], destination[0], destination[1])
+        })
+        .collect())
+}
+
 pub fn anisotropic_euclidean_distance(
     left: [f64; 2],
     right: [f64; 2],
@@ -1248,6 +1363,62 @@ mod tests {
                 assert!((expected[0] - actual[0]).abs() < 1.0e-4, "{backend}");
                 assert!((expected[1] - actual[1]).abs() < 1.0e-4, "{backend}");
             }
+        }
+    }
+
+    #[test]
+    fn route_feature_rows_support_every_dense_backend() {
+        let origins = (0..1_100)
+            .map(|index| [index as f64 * 0.25, index as f64 * -0.125])
+            .collect::<Vec<_>>();
+        let destinations = origins
+            .iter()
+            .enumerate()
+            .map(|(index, origin)| {
+                if index == 17 {
+                    *origin
+                } else {
+                    [origin[0] + 3.0, origin[1] + 4.0]
+                }
+            })
+            .collect::<Vec<_>>();
+        let expected =
+            route_feature_rows_with_backend(&origins, &destinations, Some("cpu")).unwrap();
+        for backend in cartoboost_accelerator::available_backends() {
+            let actual =
+                route_feature_rows_with_backend(&origins, &destinations, Some(&backend)).unwrap();
+            for (expected, actual) in expected.iter().zip(actual) {
+                match (expected, actual) {
+                    (Some(expected), Some(actual)) => {
+                        for (expected, actual) in expected.iter().zip(actual) {
+                            assert!((expected - actual).abs() < 1.0e-3, "{backend}");
+                        }
+                    }
+                    (None, None) => {}
+                    _ => panic!("route feature zero-distance parity mismatch for {backend}"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn initial_bearing_rows_accept_every_backend() {
+        let origins = vec![[40.0, -73.0], [40.0, -73.0], [41.0, -74.0]];
+        let destinations = vec![[41.0, -73.0], [40.0, -73.0], [40.5, -72.5]];
+        let expected = initial_bearing_unit_vector_rows_latlng_with_backend(
+            &origins,
+            &destinations,
+            Some("cpu"),
+        )
+        .unwrap();
+        for backend in cartoboost_accelerator::available_backends() {
+            let actual = initial_bearing_unit_vector_rows_latlng_with_backend(
+                &origins,
+                &destinations,
+                Some(&backend),
+            )
+            .unwrap();
+            assert_eq!(actual, expected, "{backend}");
         }
     }
 
