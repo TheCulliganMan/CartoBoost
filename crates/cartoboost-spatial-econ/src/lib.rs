@@ -1279,7 +1279,7 @@ fn spatial_affine_cpu_fallback(
 
 fn predict_design_cpu(design: &[Vec<f64>], params: &[f64]) -> Vec<f64> {
     design
-        .iter()
+        .par_iter()
         .map(|row| row.iter().zip(params).map(|(x, weight)| x * weight).sum())
         .collect()
 }

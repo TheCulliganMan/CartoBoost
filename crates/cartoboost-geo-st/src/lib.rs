@@ -485,8 +485,6 @@ impl DcrnnForecaster {
             self.config.hidden_size,
             0xbf58_476d_1ce4_e5b9,
         );
-        self.weights = vec![vec![0.0; decoder_feature_len]; frame.horizon];
-        self.intercepts = vec![0.0; frame.horizon];
         let forward = frame.adjacency.row_normalized();
         let reverse = forward.transpose(nodes);
         let samples = frame.target.len() - frame.horizon;
@@ -498,48 +496,55 @@ impl DcrnnForecaster {
         }
         let teacher_ratio = self.average_teacher_forcing_ratio();
 
-        for h in 0..frame.horizon {
-            let mut xtx = vec![vec![0.0; decoder_feature_len]; decoder_feature_len];
-            let mut xty = vec![0.0; decoder_feature_len];
-            for t in 0..samples {
-                let mut decoder_input = normalized_target[t].clone();
-                let mut decoder_hidden = hidden_by_cutoff[t].clone();
-                let mut prior_prediction = decoder_input.clone();
-                for step in 0..=h {
-                    let decoder_features =
-                        self.decoder_features(&decoder_input, &decoder_hidden, &forward, &reverse);
-                    if step == h {
-                        for node in 0..nodes {
-                            let actual = normalized_target[t + h + 1][node];
-                            let x = &decoder_features
-                                [node * decoder_feature_len..(node + 1) * decoder_feature_len];
-                            for row in 0..decoder_feature_len {
-                                xty[row] += x[row] * actual;
-                                for col in 0..decoder_feature_len {
-                                    xtx[row][col] += x[row] * x[col];
+        self.weights = (0..frame.horizon)
+            .into_par_iter()
+            .map(|h| {
+                let mut xtx = vec![vec![0.0; decoder_feature_len]; decoder_feature_len];
+                let mut xty = vec![0.0; decoder_feature_len];
+                for t in 0..samples {
+                    let mut decoder_input = normalized_target[t].clone();
+                    let mut decoder_hidden = hidden_by_cutoff[t].clone();
+                    let mut prior_prediction = decoder_input.clone();
+                    for step in 0..=h {
+                        let decoder_features = self.decoder_features(
+                            &decoder_input,
+                            &decoder_hidden,
+                            &forward,
+                            &reverse,
+                        );
+                        if step == h {
+                            for node in 0..nodes {
+                                let actual = normalized_target[t + h + 1][node];
+                                let x = &decoder_features
+                                    [node * decoder_feature_len..(node + 1) * decoder_feature_len];
+                                for row in 0..decoder_feature_len {
+                                    xty[row] += x[row] * actual;
+                                    for col in 0..decoder_feature_len {
+                                        xtx[row][col] += x[row] * x[col];
+                                    }
                                 }
                             }
+                            break;
                         }
-                        break;
+                        let next_actual = &normalized_target[t + step + 1];
+                        prior_prediction =
+                            blend_rows(next_actual, &prior_prediction, teacher_ratio);
+                        decoder_hidden = self.recurrent_hidden(
+                            &decoder_hidden,
+                            &prior_prediction,
+                            &forward,
+                            &reverse,
+                        );
+                        decoder_input = prior_prediction.clone();
                     }
-                    let next_actual = &normalized_target[t + step + 1];
-                    prior_prediction = blend_rows(next_actual, &prior_prediction, teacher_ratio);
-                    decoder_hidden = self.recurrent_hidden(
-                        &decoder_hidden,
-                        &prior_prediction,
-                        &forward,
-                        &reverse,
-                    );
-                    decoder_input = prior_prediction.clone();
                 }
-            }
-            for (idx, row) in xtx.iter_mut().enumerate() {
-                row[idx] += self.config.ridge.max(1.0e-8);
-            }
-            let solved = solve_linear_system(xtx, xty);
-            self.weights[h] = solved;
-            self.intercepts[h] = 0.0;
-        }
+                for (idx, row) in xtx.iter_mut().enumerate() {
+                    row[idx] += self.config.ridge.max(1.0e-8);
+                }
+                solve_linear_system(xtx, xty)
+            })
+            .collect();
+        self.intercepts = vec![0.0; frame.horizon];
 
         self.node_ids = frame.node_ids.clone();
         self.frequency = frame.frequency.clone();
@@ -8379,31 +8384,34 @@ impl GraphWaveNetForecaster {
             })
             .collect::<Vec<_>>();
         let adjacency = frame.adjacency.row_normalized();
-        self.weights = vec![vec![0.0; feature_len]; frame.horizon];
-        self.intercepts = vec![0.0; frame.horizon];
         let samples = frame.target.len() - self.config.lookback - frame.horizon + 1;
-        for h in 0..frame.horizon {
-            let mut xtx = vec![vec![0.0; feature_len]; feature_len];
-            let mut xty = vec![0.0; feature_len];
-            for sample in 0..samples {
-                let cutoff = sample + self.config.lookback;
-                let features = self.wave_features(&normalized_target[sample..cutoff], &adjacency);
-                let actual = &normalized_target[cutoff + h];
-                for node in 0..nodes {
-                    let x = &features[node * feature_len..(node + 1) * feature_len];
-                    for row in 0..feature_len {
-                        xty[row] += x[row] * actual[node];
-                        for col in 0..feature_len {
-                            xtx[row][col] += x[row] * x[col];
+        self.weights = (0..frame.horizon)
+            .into_par_iter()
+            .map(|h| {
+                let mut xtx = vec![vec![0.0; feature_len]; feature_len];
+                let mut xty = vec![0.0; feature_len];
+                for sample in 0..samples {
+                    let cutoff = sample + self.config.lookback;
+                    let features =
+                        self.wave_features(&normalized_target[sample..cutoff], &adjacency);
+                    let actual = &normalized_target[cutoff + h];
+                    for node in 0..nodes {
+                        let x = &features[node * feature_len..(node + 1) * feature_len];
+                        for row in 0..feature_len {
+                            xty[row] += x[row] * actual[node];
+                            for col in 0..feature_len {
+                                xtx[row][col] += x[row] * x[col];
+                            }
                         }
                     }
                 }
-            }
-            for (idx, row) in xtx.iter_mut().enumerate() {
-                row[idx] += self.config.ridge.max(1.0e-8);
-            }
-            self.weights[h] = solve_linear_system(xtx, xty);
-        }
+                for (idx, row) in xtx.iter_mut().enumerate() {
+                    row[idx] += self.config.ridge.max(1.0e-8);
+                }
+                solve_linear_system(xtx, xty)
+            })
+            .collect();
+        self.intercepts = vec![0.0; frame.horizon];
         self.node_ids = frame.node_ids.clone();
         self.frequency = frame.frequency.clone();
         self.horizon = frame.horizon;
@@ -8614,32 +8622,34 @@ impl STAEformerForecaster {
         self.spatial_weights = (0..self.config.attention_heads)
             .map(|idx| 0.5 + idx as f64 / self.config.attention_heads as f64)
             .collect();
-        self.weights = vec![vec![0.0; feature_len]; frame.horizon];
-        self.intercepts = vec![0.0; frame.horizon];
         let samples = frame.target.len() - self.config.lookback - frame.horizon + 1;
-        for h in 0..frame.horizon {
-            let mut xtx = vec![vec![0.0; feature_len]; feature_len];
-            let mut xty = vec![0.0; feature_len];
-            for sample in 0..samples {
-                let cutoff = sample + self.config.lookback;
-                let features =
-                    self.attention_features(&normalized_target[sample..cutoff], &adjacency);
-                let actual = &normalized_target[cutoff + h];
-                for node in 0..nodes {
-                    let x = &features[node * feature_len..(node + 1) * feature_len];
-                    for row in 0..feature_len {
-                        xty[row] += x[row] * actual[node];
-                        for col in 0..feature_len {
-                            xtx[row][col] += x[row] * x[col];
+        self.weights = (0..frame.horizon)
+            .into_par_iter()
+            .map(|h| {
+                let mut xtx = vec![vec![0.0; feature_len]; feature_len];
+                let mut xty = vec![0.0; feature_len];
+                for sample in 0..samples {
+                    let cutoff = sample + self.config.lookback;
+                    let features =
+                        self.attention_features(&normalized_target[sample..cutoff], &adjacency);
+                    let actual = &normalized_target[cutoff + h];
+                    for node in 0..nodes {
+                        let x = &features[node * feature_len..(node + 1) * feature_len];
+                        for row in 0..feature_len {
+                            xty[row] += x[row] * actual[node];
+                            for col in 0..feature_len {
+                                xtx[row][col] += x[row] * x[col];
+                            }
                         }
                     }
                 }
-            }
-            for (idx, row) in xtx.iter_mut().enumerate() {
-                row[idx] += self.config.ridge.max(1.0e-8);
-            }
-            self.weights[h] = solve_linear_system(xtx, xty);
-        }
+                for (idx, row) in xtx.iter_mut().enumerate() {
+                    row[idx] += self.config.ridge.max(1.0e-8);
+                }
+                solve_linear_system(xtx, xty)
+            })
+            .collect();
+        self.intercepts = vec![0.0; frame.horizon];
         self.node_ids = frame.node_ids.clone();
         self.frequency = frame.frequency.clone();
         self.horizon = frame.horizon;

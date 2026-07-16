@@ -973,13 +973,15 @@ fn validate_representation_inputs(
 }
 
 fn column_mean(features: &[Vec<f64>]) -> Vec<f64> {
-    let mut out = vec![0.0; features[0].len()];
-    for row in features {
-        for (idx, value) in row.iter().enumerate() {
-            out[idx] += value / features.len() as f64;
-        }
-    }
-    out
+    (0..features[0].len())
+        .into_par_iter()
+        .map(|idx| {
+            features
+                .iter()
+                .map(|row| row[idx] / features.len() as f64)
+                .sum()
+        })
+        .collect()
 }
 
 fn region_feature_means(
