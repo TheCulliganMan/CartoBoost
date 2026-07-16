@@ -1,9 +1,10 @@
 #[cfg(all(feature = "cuda", target_os = "linux"))]
 use cartoboost_neural::CudaTensorArena;
 use cartoboost_neural::{
-    backend_affine_scores, backend_csr_diffusion_f32, backend_csr_row_softmax_f32,
-    backend_dense_layer_f32, backend_scalar_graph_f32, backend_scalar_graph_train_step_f32,
-    select_backend_for_operations, BackendOperation, BackendSelection,
+    backend_adamw_step_f32, backend_affine_scores, backend_csr_diffusion_f32,
+    backend_csr_row_softmax_f32, backend_dense_layer_f32, backend_scalar_graph_f32,
+    backend_scalar_graph_train_step_f32, select_backend_for_operations, BackendOperation,
+    BackendSelection,
 };
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -15,6 +16,7 @@ use std::path::Path;
 
 const GEO_ST_AFFINE_DISPATCH_MIN_OPS: usize = 16_384;
 const GEO_ST_DENSE_DISPATCH_MIN_OPS: usize = 16_384;
+const GEO_ST_ADAMW_DISPATCH_MIN_VALUES: usize = 16_384;
 
 pub mod market;
 pub use market::{
@@ -4981,9 +4983,55 @@ impl TrainableGraphTransformerState {
             .collect())
     }
 
-    fn adamw_step(&mut self, gradients: &[f64], learning_rate: f64, weight_decay: f64) {
-        self.steps += 1;
-        let step = self.steps as f64;
+    fn adamw_step(
+        &mut self,
+        gradients: &[f64],
+        learning_rate: f64,
+        weight_decay: f64,
+        backend: Option<&BackendSelection>,
+    ) -> Result<()> {
+        let next_step = self.steps + 1;
+        if let Some(selection) = backend.filter(|selection| {
+            selection.selected != "cpu" && self.parameters.len() >= GEO_ST_ADAMW_DISPATCH_MIN_VALUES
+        }) {
+            let mut parameters = self
+                .parameters
+                .iter()
+                .map(|value| *value as f32)
+                .collect::<Vec<_>>();
+            let mut first_moment = self
+                .first_moment
+                .iter()
+                .map(|value| *value as f32)
+                .collect::<Vec<_>>();
+            let mut second_moment = self
+                .second_moment
+                .iter()
+                .map(|value| *value as f32)
+                .collect::<Vec<_>>();
+            let gradients = gradients
+                .iter()
+                .map(|value| *value as f32)
+                .collect::<Vec<_>>();
+            backend_adamw_step_f32(
+                selection,
+                &mut parameters,
+                &mut first_moment,
+                &mut second_moment,
+                &gradients,
+                next_step,
+                learning_rate as f32,
+                weight_decay as f32,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+            self.parameters = parameters.into_iter().map(f64::from).collect();
+            self.first_moment = first_moment.into_iter().map(f64::from).collect();
+            self.second_moment = second_moment.into_iter().map(f64::from).collect();
+            self.steps = next_step;
+            return Ok(());
+        }
+        self.steps = next_step;
+        let step = next_step as f64;
         for (index, gradient) in gradients.iter().copied().enumerate() {
             let gradient = gradient + weight_decay * self.parameters[index];
             self.first_moment[index] = 0.9 * self.first_moment[index] + 0.1 * gradient;
@@ -4994,6 +5042,7 @@ impl TrainableGraphTransformerState {
             self.parameters[index] -=
                 learning_rate * corrected_first / (corrected_second.sqrt() + 1e-8);
         }
+        Ok(())
     }
 
     /// The paper pretrains MST and freezes it before fitting LSTTN.  These
@@ -5181,7 +5230,7 @@ impl TrainableGraphTransformerState {
             if *profile == GraphTransformerProfile::LongShortFusion {
                 self.freeze_lsttn_transformer_gradients(self.layout(), &mut gradients);
             }
-            self.adamw_step(&gradients, learning_rate, weight_decay);
+            self.adamw_step(&gradients, learning_rate, weight_decay, backend)?;
             Ok(value)
         }
     }
@@ -5441,7 +5490,7 @@ impl TrainableGraphTransformerState {
             }
         }
         if !accelerated {
-            self.adamw_step(&gradients, learning_rate, weight_decay);
+            self.adamw_step(&gradients, learning_rate, weight_decay, backend)?;
         }
         Ok(total_loss)
     }
@@ -9325,7 +9374,12 @@ impl PaperGraphTransformerForecaster {
                         }
                         state.freeze_lsttn_transformer_gradients(state.layout(), &mut gradients);
                         clip_gradient_norm(&mut gradients, 3.0);
-                        state.adamw_step(&gradients, epoch_learning_rate, self.config.weight_decay);
+                        state.adamw_step(
+                            &gradients,
+                            epoch_learning_rate,
+                            self.config.weight_decay,
+                            Some(&backend),
+                        )?;
                         loss * batch_scale
                     };
                     supervised_batches_completed = task_index + 1;
@@ -11489,6 +11543,46 @@ mod tests {
                     (actual - expected).abs() < 2.0e-3,
                     "{backend}: {actual} != {expected}"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn lsttn_adamw_matches_cpu_across_available_backends() {
+        let initial =
+            TrainableGraphTransformerState::initialized(8, 32, 4, 24, 8, 96, 4, 4, 2, 0xada0);
+        assert!(initial.parameters.len() >= GEO_ST_ADAMW_DISPATCH_MIN_VALUES);
+        let gradients = (0..initial.parameters.len())
+            .map(|index| (index as f64 * 0.019).sin() * 0.01)
+            .collect::<Vec<_>>();
+        let mut expected = initial.clone();
+        expected
+            .adamw_step(&gradients, 0.001, 1.0e-5, None)
+            .unwrap();
+
+        for backend in available_compute_backends()
+            .into_iter()
+            .filter(|backend| backend != "cpu")
+        {
+            let selection =
+                cartoboost_neural::select_backend_for(Some(&backend), BackendOperation::AdamW)
+                    .unwrap();
+            let mut actual = initial.clone();
+            actual
+                .adamw_step(&gradients, 0.001, 1.0e-5, Some(&selection))
+                .unwrap_or_else(|error| panic!("{backend} LSTTN AdamW failed: {error}"));
+            assert_eq!(actual.steps, 1);
+            for (actual, expected) in actual.parameters.iter().zip(&expected.parameters) {
+                assert!(
+                    (actual - expected).abs() < 2.0e-5,
+                    "{backend}: {actual} != {expected}"
+                );
+            }
+            for (actual, expected) in actual.first_moment.iter().zip(&expected.first_moment) {
+                assert!((actual - expected).abs() < 1.0e-6);
+            }
+            for (actual, expected) in actual.second_moment.iter().zip(&expected.second_moment) {
+                assert!((actual - expected).abs() < 1.0e-7);
             }
         }
     }

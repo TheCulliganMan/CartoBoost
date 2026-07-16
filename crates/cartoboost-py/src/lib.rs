@@ -4139,6 +4139,7 @@ impl NativePaperGraphTransformerForecaster {
                 backend: graph_st_select_compute_backend_for_operations(
                     backend,
                     &[
+                        BackendOperation::AdamW,
                         BackendOperation::Dense,
                         BackendOperation::CsrRowSoftmax,
                         BackendOperation::ScalarGraph,
