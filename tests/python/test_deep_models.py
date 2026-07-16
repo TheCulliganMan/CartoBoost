@@ -5,6 +5,7 @@ import pickle
 import types
 
 import cartoboost.deep._native as native_helpers
+import cartoboost.deep.graph as graph_module
 import cartoboost.deep.temporal as temporal_module
 import numpy as np
 import pytest
@@ -533,6 +534,55 @@ def test_spatiotemporal_graph_forecaster_rejects_removed_multi_view_representati
             edge_delay_prior=[1, 1],
             multi_view_views=views,
         )
+
+
+def test_static_graph_falsifier_dispatches_csr_backend(monkeypatch):
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        graph_module,
+        "workload_decision",
+        lambda backend, operation, workload_size, minimum_accelerated_size: {
+            "executed": "cpu" if backend == "cpu" else "cuda"
+        },
+    )
+
+    def accelerated_diffusion(
+        indptr,
+        indices,
+        weights,
+        values,
+        *,
+        channels,
+        backend=None,
+    ):
+        calls.append(str(backend))
+        output = np.zeros((len(indptr) - 1, channels), dtype=np.float32)
+        nodes = np.asarray(values, dtype=np.float32).reshape(-1, channels)
+        for row in range(len(indptr) - 1):
+            for offset in range(indptr[row], indptr[row + 1]):
+                output[row] += weights[offset] * nodes[indices[offset]]
+        return output
+
+    monkeypatch.setattr(graph_module, "csr_diffusion", accelerated_diffusion)
+    history = np.asarray([[1.0, 2.0, 3.0], [2.0, 4.0, 6.0]], dtype=float)
+    actual = graph_module._static_adjacency_forecast(
+        history,
+        [(0, 1), (1, 2)],
+        np.asarray([1.0, 0.5]),
+        3,
+        "cuda",
+    )
+    expected = graph_module._static_adjacency_forecast(
+        history,
+        [(0, 1), (1, 2)],
+        np.asarray([1.0, 0.5]),
+        3,
+        "cpu",
+    )
+
+    assert calls == ["cuda"] * 3
+    assert np.allclose(actual, expected, rtol=1e-6, atol=1e-6)
 
 
 def test_delay_aware_graph_transformer_direction_delay_and_roundtrip(tmp_path):

@@ -23,6 +23,7 @@ from cartoboost.forecasting.graph_st import STGformerForecaster as _STGformerFor
 from cartoboost.forecasting.graph_st import STGormerForecaster as _STGormerForecaster
 
 from .._artifacts import ArtifactPersistenceMixin
+from ..accelerators import csr_diffusion, workload_decision
 from ..config import Backend, GraphBackbone
 from .flow import flow_uncertainty_report
 from .frames import GraphTemporalFrame
@@ -238,6 +239,7 @@ class DelayAwareGraphTransformer(ArtifactPersistenceMixin):
             native_edges,
             np.asarray(native_weights, dtype=float),
             self.horizon,
+            self.backend,
         )
         self.metadata_ = {
             "model_class": "PropagationDelayGraphForecaster",
@@ -541,18 +543,45 @@ def _static_adjacency_forecast(
     edges: list[tuple[int, int]],
     weights: np.ndarray,
     horizon: int,
+    backend: str = "cpu",
 ) -> np.ndarray:
     current = history[-1].copy()
     previous = history[-2].copy() if history.shape[0] >= 2 else current.copy()
+    node_count = current.shape[0]
+    incoming: list[list[tuple[int, float]]] = [[] for _ in range(node_count)]
+    counts = np.zeros(node_count, dtype=float)
+    for edge_idx, (source, target) in enumerate(edges):
+        weight = float(weights[edge_idx])
+        incoming[target].append((source, weight))
+        counts[target] += abs(weight)
+    counts = np.where(counts > 0.0, counts, 1.0)
+    indptr = [0]
+    indices: list[int] = []
+    normalized_weights: list[float] = []
+    for target, row in enumerate(incoming):
+        indices.extend(source for source, _weight in row)
+        normalized_weights.extend(weight / counts[target] for _source, weight in row)
+        indptr.append(len(indices))
+    workload_size = int(max(1, horizon) * max(1, len(edges)))
+    dispatch = workload_decision(backend, "csr_diffusion", workload_size, 16_384)
     rows = []
     for _step in range(horizon):
-        graph_signal = np.zeros_like(current)
-        counts = np.zeros_like(current)
-        for edge_idx, (source, target) in enumerate(edges):
-            graph_signal[target] += previous[source] * weights[edge_idx]
-            counts[target] += abs(weights[edge_idx])
-        counts = np.where(counts > 0.0, counts, 1.0)
-        updated = 0.7 * current + 0.3 * graph_signal / counts
+        if dispatch["executed"] == "cpu":
+            graph_signal = np.zeros_like(current)
+            for target, row in enumerate(incoming):
+                graph_signal[target] = sum(
+                    previous[source] * weight / counts[target] for source, weight in row
+                )
+        else:
+            graph_signal = csr_diffusion(
+                indptr,
+                indices,
+                normalized_weights,
+                previous.reshape(-1, 1),
+                channels=1,
+                backend=str(dispatch["executed"]),
+            ).astype(float)[:, 0]
+        updated = 0.7 * current + 0.3 * graph_signal
         rows.append(updated.copy())
         previous = current
         current = updated
