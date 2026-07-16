@@ -204,6 +204,132 @@ def csr_diffusion(
     )
     return np.asarray(output, dtype=np.float32).reshape(indptr_array.shape[0] - 1, channels)
 
+def csr_row_softmax(
+    indptr: ArrayLike,
+    logits: ArrayLike,
+    *,
+    backend: str | None = None,
+) -> NDArray[np.float32]:
+    """Apply independent softmax normalization to each CSR row."""
+
+    indptr_array = np.asarray(indptr, dtype=np.uint32).reshape(-1)
+    logits_array = np.asarray(logits, dtype=np.float32).reshape(-1)
+    function = getattr(_native, "accelerator_csr_row_softmax_value", None)
+    if function is None:
+        if backend not in {None, "cpu"}:
+            raise RuntimeError("native accelerator support is unavailable")
+        output = np.empty_like(logits_array)
+        for row in range(indptr_array.shape[0] - 1):
+            start, end = int(indptr_array[row]), int(indptr_array[row + 1])
+            shifted = logits_array[start:end] - np.max(logits_array[start:end])
+            exponentials = np.exp(shifted)
+            output[start:end] = exponentials / np.sum(exponentials)
+        return output
+    return np.asarray(
+        function(indptr_array.tolist(), logits_array.tolist(), backend),
+        dtype=np.float32,
+    )
+
+
+def layer_norm(
+    values: ArrayLike,
+    gamma: ArrayLike,
+    beta: ArrayLike,
+    *,
+    backend: str | None = None,
+) -> NDArray[np.float32]:
+    """Apply affine layer normalization to the last matrix dimension."""
+
+    value_array = np.asarray(values, dtype=np.float32)
+    gamma_array = np.asarray(gamma, dtype=np.float32).reshape(-1)
+    beta_array = np.asarray(beta, dtype=np.float32).reshape(-1)
+    if value_array.ndim != 2 or value_array.shape[1] != gamma_array.shape[0]:
+        raise ValueError("values must be a matrix whose width equals gamma length")
+    if beta_array.shape != gamma_array.shape:
+        raise ValueError("beta and gamma must have equal lengths")
+    function = getattr(_native, "accelerator_layer_norm_value", None)
+    if function is None:
+        if backend not in {None, "cpu"}:
+            raise RuntimeError("native accelerator support is unavailable")
+        mean = np.mean(value_array, axis=1, keepdims=True)
+        variance = np.mean((value_array - mean) ** 2, axis=1, keepdims=True)
+        return (value_array - mean) / np.sqrt(variance + 1e-5) * gamma_array + beta_array
+    output = function(
+        value_array.reshape(-1).tolist(),
+        gamma_array.tolist(),
+        beta_array.tolist(),
+        value_array.shape[0],
+        value_array.shape[1],
+        backend,
+    )
+    return np.asarray(output, dtype=np.float32).reshape(value_array.shape)
+
+
+def pair_sigmoid_scores(
+    embeddings: ArrayLike,
+    pairs: ArrayLike,
+    *,
+    backend: str | None = None,
+) -> NDArray[np.float64]:
+    """Score node pairs using sigmoid(dot(source, target))."""
+
+    embedding_array = np.asarray(embeddings, dtype=np.float32)
+    pair_array = np.asarray(pairs, dtype=np.int64)
+    if embedding_array.ndim != 2 or pair_array.ndim != 2 or pair_array.shape[1] != 2:
+        raise ValueError("embeddings must be a matrix and pairs must have shape [n, 2]")
+    pair_rows = [(int(row[0]), int(row[1])) for row in pair_array]
+    function = getattr(_native, "accelerator_pair_sigmoid_scores_value", None)
+    if function is None:
+        if backend not in {None, "cpu"}:
+            raise RuntimeError("native accelerator support is unavailable")
+        logits = np.sum(
+            embedding_array[pair_array[:, 0]] * embedding_array[pair_array[:, 1]],
+            axis=1,
+        )
+        return 1.0 / (1.0 + np.exp(-logits.astype(np.float64)))
+    return np.asarray(function(embedding_array.tolist(), pair_rows, backend), dtype=np.float64)
+
+
+def adamw_step(
+    parameters: ArrayLike,
+    first_moment: ArrayLike,
+    second_moment: ArrayLike,
+    gradients: ArrayLike,
+    *,
+    step: int,
+    learning_rate: float,
+    weight_decay: float = 0.0,
+    backend: str | None = None,
+) -> tuple[NDArray[np.float32], NDArray[np.float32], NDArray[np.float32]]:
+    """Apply one backend AdamW update and return parameters and moment state."""
+
+    arrays = [
+        np.asarray(values, dtype=np.float32).reshape(-1)
+        for values in (parameters, first_moment, second_moment, gradients)
+    ]
+    function = getattr(_native, "accelerator_adamw_step_value", None)
+    if function is None:
+        if backend not in {None, "cpu"}:
+            raise RuntimeError("native accelerator support is unavailable")
+        params, first, second, grads = arrays
+        first = 0.9 * first + 0.1 * grads
+        second = 0.999 * second + 0.001 * grads * grads
+        corrected_first = first / (1.0 - 0.9**step)
+        corrected_second = second / (1.0 - 0.999**step)
+        params = (
+            params * (1.0 - learning_rate * weight_decay)
+            - learning_rate * corrected_first / (np.sqrt(corrected_second) + 1e-8)
+        )
+        return params, first, second
+    output = function(
+        *(values.tolist() for values in arrays),
+        int(step),
+        float(learning_rate),
+        float(weight_decay),
+        backend,
+    )
+    return tuple(np.asarray(values, dtype=np.float32) for values in output)  # type: ignore[return-value]
+
 def pairwise_squared_distances(
     left: ArrayLike,
     right: ArrayLike | None = None,
@@ -229,11 +355,15 @@ def pairwise_squared_distances(
 
 
 __all__ = [
+    "adamw_step",
     "affine_scores",
     "available_backends",
     "capabilities",
     "csr_diffusion",
+    "csr_row_softmax",
     "dense_layer",
+    "layer_norm",
+    "pair_sigmoid_scores",
     "pairwise_squared_distances",
     "workload_decision",
 ]

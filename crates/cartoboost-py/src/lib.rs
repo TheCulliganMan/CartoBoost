@@ -133,10 +133,14 @@ use cartoboost_geostats::{
 };
 use cartoboost_neural::{
     available_backends as neural_available_backends,
+    backend_adamw_step_f32 as neural_backend_adamw_step_f32,
     backend_affine_scores as neural_backend_affine_scores,
     backend_csr_diffusion_f32 as neural_backend_csr_diffusion_f32,
+    backend_csr_row_softmax_f32 as neural_backend_csr_row_softmax_f32,
     backend_dense_layer_f32 as neural_backend_dense_layer_f32,
     backend_dispatch_report as neural_backend_dispatch_report,
+    backend_layer_norm_f32 as neural_backend_layer_norm_f32,
+    backend_pair_sigmoid_scores_f32 as neural_backend_pair_sigmoid_scores_f32,
     backend_pairwise_squared_distances_f32 as neural_backend_pairwise_distances_f32,
     backend_supports_operation as neural_backend_supports_operation,
     backend_workload_decision as neural_backend_workload_decision, build_embedding_table_artifact,
@@ -11957,6 +11961,90 @@ fn accelerator_csr_diffusion_value(
 }
 
 #[pyfunction]
+#[pyo3(signature = (indptr, logits, backend=None))]
+fn accelerator_csr_row_softmax_value(
+    py: Python<'_>,
+    indptr: Vec<u32>,
+    logits: Vec<f32>,
+    backend: Option<&str>,
+) -> PyResult<Vec<f32>> {
+    let selection = neural_select_backend_for(backend, BackendOperation::CsrRowSoftmax)
+        .map_err(to_py_neural_error)?;
+    py.detach(move || {
+        neural_backend_csr_row_softmax_f32(&selection, &indptr, &logits).map_err(to_py_neural_error)
+    })
+}
+
+#[pyfunction]
+#[pyo3(signature = (values, gamma, beta, rows, width, backend=None))]
+fn accelerator_layer_norm_value(
+    py: Python<'_>,
+    values: Vec<f32>,
+    gamma: Vec<f32>,
+    beta: Vec<f32>,
+    rows: usize,
+    width: usize,
+    backend: Option<&str>,
+) -> PyResult<Vec<f32>> {
+    let selection = neural_select_backend_for(backend, BackendOperation::LayerNorm)
+        .map_err(to_py_neural_error)?;
+    py.detach(move || {
+        neural_backend_layer_norm_f32(&selection, &values, rows, width, &gamma, &beta)
+            .map_err(to_py_neural_error)
+    })
+}
+
+#[pyfunction]
+#[pyo3(signature = (embeddings, pairs, backend=None))]
+fn accelerator_pair_sigmoid_scores_value(
+    py: Python<'_>,
+    embeddings: Vec<Vec<f32>>,
+    pairs: Vec<(usize, usize)>,
+    backend: Option<&str>,
+) -> PyResult<Vec<f64>> {
+    let selection = neural_select_backend_for(backend, BackendOperation::PairScoring)
+        .map_err(to_py_neural_error)?;
+    py.detach(move || {
+        neural_backend_pair_sigmoid_scores_f32(&selection, &embeddings, &pairs)
+            .map_err(to_py_neural_error)
+    })
+}
+
+type AdamwState = (Vec<f32>, Vec<f32>, Vec<f32>);
+
+#[pyfunction]
+#[pyo3(signature = (parameters, first_moment, second_moment, gradients, step, learning_rate, weight_decay, backend=None))]
+#[allow(clippy::too_many_arguments)]
+fn accelerator_adamw_step_value(
+    py: Python<'_>,
+    mut parameters: Vec<f32>,
+    mut first_moment: Vec<f32>,
+    mut second_moment: Vec<f32>,
+    gradients: Vec<f32>,
+    step: u64,
+    learning_rate: f32,
+    weight_decay: f32,
+    backend: Option<&str>,
+) -> PyResult<AdamwState> {
+    let selection =
+        neural_select_backend_for(backend, BackendOperation::AdamW).map_err(to_py_neural_error)?;
+    py.detach(move || {
+        neural_backend_adamw_step_f32(
+            &selection,
+            &mut parameters,
+            &mut first_moment,
+            &mut second_moment,
+            &gradients,
+            step,
+            learning_rate,
+            weight_decay,
+        )
+        .map_err(to_py_neural_error)?;
+        Ok((parameters, first_moment, second_moment))
+    })
+}
+
+#[pyfunction]
 #[pyo3(signature = (backend=None, len=4096))]
 fn deep_backend_dispatch_report_value(backend: Option<&str>, len: usize) -> PyResult<String> {
     let report = neural_backend_dispatch_report(backend, len).map_err(to_py_neural_error)?;
@@ -12721,6 +12809,10 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(accelerator_dense_layer_value, m)?)?;
     m.add_function(wrap_pyfunction!(accelerator_affine_scores_value, m)?)?;
     m.add_function(wrap_pyfunction!(accelerator_csr_diffusion_value, m)?)?;
+    m.add_function(wrap_pyfunction!(accelerator_csr_row_softmax_value, m)?)?;
+    m.add_function(wrap_pyfunction!(accelerator_layer_norm_value, m)?)?;
+    m.add_function(wrap_pyfunction!(accelerator_pair_sigmoid_scores_value, m)?)?;
+    m.add_function(wrap_pyfunction!(accelerator_adamw_step_value, m)?)?;
     m.add_function(wrap_pyfunction!(
         accelerator_pairwise_squared_distances_value,
         m

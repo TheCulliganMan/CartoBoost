@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import numpy as np
 from cartoboost.accelerators import (
+    adamw_step,
     affine_scores,
     csr_diffusion,
+    csr_row_softmax,
     dense_layer,
+    layer_norm,
+    pair_sigmoid_scores,
     pairwise_squared_distances,
     workload_decision,
 )
@@ -66,3 +70,37 @@ def test_affine_and_csr_graph_kernels_are_public_to_python() -> None:
         backend="cpu",
     )
     np.testing.assert_allclose(diffused, [[6.0, 8.0], [5.0, 7.0]])
+
+
+def test_optimizer_normalization_and_sparse_attention_are_public() -> None:
+    normalized = layer_norm(
+        [[1.0, 3.0], [2.0, 6.0]],
+        [1.0, 1.0],
+        [0.0, 0.0],
+        backend="cpu",
+    )
+    np.testing.assert_allclose(normalized, [[-1.0, 1.0], [-1.0, 1.0]], atol=1e-4)
+
+    softmax = csr_row_softmax([0, 2, 3], [0.0, 0.0, 4.0], backend="cpu")
+    np.testing.assert_allclose(softmax, [0.5, 0.5, 1.0])
+
+    scores = pair_sigmoid_scores(
+        [[1.0, 0.0], [1.0, 0.0], [-1.0, 0.0]],
+        [[0, 1], [0, 2]],
+        backend="cpu",
+    )
+    np.testing.assert_allclose(scores, [0.73105858, 0.26894142])
+
+    parameters, first, second = adamw_step(
+        [1.0, -1.0],
+        [0.0, 0.0],
+        [0.0, 0.0],
+        [0.5, -0.25],
+        step=1,
+        learning_rate=0.01,
+        weight_decay=0.01,
+        backend="cpu",
+    )
+    assert parameters.shape == first.shape == second.shape == (2,)
+    assert parameters[0] < 1.0
+    assert parameters[1] > -1.0
