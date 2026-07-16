@@ -55,6 +55,15 @@ fn weights_artifact_round_trips_predictions() {
     assert_eq!(payload["artifact_type"], WEIGHTS_ARTIFACT_TYPE);
     assert_eq!(payload["weights_artifact_version"], 1);
     assert_eq!(payload["model_artifact_version"], 1);
+    assert_eq!(payload["backend"], "cpu");
+    assert_eq!(
+        payload["model"]["training_config"]["backend"]["requested"],
+        "cpu"
+    );
+    assert_eq!(
+        payload["model"]["training_config"]["backend"]["selected"],
+        "cpu"
+    );
     assert_eq!(loaded.predict(&x), expected);
 }
 

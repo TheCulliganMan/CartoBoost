@@ -51,7 +51,7 @@ fn run() -> CliResult<()> {
 
 fn print_help() {
     println!(
-        "cartoboost <command> [options]\n\nCommands:\n  train         --data <csv> [--backend cpu|auto|cuda|rocm|metal|directml|webgpu] [--config <toml>] [--model-out <path>] [--output json|csv]\n  predict       --model <path> --input <csv> [--backend cpu|auto|cuda|rocm|metal|directml|webgpu] [--predictions-out <path>] [--output json|csv]\n  eval          --model <path> --data <csv> [--backend cpu|auto|cuda|rocm|metal|directml|webgpu] [--output json|csv]\n  inspect       [--model <path>] [--config <toml>] [--data <csv>] [--output json|csv]\n  accelerators  [--backend <name> --operation <kernel> --workload-size <n> --minimum-accelerated-size <n>] [--output json|csv]"
+        "cartoboost <command> [options]\n\nBackends: auto|cpu|cuda|rocm|hip|metal|directml|dml|webgpu\n\nCommands:\n  train         --data <csv> [--backend <name>] [--config <toml>] [--model-out <path>] [--output json|csv]\n  predict       --model <path> --input <csv> [--backend <name>] [--predictions-out <path>] [--output json|csv]\n  eval          --model <path> --data <csv> [--backend <name>] [--output json|csv]\n  inspect       [--model <path>] [--config <toml>] [--data <csv>] [--output json|csv]\n  accelerators  [--backend <name> --operation <kernel> --workload-size <n> --minimum-accelerated-size <n>] [--output json|csv]"
     );
 }
 
