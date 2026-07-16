@@ -506,7 +506,7 @@ pub fn empirical_semivariogram_with_backend(
         ..NngpConfig::default()
     }
     .validate()?;
-    let accelerated_distances = if backend.selected == "cpu"
+    let accelerated_pair_matrices = if backend.selected == "cpu"
         || coords.len().saturating_mul(coords.len()) < GEOSTATS_PAIRWISE_DISPATCH_MIN_PAIRS
     {
         None
@@ -520,19 +520,25 @@ pub fn empirical_semivariogram_with_backend(
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
-        Some(
+        let value_rows = values
+            .iter()
+            .map(|value| vec![*value as f32])
+            .collect::<Vec<_>>();
+        Some((
             backend_pairwise_squared_distances_f32(&backend, &transformed, &transformed)
                 .map_err(|error| GeostatsError::InvalidInput(error.to_string()))?,
-        )
+            backend_pairwise_squared_distances_f32(&backend, &value_rows, &value_rows)
+                .map_err(|error| GeostatsError::InvalidInput(error.to_string()))?,
+        ))
     };
     let pairs = (0..coords.len())
         .into_par_iter()
         .map(|i| {
             let mut row_pairs = Vec::with_capacity(coords.len().saturating_sub(i + 1));
             for j in (i + 1)..coords.len() {
-                let distance = accelerated_distances.as_ref().map_or_else(
+                let distance = accelerated_pair_matrices.as_ref().map_or_else(
                     || transformed_distance(coords[i], coords[j], distance_config),
-                    |distances| f64::from(distances[i][j]).sqrt(),
+                    |(distances, _)| f64::from(distances[i][j]).sqrt(),
                 );
                 if !distance.is_finite() {
                     return Err(GeostatsError::InvalidInput(format!(
@@ -542,8 +548,13 @@ pub fn empirical_semivariogram_with_backend(
                 if max_distance.is_some_and(|max| distance > max) {
                     continue;
                 }
-                let difference = values[i] - values[j];
-                let semivariance = 0.5 * difference * difference;
+                let semivariance = accelerated_pair_matrices.as_ref().map_or_else(
+                    || {
+                        let difference = values[i] - values[j];
+                        0.5 * difference * difference
+                    },
+                    |(_, squared_differences)| 0.5 * f64::from(squared_differences[i][j]),
+                );
                 if !semivariance.is_finite() {
                     return Err(GeostatsError::InvalidInput(format!(
                         "variogram semivariance is not finite for rows {i} and {j}"
@@ -557,6 +568,60 @@ pub fn empirical_semivariogram_with_backend(
         .into_iter()
         .flatten()
         .collect::<Vec<_>>();
+    bin_variogram_pairs(pairs, bin_count, max_distance)
+}
+
+pub fn empirical_semivariogram_from_squared_matrices(
+    squared_coordinate_distances: &[Vec<f32>],
+    squared_value_differences: &[Vec<f32>],
+    bin_count: usize,
+    max_distance: Option<f64>,
+) -> Result<Vec<EmpiricalVariogramBin>> {
+    let rows = squared_coordinate_distances.len();
+    if rows < 2
+        || bin_count == 0
+        || squared_value_differences.len() != rows
+        || squared_coordinate_distances
+            .iter()
+            .chain(squared_value_differences)
+            .any(|row| {
+                row.len() != rows || row.iter().any(|value| !value.is_finite() || *value < 0.0)
+            })
+    {
+        return Err(GeostatsError::InvalidInput(
+            "variogram squared-distance matrices must be aligned, square, finite, and non-negative"
+                .to_string(),
+        ));
+    }
+    if max_distance.is_some_and(|value| !value.is_finite() || value <= 0.0) {
+        return Err(GeostatsError::InvalidInput(
+            "max variogram distance must be finite and positive".to_string(),
+        ));
+    }
+    let pairs = (0..rows)
+        .into_par_iter()
+        .flat_map_iter(|left| {
+            ((left + 1)..rows).filter_map(move |right| {
+                let distance = f64::from(squared_coordinate_distances[left][right]).sqrt();
+                if max_distance.is_some_and(|maximum| distance > maximum) {
+                    None
+                } else {
+                    Some((
+                        distance,
+                        0.5 * f64::from(squared_value_differences[left][right]),
+                    ))
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    bin_variogram_pairs(pairs, bin_count, max_distance)
+}
+
+fn bin_variogram_pairs(
+    pairs: Vec<(f64, f64)>,
+    bin_count: usize,
+    max_distance: Option<f64>,
+) -> Result<Vec<EmpiricalVariogramBin>> {
     if pairs.is_empty() {
         return Err(GeostatsError::InvalidInput(
             "no coordinate pairs are available for variogram bins".to_string(),
@@ -1392,8 +1457,12 @@ mod tests {
 
     #[test]
     fn empirical_variogram_runs_on_every_available_backend() {
-        let coords = [[0.0, 0.0], [0.6, 0.2], [1.4, -0.1], [2.2, 0.4], [3.0, 0.0]];
-        let values = [0.0, 1.0, 1.4, 1.8, 2.1];
+        let coords = (0..128)
+            .map(|index| [index as f64 * 0.17, (index as f64 * 0.11).sin() * 2.0])
+            .collect::<Vec<_>>();
+        let values = (0..128)
+            .map(|index| (index as f64 * 0.07).cos() + index as f64 * 0.01)
+            .collect::<Vec<_>>();
         let anisotropy = Anisotropy {
             angle_degrees: 23.0,
             scaling: 1.3,
@@ -1401,8 +1470,8 @@ mod tests {
         let expected = empirical_semivariogram_with_backend(
             &coords,
             &values,
-            2,
-            Some(10.0),
+            8,
+            None,
             anisotropy,
             Some("cpu"),
         )
@@ -1411,8 +1480,8 @@ mod tests {
             let actual = empirical_semivariogram_with_backend(
                 &coords,
                 &values,
-                2,
-                Some(10.0),
+                8,
+                None,
                 anisotropy,
                 Some(&backend),
             )
@@ -1420,8 +1489,48 @@ mod tests {
             assert_eq!(actual.len(), expected.len());
             for (actual, expected) in actual.iter().zip(&expected) {
                 assert_eq!(actual.pair_count, expected.pair_count);
-                assert!((actual.semivariance - expected.semivariance).abs() < 1.0e-12);
+                assert!((actual.semivariance - expected.semivariance).abs() < 1.0e-5);
             }
+        }
+    }
+
+    #[test]
+    fn precomputed_variogram_matrices_match_direct_cpu_bins() {
+        let coords = [[0.0, 0.0], [1.0, 0.0], [0.0, 2.0], [2.0, 2.0]];
+        let values = [1.0, 2.0, 4.0, 3.0];
+        let expected =
+            empirical_semivariogram(&coords, &values, 3, None, Anisotropy::default()).unwrap();
+        let coordinate_distances = coords
+            .iter()
+            .map(|left| {
+                coords
+                    .iter()
+                    .map(|right| squared_distance(*left, *right) as f32)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let value_differences = values
+            .iter()
+            .map(|left| {
+                values
+                    .iter()
+                    .map(|right| (left - right).powi(2) as f32)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let actual = empirical_semivariogram_from_squared_matrices(
+            &coordinate_distances,
+            &value_differences,
+            3,
+            None,
+        )
+        .unwrap();
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.iter().zip(&expected) {
+            assert_eq!(actual.pair_count, expected.pair_count);
+            assert!((actual.lag_start - expected.lag_start).abs() < 1.0e-6);
+            assert!((actual.lag_end - expected.lag_end).abs() < 1.0e-6);
+            assert!((actual.semivariance - expected.semivariance).abs() < 1.0e-6);
         }
     }
 

@@ -91,6 +91,11 @@ query-by-observation distance matrix on WebGPU, then performs only the small
 per-neighborhood covariance solves on CPU. Metadata distinguishes the GPU
 distance operation from the retained CPU solve.
 
+`empiricalSemivariogramWebgpu` accelerates both quadratic matrices needed for
+large empirical variograms: transformed coordinate distances and squared value
+differences. Pair filtering and bin reduction remain on CPU because they are
+branch-heavy; the response reports the split explicitly.
+
 `InvertedTemporalTransformer` models synchronized wide panels with entities as
 tokens. It reports horizon-wise metrics, cross-entity ablation, and metadata
 showing that it avoids quadratic time-token attention. The same path is exposed

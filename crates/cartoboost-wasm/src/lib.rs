@@ -53,6 +53,8 @@ use cartoboost_geo_st::{
     PaperGraphTransformerConfig as BrowserPaperGraphTransformerConfig,
     PaperGraphTransformerForecaster as BrowserPaperGraphTransformerForecaster,
 };
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+use cartoboost_geostats::empirical_semivariogram_from_squared_matrices;
 use cartoboost_geostats::{
     Anisotropy as GeostatsAnisotropy, CovarianceKernel,
     NearestNeighborGPRegressor as WasmNearestNeighborGPRegressor, NngpConfig,
@@ -1607,6 +1609,73 @@ pub async fn webgpu_scalar_graph_train_step_wasm(
             "firstMoment": first_moment, "secondMoment": second_moment,
         }),
         "WebGPU scalar graph training state",
+    )
+}
+
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+#[wasm_bindgen(js_name = empiricalSemivariogramWebgpu)]
+pub async fn empirical_semivariogram_webgpu_wasm(
+    coords: JsValue,
+    values: Vec<f32>,
+    bin_count: usize,
+    max_distance: Option<f64>,
+    anisotropy_angle_degrees: f64,
+    anisotropy_scaling: f64,
+) -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    let coords: Vec<[f64; 2]> = serde_wasm_bindgen::from_value(coords)
+        .map_err(|error| JsValue::from_str(&format!("invalid variogram coordinates: {error}")))?;
+    if coords.len() != values.len()
+        || coords.len() < 2
+        || !anisotropy_angle_degrees.is_finite()
+        || !anisotropy_scaling.is_finite()
+        || anisotropy_scaling <= 0.0
+    {
+        return Err(JsValue::from_str(
+            "variogram inputs must be aligned and anisotropy must be finite with positive scaling",
+        ));
+    }
+    let angle = anisotropy_angle_degrees.to_radians();
+    let cosine = angle.cos();
+    let sine = angle.sin();
+    let transformed = coords
+        .iter()
+        .map(|point| {
+            vec![
+                (point[0] * cosine + point[1] * sine) as f32,
+                ((-point[0] * sine + point[1] * cosine) / anisotropy_scaling) as f32,
+            ]
+        })
+        .collect::<Vec<_>>();
+    let value_rows = values.iter().map(|value| vec![*value]).collect::<Vec<_>>();
+    let coordinate_distances =
+        webgpu_pairwise_squared_distances_f32_async(&transformed, &transformed)
+            .await
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    let value_differences = webgpu_pairwise_squared_distances_f32_async(&value_rows, &value_rows)
+        .await
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    let bins = empirical_semivariogram_from_squared_matrices(
+        &coordinate_distances,
+        &value_differences,
+        bin_count,
+        max_distance,
+    )
+    .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    serialize_json_response(
+        &json!({
+            "backend": {
+                "requested": "webgpu",
+                "selected": "webgpu",
+                "acceleratedOperations": [
+                    "coordinate_pairwise_distance",
+                    "value_pairwise_squared_difference"
+                ],
+                "cpuOperations": ["pair_filtering", "bin_reduction"]
+            },
+            "bins": bins,
+        }),
+        "WebGPU empirical semivariogram",
     )
 }
 
