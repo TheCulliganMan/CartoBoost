@@ -1,9 +1,9 @@
 #[cfg(all(feature = "cuda", target_os = "linux"))]
 use cartoboost_neural::CudaTensorArena;
 use cartoboost_neural::{
-    backend_affine_scores, backend_csr_diffusion_f32, backend_scalar_graph_f32,
-    backend_scalar_graph_train_step_f32, select_backend_for_operations, BackendOperation,
-    BackendSelection,
+    backend_affine_scores, backend_csr_diffusion_f32, backend_dense_layer_f32,
+    backend_scalar_graph_f32, backend_scalar_graph_train_step_f32, select_backend_for_operations,
+    BackendOperation, BackendSelection,
 };
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -14,6 +14,7 @@ use std::hash::{Hash, Hasher};
 use std::path::Path;
 
 const GEO_ST_AFFINE_DISPATCH_MIN_OPS: usize = 16_384;
+const GEO_ST_DENSE_DISPATCH_MIN_OPS: usize = 16_384;
 
 pub mod market;
 pub use market::{
@@ -4903,9 +4904,20 @@ impl TrainableGraphTransformerState {
     fn frozen_lsttn_patch_representations(
         &self,
         window: &[Vec<f64>],
+        adjacency: &CsrAdjacency,
+        phase_offset: usize,
+    ) -> Vec<Vec<Vec<f32>>> {
+        self.frozen_lsttn_patch_representations_with_backend(window, adjacency, phase_offset, None)
+            .expect("CPU frozen LSTTN transformer is infallible")
+    }
+
+    fn frozen_lsttn_patch_representations_with_backend(
+        &self,
+        window: &[Vec<f64>],
         _adjacency: &CsrAdjacency,
         _phase_offset: usize,
-    ) -> Vec<Vec<Vec<f32>>> {
+        backend: Option<&BackendSelection>,
+    ) -> Result<Vec<Vec<Vec<f32>>>> {
         let layout = self.layout();
         let patch_width = (self.periodicity / 24).max(1);
         let position_count = (layout.pretrain_decoder - layout.pretrain_position) / self.hidden;
@@ -4914,7 +4926,7 @@ impl TrainableGraphTransformerState {
         let ffn_width = 8 * self.hidden * self.hidden + 5 * self.hidden;
         let by_node = (0..self.nodes)
             .into_par_iter()
-            .map(|node| {
+            .map(|node| -> Result<Vec<Vec<f64>>> {
                 let mut sequence = (0..patch_count)
                     .map(|patch| {
                         (0..self.hidden)
@@ -4949,12 +4961,13 @@ impl TrainableGraphTransformerState {
                         layout.lsttn_transformer_norm + layer * 4 * self.hidden,
                         self.hidden,
                         self.attention_heads,
-                    );
+                        backend,
+                    )?;
                 }
-                sequence
+                Ok(sequence)
             })
-            .collect::<Vec<_>>();
-        (0..patch_count)
+            .collect::<Result<Vec<_>>>()?;
+        Ok((0..patch_count)
             .map(|patch| {
                 (0..self.nodes)
                     .map(|node| {
@@ -4965,7 +4978,7 @@ impl TrainableGraphTransformerState {
                     })
                     .collect()
             })
-            .collect()
+            .collect())
     }
 
     fn adamw_step(&mut self, gradients: &[f64], learning_rate: f64, weight_decay: f64) {
@@ -5068,8 +5081,16 @@ impl TrainableGraphTransformerState {
         // frozen ranges are enforced identically on every supported host.
         let accelerated = *profile != GraphTransformerProfile::LongShortFusion
             && backend.is_some_and(|selection| selection.selected != "cpu");
-        let frozen_lsttn = (*profile == GraphTransformerProfile::LongShortFusion)
-            .then(|| self.frozen_lsttn_patch_representations(window, adjacency, phase_offset));
+        let frozen_lsttn = if *profile == GraphTransformerProfile::LongShortFusion {
+            Some(self.frozen_lsttn_patch_representations_with_backend(
+                window,
+                adjacency,
+                phase_offset,
+                backend,
+            )?)
+        } else {
+            None
+        };
         let (tape, outputs, router_weights, _) = self.forward(GraphForwardContext {
             profile,
             window,
@@ -5449,8 +5470,16 @@ impl TrainableGraphTransformerState {
     ) -> Result<Vec<Vec<f64>>> {
         let accelerated = *profile == GraphTransformerProfile::LongShortFusion
             && backend.is_some_and(|selection| selection.selected != "cpu");
-        let frozen_lsttn = (*profile == GraphTransformerProfile::LongShortFusion)
-            .then(|| self.frozen_lsttn_patch_representations(window, adjacency, phase_offset));
+        let frozen_lsttn = if *profile == GraphTransformerProfile::LongShortFusion {
+            Some(self.frozen_lsttn_patch_representations_with_backend(
+                window,
+                adjacency,
+                phase_offset,
+                backend,
+            )?)
+        } else {
+            None
+        };
         let (tape, outputs, _, _) = self.forward(GraphForwardContext {
             profile,
             window,
@@ -7190,6 +7219,48 @@ fn numeric_linear(
         .collect()
 }
 
+fn numeric_linear_batch(
+    parameters: &[f64],
+    offset: usize,
+    inputs: &[Vec<f64>],
+    input_width: usize,
+    output_width: usize,
+    backend: Option<&BackendSelection>,
+) -> Result<Vec<Vec<f64>>> {
+    let operations = inputs
+        .len()
+        .saturating_mul(input_width)
+        .saturating_mul(output_width);
+    if let Some(selection) = backend.filter(|selection| {
+        selection.selected != "cpu" && operations >= GEO_ST_DENSE_DISPATCH_MIN_OPS
+    }) {
+        let features = inputs
+            .iter()
+            .map(|row| row.iter().map(|value| *value as f32).collect())
+            .collect::<Vec<Vec<f32>>>();
+        let weight_count = input_width * output_width;
+        let weights = parameters[offset..offset + weight_count]
+            .iter()
+            .map(|value| *value as f32)
+            .collect::<Vec<_>>();
+        let biases = parameters[offset + weight_count..offset + weight_count + output_width]
+            .iter()
+            .map(|value| *value as f32)
+            .collect::<Vec<_>>();
+        return backend_dense_layer_f32(selection, &features, &weights, &biases)
+            .map(|rows| {
+                rows.into_iter()
+                    .map(|row| row.into_iter().map(f64::from).collect())
+                    .collect()
+            })
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()));
+    }
+    Ok(inputs
+        .iter()
+        .map(|input| numeric_linear(parameters, offset, input, input_width, output_width))
+        .collect())
+}
+
 fn numeric_layer_norm(parameters: &[f64], offset: usize, values: &[f64]) -> Vec<f64> {
     let mean = values.iter().sum::<f64>() / values.len() as f64;
     let variance = values
@@ -7220,23 +7291,15 @@ fn numeric_transformer_encoder_layer(
     norm_offset: usize,
     hidden: usize,
     heads: usize,
-) -> Vec<Vec<f64>> {
-    let queries = sequence
-        .iter()
-        .map(|token| numeric_linear(parameters, q_offset, token, hidden, hidden))
-        .collect::<Vec<_>>();
-    let keys = sequence
-        .iter()
-        .map(|token| numeric_linear(parameters, k_offset, token, hidden, hidden))
-        .collect::<Vec<_>>();
-    let values = sequence
-        .iter()
-        .map(|token| numeric_linear(parameters, v_offset, token, hidden, hidden))
-        .collect::<Vec<_>>();
-    sequence
+    backend: Option<&BackendSelection>,
+) -> Result<Vec<Vec<f64>>> {
+    let queries = numeric_linear_batch(parameters, q_offset, sequence, hidden, hidden, backend)?;
+    let keys = numeric_linear_batch(parameters, k_offset, sequence, hidden, hidden, backend)?;
+    let values = numeric_linear_batch(parameters, v_offset, sequence, hidden, hidden, backend)?;
+    let attended = sequence
         .iter()
         .enumerate()
-        .map(|(token_index, residual)| {
+        .map(|(token_index, _)| {
             let mut attended = vec![0.0; hidden];
             for head in 0..heads {
                 let start = head * hidden / heads;
@@ -7270,24 +7333,47 @@ fn numeric_transformer_encoder_layer(
                         .sum();
                 }
             }
-            let projected = numeric_linear(parameters, out_offset, &attended, hidden, hidden);
+            attended
+        })
+        .collect::<Vec<_>>();
+    let projected =
+        numeric_linear_batch(parameters, out_offset, &attended, hidden, hidden, backend)?;
+    let normalized = sequence
+        .iter()
+        .zip(projected)
+        .map(|(residual, projected)| {
             let first = residual
                 .iter()
                 .zip(projected)
                 .map(|(left, right)| left + right)
                 .collect::<Vec<_>>();
-            let normalized = numeric_layer_norm(parameters, norm_offset, &first);
-            let expanded = numeric_linear(parameters, ffn_offset, &normalized, hidden, 4 * hidden)
-                .into_iter()
-                .map(|value| value.max(0.0))
-                .collect::<Vec<_>>();
-            let contracted = numeric_linear(
-                parameters,
-                ffn_offset + (hidden + 1) * 4 * hidden,
-                &expanded,
-                4 * hidden,
-                hidden,
-            );
+            numeric_layer_norm(parameters, norm_offset, &first)
+        })
+        .collect::<Vec<_>>();
+    let mut expanded = numeric_linear_batch(
+        parameters,
+        ffn_offset,
+        &normalized,
+        hidden,
+        4 * hidden,
+        backend,
+    )?;
+    expanded
+        .iter_mut()
+        .flatten()
+        .for_each(|value| *value = value.max(0.0));
+    let contracted = numeric_linear_batch(
+        parameters,
+        ffn_offset + (hidden + 1) * 4 * hidden,
+        &expanded,
+        4 * hidden,
+        hidden,
+        backend,
+    )?;
+    Ok(normalized
+        .iter()
+        .zip(contracted)
+        .map(|(normalized, contracted)| {
             numeric_layer_norm(
                 parameters,
                 norm_offset + 2 * hidden,
@@ -7298,7 +7384,7 @@ fn numeric_transformer_encoder_layer(
                     .collect::<Vec<_>>(),
             )
         })
-        .collect()
+        .collect())
 }
 
 fn tape_layer_norm(
@@ -11288,6 +11374,74 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("incompatible"));
+    }
+
+    #[test]
+    fn lsttn_dense_projections_match_cpu_across_available_backends() {
+        let hidden = 32;
+        let projection = hidden * (hidden + 1);
+        let q_offset = 0;
+        let k_offset = q_offset + projection;
+        let v_offset = k_offset + projection;
+        let out_offset = v_offset + projection;
+        let ffn_offset = out_offset + projection;
+        let ffn_width = (hidden + 1) * 4 * hidden + (4 * hidden + 1) * hidden;
+        let norm_offset = ffn_offset + ffn_width;
+        let mut parameters = (0..norm_offset + 4 * hidden)
+            .map(|index| ((index as f64 * 0.013).sin()) * 0.03)
+            .collect::<Vec<_>>();
+        parameters[norm_offset..norm_offset + hidden].fill(1.0);
+        parameters[norm_offset + 2 * hidden..norm_offset + 3 * hidden].fill(1.0);
+        let sequence = (0..32)
+            .map(|row| {
+                (0..hidden)
+                    .map(|column| ((row * hidden + column) as f64 * 0.017).cos())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let expected = numeric_transformer_encoder_layer(
+            &parameters,
+            &sequence,
+            q_offset,
+            k_offset,
+            v_offset,
+            out_offset,
+            ffn_offset,
+            norm_offset,
+            hidden,
+            4,
+            None,
+        )
+        .unwrap();
+
+        for backend in available_compute_backends()
+            .into_iter()
+            .filter(|backend| backend != "cpu")
+        {
+            let selection =
+                cartoboost_neural::select_backend_for(Some(&backend), BackendOperation::Dense)
+                    .unwrap();
+            let actual = numeric_transformer_encoder_layer(
+                &parameters,
+                &sequence,
+                q_offset,
+                k_offset,
+                v_offset,
+                out_offset,
+                ffn_offset,
+                norm_offset,
+                hidden,
+                4,
+                Some(&selection),
+            )
+            .unwrap_or_else(|error| panic!("{backend} LSTTN dense projection failed: {error}"));
+            for (actual, expected) in actual.iter().flatten().zip(expected.iter().flatten()) {
+                assert!(
+                    (actual - expected).abs() < 2.0e-3,
+                    "{backend}: {actual} != {expected}"
+                );
+            }
+        }
     }
 
     #[cfg(all(target_os = "macos", feature = "metal"))]
