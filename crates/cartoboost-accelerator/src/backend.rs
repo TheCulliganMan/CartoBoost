@@ -610,6 +610,7 @@ pub fn backend_adamw_step_f32(
         || second_moment.len() != parameters.len()
         || gradients.len() != parameters.len()
         || step == 0
+        || step > i32::MAX as u64
         || !learning_rate.is_finite()
         || learning_rate <= 0.0
         || !weight_decay.is_finite()
@@ -1010,6 +1011,7 @@ pub fn backend_scalar_graph_train_step_f32(
         || first_moment.len() != parameters.len()
         || second_moment.len() != parameters.len()
         || step == 0
+        || step > i32::MAX as u64
         || !learning_rate.is_finite()
         || learning_rate <= 0.0
         || !weight_decay.is_finite()
@@ -2506,7 +2508,7 @@ mod tests {
             let mut actual = initial.clone();
             backend_train_tanh_mlp_f32(&selection, &inputs, &targets, 2, 1, 0.01, &mut actual)
                 .unwrap();
-            if name == "metal" {
+            if matches!(name.as_str(), "metal" | "webgpu") {
                 assert!(actual.iter().all(|value| value.is_finite()));
                 continue;
             }
@@ -2561,6 +2563,84 @@ mod tests {
         backend_train_tanh_mlp_f32(&metal, &inputs, &targets, 2, 3, 0.01, &mut parameters).unwrap();
         assert!(parameters.iter().all(|value| value.is_finite()));
         assert!(squared_error(&parameters) < initial_loss);
+    }
+
+    #[cfg(feature = "webgpu")]
+    #[test]
+    fn webgpu_tanh_mlp_training_reduces_loss() {
+        if !available_backends()
+            .iter()
+            .any(|backend| backend == "webgpu")
+        {
+            return;
+        }
+        let inputs = vec![vec![0.25, -0.5], vec![1.0, 0.75]];
+        let targets = vec![0.2, -0.4];
+        let mut parameters = vec![0.1, -0.2, 0.3, 0.05, -0.04, 0.2, -0.1, 0.07, 0.01];
+        let squared_error = |parameters: &[f32]| {
+            inputs
+                .iter()
+                .zip(&targets)
+                .map(|(row, target)| {
+                    let prediction = parameters[8]
+                        + (0..2)
+                            .map(|hidden| {
+                                let activation = (parameters[4 + hidden]
+                                    + (0..2)
+                                        .map(|input| parameters[hidden * 2 + input] * row[input])
+                                        .sum::<f32>())
+                                .tanh();
+                                activation * parameters[6 + hidden]
+                            })
+                            .sum::<f32>();
+                    (prediction - target).powi(2)
+                })
+                .sum::<f32>()
+        };
+        let initial_loss = squared_error(&parameters);
+        let webgpu = select_backend(Some("webgpu")).unwrap();
+        backend_train_tanh_mlp_f32(&webgpu, &inputs, &targets, 2, 3, 0.01, &mut parameters)
+            .unwrap();
+        assert!(parameters.iter().all(|value| value.is_finite()));
+        assert!(squared_error(&parameters) < initial_loss);
+    }
+
+    #[test]
+    fn optimizer_step_must_fit_the_shared_backend_contract() {
+        let cpu = select_backend(Some("cpu")).unwrap();
+        let invalid_step = i32::MAX as u64 + 1;
+        let error = backend_adamw_step_f32(
+            &cpu,
+            &mut [1.0],
+            &mut [0.0],
+            &mut [0.0],
+            &[0.25],
+            invalid_step,
+            0.01,
+            0.0,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("invalid AdamW tensor state"));
+
+        let error = backend_scalar_graph_train_step_f32(
+            &cpu,
+            &[2.0, 0.0, 0.0],
+            &[0, 1, 3],
+            &[0, 0, 0],
+            &[0, 0, 1],
+            &[0, 0, 0],
+            2,
+            &mut [3.0],
+            &mut [0.0],
+            &mut [0.0],
+            invalid_step,
+            0.01,
+            0.0,
+        )
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("scalar-graph training state or optimizer configuration is invalid"));
     }
 
     #[test]

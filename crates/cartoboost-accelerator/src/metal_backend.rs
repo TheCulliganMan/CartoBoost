@@ -1,4 +1,4 @@
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(all(feature = "metal", any(target_os = "macos", target_os = "ios")))]
 use crate::backend::expected_vector_add_checksum;
 use crate::backend::{BackendDispatchReport, BackendSelection, CsrDiffusionBackward};
 use crate::{AcceleratorError, Result};
