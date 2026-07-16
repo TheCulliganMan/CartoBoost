@@ -981,14 +981,14 @@ fn solve_spatial_lag_mean_with_backend(
             "spatial lag mean length must match spatial weights".to_string(),
         ));
     }
+    let prepared = PreparedAcceleratedCsr::from_weights(weights)?;
     let mut current = structural_mean.clone();
     for _ in 0..512 {
-        let rows = current.iter().map(|&value| vec![value]).collect::<Vec<_>>();
-        let lag = sparse_matrix_lag_with_backend(weights, &rows, backend)?;
+        let lag = prepared.diffuse_vector(&current, backend)?;
         let next = structural_mean
             .iter()
             .zip(lag)
-            .map(|(&mean, row)| mean + rho * row[0])
+            .map(|(&mean, lagged)| mean + rho * lagged)
             .collect::<Vec<_>>();
         let delta = next
             .iter()
@@ -1005,6 +1005,80 @@ fn solve_spatial_lag_mean_with_backend(
         "{} spatial-lag fixed-point solve did not converge",
         backend.selected
     )))
+}
+
+struct PreparedAcceleratedCsr {
+    indptr: Vec<u32>,
+    indices: Vec<u32>,
+    weights: Vec<f32>,
+}
+
+impl PreparedAcceleratedCsr {
+    fn from_weights(weights: &SpatialWeights) -> Result<Self> {
+        let indptr = weights
+            .indptr
+            .iter()
+            .map(|value| u32::try_from(*value))
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|_| SpatialEconError::InvalidInput("CSR indptr exceeds u32 range".into()))?;
+        let indices = weights
+            .indices
+            .iter()
+            .map(|value| u32::try_from(*value))
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|_| SpatialEconError::InvalidInput("CSR index exceeds u32 range".into()))?;
+        let edge_weights = weights
+            .data
+            .iter()
+            .map(|value| *value as f32)
+            .collect::<Vec<_>>();
+        Ok(Self {
+            indptr,
+            indices,
+            weights: edge_weights,
+        })
+    }
+
+    fn diffuse_vector(&self, values: &[f64], backend: &BackendSelection) -> Result<Vec<f64>> {
+        let values = values.iter().map(|value| *value as f32).collect::<Vec<_>>();
+        backend_csr_diffusion_f32(
+            backend,
+            &self.indptr,
+            &self.indices,
+            &self.weights,
+            1,
+            &values,
+        )
+        .map(|output| output.into_iter().map(f64::from).collect())
+        .map_err(|error| SpatialEconError::Backend(error.to_string()))
+    }
+
+    fn diffuse_matrix(
+        &self,
+        values: &[Vec<f64>],
+        backend: &BackendSelection,
+    ) -> Result<Vec<Vec<f64>>> {
+        let cols = values[0].len();
+        let values = values
+            .iter()
+            .flat_map(|row| row.iter().map(|value| *value as f32))
+            .collect::<Vec<_>>();
+        backend_csr_diffusion_f32(
+            backend,
+            &self.indptr,
+            &self.indices,
+            &self.weights,
+            cols,
+            &values,
+        )
+        .map(|output| {
+            output
+                .chunks_exact(cols)
+                .map(|row| row.iter().map(|value| f64::from(*value)).collect())
+                .collect()
+        })
+        .map_err(|error| SpatialEconError::Backend(error.to_string()))
+    }
 }
 
 fn spatial_log_abs_determinant(parameter: f64, weights: &SpatialWeights) -> Result<f64> {
@@ -1116,27 +1190,7 @@ fn sparse_matvec_with_backend(
         ));
     }
     if backend.selected != "cpu" && weights.indices.len() >= SPATIAL_SPARSE_DISPATCH_MIN_EDGES {
-        let indptr = weights
-            .indptr
-            .iter()
-            .map(|value| u32::try_from(*value))
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|_| SpatialEconError::InvalidInput("CSR indptr exceeds u32 range".into()))?;
-        let indices = weights
-            .indices
-            .iter()
-            .map(|value| u32::try_from(*value))
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|_| SpatialEconError::InvalidInput("CSR index exceeds u32 range".into()))?;
-        let edge_weights = weights
-            .data
-            .iter()
-            .map(|value| *value as f32)
-            .collect::<Vec<_>>();
-        let values = x.iter().map(|value| *value as f32).collect::<Vec<_>>();
-        return backend_csr_diffusion_f32(backend, &indptr, &indices, &edge_weights, 1, &values)
-            .map(|output| output.into_iter().map(f64::from).collect())
-            .map_err(|error| SpatialEconError::Backend(error.to_string()));
+        return PreparedAcceleratedCsr::from_weights(weights)?.diffuse_vector(x, backend);
     }
     let mut out = vec![0.0; weights.n_nodes];
     for (row, out_value) in out.iter_mut().enumerate() {
@@ -1164,34 +1218,7 @@ fn sparse_matrix_lag_with_backend(
     if backend.selected != "cpu"
         && weights.indices.len().saturating_mul(cols) >= SPATIAL_SPARSE_DISPATCH_MIN_EDGES
     {
-        let indptr = weights
-            .indptr
-            .iter()
-            .map(|value| u32::try_from(*value))
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|_| SpatialEconError::InvalidInput("CSR indptr exceeds u32 range".into()))?;
-        let indices = weights
-            .indices
-            .iter()
-            .map(|value| u32::try_from(*value))
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|_| SpatialEconError::InvalidInput("CSR index exceeds u32 range".into()))?;
-        let edge_weights = weights
-            .data
-            .iter()
-            .map(|value| *value as f32)
-            .collect::<Vec<_>>();
-        let values = x
-            .iter()
-            .flat_map(|row| row.iter().map(|value| *value as f32))
-            .collect::<Vec<_>>();
-        let output =
-            backend_csr_diffusion_f32(backend, &indptr, &indices, &edge_weights, cols, &values)
-                .map_err(|error| SpatialEconError::Backend(error.to_string()))?;
-        return Ok(output
-            .chunks_exact(cols)
-            .map(|row| row.iter().map(|value| f64::from(*value)).collect())
-            .collect());
+        return PreparedAcceleratedCsr::from_weights(weights)?.diffuse_matrix(x, backend);
     }
     let mut out = vec![vec![0.0; cols]; weights.n_nodes];
     for (row, out_row) in out.iter_mut().enumerate() {
@@ -1642,6 +1669,26 @@ mod tests {
             for (actual, expected) in actual.iter().zip(&expected) {
                 assert!((actual - expected).abs() <= 2.0e-4);
             }
+        }
+    }
+
+    #[test]
+    fn large_iterative_spatial_lag_reuses_csr_on_every_accelerator() {
+        let weights = ring_weights(SPATIAL_SPARSE_DISPATCH_MIN_EDGES / 2);
+        let structural = vec![2.0; weights.n_nodes];
+        let expected = 2.0 / (1.0 - 0.3);
+        for backend_name in cartoboost_neural::available_backends()
+            .into_iter()
+            .filter(|name| name != "cpu")
+        {
+            let backend = select_spatial_backend(Some(&backend_name))
+                .unwrap_or_else(|error| panic!("{backend_name} selection failed: {error}"));
+            let actual =
+                solve_spatial_lag_mean_with_backend(structural.clone(), 0.3, &weights, &backend)
+                    .unwrap_or_else(|error| panic!("{backend_name} solve failed: {error}"));
+            assert!(actual
+                .iter()
+                .all(|value| (value - expected).abs() <= 2.0e-4));
         }
     }
 
