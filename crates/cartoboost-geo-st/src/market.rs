@@ -5,7 +5,10 @@
 //! smoothing, prediction, and explanation.
 
 use crate::{GeoStError, Result};
-use cartoboost_neural::{select_backend, GraphSageConfig, GraphSageEncoder, HomogeneousGraph};
+use cartoboost_neural::{
+    backend_dense_layer_f32, select_backend, select_backend_for, BackendOperation,
+    BackendSelection, GraphSageConfig, GraphSageEncoder, HomogeneousGraph,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::cmp::Ordering;
@@ -654,11 +657,43 @@ impl MarketStructureForecaster {
             .cloned()
             .ok_or(GeoStError::NotFit)?;
         let last_timestamp = *self.timestamps.last().ok_or(GeoStError::NotFit)?;
+        let head_backend = select_backend_for(Some(&self.config.backend), BackendOperation::Dense)
+            .map_err(|error| {
+                GeoStError::InvalidFrame(format!("invalid market head backend: {error}"))
+            })?;
         let mut result = Vec::with_capacity(horizon * self.lane_ids.len());
         for step in 1..=horizon {
             let timestamp = last_timestamp + step as i64;
             let mut next_primary = vec![0.0; self.lane_ids.len()];
             let mut next_secondary = vec![0.0; self.lane_ids.len()];
+            let calendar = future_calendar
+                .map(|rows| rows[step - 1].as_slice())
+                .unwrap_or(&[]);
+            let head_features = self.joint_heads.as_ref().map(|_| {
+                (0..self.lane_ids.len())
+                    .map(|lane| {
+                        forecast_head_features(
+                            lane,
+                            &primary,
+                            &secondary,
+                            &self.primary_means,
+                            &self.secondary_means,
+                            &self.relationships,
+                            &self.lane_ids,
+                            timestamp,
+                            calendar,
+                            self.last_mix.as_deref(),
+                            &self.neural_embeddings,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            });
+            let accelerated_heads = match (&self.joint_heads, &head_features) {
+                (Some(heads), Some(features)) if head_backend.selected != "cpu" => Some(
+                    joint_head_outputs_with_backend(heads, features, &head_backend)?,
+                ),
+                _ => None,
+            };
             for lane in 0..self.lane_ids.len() {
                 let seasonal_primary =
                     self.weekly_primary[(timestamp.rem_euclid(7)) as usize][lane];
@@ -680,9 +715,6 @@ impl MarketStructureForecaster {
                     &self.lane_ids,
                     timestamp,
                 );
-                let calendar = future_calendar
-                    .map(|rows| rows[step - 1].as_slice())
-                    .unwrap_or(&[]);
                 next_primary[lane] = self.primary_means[lane]
                     + seasonal_primary
                     + self.config.local_strength * (primary[lane] - self.primary_means[lane])
@@ -700,23 +732,16 @@ impl MarketStructureForecaster {
                 next_secondary[lane] +=
                     self.cross_target_couplings[lane] * (primary[lane] - self.primary_means[lane]);
                 if let Some(heads) = &self.joint_heads {
-                    let features = forecast_head_features(
-                        lane,
-                        &primary,
-                        &secondary,
-                        &self.primary_means,
-                        &self.secondary_means,
-                        &self.relationships,
-                        &self.lane_ids,
-                        timestamp,
-                        calendar,
-                        self.last_mix.as_deref(),
-                        &self.neural_embeddings,
-                    );
+                    let features = &head_features.as_ref().expect("joint head features")[lane];
                     // The robust adapters predict residual corrections to the
                     // decomposed graph path, never a competing absolute level.
-                    next_primary[lane] += dot(&heads.primary_huber, &features);
-                    next_secondary[lane] += dot(&heads.secondary_huber, &features);
+                    if let Some(outputs) = &accelerated_heads {
+                        next_primary[lane] += f64::from(outputs[lane][0]);
+                        next_secondary[lane] += f64::from(outputs[lane][1]);
+                    } else {
+                        next_primary[lane] += dot(&heads.primary_huber, features);
+                        next_secondary[lane] += dot(&heads.secondary_huber, features);
+                    }
                 }
                 let primary_value = next_primary[lane].exp();
                 let spread =
@@ -724,24 +749,19 @@ impl MarketStructureForecaster {
                 let (lower, upper) = self.joint_heads.as_ref().map_or_else(
                     || (next_primary[lane] - spread, next_primary[lane] + spread),
                     |heads| {
-                        let features = forecast_head_features(
-                            lane,
-                            &primary,
-                            &secondary,
-                            &self.primary_means,
-                            &self.secondary_means,
-                            &self.relationships,
-                            &self.lane_ids,
-                            timestamp,
-                            calendar,
-                            self.last_mix.as_deref(),
-                            &self.neural_embeddings,
-                        );
-                        let values = heads
-                            .primary_quantiles
-                            .iter()
-                            .map(|head| next_primary[lane] + dot(head, &features))
-                            .collect::<Vec<_>>();
+                        let features = &head_features.as_ref().expect("joint head features")[lane];
+                        let values = if let Some(outputs) = &accelerated_heads {
+                            outputs[lane][2..]
+                                .iter()
+                                .map(|value| next_primary[lane] + f64::from(*value))
+                                .collect::<Vec<_>>()
+                        } else {
+                            heads
+                                .primary_quantiles
+                                .iter()
+                                .map(|head| next_primary[lane] + dot(head, features))
+                                .collect::<Vec<_>>()
+                        };
                         quantile_interval(
                             &self.config.quantile_levels,
                             &values,
@@ -1395,6 +1415,32 @@ fn dot(weights: &[f64], features: &[f64]) -> f64 {
         .zip(features)
         .map(|(weight, feature)| weight * feature)
         .sum()
+}
+
+fn joint_head_outputs_with_backend(
+    heads: &JointMarketHeads,
+    features: &[Vec<f64>],
+    backend: &BackendSelection,
+) -> Result<Vec<Vec<f32>>> {
+    let output_width = 2 + heads.primary_quantiles.len();
+    let feature_width = heads.primary_huber.len();
+    let mut weights = Vec::with_capacity(feature_width * output_width);
+    for feature in 0..feature_width {
+        weights.push(heads.primary_huber[feature] as f32);
+        weights.push(heads.secondary_huber[feature] as f32);
+        weights.extend(
+            heads
+                .primary_quantiles
+                .iter()
+                .map(|head| head[feature] as f32),
+        );
+    }
+    let features = features
+        .iter()
+        .map(|row| row.iter().map(|value| *value as f32).collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    backend_dense_layer_f32(backend, &features, &weights, &vec![0.0; output_width])
+        .map_err(|error| GeoStError::InvalidFrame(format!("market head dispatch failed: {error}")))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2223,6 +2269,16 @@ mod tests {
 
     #[test]
     fn market_graph_kernel_runs_on_every_available_backend() {
+        let mut cpu = MarketStructureForecaster::new(MarketStructureConfig {
+            neural_hidden_dim: 4,
+            neural_epochs: 1,
+            head_epochs: 1,
+            calibrate_intervals: false,
+            ..MarketStructureConfig::default()
+        })
+        .unwrap();
+        cpu.fit(&frame()).unwrap();
+        let expected = cpu.predict(2, None).unwrap();
         for backend in cartoboost_neural::available_backends() {
             let mut model = MarketStructureForecaster::new(MarketStructureConfig {
                 backend: backend.clone(),
@@ -2239,6 +2295,27 @@ mod tests {
             assert_eq!(model.config.backend, backend);
             assert_eq!(model.neural_embeddings.len(), 3);
             assert_eq!(model.neural_embeddings[0].len(), 4);
+            let actual = model.predict(2, None).unwrap();
+            for (left, right) in actual.iter().zip(&expected) {
+                assert!(
+                    (left.primary - right.primary).abs() < 2.0e-3,
+                    "{backend} primary mismatch: {} != {}",
+                    left.primary,
+                    right.primary
+                );
+                assert!(
+                    (left.primary_lower - right.primary_lower).abs() < 2.0e-3,
+                    "{backend} lower mismatch: {} != {}",
+                    left.primary_lower,
+                    right.primary_lower
+                );
+                assert!(
+                    (left.primary_upper - right.primary_upper).abs() < 2.0e-3,
+                    "{backend} upper mismatch: {} != {}",
+                    left.primary_upper,
+                    right.primary_upper
+                );
+            }
         }
     }
 
