@@ -58,4 +58,45 @@ def available_backends(operation: str | None = None) -> list[str]:
     ]
 
 
-__all__ = ["available_backends", "capabilities"]
+def workload_decision(
+    backend: str | None,
+    operation: str,
+    workload_size: int,
+    minimum_accelerated_size: int,
+) -> dict[str, Any]:
+    """Report the device that a threshold-gated operation will actually use.
+
+    This performs capability selection only. It does not benchmark, calibrate,
+    allocate device buffers, or launch a kernel, so it is safe to call on an
+    inference path.
+    """
+
+    if operation not in _ALL_OPERATIONS:
+        raise ValueError(f"unknown accelerator operation {operation!r}")
+    if workload_size < 0 or minimum_accelerated_size < 0:
+        raise ValueError("workload sizes must be non-negative")
+    function = getattr(_native, "accelerator_workload_decision_value", None)
+    if function is None:
+        return {
+            "requested": "cpu" if backend is None else str(backend),
+            "selected": "cpu",
+            "executed": "cpu",
+            "operation": operation,
+            "workload_size": int(workload_size),
+            "minimum_accelerated_size": int(minimum_accelerated_size),
+            "accelerated": False,
+            "fallback_reason": None,
+        }
+    return dict(
+        json.loads(
+            function(
+                backend,
+                operation,
+                int(workload_size),
+                int(minimum_accelerated_size),
+            )
+        )
+    )
+
+
+__all__ = ["available_backends", "capabilities", "workload_decision"]

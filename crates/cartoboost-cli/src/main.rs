@@ -2,7 +2,8 @@ use cartoboost_core::loss::{LossConfig, QuantileLossConfig};
 use cartoboost_core::tree::{FuzzyKernel, LeafPredictorKind, SplitterKind};
 use cartoboost_core::{Booster, BoosterConfig, Dataset, Model as CoreModel};
 use cartoboost_neural::{
-    available_backends, backend_supports_operation, select_backend_for, BackendOperation,
+    available_backends, backend_supports_operation, backend_workload_decision, select_backend_for,
+    BackendOperation,
 };
 use std::collections::BTreeMap;
 use std::env;
@@ -50,7 +51,7 @@ fn run() -> CliResult<()> {
 
 fn print_help() {
     println!(
-        "cartoboost <command> [options]\n\nCommands:\n  train         --data <csv> [--backend cpu|auto|cuda|rocm|metal|directml|webgpu] [--config <toml>] [--model-out <path>] [--output json|csv]\n  predict       --model <path> --input <csv> [--backend cpu|auto|cuda|rocm|metal|directml|webgpu] [--predictions-out <path>] [--output json|csv]\n  eval          --model <path> --data <csv> [--backend cpu|auto|cuda|rocm|metal|directml|webgpu] [--output json|csv]\n  inspect       [--model <path>] [--config <toml>] [--data <csv>] [--output json|csv]\n  accelerators  [--output json|csv]"
+        "cartoboost <command> [options]\n\nCommands:\n  train         --data <csv> [--backend cpu|auto|cuda|rocm|metal|directml|webgpu] [--config <toml>] [--model-out <path>] [--output json|csv]\n  predict       --model <path> --input <csv> [--backend cpu|auto|cuda|rocm|metal|directml|webgpu] [--predictions-out <path>] [--output json|csv]\n  eval          --model <path> --data <csv> [--backend cpu|auto|cuda|rocm|metal|directml|webgpu] [--output json|csv]\n  inspect       [--model <path>] [--config <toml>] [--data <csv>] [--output json|csv]\n  accelerators  [--backend <name> --operation <kernel> --workload-size <n> --minimum-accelerated-size <n>] [--output json|csv]"
     );
 }
 
@@ -90,7 +91,14 @@ fn validate_options(command: &str, opts: &BTreeMap<String, String>) -> CliResult
         ][..],
         "eval" => &["backend", "data", "help", "model", "output"][..],
         "inspect" => &["config", "data", "help", "model", "output"][..],
-        "accelerators" => &["help", "output"][..],
+        "accelerators" => &[
+            "backend",
+            "help",
+            "minimum-accelerated-size",
+            "operation",
+            "output",
+            "workload-size",
+        ][..],
         _ => return Ok(()),
     };
     for key in opts.keys() {
@@ -103,6 +111,54 @@ fn validate_options(command: &str, opts: &BTreeMap<String, String>) -> CliResult
 
 fn accelerators(opts: BTreeMap<String, String>) -> CliResult<()> {
     let output = output_format(&opts)?;
+    if let Some(operation_name) = opts.get("operation") {
+        let operation = BackendOperation::ALL
+            .into_iter()
+            .find(|operation| operation.as_str() == operation_name)
+            .ok_or_else(|| format!("unknown accelerator operation '{operation_name}'"))?;
+        let workload_size = opts
+            .get("workload-size")
+            .ok_or("--workload-size is required with --operation")?
+            .parse::<usize>()?;
+        let minimum = opts
+            .get("minimum-accelerated-size")
+            .ok_or("--minimum-accelerated-size is required with --operation")?
+            .parse::<usize>()?;
+        let selection = select_backend_for(opts.get("backend").map(String::as_str), operation)?;
+        let decision = backend_workload_decision(&selection, operation, workload_size, minimum);
+        if output == "csv" {
+            println!(
+                "requested,selected,executed,operation,workload_size,minimum_accelerated_size,accelerated,fallback_reason"
+            );
+            println!(
+                "{},{},{},{},{},{},{},{}",
+                csv_cell(&decision.requested),
+                csv_cell(&decision.selected),
+                csv_cell(&decision.executed),
+                csv_cell(&decision.operation),
+                decision.workload_size,
+                decision.minimum_accelerated_size,
+                decision.accelerated,
+                csv_cell(decision.fallback_reason.as_deref().unwrap_or(""))
+            );
+        } else {
+            println!(
+                "{{\"requested\":\"{}\",\"selected\":\"{}\",\"executed\":\"{}\",\"operation\":\"{}\",\"workload_size\":{},\"minimum_accelerated_size\":{},\"accelerated\":{},\"fallback_reason\":{}}}",
+                json_escape(&decision.requested),
+                json_escape(&decision.selected),
+                json_escape(&decision.executed),
+                json_escape(&decision.operation),
+                decision.workload_size,
+                decision.minimum_accelerated_size,
+                decision.accelerated,
+                decision.fallback_reason.as_ref().map_or_else(
+                    || "null".to_string(),
+                    |reason| format!("\"{}\"", json_escape(reason))
+                )
+            );
+        }
+        return Ok(());
+    }
     let available = available_backends();
     if output == "csv" {
         println!("backend,available,operations");

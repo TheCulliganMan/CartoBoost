@@ -133,7 +133,7 @@ use cartoboost_neural::{
     available_backends as neural_available_backends,
     backend_dispatch_report as neural_backend_dispatch_report,
     backend_supports_operation as neural_backend_supports_operation,
-    build_embedding_table_artifact,
+    backend_workload_decision as neural_backend_workload_decision, build_embedding_table_artifact,
     choice_set_transformer_report_json as core_choice_set_transformer_report_json,
     compute_directional_features,
     constrained_decision_select_with_options as core_deep_constrained_decision_select,
@@ -11833,6 +11833,37 @@ fn deep_backend_dispatch_report_value(backend: Option<&str>, len: usize) -> PyRe
 }
 
 #[pyfunction]
+#[pyo3(signature = (backend, operation, workload_size, minimum_accelerated_size))]
+fn accelerator_workload_decision_value(
+    backend: Option<&str>,
+    operation: &str,
+    workload_size: usize,
+    minimum_accelerated_size: usize,
+) -> PyResult<String> {
+    let operation = BackendOperation::ALL
+        .into_iter()
+        .find(|candidate| candidate.as_str() == operation)
+        .ok_or_else(|| {
+            PyValueError::new_err(format!(
+                "unknown accelerator operation {operation:?}; expected one of {}",
+                BackendOperation::ALL
+                    .into_iter()
+                    .map(BackendOperation::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
+        })?;
+    let selection = neural_select_backend_for(backend, operation).map_err(to_py_neural_error)?;
+    serde_json::to_string(&neural_backend_workload_decision(
+        &selection,
+        operation,
+        workload_size,
+        minimum_accelerated_size,
+    ))
+    .map_err(to_py_json_error)
+}
+
+#[pyfunction]
 fn graph_st_available_backends_value() -> Vec<String> {
     graph_st_available_compute_backends()
 }
@@ -12555,6 +12586,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(deep_service_residual_predict_value, m)?)?;
     m.add_function(wrap_pyfunction!(deep_available_backends_value, m)?)?;
     m.add_function(wrap_pyfunction!(accelerator_capabilities_value, m)?)?;
+    m.add_function(wrap_pyfunction!(accelerator_workload_decision_value, m)?)?;
     m.add_function(wrap_pyfunction!(deep_backend_dispatch_report_value, m)?)?;
     m.add_function(wrap_pyfunction!(deep_constrained_decision_select_value, m)?)?;
     m.add_function(wrap_pyfunction!(

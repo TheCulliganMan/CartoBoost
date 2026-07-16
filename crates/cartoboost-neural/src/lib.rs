@@ -28,9 +28,9 @@ pub use backend::{
     backend_dispatch_report, backend_layer_norm_f32, backend_pair_sigmoid_scores_f32,
     backend_pairwise_squared_distances_f32, backend_scalar_graph_f32,
     backend_scalar_graph_train_step_f32, backend_supports_operation, backend_train_tanh_mlp_f32,
-    masked_inverse_scale_mae_f32, select_backend, select_backend_for,
+    backend_workload_decision, masked_inverse_scale_mae_f32, select_backend, select_backend_for,
     select_backend_for_operations, BackendDispatchReport, BackendOperation, BackendSelection,
-    ComputeBackend, CsrDiffusionBackward,
+    BackendWorkloadDecision, ComputeBackend, CsrDiffusionBackward,
 };
 #[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
 pub use cartoboost_accelerator::{

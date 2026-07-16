@@ -126,6 +126,46 @@ pub struct BackendDispatchReport {
     pub accelerated: bool,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BackendWorkloadDecision {
+    pub requested: String,
+    pub selected: String,
+    pub executed: String,
+    pub operation: String,
+    pub workload_size: usize,
+    pub minimum_accelerated_size: usize,
+    pub accelerated: bool,
+    pub fallback_reason: Option<String>,
+}
+
+pub fn backend_workload_decision(
+    selection: &BackendSelection,
+    operation: BackendOperation,
+    workload_size: usize,
+    minimum_accelerated_size: usize,
+) -> BackendWorkloadDecision {
+    let below_threshold = selection.selected != "cpu" && workload_size < minimum_accelerated_size;
+    let accelerated = selection.selected != "cpu" && !below_threshold;
+    BackendWorkloadDecision {
+        requested: selection.requested.clone(),
+        selected: selection.selected.clone(),
+        executed: if accelerated {
+            selection.selected.clone()
+        } else {
+            "cpu".to_string()
+        },
+        operation: operation.as_str().to_string(),
+        workload_size,
+        minimum_accelerated_size,
+        accelerated,
+        fallback_reason: below_threshold.then(|| {
+            format!(
+                "workload size {workload_size} is below the accelerated dispatch threshold {minimum_accelerated_size}"
+            )
+        }),
+    }
+}
+
 /// Gradients for a batched CSR diffusion. `input_grad` has the same layout as
 /// the input (`[batch, nodes, channels]`) and `edge_grad` follows CSR edge
 /// order. Keeping these buffers explicit is the tensor backend's alternative
@@ -4646,6 +4686,25 @@ mod tests {
         let right = vec![vec![1.0, 0.0], vec![-1.0, 2.0], vec![1.0, 2.0]];
         let actual = backend_pairwise_squared_distances_f32(&cpu, &left, &right).unwrap();
         assert_eq!(actual, vec![vec![1.0, 5.0, 5.0], vec![4.0, 4.0, 0.0]]);
+    }
+
+    #[test]
+    fn workload_decision_reports_threshold_cpu_execution_without_calibration() {
+        let selection = BackendSelection {
+            requested: "webgpu".to_string(),
+            selected: "webgpu".to_string(),
+            available: vec!["cpu".to_string(), "webgpu".to_string()],
+        };
+        let small = backend_workload_decision(&selection, BackendOperation::Dense, 128, 16_384);
+        assert_eq!(small.selected, "webgpu");
+        assert_eq!(small.executed, "cpu");
+        assert!(!small.accelerated);
+        assert!(small.fallback_reason.is_some());
+
+        let large = backend_workload_decision(&selection, BackendOperation::Dense, 16_384, 16_384);
+        assert_eq!(large.executed, "webgpu");
+        assert!(large.accelerated);
+        assert!(large.fallback_reason.is_none());
     }
 
     #[cfg(all(feature = "directml", target_os = "windows"))]
