@@ -331,6 +331,12 @@ impl DeterministicMlp {
                 "NBEATS input is shorter than input_size".to_string(),
             ));
         }
+        // Forecasting invokes this for one origin at a time. A single-vector
+        // device dispatch costs more than the dense work it replaces; training
+        // remains batched on the selected accelerator.
+        if self.backend.selected != "cpu" {
+            return Ok(self.hidden(input));
+        }
         let features = vec![input
             .iter()
             .take(self.input_size)

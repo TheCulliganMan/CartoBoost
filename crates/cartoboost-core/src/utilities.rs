@@ -5,6 +5,8 @@ use cartoboost_accelerator::backend::{
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
+const KRIGING_PAIRWISE_DISPATCH_MIN_PAIRS: usize = 16_384;
+
 #[derive(Debug, Clone, Copy)]
 pub struct LocalLinearKalmanConfig {
     pub level_process_variance: f64,
@@ -424,7 +426,10 @@ impl OrdinaryKrigingSystem {
                 "kriging targets must not be empty".to_string(),
             ));
         }
-        if self.backend.selected == "cpu" {
+        if self.backend.selected == "cpu"
+            || targets.len().saturating_mul(self.observations.len())
+                < KRIGING_PAIRWISE_DISPATCH_MIN_PAIRS
+        {
             return targets
                 .par_iter()
                 .map(|target| self.predict(*target))
@@ -1582,7 +1587,10 @@ fn variogram_pairs_with_backend(
     max_distance: Option<f64>,
     backend: &BackendSelection,
 ) -> Result<Vec<(f64, f64)>> {
-    if backend.selected == "cpu" {
+    if backend.selected == "cpu"
+        || observations.len().saturating_mul(observations.len())
+            < KRIGING_PAIRWISE_DISPATCH_MIN_PAIRS
+    {
         return variogram_pairs(observations, distance_config, max_distance);
     }
     if let Some(max_distance) = max_distance {

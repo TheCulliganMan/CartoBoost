@@ -8926,6 +8926,10 @@ impl PaperGraphTransformerForecaster {
         } else {
             None
         };
+        #[cfg(all(feature = "cuda", target_os = "linux"))]
+        let uses_cuda_tensor_executor = cuda_executor.is_some();
+        #[cfg(not(all(feature = "cuda", target_os = "linux")))]
+        let uses_cuda_tensor_executor = false;
         if self.config.profile == GraphTransformerProfile::LongShortFusion {
             // LSTTN first reconstructs randomly withheld whole patches from
             // the unmasked long-history context, then fine-tunes those shared
@@ -9003,7 +9007,7 @@ impl PaperGraphTransformerForecaster {
         }
         let supervised_starts = (0..sample_count).collect::<Vec<_>>();
         let frozen_lsttn_cache = if self.config.profile == GraphTransformerProfile::LongShortFusion
-            && backend.selected != "cuda"
+            && !uses_cuda_tensor_executor
         {
             let patch_width = (self.config.periodicity / 24).max(1);
             let patches = self.config.lookback / patch_width;
@@ -9876,7 +9880,8 @@ fn delayed_graph_signal_backend(
     time_idx: usize,
     backend: &ComputeBackendSelection,
 ) -> Result<Vec<f64>> {
-    if backend.selected == "cpu" {
+    const DELAYED_GRAPH_DISPATCH_MIN_EDGES: usize = 16_384;
+    if backend.selected == "cpu" || edges.len() < DELAYED_GRAPH_DISPATCH_MIN_EDGES {
         return Ok(delayed_graph_signal(
             target, edges, weights, delays, time_idx,
         ));

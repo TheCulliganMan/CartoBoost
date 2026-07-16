@@ -4,6 +4,8 @@ use cartoboost_accelerator::{
     backend_dense_layer_f32, select_backend_for, BackendOperation, BackendSelection,
 };
 
+const RECONCILIATION_DENSE_DISPATCH_MIN_OPS: usize = 16_384;
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum ReconciliationMethod {
     BottomUp,
@@ -277,7 +279,12 @@ impl Reconciler {
             }
         }
 
-        let weighted_panel = if self.backend.selected == "cpu" {
+        let weighted_panel = if self.backend.selected == "cpu"
+            || horizon
+                .saturating_mul(node_count)
+                .saturating_mul(node_count)
+                < RECONCILIATION_DENSE_DISPATCH_MIN_OPS
+        {
             None
         } else {
             let features = (0..horizon)
@@ -327,7 +334,12 @@ impl Reconciler {
     fn aggregate_bottom_horizons(&self, bottom_by_horizon: &[Vec<f64>]) -> Result<Vec<Vec<f64>>> {
         let horizon = bottom_by_horizon.len();
         let nodes = self.hierarchy.node_count();
-        if self.backend.selected == "cpu" {
+        if self.backend.selected == "cpu"
+            || horizon
+                .saturating_mul(self.hierarchy.bottom_count())
+                .saturating_mul(nodes)
+                < RECONCILIATION_DENSE_DISPATCH_MIN_OPS
+        {
             let mut out = vec![vec![0.0; horizon]; nodes];
             for (h, bottom) in bottom_by_horizon.iter().enumerate() {
                 for (node, value) in self
