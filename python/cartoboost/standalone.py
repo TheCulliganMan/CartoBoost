@@ -570,8 +570,19 @@ class Node2VecLinkPredictor(ArtifactPersistenceMixin):
 class GraphSageLinkPredictor(ArtifactPersistenceMixin):
     """Standalone GraphSAGE edge scorer."""
 
-    def __init__(self, *, input_dim: int, **kwargs: Any) -> None:
-        self._native = _NativeGraphSageLinkPredictor(input_dim=int(input_dim), **kwargs)
+    def __init__(
+        self,
+        *,
+        input_dim: int,
+        backend: Backend | str = Backend.CPU,
+        **kwargs: Any,
+    ) -> None:
+        self.backend = _choice_value(backend)
+        self._native = _NativeGraphSageLinkPredictor(
+            input_dim=int(input_dim),
+            backend=self.backend,
+            **kwargs,
+        )
 
     def fit(self, *, node_features: Any, edges: Any) -> GraphSageLinkPredictor:
         self._native.fit(_f32_matrix(node_features, "node_features"), _edge_pairs(edges))
@@ -611,16 +622,26 @@ class GraphSageLinkPredictor(ArtifactPersistenceMixin):
     def load(cls, path: str | Path) -> GraphSageLinkPredictor:
         instance = cls(input_dim=1)
         instance._native = _NativeGraphSageLinkPredictor.load_artifact_json(str(path))
+        instance.backend = str(instance._native.backend)
         return instance
 
 
 class HeteroGraphSageLinkPredictor(ArtifactPersistenceMixin):
     """Standalone heterogeneous GraphSAGE edge scorer."""
 
-    def __init__(self, *, input_dim: int, relation_count: int, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *,
+        input_dim: int,
+        relation_count: int,
+        backend: Backend | str = Backend.CPU,
+        **kwargs: Any,
+    ) -> None:
+        self.backend = _choice_value(backend)
         self._native = _NativeHeteroGraphSageLinkPredictor(
             input_dim=int(input_dim),
             relation_count=int(relation_count),
+            backend=self.backend,
             **kwargs,
         )
 
@@ -662,6 +683,7 @@ class HeteroGraphSageLinkPredictor(ArtifactPersistenceMixin):
     def load(cls, path: str | Path) -> HeteroGraphSageLinkPredictor:
         instance = cls(input_dim=1, relation_count=1)
         instance._native = _NativeHeteroGraphSageLinkPredictor.load_artifact_json(str(path))
+        instance.backend = str(instance._native.backend)
         return instance
 
 
@@ -674,12 +696,15 @@ class HinSageLinkPredictor(ArtifactPersistenceMixin):
         input_dim: int,
         node_type_count: int,
         edge_type_triples: Any,
+        backend: Backend | str = Backend.CPU,
         **kwargs: Any,
     ) -> None:
+        self.backend = _choice_value(backend)
         self._native = _NativeHinSageLinkPredictor(
             input_dim=int(input_dim),
             node_type_count=int(node_type_count),
             edge_type_triples=_typed_edges(edge_type_triples),
+            backend=self.backend,
             **kwargs,
         )
 
@@ -725,6 +750,7 @@ class HinSageLinkPredictor(ArtifactPersistenceMixin):
     def load(cls, path: str | Path) -> HinSageLinkPredictor:
         instance = cls(input_dim=1, node_type_count=1, edge_type_triples=[(0, 0, 0)])
         instance._native = _NativeHinSageLinkPredictor.load_artifact_json(str(path))
+        instance.backend = str(instance._native.backend)
         return instance
 
 

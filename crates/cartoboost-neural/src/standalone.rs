@@ -1053,6 +1053,10 @@ impl GraphSageLinkPredictor {
         link_scores_with_backend(&embeddings, pairs, &self.config.backend)
     }
 
+    pub fn backend(&self) -> &BackendSelection {
+        &self.config.backend
+    }
+
     pub fn save_artifact_json(&self, path: impl AsRef<Path>) -> Result<()> {
         let artifact = GraphSageLinkPredictorArtifact {
             artifact_type: GRAPHSAGE_LINK_ARTIFACT_TYPE.to_string(),
@@ -1151,6 +1155,10 @@ impl HeteroGraphSageLinkPredictor {
             .encode_graph(&graph, node_features)?
             .into_inner();
         link_scores_with_backend(&embeddings, pairs, &self.config.backend)
+    }
+
+    pub fn backend(&self) -> &BackendSelection {
+        &self.config.backend
     }
 
     pub fn save_artifact_json(&self, path: impl AsRef<Path>) -> Result<()> {
@@ -1275,6 +1283,10 @@ impl HinSageLinkPredictor {
             .encode_graph(&graph, node_features)?
             .into_inner();
         link_scores_with_backend(&embeddings, pairs, &self.config.backend)
+    }
+
+    pub fn backend(&self) -> &BackendSelection {
+        &self.config.backend
     }
 
     pub fn save_artifact_json(&self, path: impl AsRef<Path>) -> Result<()> {

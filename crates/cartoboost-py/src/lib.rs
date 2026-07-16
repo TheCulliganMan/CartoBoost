@@ -8693,6 +8693,11 @@ impl NativeStandaloneGraphSageLinkPredictor {
             .map_err(to_py_neural_error)
     }
 
+    #[getter]
+    fn backend(&self) -> String {
+        self.model.backend().selected.clone()
+    }
+
     fn save_artifact_json(&self, py: Python<'_>, path: String) -> PyResult<()> {
         py.detach(|| self.model.save_artifact_json(path))
             .map_err(to_py_neural_error)
@@ -8769,6 +8774,11 @@ impl NativeStandaloneHeteroGraphSageLinkPredictor {
     ) -> PyResult<Vec<f64>> {
         py.detach(|| self.model.predict_scores(&node_features, &pairs))
             .map_err(to_py_neural_error)
+    }
+
+    #[getter]
+    fn backend(&self) -> String {
+        self.model.backend().selected.clone()
     }
 
     fn save_artifact_json(&self, py: Python<'_>, path: String) -> PyResult<()> {
@@ -8852,6 +8862,11 @@ impl NativeStandaloneHinSageLinkPredictor {
     ) -> PyResult<Vec<f64>> {
         py.detach(|| self.model.predict_scores(&node_features, &pairs))
             .map_err(to_py_neural_error)
+    }
+
+    #[getter]
+    fn backend(&self) -> String {
+        self.model.backend().selected.clone()
     }
 
     fn save_artifact_json(&self, py: Python<'_>, path: String) -> PyResult<()> {
