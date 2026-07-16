@@ -16,6 +16,8 @@ use cartoboost_accelerator::{
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
+const BOOSTER_DENSE_DISPATCH_MIN_ROWS: usize = 16_384;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BoosterConfig {
     pub n_estimators: usize,
@@ -173,15 +175,14 @@ impl Booster {
         };
         for iteration in 0..tree_count {
             profile::timed(profile::RESIDUAL, || {
-                residuals
-                    .par_iter_mut()
-                    .zip(training_targets.par_iter())
-                    .zip(pred.par_iter())
-                    .for_each(|((residual, target), prediction)| {
-                        *residual =
-                            pseudo_residual_for_loss(&self.config.loss, *target, *prediction);
-                    });
-            });
+                accelerated_pseudo_residuals(
+                    &mut residuals,
+                    training_targets,
+                    &pred,
+                    &self.config.loss,
+                    &self.backend,
+                )
+            })?;
             let use_leaf_updates = !self.config.fuzzy
                 && matches!(self.config.leaf_predictor, LeafPredictorKind::Constant);
             let use_leaf_updates = use_leaf_updates
@@ -269,13 +270,46 @@ impl Booster {
     }
 }
 
+fn accelerated_pseudo_residuals(
+    residuals: &mut [f64],
+    targets: &[f64],
+    predictions: &[f64],
+    loss: &LossConfig,
+    backend: &BackendSelection,
+) -> Result<()> {
+    if backend.selected == "cpu"
+        || targets.len() < BOOSTER_DENSE_DISPATCH_MIN_ROWS
+        || !matches!(loss, LossConfig::L2 | LossConfig::LogL2(_))
+    {
+        residuals
+            .par_iter_mut()
+            .zip(targets.par_iter())
+            .zip(predictions.par_iter())
+            .for_each(|((residual, target), prediction)| {
+                *residual = pseudo_residual_for_loss(loss, *target, *prediction);
+            });
+        return Ok(());
+    }
+    let features = targets
+        .iter()
+        .zip(predictions)
+        .map(|(&target, &prediction)| vec![target as f32, prediction as f32])
+        .collect::<Vec<_>>();
+    let output = backend_dense_layer_f32(backend, &features, &[1.0, -1.0], &[0.0])
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    for (residual, row) in residuals.iter_mut().zip(output) {
+        *residual = f64::from(row[0]);
+    }
+    Ok(())
+}
+
 pub(crate) fn accelerated_prediction_update(
     predictions: &mut [f64],
     updates: &[f64],
     learning_rate: f64,
     backend: &BackendSelection,
 ) -> Result<()> {
-    if backend.selected == "cpu" {
+    if backend.selected == "cpu" || predictions.len() < BOOSTER_DENSE_DISPATCH_MIN_ROWS {
         predictions
             .par_iter_mut()
             .zip(updates.par_iter())
@@ -673,6 +707,41 @@ mod tests {
                     .selected,
                 backend
             );
+        }
+    }
+
+    #[test]
+    fn accelerated_l2_residual_generation_matches_cpu_on_every_backend() {
+        let targets = (0..BOOSTER_DENSE_DISPATCH_MIN_ROWS)
+            .map(|index| (index % 19) as f64 - 4.0)
+            .collect::<Vec<_>>();
+        let predictions = (0..BOOSTER_DENSE_DISPATCH_MIN_ROWS)
+            .map(|index| (index % 7) as f64 * 0.25)
+            .collect::<Vec<_>>();
+        let expected = targets
+            .iter()
+            .zip(&predictions)
+            .map(|(target, prediction)| target - prediction)
+            .collect::<Vec<_>>();
+        for backend in cartoboost_accelerator::available_backends() {
+            let selection =
+                cartoboost_accelerator::select_backend_for(Some(&backend), BackendOperation::Dense)
+                    .unwrap();
+            let mut actual = vec![0.0; targets.len()];
+            accelerated_pseudo_residuals(
+                &mut actual,
+                &targets,
+                &predictions,
+                &LossConfig::L2,
+                &selection,
+            )
+            .unwrap_or_else(|error| panic!("{backend} residual dispatch failed: {error}"));
+            for (left, right) in actual.iter().zip(&expected) {
+                assert!(
+                    (left - right).abs() < 1.0e-5,
+                    "{backend}: {left} != {right}"
+                );
+            }
         }
     }
 

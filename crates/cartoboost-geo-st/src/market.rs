@@ -16,6 +16,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
+const MARKET_HEAD_DENSE_DISPATCH_MIN_OPS: usize = 16_384;
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RelationshipKind {
@@ -689,9 +691,17 @@ impl MarketStructureForecaster {
                     .collect::<Vec<_>>()
             });
             let accelerated_heads = match (&self.joint_heads, &head_features) {
-                (Some(heads), Some(features)) if head_backend.selected != "cpu" => Some(
-                    joint_head_outputs_with_backend(heads, features, &head_backend)?,
-                ),
+                (Some(heads), Some(features))
+                    if head_backend.selected != "cpu"
+                        && market_head_dense_ops(heads, features)
+                            >= MARKET_HEAD_DENSE_DISPATCH_MIN_OPS =>
+                {
+                    Some(joint_head_outputs_with_backend(
+                        heads,
+                        features,
+                        &head_backend,
+                    )?)
+                }
                 _ => None,
             };
             for lane in 0..self.lane_ids.len() {
@@ -1441,6 +1451,13 @@ fn joint_head_outputs_with_backend(
         .collect::<Vec<_>>();
     backend_dense_layer_f32(backend, &features, &weights, &vec![0.0; output_width])
         .map_err(|error| GeoStError::InvalidFrame(format!("market head dispatch failed: {error}")))
+}
+
+fn market_head_dense_ops(heads: &JointMarketHeads, features: &[Vec<f64>]) -> usize {
+    features
+        .len()
+        .saturating_mul(heads.primary_huber.len())
+        .saturating_mul(2 + heads.primary_quantiles.len())
 }
 
 #[allow(clippy::too_many_arguments)]
