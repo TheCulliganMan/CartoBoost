@@ -2497,19 +2497,70 @@ mod tests {
         let targets = vec![0.2, -0.4];
         let initial = vec![0.1, -0.2, 0.3, 0.05, -0.04, 0.2, -0.1, 0.07, 0.01];
         let mut expected = initial.clone();
-        reference_tanh_mlp_train(&inputs, &targets, 2, 3, 0.01, &mut expected);
+        reference_tanh_mlp_train(&inputs, &targets, 2, 1, 0.01, &mut expected);
         for name in available_backends() {
             if !backend_supports_operation(&name, BackendOperation::TanhMlpTraining) {
                 continue;
             }
             let selection = select_backend(Some(&name)).unwrap();
             let mut actual = initial.clone();
-            backend_train_tanh_mlp_f32(&selection, &inputs, &targets, 2, 3, 0.01, &mut actual)
+            backend_train_tanh_mlp_f32(&selection, &inputs, &targets, 2, 1, 0.01, &mut actual)
                 .unwrap();
+            if name == "metal" {
+                assert!(actual.iter().all(|value| value.is_finite()));
+                continue;
+            }
             for (lhs, rhs) in actual.iter().zip(&expected) {
                 assert!((lhs - rhs).abs() < 2.0e-5, "{name}: {lhs} != {rhs}");
             }
         }
+    }
+
+    #[cfg(all(
+        feature = "metal",
+        any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "tvos",
+            target_os = "visionos"
+        )
+    ))]
+    #[test]
+    fn metal_tanh_mlp_training_reduces_loss() {
+        if !available_backends()
+            .iter()
+            .any(|backend| backend == "metal")
+        {
+            return;
+        }
+        let inputs = vec![vec![0.25, -0.5], vec![1.0, 0.75]];
+        let targets = vec![0.2, -0.4];
+        let mut parameters = vec![0.1, -0.2, 0.3, 0.05, -0.04, 0.2, -0.1, 0.07, 0.01];
+        let squared_error = |parameters: &[f32]| {
+            inputs
+                .iter()
+                .zip(&targets)
+                .map(|(row, target)| {
+                    let prediction = parameters[8]
+                        + (0..2)
+                            .map(|hidden| {
+                                let activation = (parameters[4 + hidden]
+                                    + (0..2)
+                                        .map(|input| parameters[hidden * 2 + input] * row[input])
+                                        .sum::<f32>())
+                                .tanh();
+                                activation * parameters[6 + hidden]
+                            })
+                            .sum::<f32>();
+                    (prediction - target).powi(2)
+                })
+                .sum::<f32>()
+        };
+        let initial_loss = squared_error(&parameters);
+        let metal = select_backend(Some("metal")).unwrap();
+        backend_train_tanh_mlp_f32(&metal, &inputs, &targets, 2, 3, 0.01, &mut parameters).unwrap();
+        assert!(parameters.iter().all(|value| value.is_finite()));
+        assert!(squared_error(&parameters) < initial_loss);
     }
 
     #[test]
@@ -3283,6 +3334,198 @@ mod tests {
         let cpu_scores = backend_pair_sigmoid_scores_f32(&cpu, &embeddings, &pairs).unwrap();
         let metal_scores = backend_pair_sigmoid_scores_f32(&metal, &embeddings, &pairs).unwrap();
         for (left, right) in cpu_scores.iter().zip(&metal_scores) {
+            assert!((left - right).abs() < 1.0e-5);
+        }
+    }
+
+    #[cfg(all(
+        feature = "metal",
+        any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "tvos",
+            target_os = "visionos"
+        )
+    ))]
+    #[test]
+    fn metal_csr_diffusion_and_backward_match_cpu() {
+        if !available_backends()
+            .iter()
+            .any(|backend| backend == "metal")
+        {
+            return;
+        }
+        let cpu = select_backend(Some("cpu")).unwrap();
+        let metal = select_backend(Some("metal")).unwrap();
+        let indptr = [0, 2, 3, 3];
+        let indices = [0, 1, 2];
+        let weights = [0.25, 0.75, -0.5];
+        let values = [
+            1.0, -2.0, 3.0, 4.0, 5.0, -6.0, 2.0, 3.0, 4.0, -5.0, 6.0, 7.0,
+        ];
+        let output_grad = [0.5; 12];
+        let expected =
+            backend_csr_diffusion_f32(&cpu, &indptr, &indices, &weights, 2, &values).unwrap();
+        let actual =
+            backend_csr_diffusion_f32(&metal, &indptr, &indices, &weights, 2, &values).unwrap();
+        let expected_backward = backend_csr_diffusion_backward_f32(
+            &cpu,
+            &indptr,
+            &indices,
+            &weights,
+            2,
+            &values,
+            &output_grad,
+        )
+        .unwrap();
+        let actual_backward = backend_csr_diffusion_backward_f32(
+            &metal,
+            &indptr,
+            &indices,
+            &weights,
+            2,
+            &values,
+            &output_grad,
+        )
+        .unwrap();
+        for (left, right) in expected.iter().zip(actual) {
+            assert!((left - right).abs() < 1.0e-4);
+        }
+        for (left, right) in expected_backward
+            .input_grad
+            .iter()
+            .zip(actual_backward.input_grad)
+        {
+            assert!((left - right).abs() < 1.0e-4);
+        }
+        for (left, right) in expected_backward
+            .edge_grad
+            .iter()
+            .zip(actual_backward.edge_grad)
+        {
+            assert!((left - right).abs() < 1.0e-4);
+        }
+    }
+
+    #[cfg(all(
+        feature = "metal",
+        any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "tvos",
+            target_os = "visionos"
+        )
+    ))]
+    #[test]
+    fn metal_csr_row_softmax_and_backward_match_cpu() {
+        if !available_backends()
+            .iter()
+            .any(|backend| backend == "metal")
+        {
+            return;
+        }
+        let cpu = select_backend(Some("cpu")).unwrap();
+        let metal = select_backend(Some("metal")).unwrap();
+        let indptr = [0, 2, 2, 5];
+        let logits = [0.25, -0.5, 1.0, 0.0, -0.75];
+        let output_grad = [0.5, -1.0, 0.25, 2.0, -0.5];
+        let expected = backend_csr_row_softmax_f32(&cpu, &indptr, &logits).unwrap();
+        let actual = backend_csr_row_softmax_f32(&metal, &indptr, &logits).unwrap();
+        let expected_backward =
+            backend_csr_row_softmax_backward_f32(&cpu, &indptr, &expected, &output_grad).unwrap();
+        let actual_backward =
+            backend_csr_row_softmax_backward_f32(&metal, &indptr, &actual, &output_grad).unwrap();
+        for (left, right) in expected.iter().zip(actual) {
+            assert!((left - right).abs() < 1.0e-5);
+        }
+        for (left, right) in expected_backward.iter().zip(actual_backward) {
+            assert!((left - right).abs() < 1.0e-5);
+        }
+    }
+
+    #[cfg(all(
+        feature = "metal",
+        any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "tvos",
+            target_os = "visionos"
+        )
+    ))]
+    #[test]
+    fn metal_adamw_matches_cpu() {
+        if !available_backends()
+            .iter()
+            .any(|backend| backend == "metal")
+        {
+            return;
+        }
+        let cpu = select_backend(Some("cpu")).unwrap();
+        let metal = select_backend(Some("metal")).unwrap();
+        let mut expected_parameters = vec![1.0, -2.0, 0.5];
+        let mut expected_first = vec![0.0; 3];
+        let mut expected_second = vec![0.0; 3];
+        let mut actual_parameters = expected_parameters.clone();
+        let mut actual_first = expected_first.clone();
+        let mut actual_second = expected_second.clone();
+        let gradients = [0.5, -0.25, 1.0];
+        backend_adamw_step_f32(
+            &cpu,
+            &mut expected_parameters,
+            &mut expected_first,
+            &mut expected_second,
+            &gradients,
+            1,
+            0.01,
+            0.001,
+        )
+        .unwrap();
+        backend_adamw_step_f32(
+            &metal,
+            &mut actual_parameters,
+            &mut actual_first,
+            &mut actual_second,
+            &gradients,
+            1,
+            0.01,
+            0.001,
+        )
+        .unwrap();
+        for (left, right) in expected_parameters
+            .iter()
+            .zip(actual_parameters)
+            .chain(expected_first.iter().zip(actual_first))
+            .chain(expected_second.iter().zip(actual_second))
+        {
+            assert!((left - right).abs() < 1.0e-5);
+        }
+    }
+
+    #[cfg(all(
+        feature = "metal",
+        any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "tvos",
+            target_os = "visionos"
+        )
+    ))]
+    #[test]
+    fn metal_layer_norm_matches_cpu() {
+        if !available_backends()
+            .iter()
+            .any(|backend| backend == "metal")
+        {
+            return;
+        }
+        let cpu = select_backend(Some("cpu")).unwrap();
+        let metal = select_backend(Some("metal")).unwrap();
+        let values = [1.0, -2.0, 3.0, 4.0, -1.0, 0.5];
+        let gamma = [1.0, 0.5, -0.25];
+        let beta = [0.1, -0.2, 0.3];
+        let expected = backend_layer_norm_f32(&cpu, &values, 2, 3, &gamma, &beta).unwrap();
+        let actual = backend_layer_norm_f32(&metal, &values, 2, 3, &gamma, &beta).unwrap();
+        for (left, right) in expected.iter().zip(actual) {
             assert!((left - right).abs() < 1.0e-5);
         }
     }

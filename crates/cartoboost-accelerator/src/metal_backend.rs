@@ -1435,8 +1435,9 @@ pub(crate) fn metal_adamw_step_f32(
       kernel void adamw(device float* p[[buffer(0)]],device float* m[[buffer(1)]],device float* v[[buffer(2)]],
        const device float* g[[buffer(3)]],constant float& lr[[buffer(4)]],constant float& decay[[buffer(5)]],
        constant float& bc1[[buffer(6)]],constant float& bc2[[buffer(7)]],uint i[[thread_position_in_grid]]){
-       float mi=0.9f*m[i]+0.1f*g[i]; float vi=0.999f*v[i]+0.001f*g[i]*g[i]; m[i]=mi; v[i]=vi;
-       p[i]=p[i]*(1.0f-lr*decay)-lr*(mi/bc1)/(sqrt(vi/bc2)+1.0e-8f); }
+         float gradient=g[i]+decay*p[i]; float mi=0.9f*m[i]+0.1f*gradient;
+         float vi=0.999f*v[i]+0.001f*gradient*gradient; m[i]=mi; v[i]=vi;
+         p[i]-=lr*(mi/bc1)/(sqrt(vi/bc2)+1.0e-8f); }
     "#;
     with_metal_autoreleasepool(|| {
         let (d, q, k) = metal_pipeline(SOURCE, "adamw")?;
