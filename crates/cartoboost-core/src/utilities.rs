@@ -1602,19 +1602,31 @@ fn variogram_pairs_with_backend(
             transformed_kriging_point((observation.x, observation.y), distance_config)
         })
         .collect::<Vec<_>>();
-    let squared = backend_pairwise_squared_distances_f32(backend, &points, &points)
+    let value_rows = observations
+        .iter()
+        .map(|observation| vec![observation.value as f32])
+        .collect::<Vec<_>>();
+    let squared_distances = backend_pairwise_squared_distances_f32(backend, &points, &points)
         .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    let squared_value_differences =
+        backend_pairwise_squared_distances_f32(backend, &value_rows, &value_rows)
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
     Ok((0..observations.len())
         .into_par_iter()
         .flat_map_iter(|left_idx| {
-            let squared = &squared;
+            let squared_distances = &squared_distances;
+            let squared_value_differences = &squared_value_differences;
             ((left_idx + 1)..observations.len()).filter_map(move |right_idx| {
-                let distance = f64::from(squared[left_idx][right_idx]).max(0.0).sqrt();
+                let distance = f64::from(squared_distances[left_idx][right_idx])
+                    .max(0.0)
+                    .sqrt();
                 if max_distance.is_some_and(|max_distance| distance > max_distance) {
                     return None;
                 }
-                let diff = observations[left_idx].value - observations[right_idx].value;
-                Some((distance, 0.5 * diff * diff))
+                Some((
+                    distance,
+                    0.5 * f64::from(squared_value_differences[left_idx][right_idx]),
+                ))
             })
         })
         .collect())
@@ -2765,40 +2777,25 @@ mod tests {
 
     #[test]
     fn empirical_variogram_runs_on_every_available_backend() {
-        let observations = vec![
-            KrigingObservation {
-                x: 0.0,
-                y: 0.0,
-                value: 10.0,
-            },
-            KrigingObservation {
-                x: 1.2,
-                y: 0.4,
-                value: 12.0,
-            },
-            KrigingObservation {
-                x: 2.7,
-                y: 1.1,
-                value: 16.0,
-            },
-            KrigingObservation {
-                x: 4.3,
-                y: 0.2,
-                value: 13.0,
-            },
-        ];
+        let observations = (0..128)
+            .map(|index| KrigingObservation {
+                x: index as f64 * 0.17,
+                y: (index as f64 * 0.11).sin() * 2.0,
+                value: (index as f64 * 0.07).cos() + index as f64 * 0.01,
+            })
+            .collect::<Vec<_>>();
         let expected =
-            empirical_variogram_with_backend(&observations, 3, None, 17.0, 1.4, Some("cpu"))
+            empirical_variogram_with_backend(&observations, 8, None, 17.0, 1.4, Some("cpu"))
                 .unwrap();
         for backend in available_backends() {
             let actual =
-                empirical_variogram_with_backend(&observations, 3, None, 17.0, 1.4, Some(&backend))
+                empirical_variogram_with_backend(&observations, 8, None, 17.0, 1.4, Some(&backend))
                     .unwrap_or_else(|error| panic!("{backend} variogram failed: {error}"));
             assert_eq!(actual.len(), expected.len(), "{backend}");
             for (actual, expected) in actual.iter().zip(&expected) {
                 assert_eq!(actual.pair_count, expected.pair_count, "{backend}");
                 assert!((actual.mean_distance - expected.mean_distance).abs() <= 2.0e-5);
-                assert!((actual.semivariance - expected.semivariance).abs() <= f64::EPSILON);
+                assert!((actual.semivariance - expected.semivariance).abs() <= 2.0e-5);
             }
         }
     }
