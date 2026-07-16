@@ -676,7 +676,7 @@ fn finish_model(
     let aic = log_likelihood.map(|ll| 2.0 * k as f64 - 2.0 * ll);
     let bic = log_likelihood.map(|ll| (k as f64) * (y.len() as f64).ln() - 2.0 * ll);
     let (direct_effects, indirect_effects, total_effects) =
-        effects(rho, &coefficients, &durbin_coefficients, weights)?;
+        effects_with_backend(rho, &coefficients, &durbin_coefficients, weights, backend)?;
     let diagnostics = SpatialDiagnostics {
         residual_morans_i: morans_i_with_backend(&residuals, weights, backend)?,
         log_likelihood,
@@ -706,11 +706,28 @@ fn finish_model(
     })
 }
 
+#[cfg(test)]
 fn effects(
     rho: Option<f64>,
     coefficients: &[f64],
     durbin_coefficients: &[f64],
     weights: &SpatialWeights,
+) -> Result<SpatialEffects> {
+    effects_with_backend(
+        rho,
+        coefficients,
+        durbin_coefficients,
+        weights,
+        &default_backend_selection(),
+    )
+}
+
+fn effects_with_backend(
+    rho: Option<f64>,
+    coefficients: &[f64],
+    durbin_coefficients: &[f64],
+    weights: &SpatialWeights,
+    backend: &BackendSelection,
 ) -> Result<SpatialEffects> {
     let Some(rho) = rho else {
         return Ok((None, None, None));
@@ -721,30 +738,30 @@ fn effects(
         ));
     }
     let inverse = invert(spatial_system_matrix(rho, weights)?)?;
-    let dense_weights = dense_weights(weights);
     let n = weights.n_nodes as f64;
-    let mut direct = Vec::with_capacity(coefficients.len());
-    let mut total = Vec::with_capacity(coefficients.len());
-    for (feature, beta) in coefficients.iter().enumerate() {
-        let theta = durbin_coefficients.get(feature).copied().unwrap_or(0.0);
-        let mut direct_sum = 0.0;
-        let mut total_sum = 0.0;
-        for (row, inverse_row) in inverse.iter().enumerate() {
-            for (middle, multiplier) in inverse_row.iter().enumerate() {
-                for (col, spatial_weight) in dense_weights[middle].iter().enumerate() {
-                    let base_effect =
-                        (if middle == col { *beta } else { 0.0 }) + theta * spatial_weight;
-                    let effect = multiplier * base_effect;
-                    total_sum += effect;
-                    if row == col {
-                        direct_sum += effect;
-                    }
-                }
-            }
-        }
-        direct.push(direct_sum / n);
-        total.push(total_sum / n);
-    }
+    let inverse_trace = inverse
+        .iter()
+        .enumerate()
+        .map(|(index, row)| row[index])
+        .sum::<f64>();
+    let inverse_sum = inverse.iter().flatten().sum::<f64>();
+    let (lag_trace, lag_sum) = spatial_effect_lag_summaries(&inverse, weights, backend)?;
+    let direct = coefficients
+        .iter()
+        .enumerate()
+        .map(|(feature, beta)| {
+            let theta = durbin_coefficients.get(feature).copied().unwrap_or(0.0);
+            (beta * inverse_trace + theta * lag_trace) / n
+        })
+        .collect::<Vec<_>>();
+    let total = coefficients
+        .iter()
+        .enumerate()
+        .map(|(feature, beta)| {
+            let theta = durbin_coefficients.get(feature).copied().unwrap_or(0.0);
+            (beta * inverse_sum + theta * lag_sum) / n
+        })
+        .collect::<Vec<_>>();
     let indirect: Vec<f64> = total.iter().zip(&direct).map(|(t, d)| t - d).collect();
     if direct
         .iter()
@@ -757,6 +774,64 @@ fn effects(
         ));
     }
     Ok((Some(direct), Some(indirect), Some(total)))
+}
+
+fn spatial_effect_lag_summaries(
+    inverse: &[Vec<f64>],
+    weights: &SpatialWeights,
+    backend: &BackendSelection,
+) -> Result<(f64, f64)> {
+    let n = weights.n_nodes;
+    let dense_work = n.saturating_mul(n).saturating_mul(n);
+    let sufficiently_dense = weights.indices.len().saturating_mul(4) >= n.saturating_mul(n);
+    if backend.selected != "cpu"
+        && sufficiently_dense
+        && dense_work >= SPATIAL_DENSE_DISPATCH_MIN_OPS
+    {
+        let features = inverse
+            .iter()
+            .map(|row| row.iter().map(|value| *value as f32).collect())
+            .collect::<Vec<Vec<f32>>>();
+        let dense_weights = dense_weights(weights);
+        let flattened_weights = dense_weights
+            .iter()
+            .flatten()
+            .map(|value| *value as f32)
+            .collect::<Vec<_>>();
+        let product =
+            backend_dense_layer_f32(backend, &features, &flattened_weights, &vec![0.0; n])
+                .map_err(|error| SpatialEconError::Backend(error.to_string()))?;
+        let trace = product
+            .iter()
+            .enumerate()
+            .map(|(index, row)| f64::from(row[index]))
+            .sum();
+        let sum = product
+            .iter()
+            .flatten()
+            .map(|value| f64::from(*value))
+            .sum();
+        return Ok((trace, sum));
+    }
+
+    let row_sums = (0..n)
+        .map(|row| {
+            weights.data[weights.indptr[row]..weights.indptr[row + 1]]
+                .iter()
+                .sum::<f64>()
+        })
+        .collect::<Vec<_>>();
+    let lag_sum = (0..n)
+        .map(|middle| inverse.iter().map(|row| row[middle]).sum::<f64>() * row_sums[middle])
+        .sum();
+    let mut lag_trace = 0.0;
+    for (middle, _) in inverse.iter().enumerate() {
+        for offset in weights.indptr[middle]..weights.indptr[middle + 1] {
+            let col = weights.indices[offset];
+            lag_trace += inverse[col][middle] * weights.data[offset];
+        }
+    }
+    Ok((lag_trace, lag_sum))
 }
 
 fn morans_i_with_backend(
@@ -1444,6 +1519,21 @@ mod tests {
         spatial_weights_from_coo(n, n, rows, cols, vec![1.0; 2 * n], true).expect("ring weights")
     }
 
+    fn dense_weights_fixture(n: usize) -> SpatialWeights {
+        let mut rows = Vec::with_capacity(n * (n - 1));
+        let mut cols = Vec::with_capacity(n * (n - 1));
+        for row in 0..n {
+            for col in 0..n {
+                if row != col {
+                    rows.push(row);
+                    cols.push(col);
+                }
+            }
+        }
+        spatial_weights_from_coo(n, n, rows, cols, vec![1.0; n * (n - 1)], true)
+            .expect("dense weights")
+    }
+
     fn fixture_x() -> Vec<Vec<f64>> {
         [0.0, 1.0, 4.0, 2.0, 7.0, 3.0, 9.0, 5.0, 11.0, 6.0, 10.0, 8.0]
             .into_iter()
@@ -1542,6 +1632,35 @@ mod tests {
                     "{backend_name}: expected {expected}, got {actual}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn dense_spatial_effect_summaries_run_on_every_available_backend() {
+        let weights = dense_weights_fixture(32);
+        let inverse = invert(spatial_system_matrix(0.25, &weights).expect("spatial system"))
+            .expect("inverse");
+        let cpu = default_backend_selection();
+        let expected =
+            spatial_effect_lag_summaries(&inverse, &weights, &cpu).expect("CPU summaries");
+
+        for backend_name in cartoboost_neural::available_backends() {
+            let backend = select_spatial_backend(Some(&backend_name))
+                .unwrap_or_else(|error| panic!("{backend_name} selection failed: {error}"));
+            let actual = spatial_effect_lag_summaries(&inverse, &weights, &backend)
+                .unwrap_or_else(|error| panic!("{backend_name} effect summaries failed: {error}"));
+            assert!(
+                (actual.0 - expected.0).abs() <= 2.0e-4,
+                "{backend_name} trace: expected {}, got {}",
+                expected.0,
+                actual.0
+            );
+            assert!(
+                (actual.1 - expected.1).abs() <= 2.0e-3,
+                "{backend_name} sum: expected {}, got {}",
+                expected.1,
+                actual.1
+            );
         }
     }
 
