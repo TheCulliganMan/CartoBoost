@@ -1,9 +1,9 @@
 #[cfg(all(feature = "cuda", target_os = "linux"))]
 use cartoboost_neural::CudaTensorArena;
 use cartoboost_neural::{
-    backend_affine_scores, backend_csr_diffusion_f32, backend_dense_layer_f32,
-    backend_scalar_graph_f32, backend_scalar_graph_train_step_f32, select_backend_for_operations,
-    BackendOperation, BackendSelection,
+    backend_affine_scores, backend_csr_diffusion_f32, backend_csr_row_softmax_f32,
+    backend_dense_layer_f32, backend_scalar_graph_f32, backend_scalar_graph_train_step_f32,
+    select_backend_for_operations, BackendOperation, BackendSelection,
 };
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -7200,29 +7200,29 @@ fn tape_linear(
         .collect()
 }
 
-fn numeric_linear(
-    parameters: &[f64],
-    offset: usize,
-    input: &[f64],
-    input_width: usize,
-    output_width: usize,
-) -> Vec<f64> {
-    (0..output_width)
-        .map(|output| {
-            input.iter().enumerate().take(input_width).fold(
-                parameters[offset + input_width * output_width + output],
-                |sum, (index, value)| {
-                    sum + parameters[offset + index * output_width + output] * value
-                },
-            )
-        })
-        .collect()
-}
-
 fn numeric_linear_batch(
     parameters: &[f64],
     offset: usize,
     inputs: &[Vec<f64>],
+    input_width: usize,
+    output_width: usize,
+    backend: Option<&BackendSelection>,
+) -> Result<Vec<Vec<f64>>> {
+    let weight_count = input_width * output_width;
+    dense_matrix_product(
+        inputs,
+        &parameters[offset..offset + weight_count],
+        &parameters[offset + weight_count..offset + weight_count + output_width],
+        input_width,
+        output_width,
+        backend,
+    )
+}
+
+fn dense_matrix_product(
+    inputs: &[Vec<f64>],
+    weights: &[f64],
+    biases: &[f64],
     input_width: usize,
     output_width: usize,
     backend: Option<&BackendSelection>,
@@ -7238,15 +7238,11 @@ fn numeric_linear_batch(
             .iter()
             .map(|row| row.iter().map(|value| *value as f32).collect())
             .collect::<Vec<Vec<f32>>>();
-        let weight_count = input_width * output_width;
-        let weights = parameters[offset..offset + weight_count]
+        let weights = weights
             .iter()
             .map(|value| *value as f32)
             .collect::<Vec<_>>();
-        let biases = parameters[offset + weight_count..offset + weight_count + output_width]
-            .iter()
-            .map(|value| *value as f32)
-            .collect::<Vec<_>>();
+        let biases = biases.iter().map(|value| *value as f32).collect::<Vec<_>>();
         return backend_dense_layer_f32(selection, &features, &weights, &biases)
             .map(|rows| {
                 rows.into_iter()
@@ -7257,7 +7253,19 @@ fn numeric_linear_batch(
     }
     Ok(inputs
         .iter()
-        .map(|input| numeric_linear(parameters, offset, input, input_width, output_width))
+        .map(|input| {
+            (0..output_width)
+                .map(|output| {
+                    input
+                        .iter()
+                        .enumerate()
+                        .take(input_width)
+                        .fold(biases[output], |sum, (index, value)| {
+                            sum + weights[index * output_width + output] * value
+                        })
+                })
+                .collect()
+        })
         .collect())
 }
 
@@ -7279,6 +7287,48 @@ fn numeric_layer_norm(parameters: &[f64], offset: usize, values: &[f64]) -> Vec<
         .collect()
 }
 
+fn attention_row_softmax(
+    logits: &mut [Vec<f64>],
+    scale: f64,
+    backend: Option<&BackendSelection>,
+) -> Result<()> {
+    let rows = logits.len();
+    let width = logits.first().map_or(0, Vec::len);
+    let operations = rows.saturating_mul(width);
+    if let Some(selection) = backend.filter(|selection| {
+        selection.selected != "cpu" && operations >= GEO_ST_DENSE_DISPATCH_MIN_OPS
+    }) {
+        let indptr = (0..=rows)
+            .map(|row| u32::try_from(row * width))
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|_| {
+                GeoStError::InvalidFrame("attention matrix exceeds u32 CSR limits".into())
+            })?;
+        let values = logits
+            .iter()
+            .flatten()
+            .map(|value| (*value * scale) as f32)
+            .collect::<Vec<_>>();
+        let weights = backend_csr_row_softmax_f32(selection, &indptr, &values)
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        for (target, weight) in logits.iter_mut().flatten().zip(weights) {
+            *target = f64::from(weight);
+        }
+        return Ok(());
+    }
+    for weights in logits {
+        let max = weights.iter().copied().fold(f64::NEG_INFINITY, f64::max) * scale;
+        for weight in weights.iter_mut() {
+            *weight = (*weight * scale - max).exp();
+        }
+        let denominator = weights.iter().sum::<f64>().max(1e-12);
+        for weight in weights {
+            *weight /= denominator;
+        }
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn numeric_transformer_encoder_layer(
     parameters: &[f64],
@@ -7296,46 +7346,45 @@ fn numeric_transformer_encoder_layer(
     let queries = numeric_linear_batch(parameters, q_offset, sequence, hidden, hidden, backend)?;
     let keys = numeric_linear_batch(parameters, k_offset, sequence, hidden, hidden, backend)?;
     let values = numeric_linear_batch(parameters, v_offset, sequence, hidden, hidden, backend)?;
-    let attended = sequence
-        .iter()
-        .enumerate()
-        .map(|(token_index, _)| {
-            let mut attended = vec![0.0; hidden];
-            for head in 0..heads {
-                let start = head * hidden / heads;
-                let end = (head + 1) * hidden / heads;
-                let scale = 1.0 / ((end - start) as f64).sqrt();
-                let logits = keys
-                    .iter()
-                    .map(|key| {
-                        queries[token_index][start..end]
-                            .iter()
-                            .zip(&key[start..end])
-                            .map(|(left, right)| left * right)
-                            .sum::<f64>()
-                            * scale
-                    })
-                    .collect::<Vec<_>>();
-                let max = logits.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-                let mut weights = logits
-                    .iter()
-                    .map(|value| (value - max).exp())
-                    .collect::<Vec<_>>();
-                let denominator = weights.iter().sum::<f64>().max(1e-12);
-                for weight in &mut weights {
-                    *weight /= denominator;
-                }
-                for channel in start..end {
-                    attended[channel] = weights
-                        .iter()
-                        .zip(&values)
-                        .map(|(weight, value)| weight * value[channel])
-                        .sum();
-                }
-            }
-            attended
-        })
-        .collect::<Vec<_>>();
+    let tokens = sequence.len();
+    let mut attended = vec![vec![0.0; hidden]; tokens];
+    for head in 0..heads {
+        let start = head * hidden / heads;
+        let end = (head + 1) * hidden / heads;
+        let head_width = end - start;
+        let scale = 1.0 / (head_width as f64).sqrt();
+        let head_queries = queries
+            .iter()
+            .map(|query| query[start..end].to_vec())
+            .collect::<Vec<_>>();
+        let transposed_keys = (start..end)
+            .flat_map(|channel| keys.iter().map(move |key| key[channel]))
+            .collect::<Vec<_>>();
+        let mut attention_weights = dense_matrix_product(
+            &head_queries,
+            &transposed_keys,
+            &vec![0.0; tokens],
+            head_width,
+            tokens,
+            backend,
+        )?;
+        attention_row_softmax(&mut attention_weights, scale, backend)?;
+        let mut value_weights = Vec::with_capacity(tokens * head_width);
+        for value in &values {
+            value_weights.extend_from_slice(&value[start..end]);
+        }
+        let head_values = dense_matrix_product(
+            &attention_weights,
+            &value_weights,
+            &vec![0.0; head_width],
+            tokens,
+            head_width,
+            backend,
+        )?;
+        for (attended, head_values) in attended.iter_mut().zip(head_values) {
+            attended[start..end].copy_from_slice(&head_values);
+        }
+    }
     let projected =
         numeric_linear_batch(parameters, out_offset, &attended, hidden, hidden, backend)?;
     let normalized = sequence
@@ -11377,7 +11426,7 @@ mod tests {
     }
 
     #[test]
-    fn lsttn_dense_projections_match_cpu_across_available_backends() {
+    fn lsttn_dense_attention_matches_cpu_across_available_backends() {
         let hidden = 32;
         let projection = hidden * (hidden + 1);
         let q_offset = 0;
@@ -11392,7 +11441,7 @@ mod tests {
             .collect::<Vec<_>>();
         parameters[norm_offset..norm_offset + hidden].fill(1.0);
         parameters[norm_offset + 2 * hidden..norm_offset + 3 * hidden].fill(1.0);
-        let sequence = (0..32)
+        let sequence = (0..64)
             .map(|row| {
                 (0..hidden)
                     .map(|column| ((row * hidden + column) as f64 * 0.017).cos())

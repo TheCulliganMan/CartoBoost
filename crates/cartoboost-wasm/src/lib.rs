@@ -4355,6 +4355,8 @@ fn run_graph_forecast_request(
             backend: graph_st_select_backend_for_operations(
                 Some(&request.options.backend),
                 &[
+                    BackendOperation::Dense,
+                    BackendOperation::CsrRowSoftmax,
                     BackendOperation::ScalarGraph,
                     BackendOperation::ScalarGraphTraining,
                 ],
