@@ -89,6 +89,7 @@ class BacktestWeightedEnsembleForecaster(WeightedEnsembleForecaster):
         min_train_size: int | None = None,
         step_size: int = 1,
         error_floor: float = 1e-9,
+        backend: Backend | str = Backend.CPU,
     ) -> None:
         if backtest_horizon < 1:
             raise ValueError("backtest_horizon must be a positive integer")
@@ -101,6 +102,7 @@ class BacktestWeightedEnsembleForecaster(WeightedEnsembleForecaster):
             lower_bound=lower_bound,
             upper_bound=upper_bound,
             metadata=metadata,
+            backend=backend,
         )
         self._params.update(
             {
@@ -169,6 +171,7 @@ class BottomUpReconciler(NativeForecastWrapper):
         child_column: str | None = None,
         non_negative: bool = False,
         metadata: Mapping[str, Any] | None = None,
+        backend: Backend | str = Backend.CPU,
         **params: Any,
     ) -> None:
         _validate_reconciliation_inputs(
@@ -186,6 +189,7 @@ class BottomUpReconciler(NativeForecastWrapper):
             child_column=child_column,
             non_negative=bool(non_negative),
             metadata={} if metadata is None else dict(metadata),
+            backend=str(backend),
             **params,
         )
 
@@ -207,6 +211,7 @@ class MinTraceReconciler(NativeForecastWrapper):
         child_column: str | None = None,
         non_negative: bool = False,
         metadata: Mapping[str, Any] | None = None,
+        backend: Backend | str = Backend.CPU,
         **params: Any,
     ) -> None:
         if not covariance_method:
@@ -228,6 +233,7 @@ class MinTraceReconciler(NativeForecastWrapper):
             child_column=child_column,
             non_negative=bool(non_negative),
             metadata={} if metadata is None else dict(metadata),
+            backend=str(backend),
             **params,
         )
 

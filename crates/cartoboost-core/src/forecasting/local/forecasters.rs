@@ -1074,7 +1074,11 @@ impl Forecaster for KrigingForecaster {
             })
             .collect::<Result<Vec<_>>>()?;
         let series_ids = fitted.levels.keys().cloned().collect::<Vec<_>>();
-        let means = ordinary_kriging_leave_one_out(&observations, self.config)?
+        let means = ordinary_kriging_leave_one_out_with_backend(
+            &observations,
+            self.config,
+            Some(&self.backend.selected),
+        )?
             .into_iter()
             .map(|prediction| prediction.mean)
             .collect::<Vec<_>>();
@@ -1127,6 +1131,7 @@ impl Forecaster for KrigingForecaster {
             "max_distance": self.config.max_distance,
             "series_count": self.coordinates.len(),
             "target_policy": "leave_one_series_out",
+            "backend": self.backend,
         })
     }
 }
@@ -1138,6 +1143,7 @@ impl Forecaster for SpatialPiecewiseKrigingForecaster {
         self.fitted = Some(FittedSpatialPiecewiseKrigingState::from_frame(
             frame,
             &self.config,
+            &self.backend,
         )?);
         Ok(())
     }
@@ -1160,7 +1166,7 @@ impl Forecaster for SpatialPiecewiseKrigingForecaster {
         }
         let base_result = base.predict(horizon)?;
         let corrections = if self.config.uses_residual_kriging() {
-            fitted.residual_kriging_predictions(&self.config)?
+            fitted.residual_kriging_predictions(&self.config, &self.backend)?
         } else {
             BTreeMap::new()
         };
@@ -1351,6 +1357,7 @@ impl Forecaster for SpatialPiecewiseKrigingForecaster {
             "series_count": self.config.coordinates.len(),
             "residual_shrinkage": self.config.residual_shrinkage,
             "allow_neighbor_fallback": self.config.allow_neighbor_fallback,
+            "backend": self.backend,
             "fit": fit_metadata,
         })
     }

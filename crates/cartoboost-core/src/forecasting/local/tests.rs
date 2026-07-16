@@ -3147,4 +3147,37 @@ mod tests {
 
         assert!(model.fit(&frame).is_err());
     }
+
+    #[test]
+    fn kriging_models_record_selected_backend() {
+        let coordinates = BTreeMap::from([
+            ("a".to_string(), (0.0, 0.0)),
+            ("b".to_string(), (1.0, 0.0)),
+        ]);
+        let kriging = KrigingForecaster::with_config_and_backend(
+            coordinates.clone(),
+            OrdinaryKrigingConfig::new(1.0, 1.0e-6).expect("kriging config"),
+            Some("cpu"),
+        )
+        .expect("kriging backend");
+        assert_eq!(kriging.backend().requested, "cpu");
+        assert_eq!(kriging.metadata()["backend"]["selected"], "cpu");
+
+        let spatial = SpatialPiecewiseKrigingForecaster::new_with_backend(
+            SpatialPiecewiseKrigingConfig {
+                coordinates,
+                mode: SpatialPiecewiseKrigingMode::ResidualKriging,
+                piecewise_config: PiecewiseLinearSeasonalConfig::default(),
+                kriging_config: OrdinaryKrigingConfig::new(1.0, 1.0e-6)
+                    .expect("kriging config"),
+                spatial_regressors: Vec::new(),
+                residual_shrinkage: 1.0,
+                allow_neighbor_fallback: false,
+            },
+            Some("cpu"),
+        )
+        .expect("spatial kriging backend");
+        assert_eq!(spatial.backend().selected, "cpu");
+        assert_eq!(spatial.metadata()["backend"]["requested"], "cpu");
+    }
 }

@@ -2950,6 +2950,7 @@ fn spatial_piecewise_base_config(
 fn kriged_regressor_frame(
     frame: &ForecastFrame,
     config: &SpatialPiecewiseKrigingConfig,
+    backend: &BackendSelection,
 ) -> Result<ForecastFrame> {
     let mut rows = frame.rows().to_vec();
     let mut rows_by_timestamp: BTreeMap<chrono::NaiveDateTime, Vec<usize>> = BTreeMap::new();
@@ -3002,8 +3003,12 @@ fn kriged_regressor_frame(
                         })
                 })
                 .collect::<Result<Vec<_>>>()?;
-            let predictions =
-                ordinary_kriging_predict_many(&observations, &targets, config.kriging_config)?;
+            let predictions = ordinary_kriging_predict_many_with_backend(
+                &observations,
+                &targets,
+                config.kriging_config,
+                Some(&backend.selected),
+            )?;
             for (idx, prediction) in indices.iter().zip(predictions) {
                 rows[*idx]
                     .covariates

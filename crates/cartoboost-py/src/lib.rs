@@ -3345,7 +3345,8 @@ impl NativeKrigingForecaster {
         anisotropy_scaling=1.0,
         max_neighbors=None,
         min_neighbors=1,
-        max_distance=None
+        max_distance=None,
+        backend="cpu"
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -3360,6 +3361,7 @@ impl NativeKrigingForecaster {
         max_neighbors: Option<usize>,
         min_neighbors: usize,
         max_distance: Option<f64>,
+        backend: &str,
     ) -> PyResult<Self> {
         let coordinates = coordinates
             .into_iter()
@@ -3378,8 +3380,12 @@ impl NativeKrigingForecaster {
             max_distance,
         )?;
         Ok(Self {
-            model: CoreKrigingForecaster::with_config(coordinates, config)
-                .map_err(to_py_value_error)?,
+            model: CoreKrigingForecaster::with_config_and_backend(
+                coordinates,
+                config,
+                Some(backend),
+            )
+            .map_err(to_py_value_error)?,
         })
     }
 
@@ -3422,7 +3428,8 @@ impl NativeSpatialPiecewiseKrigingForecaster {
         max_distance=None,
         residual_shrinkage=1.0,
         allow_neighbor_fallback=false,
-        piecewise_config_json=None
+        piecewise_config_json=None,
+        backend="cpu"
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -3442,6 +3449,7 @@ impl NativeSpatialPiecewiseKrigingForecaster {
         residual_shrinkage: f64,
         allow_neighbor_fallback: bool,
         piecewise_config_json: Option<String>,
+        backend: &str,
     ) -> PyResult<Self> {
         let coordinates = coordinates
             .into_iter()
@@ -3476,7 +3484,8 @@ impl NativeSpatialPiecewiseKrigingForecaster {
             allow_neighbor_fallback,
         };
         Ok(Self {
-            model: CoreSpatialPiecewiseKrigingForecaster::new(config).map_err(to_py_value_error)?,
+            model: CoreSpatialPiecewiseKrigingForecaster::new_with_backend(config, Some(backend))
+                .map_err(to_py_value_error)?,
         })
     }
 

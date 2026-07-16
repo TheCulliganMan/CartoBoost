@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from ...config import Drift, Kernel
+from ...config import Backend, Drift, Kernel
 from .._native_wrappers import NativeForecastWrapper
 
 CoordinateInput = Mapping[str, Sequence[float]] | Sequence[tuple[str, float, float]]
@@ -27,6 +27,7 @@ class KrigingForecaster(NativeForecastWrapper):
         max_neighbors: int | None = None,
         min_neighbors: int = 1,
         max_distance: float | None = None,
+        backend: Backend | str = Backend.CPU,
         **params: Any,
     ) -> None:
         coordinate_rows = _normalize_coordinates(coordinates)
@@ -42,6 +43,7 @@ class KrigingForecaster(NativeForecastWrapper):
             max_neighbors=None if max_neighbors is None else int(max_neighbors),
             min_neighbors=int(min_neighbors),
             max_distance=None if max_distance is None else float(max_distance),
+            backend=str(backend),
         )
         self.coordinates = coordinate_rows
         self.range = float(range)
@@ -54,6 +56,7 @@ class KrigingForecaster(NativeForecastWrapper):
         self.max_neighbors = None if max_neighbors is None else int(max_neighbors)
         self.min_neighbors = int(min_neighbors)
         self.max_distance = None if max_distance is None else float(max_distance)
+        self.backend = backend
         for key, value in params.items():
             setattr(self, key, value)
 
@@ -82,6 +85,7 @@ class SpatialPiecewiseKrigingForecaster(NativeForecastWrapper):
         residual_shrinkage: float = 1.0,
         allow_neighbor_fallback: bool = False,
         piecewise_config_json: str | None = None,
+        backend: Backend | str = Backend.CPU,
         **params: Any,
     ) -> None:
         coordinate_rows = _normalize_coordinates(coordinates)
@@ -102,6 +106,7 @@ class SpatialPiecewiseKrigingForecaster(NativeForecastWrapper):
             residual_shrinkage=float(residual_shrinkage),
             allow_neighbor_fallback=bool(allow_neighbor_fallback),
             piecewise_config_json=piecewise_config_json,
+            backend=str(backend),
         )
         self.coordinates = coordinate_rows
         self.mode = str(mode)
@@ -119,6 +124,7 @@ class SpatialPiecewiseKrigingForecaster(NativeForecastWrapper):
         self.residual_shrinkage = float(residual_shrinkage)
         self.allow_neighbor_fallback = bool(allow_neighbor_fallback)
         self.piecewise_config_json = piecewise_config_json
+        self.backend = backend
         for key, value in params.items():
             setattr(self, key, value)
 

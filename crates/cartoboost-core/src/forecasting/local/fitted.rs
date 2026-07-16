@@ -1420,14 +1420,18 @@ impl FittedKrigingState {
 }
 
 impl FittedSpatialPiecewiseKrigingState {
-    fn from_frame(frame: &ForecastFrame, config: &SpatialPiecewiseKrigingConfig) -> Result<Self> {
+    fn from_frame(
+        frame: &ForecastFrame,
+        config: &SpatialPiecewiseKrigingConfig,
+        backend: &BackendSelection,
+    ) -> Result<Self> {
         #[cfg(not(target_arch = "wasm32"))]
         let started = std::time::Instant::now();
         #[cfg(target_arch = "wasm32")]
         let started = ();
         let piecewise_config = spatial_piecewise_base_config(config);
         let modeled_frame = if config.uses_kriged_regressors() {
-            kriged_regressor_frame(frame, config)?
+            kriged_regressor_frame(frame, config, backend)?
         } else {
             frame.clone()
         };
@@ -1484,6 +1488,7 @@ impl FittedSpatialPiecewiseKrigingState {
     fn residual_kriging_predictions(
         &self,
         config: &SpatialPiecewiseKrigingConfig,
+        backend: &BackendSelection,
     ) -> Result<BTreeMap<String, SpatialKrigingCorrection>> {
         let observations = self
             .residual_observation_series
@@ -1530,9 +1535,14 @@ impl FittedSpatialPiecewiseKrigingState {
                 .map(|(_, observation)| *observation)
                 .collect::<Vec<_>>();
             let target = (target_observation.x, target_observation.y);
-            let correction =
-                match ordinary_kriging_predict(&training, target, config.kriging_config) {
-                    Ok(mut prediction) => {
+            let correction = match ordinary_kriging_predict_many_with_backend(
+                &training,
+                &[target],
+                config.kriging_config,
+                Some(&backend.selected),
+            ) {
+                    Ok(mut predictions) => {
+                        let mut prediction = predictions.remove(0);
                         prediction.neighbor_indices = prediction
                             .neighbor_indices
                             .iter()

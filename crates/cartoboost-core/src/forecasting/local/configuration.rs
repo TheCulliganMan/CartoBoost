@@ -1327,7 +1327,17 @@ impl KrigingForecaster {
         coordinates: BTreeMap<String, (f64, f64)>,
         config: OrdinaryKrigingConfig,
     ) -> Result<Self> {
+        Self::with_config_and_backend(coordinates, config, Some("cpu"))
+    }
+
+    pub fn with_config_and_backend(
+        coordinates: BTreeMap<String, (f64, f64)>,
+        config: OrdinaryKrigingConfig,
+        backend: Option<&str>,
+    ) -> Result<Self> {
         let config = config.validate()?;
+        let backend = select_backend_for(backend, BackendOperation::PairwiseDistance)
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
         if coordinates.is_empty() {
             return Err(CartoBoostError::InvalidInput(
                 "kriging coordinates must not be empty".to_string(),
@@ -1343,22 +1353,41 @@ impl KrigingForecaster {
         Ok(Self {
             coordinates,
             config,
+            backend,
             fitted: None,
         })
+    }
+
+    pub fn backend(&self) -> &BackendSelection {
+        &self.backend
     }
 }
 
 impl SpatialPiecewiseKrigingForecaster {
     pub fn new(config: SpatialPiecewiseKrigingConfig) -> Result<Self> {
+        Self::new_with_backend(config, Some("cpu"))
+    }
+
+    pub fn new_with_backend(
+        config: SpatialPiecewiseKrigingConfig,
+        backend: Option<&str>,
+    ) -> Result<Self> {
         validate_spatial_piecewise_kriging_config(&config)?;
+        let backend = select_backend_for(backend, BackendOperation::PairwiseDistance)
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
         Ok(Self {
             config,
+            backend,
             fitted: None,
         })
     }
 
     pub fn config(&self) -> &SpatialPiecewiseKrigingConfig {
         &self.config
+    }
+
+    pub fn backend(&self) -> &BackendSelection {
+        &self.backend
     }
 }
 

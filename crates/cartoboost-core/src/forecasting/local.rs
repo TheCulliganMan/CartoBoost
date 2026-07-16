@@ -7,11 +7,12 @@ use crate::forecasting::{
 use crate::loss::huber_irls_weights;
 use crate::utilities::{
     fit_local_level_kalman, fit_local_linear_kalman, local_level_kalman_forecast_distribution,
-    local_linear_kalman_forecast_distribution, ordinary_kriging_leave_one_out,
-    ordinary_kriging_predict, ordinary_kriging_predict_many, KrigingObservation,
-    LocalLevelKalmanConfig, LocalLinearKalmanConfig, OrdinaryKrigingConfig,
+    local_linear_kalman_forecast_distribution, ordinary_kriging_leave_one_out_with_backend,
+    ordinary_kriging_predict_many_with_backend, KrigingObservation, LocalLevelKalmanConfig,
+    LocalLinearKalmanConfig, OrdinaryKrigingConfig,
 };
 use crate::{CartoBoostError, Result};
+use cartoboost_accelerator::{select_backend_for, BackendOperation, BackendSelection};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -147,12 +148,14 @@ pub struct AutoLocalLevelKalmanForecaster {
 pub struct KrigingForecaster {
     coordinates: BTreeMap<String, (f64, f64)>,
     config: OrdinaryKrigingConfig,
+    backend: BackendSelection,
     fitted: Option<FittedKrigingState>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpatialPiecewiseKrigingForecaster {
     config: SpatialPiecewiseKrigingConfig,
+    backend: BackendSelection,
     fitted: Option<FittedSpatialPiecewiseKrigingState>,
 }
 
