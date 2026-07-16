@@ -9,6 +9,7 @@ use cartoboost_neural::{
     backend_dense_layer_f32, select_backend, select_backend_for, BackendOperation,
     BackendSelection, GraphSageConfig, GraphSageEncoder, HomogeneousGraph,
 };
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::cmp::Ordering;
@@ -1062,108 +1063,110 @@ fn learn_relationships(
             prior,
         );
     }
-    let mut output = vec![Vec::new(); frame.lane_ids.len()];
-    for source in 0..frame.lane_ids.len() {
-        // Build and release one lane's candidate list at a time. Retaining a
-        // set for every lane would itself duplicate a full city graph.
-        let mut candidate_indices = Vec::new();
-        if let Some(rows) = origins.get(frame.origin_ids[source].as_str()) {
-            candidate_indices.extend(rows.iter().copied());
-        }
-        if let Some(rows) = destinations.get(frame.destination_ids[source].as_str()) {
-            candidate_indices.extend(rows.iter().copied());
-        }
-        if let Some(rows) = endpoint_pairs.get(&(
-            frame.destination_ids[source].as_str(),
-            frame.origin_ids[source].as_str(),
-        )) {
-            candidate_indices.extend(rows.iter().copied());
-        }
-        candidate_indices.extend(
-            priors
-                .keys()
-                .filter_map(|&(prior_source, target)| (prior_source == source).then_some(target)),
-        );
-        candidate_indices.sort_unstable();
-        candidate_indices.dedup();
-        let mut candidates = Vec::new();
-        for target in candidate_indices {
-            if source == target {
-                continue;
+    Ok((0..frame.lane_ids.len())
+        .into_par_iter()
+        .map(|source| {
+            // Build and release one lane's candidate list at a time. Retaining a
+            // set for every lane would itself duplicate a full city graph.
+            let mut candidate_indices = Vec::new();
+            if let Some(rows) = origins.get(frame.origin_ids[source].as_str()) {
+                candidate_indices.extend(rows.iter().copied());
             }
-            if let Some(prior) = priors.get(&(source, target)) {
-                if !prior.allowed {
+            if let Some(rows) = destinations.get(frame.destination_ids[source].as_str()) {
+                candidate_indices.extend(rows.iter().copied());
+            }
+            if let Some(rows) = endpoint_pairs.get(&(
+                frame.destination_ids[source].as_str(),
+                frame.origin_ids[source].as_str(),
+            )) {
+                candidate_indices.extend(rows.iter().copied());
+            }
+            candidate_indices.extend(
+                priors.keys().filter_map(|&(prior_source, target)| {
+                    (prior_source == source).then_some(target)
+                }),
+            );
+            candidate_indices.sort_unstable();
+            candidate_indices.dedup();
+            let mut candidates = Vec::new();
+            for target in candidate_indices {
+                if source == target {
                     continue;
                 }
-            }
-            let mut kinds = Vec::new();
-            let mut score = 0.0;
-            if frame.origin_ids[source] == frame.origin_ids[target] {
-                kinds.push(RelationshipKind::SharedOrigin);
-                score += 0.35;
-            }
-            if frame.destination_ids[source] == frame.destination_ids[target] {
-                kinds.push(RelationshipKind::SharedDestination);
-                score += 0.35;
-            }
-            if frame.origin_ids[source] == frame.destination_ids[target]
-                && frame.destination_ids[source] == frame.origin_ids[target]
-            {
-                kinds.push(RelationshipKind::ReverseLane);
-                score += 0.45;
-            }
-            let distance = endpoint_distance(frame.coordinates[source], frame.coordinates[target]);
-            if distance < 2.0 {
-                kinds.push(RelationshipKind::Geographic);
-                score += 0.2 / (1.0 + distance);
-            }
-            let correlation = masked_correlation(residuals, observed, source, target);
-            if correlation >= floor {
-                kinds.push(RelationshipKind::ResidualCorrelation);
-                score += 0.5 * correlation;
-            }
-            if let Some(embeddings) = neural_embeddings {
-                let similarity = cosine_similarity(&embeddings[source], &embeddings[target]);
-                if similarity > 0.0 {
-                    // The kernel is learned from the candidate graph and static lane state;
-                    // residual evidence remains the task-specific selection signal.
-                    score += 0.2 * similarity;
-                    kinds.push(RelationshipKind::NeuralKernel);
+                if let Some(prior) = priors.get(&(source, target)) {
+                    if !prior.allowed {
+                        continue;
+                    }
+                }
+                let mut kinds = Vec::new();
+                let mut score = 0.0;
+                if frame.origin_ids[source] == frame.origin_ids[target] {
+                    kinds.push(RelationshipKind::SharedOrigin);
+                    score += 0.35;
+                }
+                if frame.destination_ids[source] == frame.destination_ids[target] {
+                    kinds.push(RelationshipKind::SharedDestination);
+                    score += 0.35;
+                }
+                if frame.origin_ids[source] == frame.destination_ids[target]
+                    && frame.destination_ids[source] == frame.origin_ids[target]
+                {
+                    kinds.push(RelationshipKind::ReverseLane);
+                    score += 0.45;
+                }
+                let distance =
+                    endpoint_distance(frame.coordinates[source], frame.coordinates[target]);
+                if distance < 2.0 {
+                    kinds.push(RelationshipKind::Geographic);
+                    score += 0.2 / (1.0 + distance);
+                }
+                let correlation = masked_correlation(residuals, observed, source, target);
+                if correlation >= floor {
+                    kinds.push(RelationshipKind::ResidualCorrelation);
+                    score += 0.5 * correlation;
+                }
+                if let Some(embeddings) = neural_embeddings {
+                    let similarity = cosine_similarity(&embeddings[source], &embeddings[target]);
+                    if similarity > 0.0 {
+                        // The kernel is learned from the candidate graph and static lane state;
+                        // residual evidence remains the task-specific selection signal.
+                        score += 0.2 * similarity;
+                        kinds.push(RelationshipKind::NeuralKernel);
+                    }
+                }
+                if let Some(prior) = priors.get(&(source, target)) {
+                    kinds.push(RelationshipKind::Expert);
+                    score += prior.weight.max(0.01);
+                }
+                if !kinds.is_empty() && score > 0.0 {
+                    candidates.push((target, score, kinds));
                 }
             }
-            if let Some(prior) = priors.get(&(source, target)) {
-                kinds.push(RelationshipKind::Expert);
-                score += prior.weight.max(0.01);
-            }
-            if !kinds.is_empty() && score > 0.0 {
-                candidates.push((target, score, kinds));
-            }
-        }
-        candidates.sort_by(|a, b| {
-            b.1.partial_cmp(&a.1)
-                .unwrap_or(Ordering::Equal)
-                .then_with(|| frame.lane_ids[a.0].cmp(&frame.lane_ids[b.0]))
-        });
-        candidates.truncate(top_k);
-        let total: f64 = candidates.iter().map(|row| row.1).sum();
-        output[source] = candidates
-            .into_iter()
-            .map(|(target, score, kinds)| MarketRelationship {
-                source_lane_id: frame.lane_ids[source].clone(),
-                target_lane_id: frame.lane_ids[target].clone(),
-                weight: score / total.max(1e-12),
-                periodic_weights: periodic_edge_weights(
-                    source,
-                    target,
-                    residuals,
-                    observed,
-                    &frame.timestamps,
-                ),
-                kinds,
-            })
-            .collect();
-    }
-    Ok(output)
+            candidates.sort_by(|a, b| {
+                b.1.partial_cmp(&a.1)
+                    .unwrap_or(Ordering::Equal)
+                    .then_with(|| frame.lane_ids[a.0].cmp(&frame.lane_ids[b.0]))
+            });
+            candidates.truncate(top_k);
+            let total: f64 = candidates.iter().map(|row| row.1).sum();
+            candidates
+                .into_iter()
+                .map(|(target, score, kinds)| MarketRelationship {
+                    source_lane_id: frame.lane_ids[source].clone(),
+                    target_lane_id: frame.lane_ids[target].clone(),
+                    weight: score / total.max(1e-12),
+                    periodic_weights: periodic_edge_weights(
+                        source,
+                        target,
+                        residuals,
+                        observed,
+                        &frame.timestamps,
+                    ),
+                    kinds,
+                })
+                .collect()
+        })
+        .collect())
 }
 
 fn fit_graph_kernel(

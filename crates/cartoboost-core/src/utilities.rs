@@ -442,8 +442,8 @@ impl OrdinaryKrigingSystem {
             &self.backend,
         )?;
         targets
-            .iter()
-            .zip(rhs_rows)
+            .par_iter()
+            .zip(rhs_rows.into_par_iter())
             .map(|(&target, rhs)| {
                 let solution = self.factorization.solve(&rhs).ok_or_else(|| {
                     CartoBoostError::InvalidInput(
@@ -1604,21 +1604,20 @@ fn variogram_pairs_with_backend(
         .collect::<Vec<_>>();
     let squared = backend_pairwise_squared_distances_f32(backend, &points, &points)
         .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
-    let mut pairs = Vec::with_capacity(observations.len() * (observations.len() - 1) / 2);
-    for left_idx in 0..observations.len() {
-        for right_idx in (left_idx + 1)..observations.len() {
-            let distance = f64::from(squared[left_idx][right_idx]).max(0.0).sqrt();
-            if max_distance
-                .map(|max_distance| distance > max_distance)
-                .unwrap_or(false)
-            {
-                continue;
-            }
-            let diff = observations[left_idx].value - observations[right_idx].value;
-            pairs.push((distance, 0.5 * diff * diff));
-        }
-    }
-    Ok(pairs)
+    Ok((0..observations.len())
+        .into_par_iter()
+        .flat_map_iter(|left_idx| {
+            let squared = &squared;
+            ((left_idx + 1)..observations.len()).filter_map(move |right_idx| {
+                let distance = f64::from(squared[left_idx][right_idx]).max(0.0).sqrt();
+                if max_distance.is_some_and(|max_distance| distance > max_distance) {
+                    return None;
+                }
+                let diff = observations[left_idx].value - observations[right_idx].value;
+                Some((distance, 0.5 * diff * diff))
+            })
+        })
+        .collect())
 }
 
 fn validate_variogram_candidates(values: &[f64], name: &str) -> Result<()> {

@@ -525,38 +525,47 @@ pub fn empirical_semivariogram_with_backend(
                 .map_err(|error| GeostatsError::InvalidInput(error.to_string()))?,
         )
     };
-    let mut pairs = Vec::new();
-    let mut observed_max: f64 = 0.0;
-    for i in 0..coords.len() {
-        for j in (i + 1)..coords.len() {
-            let distance = accelerated_distances.as_ref().map_or_else(
-                || transformed_distance(coords[i], coords[j], distance_config),
-                |distances| f64::from(distances[i][j]).sqrt(),
-            );
-            if !distance.is_finite() {
-                return Err(GeostatsError::InvalidInput(format!(
-                    "variogram distance is not finite for rows {i} and {j}"
-                )));
+    let pairs = (0..coords.len())
+        .into_par_iter()
+        .map(|i| {
+            let mut row_pairs = Vec::with_capacity(coords.len().saturating_sub(i + 1));
+            for j in (i + 1)..coords.len() {
+                let distance = accelerated_distances.as_ref().map_or_else(
+                    || transformed_distance(coords[i], coords[j], distance_config),
+                    |distances| f64::from(distances[i][j]).sqrt(),
+                );
+                if !distance.is_finite() {
+                    return Err(GeostatsError::InvalidInput(format!(
+                        "variogram distance is not finite for rows {i} and {j}"
+                    )));
+                }
+                if max_distance.is_some_and(|max| distance > max) {
+                    continue;
+                }
+                let difference = values[i] - values[j];
+                let semivariance = 0.5 * difference * difference;
+                if !semivariance.is_finite() {
+                    return Err(GeostatsError::InvalidInput(format!(
+                        "variogram semivariance is not finite for rows {i} and {j}"
+                    )));
+                }
+                row_pairs.push((distance, semivariance));
             }
-            if max_distance.is_some_and(|max| distance > max) {
-                continue;
-            }
-            let difference = values[i] - values[j];
-            let semivariance = 0.5 * difference * difference;
-            if !semivariance.is_finite() {
-                return Err(GeostatsError::InvalidInput(format!(
-                    "variogram semivariance is not finite for rows {i} and {j}"
-                )));
-            }
-            observed_max = observed_max.max(distance);
-            pairs.push((distance, semivariance));
-        }
-    }
+            Ok(row_pairs)
+        })
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
     if pairs.is_empty() {
         return Err(GeostatsError::InvalidInput(
             "no coordinate pairs are available for variogram bins".to_string(),
         ));
     }
+    let observed_max = pairs
+        .par_iter()
+        .map(|(distance, _)| *distance)
+        .reduce(|| 0.0, f64::max);
     let upper = max_distance.unwrap_or(observed_max);
     if upper <= 0.0 || !upper.is_finite() {
         return Err(GeostatsError::InvalidInput(
