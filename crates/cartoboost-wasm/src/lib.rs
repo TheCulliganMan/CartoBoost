@@ -2326,6 +2326,20 @@ pub fn run_geo_feature_examples(request: JsValue) -> std::result::Result<JsValue
     })
 }
 
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+#[wasm_bindgen(js_name = runGeoFeatureExamplesWebgpu)]
+pub async fn run_geo_feature_examples_webgpu(
+    request: JsValue,
+) -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    let request: BrowserGeoFeatureRequest = serde_wasm_bindgen::from_value(request)
+        .map_err(|error| JsValue::from_str(&format!("invalid geo feature request: {error}")))?;
+    let response = run_geo_feature_examples_webgpu_request(request)
+        .await
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    serialize_json_response(&response, "WebGPU geo feature response")
+}
+
 #[wasm_bindgen(js_name = availableForecastModels)]
 pub fn available_forecast_models() -> std::result::Result<JsValue, JsValue> {
     let serializer = serde_wasm_bindgen::Serializer::json_compatible();
@@ -2677,6 +2691,42 @@ async fn run_geostatistics_webgpu_request(
 fn run_geo_feature_examples_request(
     request: BrowserGeoFeatureRequest,
 ) -> Result<BrowserGeoFeatureResponse> {
+    run_geo_feature_examples_with_distances(request, None, "cpu")
+}
+
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+async fn run_geo_feature_examples_webgpu_request(
+    request: BrowserGeoFeatureRequest,
+) -> Result<BrowserGeoFeatureResponse> {
+    let points = request
+        .radial_points
+        .iter()
+        .map(|point| point.point.iter().map(|value| *value as f32).collect())
+        .collect::<Vec<Vec<f32>>>();
+    let anchors = request
+        .anchors
+        .iter()
+        .map(|anchor| anchor.point.iter().map(|value| *value as f32).collect())
+        .collect::<Vec<Vec<f32>>>();
+    let squared_distances = webgpu_pairwise_squared_distances_f32_async(&points, &anchors)
+        .await
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    let distances = squared_distances
+        .into_iter()
+        .map(|row| {
+            row.into_iter()
+                .map(|distance| f64::from(distance.max(0.0).sqrt()))
+                .collect()
+        })
+        .collect();
+    run_geo_feature_examples_with_distances(request, Some(distances), "webgpu")
+}
+
+fn run_geo_feature_examples_with_distances(
+    request: BrowserGeoFeatureRequest,
+    accelerated_distances: Option<Vec<Vec<f64>>>,
+    selected_backend: &str,
+) -> Result<BrowserGeoFeatureResponse> {
     let anchors = request.anchors;
     let anchor_points = anchors
         .iter()
@@ -2736,19 +2786,41 @@ fn run_geo_feature_examples_request(
     let radial = request
         .radial_points
         .iter()
-        .map(|point| BrowserAnchorFeatureRow {
+        .enumerate()
+        .map(|(index, point)| BrowserAnchorFeatureRow {
             label: point.label.clone(),
-            values: radial_anchor_distances(point.point, &anchor_points),
+            values: accelerated_distances.as_ref().map_or_else(
+                || radial_anchor_distances(point.point, &anchor_points),
+                |distances| distances[index].clone(),
+            ),
         })
         .collect::<Vec<_>>();
     let rbf = request
         .radial_points
         .iter()
-        .map(|point| {
+        .enumerate()
+        .map(|(index, point)| {
+            let values = accelerated_distances.as_ref().map_or_else(
+                || {
+                    rbf_anchor_features(point.point, &anchor_points, request.length_scale)
+                        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))
+                },
+                |distances| {
+                    if !request.length_scale.is_finite() || request.length_scale <= 0.0 {
+                        return Err(CartoBoostError::InvalidInput(
+                            "length_scale must be finite and positive".to_string(),
+                        ));
+                    }
+                    let denominator = 2.0 * request.length_scale * request.length_scale;
+                    Ok(distances[index]
+                        .iter()
+                        .map(|distance| (-(distance * distance) / denominator).exp())
+                        .collect())
+                },
+            )?;
             Ok(BrowserAnchorFeatureRow {
                 label: point.label.clone(),
-                values: rbf_anchor_features(point.point, &anchor_points, request.length_scale)
-                    .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?,
+                values,
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -2784,6 +2856,12 @@ fn run_geo_feature_examples_request(
             "anchorLabels": anchor_labels,
             "rbfLengthScale": request.length_scale,
             "zeroDistancePolicy": "null components with zeroDistance=true",
+            "backend": {"requested": selected_backend, "selected": selected_backend},
+            "acceleratedOperations": if selected_backend == "webgpu" {
+                vec!["pairwise_distance"]
+            } else {
+                Vec::<&str>::new()
+            },
         }),
     })
 }
@@ -6996,6 +7074,62 @@ mod tests {
         assert_eq!(response.rbf[0].values[0], (-12.5_f64).exp());
         assert_eq!(response.local_frame[0].along_axis, Some(2.0));
         assert_eq!(response.local_frame[0].cross_axis, Some(-1.0));
+    }
+
+    #[test]
+    fn browser_geo_feature_accelerated_distances_match_cpu_features() {
+        fn request() -> BrowserGeoFeatureRequest {
+            BrowserGeoFeatureRequest {
+                planar_routes: Vec::new(),
+                latlng_routes: Vec::new(),
+                radial_points: vec![
+                    BrowserNamedPoint {
+                        label: "first".to_string(),
+                        point: [3.0, 4.0],
+                    },
+                    BrowserNamedPoint {
+                        label: "second".to_string(),
+                        point: [6.0, 8.0],
+                    },
+                ],
+                anchors: vec![
+                    BrowserNamedPoint {
+                        label: "origin".to_string(),
+                        point: [0.0, 0.0],
+                    },
+                    BrowserNamedPoint {
+                        label: "x-axis".to_string(),
+                        point: [3.0, 0.0],
+                    },
+                ],
+                length_scale: 2.0,
+                local_frame: None,
+            }
+        }
+
+        let cpu = run_geo_feature_examples_request(request()).expect("CPU geo features");
+        let accelerated = run_geo_feature_examples_with_distances(
+            request(),
+            Some(vec![vec![5.0, 4.0], vec![10.0, 8.544_003_745_317_53]]),
+            "webgpu",
+        )
+        .expect("accelerated geo features");
+
+        for (actual, expected) in accelerated.radial.iter().zip(&cpu.radial) {
+            for (actual, expected) in actual.values.iter().zip(&expected.values) {
+                assert!((actual - expected).abs() < 1.0e-12);
+            }
+        }
+        for (actual, expected) in accelerated.rbf.iter().zip(&cpu.rbf) {
+            for (actual, expected) in actual.values.iter().zip(&expected.values) {
+                assert!((actual - expected).abs() < 1.0e-12);
+            }
+        }
+        assert_eq!(accelerated.metadata["backend"]["selected"], "webgpu");
+        assert_eq!(
+            accelerated.metadata["acceleratedOperations"][0],
+            "pairwise_distance"
+        );
     }
 
     #[test]
