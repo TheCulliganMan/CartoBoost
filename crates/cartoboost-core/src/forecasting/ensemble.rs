@@ -10,6 +10,8 @@ use rayon::prelude::*;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
+const ENSEMBLE_DENSE_DISPATCH_MIN_OPS: usize = 16_384;
+
 pub struct WeightedEnsembleForecaster {
     members: Vec<WeightedMember>,
     backend: BackendSelection,
@@ -385,6 +387,7 @@ fn aggregate_member_results(
             "ensemble requires at least one positive-weight member".to_string(),
         ));
     }
+    let member_count = member_results.len();
 
     let mut weighted: BTreeMap<ForecastKey, f64> = BTreeMap::new();
     let mut contributions: BTreeMap<ForecastKey, Vec<Value>> = BTreeMap::new();
@@ -394,6 +397,7 @@ fn aggregate_member_results(
     let mut has_member_details = false;
     let mut accelerator_columns = Vec::<Vec<f32>>::new();
     let mut accelerator_weights = Vec::<f32>::new();
+    let mut use_accelerator = false;
 
     for (member_name, weight, result) in member_results {
         if !weight.is_finite() || weight <= 0.0 {
@@ -418,6 +422,7 @@ fn aggregate_member_results(
                 )));
             }
         } else {
+            use_accelerator = should_accelerate_ensemble(backend, current_keys.len(), member_count);
             expected_keys = Some(current_keys);
         }
 
@@ -432,14 +437,16 @@ fn aggregate_member_results(
             })
             .collect::<Result<BTreeMap<_, _>>>()?;
         has_member_details |= !details.is_empty();
-        accelerator_columns.push(
-            result
-                .predictions()
-                .iter()
-                .map(|prediction| prediction.mean as f32)
-                .collect(),
-        );
-        accelerator_weights.push(weight as f32);
+        if use_accelerator {
+            accelerator_columns.push(
+                result
+                    .predictions()
+                    .iter()
+                    .map(|prediction| prediction.mean as f32)
+                    .collect(),
+            );
+            accelerator_weights.push(weight as f32);
+        }
         for prediction in result.predictions() {
             let key = forecast_key(prediction);
             let weighted_mean = weight * prediction.mean;
@@ -484,7 +491,7 @@ fn aggregate_member_results(
         }
     }
 
-    if backend.selected != "cpu" {
+    if use_accelerator {
         let keys = expected_keys.as_ref().expect("validated ensemble keys");
         let features = (0..keys.len())
             .map(|row| {
@@ -548,6 +555,15 @@ fn aggregate_member_results(
         Vec::new()
     };
     ForecastResult::new_with_intervals_and_details(predictions, intervals, details)
+}
+
+fn should_accelerate_ensemble(
+    backend: &BackendSelection,
+    forecast_count: usize,
+    member_count: usize,
+) -> bool {
+    backend.selected != "cpu"
+        && forecast_count.saturating_mul(member_count) >= ENSEMBLE_DENSE_DISPATCH_MIN_OPS
 }
 
 #[cfg(test)]
@@ -636,7 +652,7 @@ mod tests {
     }
 
     #[test]
-    fn accelerated_weighted_ensemble_matches_cpu() {
+    fn accelerator_selection_preserves_small_ensemble_results() {
         for backend in cartoboost_accelerator::available_backends() {
             if backend == "cpu"
                 || !cartoboost_accelerator::backend_supports_operation(
@@ -673,6 +689,97 @@ mod tests {
                 (result.predictions()[0].mean - 25.0).abs() < 1.0e-4,
                 "backend {backend}"
             );
+        }
+    }
+
+    #[test]
+    fn ensemble_dense_dispatch_requires_a_profitable_workload() {
+        for backend in cartoboost_accelerator::available_backends() {
+            let selection =
+                select_backend_for(Some(&backend), BackendOperation::Dense).expect("selection");
+            assert!(!should_accelerate_ensemble(&selection, 1, 2));
+            assert_eq!(
+                should_accelerate_ensemble(&selection, 8_192, 2),
+                backend != "cpu"
+            );
+        }
+    }
+
+    #[test]
+    fn large_accelerated_weighted_ensemble_matches_cpu() {
+        let left = (0..8_192)
+            .map(|index| prediction(&format!("lane-{index:05}"), 4, 1, index as f64 * 0.25))
+            .collect::<Vec<_>>();
+        let right = (0..8_192)
+            .map(|index| {
+                prediction(
+                    &format!("lane-{index:05}"),
+                    4,
+                    1,
+                    100.0 - index as f64 * 0.125,
+                )
+            })
+            .collect::<Vec<_>>();
+        let cpu = WeightedEnsembleForecaster::new_with_backend(
+            vec![
+                (
+                    "left".to_string(),
+                    Box::new(FixedForecaster {
+                        predictions: left.clone(),
+                        name: "left",
+                    }),
+                    0.25,
+                ),
+                (
+                    "right".to_string(),
+                    Box::new(FixedForecaster {
+                        predictions: right.clone(),
+                        name: "right",
+                    }),
+                    0.75,
+                ),
+            ],
+            Some("cpu"),
+        )
+        .unwrap()
+        .predict(1)
+        .unwrap();
+        for backend in cartoboost_accelerator::available_backends()
+            .into_iter()
+            .filter(|backend| backend != "cpu")
+        {
+            let accelerated = WeightedEnsembleForecaster::new_with_backend(
+                vec![
+                    (
+                        "left".to_string(),
+                        Box::new(FixedForecaster {
+                            predictions: left.clone(),
+                            name: "left",
+                        }),
+                        0.25,
+                    ),
+                    (
+                        "right".to_string(),
+                        Box::new(FixedForecaster {
+                            predictions: right.clone(),
+                            name: "right",
+                        }),
+                        0.75,
+                    ),
+                ],
+                Some(&backend),
+            )
+            .unwrap()
+            .predict(1)
+            .unwrap();
+            for (expected, actual) in cpu.predictions().iter().zip(accelerated.predictions()) {
+                assert!(
+                    (expected.mean - actual.mean).abs() < 1.0e-4,
+                    "{backend}: {} != {}",
+                    expected.mean,
+                    actual.mean
+                );
+            }
         }
     }
 
