@@ -135,14 +135,19 @@ use cartoboost_neural::{
     available_backends as neural_available_backends,
     backend_adamw_step_f32 as neural_backend_adamw_step_f32,
     backend_affine_scores as neural_backend_affine_scores,
+    backend_csr_diffusion_backward_f32 as neural_backend_csr_diffusion_backward_f32,
     backend_csr_diffusion_f32 as neural_backend_csr_diffusion_f32,
+    backend_csr_row_softmax_backward_f32 as neural_backend_csr_row_softmax_backward_f32,
     backend_csr_row_softmax_f32 as neural_backend_csr_row_softmax_f32,
     backend_dense_layer_f32 as neural_backend_dense_layer_f32,
     backend_dispatch_report as neural_backend_dispatch_report,
     backend_layer_norm_f32 as neural_backend_layer_norm_f32,
     backend_pair_sigmoid_scores_f32 as neural_backend_pair_sigmoid_scores_f32,
     backend_pairwise_squared_distances_f32 as neural_backend_pairwise_distances_f32,
+    backend_scalar_graph_f32 as neural_backend_scalar_graph_f32,
+    backend_scalar_graph_train_step_f32 as neural_backend_scalar_graph_train_step_f32,
     backend_supports_operation as neural_backend_supports_operation,
+    backend_train_tanh_mlp_f32 as neural_backend_train_tanh_mlp_f32,
     backend_workload_decision as neural_backend_workload_decision, build_embedding_table_artifact,
     choice_set_transformer_report_json as core_choice_set_transformer_report_json,
     compute_directional_features_with_backend,
@@ -11960,6 +11965,38 @@ fn accelerator_csr_diffusion_value(
     })
 }
 
+type CsrDiffusionGradients = (Vec<f32>, Vec<f32>);
+
+#[pyfunction]
+#[pyo3(signature = (indptr, indices, weights, values, output_grad, channels, backend=None))]
+#[allow(clippy::too_many_arguments)]
+fn accelerator_csr_diffusion_backward_value(
+    py: Python<'_>,
+    indptr: Vec<u32>,
+    indices: Vec<u32>,
+    weights: Vec<f32>,
+    values: Vec<f32>,
+    output_grad: Vec<f32>,
+    channels: usize,
+    backend: Option<&str>,
+) -> PyResult<CsrDiffusionGradients> {
+    let selection = neural_select_backend_for(backend, BackendOperation::CsrDiffusionBackward)
+        .map_err(to_py_neural_error)?;
+    py.detach(move || {
+        let gradients = neural_backend_csr_diffusion_backward_f32(
+            &selection,
+            &indptr,
+            &indices,
+            &weights,
+            channels,
+            &values,
+            &output_grad,
+        )
+        .map_err(to_py_neural_error)?;
+        Ok((gradients.input_grad, gradients.edge_grad))
+    })
+}
+
 #[pyfunction]
 #[pyo3(signature = (indptr, logits, backend=None))]
 fn accelerator_csr_row_softmax_value(
@@ -11972,6 +12009,23 @@ fn accelerator_csr_row_softmax_value(
         .map_err(to_py_neural_error)?;
     py.detach(move || {
         neural_backend_csr_row_softmax_f32(&selection, &indptr, &logits).map_err(to_py_neural_error)
+    })
+}
+
+#[pyfunction]
+#[pyo3(signature = (indptr, weights, output_grad, backend=None))]
+fn accelerator_csr_row_softmax_backward_value(
+    py: Python<'_>,
+    indptr: Vec<u32>,
+    weights: Vec<f32>,
+    output_grad: Vec<f32>,
+    backend: Option<&str>,
+) -> PyResult<Vec<f32>> {
+    let selection = neural_select_backend_for(backend, BackendOperation::CsrRowSoftmaxBackward)
+        .map_err(to_py_neural_error)?;
+    py.detach(move || {
+        neural_backend_csr_row_softmax_backward_f32(&selection, &indptr, &weights, &output_grad)
+            .map_err(to_py_neural_error)
     })
 }
 
@@ -12041,6 +12095,98 @@ fn accelerator_adamw_step_value(
         )
         .map_err(to_py_neural_error)?;
         Ok((parameters, first_moment, second_moment))
+    })
+}
+
+#[pyfunction]
+#[pyo3(signature = (initial_values, opcodes, left, right, backend=None))]
+fn accelerator_scalar_graph_value(
+    py: Python<'_>,
+    initial_values: Vec<f32>,
+    opcodes: Vec<u8>,
+    left: Vec<u32>,
+    right: Vec<u32>,
+    backend: Option<&str>,
+) -> PyResult<Vec<f32>> {
+    let selection = neural_select_backend_for(backend, BackendOperation::ScalarGraph)
+        .map_err(to_py_neural_error)?;
+    py.detach(move || {
+        neural_backend_scalar_graph_f32(&selection, &initial_values, &opcodes, &left, &right)
+            .map_err(to_py_neural_error)
+    })
+}
+
+type ScalarGraphTrainingState = (f32, Vec<f32>, Vec<f32>, Vec<f32>);
+
+#[pyfunction]
+#[pyo3(signature = (initial_values, opcodes, left, right, parameter_ids, loss, parameters, first_moment, second_moment, step, learning_rate, weight_decay, backend=None))]
+#[allow(clippy::too_many_arguments)]
+fn accelerator_scalar_graph_train_step_value(
+    py: Python<'_>,
+    initial_values: Vec<f32>,
+    opcodes: Vec<u8>,
+    left: Vec<u32>,
+    right: Vec<u32>,
+    parameter_ids: Vec<u32>,
+    loss: usize,
+    mut parameters: Vec<f32>,
+    mut first_moment: Vec<f32>,
+    mut second_moment: Vec<f32>,
+    step: u64,
+    learning_rate: f32,
+    weight_decay: f32,
+    backend: Option<&str>,
+) -> PyResult<ScalarGraphTrainingState> {
+    let selection = neural_select_backend_for(backend, BackendOperation::ScalarGraphTraining)
+        .map_err(to_py_neural_error)?;
+    py.detach(move || {
+        let loss_value = neural_backend_scalar_graph_train_step_f32(
+            &selection,
+            &initial_values,
+            &opcodes,
+            &left,
+            &right,
+            &parameter_ids,
+            loss,
+            &mut parameters,
+            &mut first_moment,
+            &mut second_moment,
+            step,
+            learning_rate,
+            weight_decay,
+        )
+        .map_err(to_py_neural_error)?;
+        Ok((loss_value, parameters, first_moment, second_moment))
+    })
+}
+
+#[pyfunction]
+#[pyo3(signature = (inputs, targets, hidden_size, epochs, learning_rate, parameters, backend=None))]
+#[allow(clippy::too_many_arguments)]
+fn accelerator_train_tanh_mlp_value(
+    py: Python<'_>,
+    inputs: Vec<Vec<f32>>,
+    targets: Vec<f32>,
+    hidden_size: usize,
+    epochs: usize,
+    learning_rate: f32,
+    mut parameters: Vec<f32>,
+    backend: Option<&str>,
+) -> PyResult<Vec<f32>> {
+    let selection = neural_select_backend_for(backend, BackendOperation::TanhMlpTraining)
+        .map_err(to_py_neural_error)?;
+    py.detach(move || {
+        neural_backend_train_tanh_mlp_f32(
+            &selection,
+            &inputs,
+            &targets,
+            hidden_size,
+            epochs,
+            learning_rate,
+            &mut parameters,
+        )
+        .map_err(to_py_neural_error)?;
+        Ok(parameters)
     })
 }
 
@@ -12809,10 +12955,24 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(accelerator_dense_layer_value, m)?)?;
     m.add_function(wrap_pyfunction!(accelerator_affine_scores_value, m)?)?;
     m.add_function(wrap_pyfunction!(accelerator_csr_diffusion_value, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        accelerator_csr_diffusion_backward_value,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(accelerator_csr_row_softmax_value, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        accelerator_csr_row_softmax_backward_value,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(accelerator_layer_norm_value, m)?)?;
     m.add_function(wrap_pyfunction!(accelerator_pair_sigmoid_scores_value, m)?)?;
     m.add_function(wrap_pyfunction!(accelerator_adamw_step_value, m)?)?;
+    m.add_function(wrap_pyfunction!(accelerator_scalar_graph_value, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        accelerator_scalar_graph_train_step_value,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(accelerator_train_tanh_mlp_value, m)?)?;
     m.add_function(wrap_pyfunction!(
         accelerator_pairwise_squared_distances_value,
         m

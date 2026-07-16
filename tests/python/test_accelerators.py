@@ -5,7 +5,9 @@ from cartoboost.accelerators import (
     adamw_step,
     affine_scores,
     csr_diffusion,
+    csr_diffusion_backward,
     csr_row_softmax,
+    csr_row_softmax_backward,
     dense_layer,
     layer_norm,
     pair_sigmoid_scores,
@@ -104,3 +106,22 @@ def test_optimizer_normalization_and_sparse_attention_are_public() -> None:
     assert parameters.shape == first.shape == second.shape == (2,)
     assert parameters[0] < 1.0
     assert parameters[1] > -1.0
+
+
+def test_sparse_backward_kernels_match_reference_formulas() -> None:
+    input_grad, edge_grad = csr_diffusion_backward(
+        [0, 1, 3],
+        [1, 0, 1],
+        [1.0, 0.25, 0.75],
+        [[2.0, 4.0], [6.0, 8.0]],
+        [[1.0, 2.0], [3.0, 4.0]],
+        channels=2,
+        backend="cpu",
+    )
+    np.testing.assert_allclose(input_grad, [[0.75, 1.0], [3.25, 5.0]])
+    np.testing.assert_allclose(edge_grad, [22.0, 22.0, 50.0])
+
+    weights = csr_row_softmax([0, 2], [0.0, 1.0], backend="cpu")
+    gradient = csr_row_softmax_backward([0, 2], weights, [2.0, -1.0], backend="cpu")
+    expected = weights * (np.array([2.0, -1.0]) - np.dot(weights, [2.0, -1.0]))
+    np.testing.assert_allclose(gradient, expected, atol=1e-6)

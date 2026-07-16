@@ -204,6 +204,50 @@ def csr_diffusion(
     )
     return np.asarray(output, dtype=np.float32).reshape(indptr_array.shape[0] - 1, channels)
 
+def csr_diffusion_backward(
+    indptr: ArrayLike,
+    indices: ArrayLike,
+    weights: ArrayLike,
+    values: ArrayLike,
+    output_grad: ArrayLike,
+    *,
+    channels: int,
+    backend: str | None = None,
+) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
+    """Backpropagate through CSR diffusion into node values and edge weights."""
+
+    arrays = (
+        np.asarray(indptr, dtype=np.uint32).reshape(-1),
+        np.asarray(indices, dtype=np.uint32).reshape(-1),
+        np.asarray(weights, dtype=np.float32).reshape(-1),
+        np.asarray(values, dtype=np.float32).reshape(-1),
+        np.asarray(output_grad, dtype=np.float32).reshape(-1),
+    )
+    function = getattr(_native, "accelerator_csr_diffusion_backward_value", None)
+    if function is None:
+        if backend not in {None, "cpu"}:
+            raise RuntimeError("native accelerator support is unavailable")
+        indptr_array, indices_array, weight_array, value_array, grad_array = arrays
+        nodes = value_array.reshape(-1, channels)
+        gradients = grad_array.reshape(-1, channels)
+        input_grad = np.zeros_like(nodes)
+        edge_grad = np.zeros_like(weight_array)
+        for row in range(indptr_array.shape[0] - 1):
+            for offset in range(int(indptr_array[row]), int(indptr_array[row + 1])):
+                node = int(indices_array[offset])
+                input_grad[node] += weight_array[offset] * gradients[row]
+                edge_grad[offset] = np.dot(gradients[row], nodes[node])
+        return input_grad, edge_grad
+    input_grad, edge_grad = function(
+        *(array.tolist() for array in arrays),
+        int(channels),
+        backend,
+    )
+    return (
+        np.asarray(input_grad, dtype=np.float32).reshape(-1, channels),
+        np.asarray(edge_grad, dtype=np.float32),
+    )
+
 def csr_row_softmax(
     indptr: ArrayLike,
     logits: ArrayLike,
@@ -227,6 +271,38 @@ def csr_row_softmax(
         return output
     return np.asarray(
         function(indptr_array.tolist(), logits_array.tolist(), backend),
+        dtype=np.float32,
+    )
+
+def csr_row_softmax_backward(
+    indptr: ArrayLike,
+    weights: ArrayLike,
+    output_grad: ArrayLike,
+    *,
+    backend: str | None = None,
+) -> NDArray[np.float32]:
+    """Backpropagate through independently normalized CSR softmax rows."""
+
+    indptr_array = np.asarray(indptr, dtype=np.uint32).reshape(-1)
+    weight_array = np.asarray(weights, dtype=np.float32).reshape(-1)
+    grad_array = np.asarray(output_grad, dtype=np.float32).reshape(-1)
+    function = getattr(_native, "accelerator_csr_row_softmax_backward_value", None)
+    if function is None:
+        if backend not in {None, "cpu"}:
+            raise RuntimeError("native accelerator support is unavailable")
+        output = np.empty_like(weight_array)
+        for row in range(indptr_array.shape[0] - 1):
+            start, end = int(indptr_array[row]), int(indptr_array[row + 1])
+            dot = np.dot(weight_array[start:end], grad_array[start:end])
+            output[start:end] = weight_array[start:end] * (grad_array[start:end] - dot)
+        return output
+    return np.asarray(
+        function(
+            indptr_array.tolist(),
+            weight_array.tolist(),
+            grad_array.tolist(),
+            backend,
+        ),
         dtype=np.float32,
     )
 
@@ -330,6 +406,100 @@ def adamw_step(
     )
     return tuple(np.asarray(values, dtype=np.float32) for values in output)  # type: ignore[return-value]
 
+def scalar_graph(
+    initial_values: ArrayLike,
+    opcodes: ArrayLike,
+    left: ArrayLike,
+    right: ArrayLike,
+    *,
+    backend: str | None = None,
+) -> NDArray[np.float32]:
+    """Evaluate a validated topologically ordered scalar computation graph."""
+
+    function = getattr(_native, "accelerator_scalar_graph_value", None)
+    arguments = (
+        np.asarray(initial_values, dtype=np.float32).reshape(-1),
+        np.asarray(opcodes, dtype=np.uint8).reshape(-1),
+        np.asarray(left, dtype=np.uint32).reshape(-1),
+        np.asarray(right, dtype=np.uint32).reshape(-1),
+    )
+    if function is None:
+        if backend not in {None, "cpu"}:
+            raise RuntimeError("native accelerator support is unavailable")
+        raise RuntimeError("scalar graph evaluation requires the native extension")
+    return np.asarray(function(*(value.tolist() for value in arguments), backend), dtype=np.float32)
+
+
+def scalar_graph_train_step(
+    initial_values: ArrayLike,
+    opcodes: ArrayLike,
+    left: ArrayLike,
+    right: ArrayLike,
+    parameter_ids: ArrayLike,
+    *,
+    loss: int,
+    parameters: ArrayLike,
+    first_moment: ArrayLike,
+    second_moment: ArrayLike,
+    step: int,
+    learning_rate: float,
+    weight_decay: float = 0.0,
+    backend: str | None = None,
+) -> tuple[float, NDArray[np.float32], NDArray[np.float32], NDArray[np.float32]]:
+    """Run scalar-graph reverse mode and one fused AdamW parameter update."""
+
+    function = getattr(_native, "accelerator_scalar_graph_train_step_value", None)
+    if function is None:
+        raise RuntimeError("scalar graph training requires the native extension")
+    output = function(
+        np.asarray(initial_values, dtype=np.float32).reshape(-1).tolist(),
+        np.asarray(opcodes, dtype=np.uint8).reshape(-1).tolist(),
+        np.asarray(left, dtype=np.uint32).reshape(-1).tolist(),
+        np.asarray(right, dtype=np.uint32).reshape(-1).tolist(),
+        np.asarray(parameter_ids, dtype=np.uint32).reshape(-1).tolist(),
+        int(loss),
+        np.asarray(parameters, dtype=np.float32).reshape(-1).tolist(),
+        np.asarray(first_moment, dtype=np.float32).reshape(-1).tolist(),
+        np.asarray(second_moment, dtype=np.float32).reshape(-1).tolist(),
+        int(step),
+        float(learning_rate),
+        float(weight_decay),
+        backend,
+    )
+    return (
+        float(output[0]),
+        np.asarray(output[1], dtype=np.float32),
+        np.asarray(output[2], dtype=np.float32),
+        np.asarray(output[3], dtype=np.float32),
+    )
+
+
+def train_tanh_mlp(
+    inputs: ArrayLike,
+    targets: ArrayLike,
+    *,
+    hidden_size: int,
+    epochs: int,
+    learning_rate: float,
+    parameters: ArrayLike,
+    backend: str | None = None,
+) -> NDArray[np.float32]:
+    """Train the fused single-hidden-layer tanh MLP kernel."""
+
+    function = getattr(_native, "accelerator_train_tanh_mlp_value", None)
+    if function is None:
+        raise RuntimeError("fused tanh MLP training requires the native extension")
+    output = function(
+        np.asarray(inputs, dtype=np.float32).tolist(),
+        np.asarray(targets, dtype=np.float32).reshape(-1).tolist(),
+        int(hidden_size),
+        int(epochs),
+        float(learning_rate),
+        np.asarray(parameters, dtype=np.float32).reshape(-1).tolist(),
+        backend,
+    )
+    return np.asarray(output, dtype=np.float32)
+
 def pairwise_squared_distances(
     left: ArrayLike,
     right: ArrayLike | None = None,
@@ -360,10 +530,15 @@ __all__ = [
     "available_backends",
     "capabilities",
     "csr_diffusion",
+    "csr_diffusion_backward",
     "csr_row_softmax",
+    "csr_row_softmax_backward",
     "dense_layer",
     "layer_norm",
     "pair_sigmoid_scores",
     "pairwise_squared_distances",
+    "scalar_graph",
+    "scalar_graph_train_step",
+    "train_tanh_mlp",
     "workload_decision",
 ]
