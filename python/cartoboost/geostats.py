@@ -31,6 +31,7 @@ from ._artifacts import (
     versioned_artifact_payload,
 )
 from ._native import NearestNeighborGPRegressor as _NativeNearestNeighborGPRegressor
+from ._native import geostats_deterministic_neighbors_value as _native_deterministic_neighbors
 from ._native import geostats_empirical_semivariogram_value as _native_empirical_semivariogram
 from ._native import geostats_fit_variogram_wls_value as _native_fit_variogram_wls
 
@@ -375,6 +376,28 @@ def binned_variogram(
         anisotropy_scaling=anisotropy_scaling,
         backend=backend,
     )
+
+
+def deterministic_neighbors(
+    coords: Iterable[Iterable[float]],
+    targets: Iterable[Iterable[float]],
+    *,
+    k: int,
+    backend: Backend | str = Backend.CPU,
+) -> list[list[int]]:
+    """Return deterministic nearest-neighbor indices for a batch of targets."""
+
+    if k < 0:
+        raise ValueError("k must be nonnegative")
+    return [
+        [int(index) for index in row]
+        for row in _native_deterministic_neighbors(
+            _as_coords(coords),
+            _as_coords(targets),
+            int(k),
+            str(backend),
+        )
+    ]
 
 
 def fit_variogram_wls(

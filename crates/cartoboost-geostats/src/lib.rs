@@ -800,6 +800,67 @@ pub fn deterministic_neighbors(coords: &[[f64; 2]], target: [f64; 2], k: usize) 
     distances.into_iter().take(k).map(|(idx, _)| idx).collect()
 }
 
+pub fn deterministic_neighbors_many_with_backend(
+    coords: &[[f64; 2]],
+    targets: &[[f64; 2]],
+    k: usize,
+    backend: Option<&str>,
+) -> Result<Vec<Vec<usize>>> {
+    if coords
+        .iter()
+        .chain(targets)
+        .flatten()
+        .any(|value| !value.is_finite())
+    {
+        return Err(GeostatsError::InvalidInput(
+            "neighbor coordinates and targets must be finite".to_string(),
+        ));
+    }
+    if targets.is_empty() {
+        return Ok(Vec::new());
+    }
+    if coords.is_empty() || k == 0 {
+        return Ok(vec![Vec::new(); targets.len()]);
+    }
+    let selection = select_backend_for(backend.or(Some("cpu")), BackendOperation::PairwiseDistance)
+        .map_err(|error| GeostatsError::InvalidInput(error.to_string()))?;
+    if selection.selected == "cpu"
+        || coords.len().saturating_mul(targets.len()) < GEOSTATS_PAIRWISE_DISPATCH_MIN_PAIRS
+    {
+        return Ok(targets
+            .par_iter()
+            .map(|target| deterministic_neighbors(coords, *target, k))
+            .collect());
+    }
+    let observations = coords
+        .iter()
+        .map(|coord| coord.iter().map(|value| *value as f32).collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    let queries = targets
+        .iter()
+        .map(|coord| coord.iter().map(|value| *value as f32).collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    backend_pairwise_squared_distances_f32(&selection, &queries, &observations)
+        .map_err(|error| GeostatsError::InvalidInput(error.to_string()))
+        .map(|rows| {
+            rows.into_par_iter()
+                .map(|row| {
+                    let mut ranked = row.into_iter().enumerate().collect::<Vec<_>>();
+                    ranked.sort_by(|left, right| {
+                        left.1
+                            .total_cmp(&right.1)
+                            .then_with(|| left.0.cmp(&right.0))
+                    });
+                    ranked
+                        .into_iter()
+                        .take(k.min(coords.len()))
+                        .map(|(index, _)| index)
+                        .collect()
+                })
+                .collect()
+        })
+}
+
 #[derive(Clone, Debug)]
 enum NeighborIndex {
     BruteForce,
@@ -1225,6 +1286,43 @@ mod tests {
             deterministic_neighbors(&transformed_coords, transform_point(target, config), 9);
         let prediction = model.predict(&[target]).expect("predict").remove(0);
         assert_eq!(prediction.neighbor_indices, expected);
+    }
+
+    #[test]
+    fn batched_deterministic_neighbors_match_single_query_cpu() {
+        let coords = vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [2.0, 2.0]];
+        let targets = vec![[0.2, 0.1], [1.5, 1.5]];
+        let actual =
+            deterministic_neighbors_many_with_backend(&coords, &targets, 3, Some("cpu")).unwrap();
+        let expected = targets
+            .iter()
+            .map(|target| deterministic_neighbors(&coords, *target, 3))
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn batched_deterministic_neighbors_support_every_pairwise_backend() {
+        let coords = (0..128)
+            .map(|index| [index as f64 * 0.25, (index % 11) as f64])
+            .collect::<Vec<_>>();
+        let targets = (0..128)
+            .map(|index| [index as f64 * 0.2, (index % 7) as f64 + 0.1])
+            .collect::<Vec<_>>();
+        let expected =
+            deterministic_neighbors_many_with_backend(&coords, &targets, 5, Some("cpu")).unwrap();
+        for backend in cartoboost_neural::available_backends() {
+            if !cartoboost_neural::backend_supports_operation(
+                &backend,
+                BackendOperation::PairwiseDistance,
+            ) {
+                continue;
+            }
+            let actual =
+                deterministic_neighbors_many_with_backend(&coords, &targets, 5, Some(&backend))
+                    .unwrap();
+            assert_eq!(actual, expected, "backend {backend}");
+        }
     }
 
     #[test]

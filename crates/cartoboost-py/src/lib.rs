@@ -11721,6 +11721,29 @@ fn geostats_empirical_semivariogram_value(
 }
 
 #[pyfunction]
+#[pyo3(signature = (coords, targets, k, backend=None))]
+fn geostats_deterministic_neighbors_value(
+    py: Python<'_>,
+    coords: PyReadonlyArray2<'_, f64>,
+    targets: PyReadonlyArray2<'_, f64>,
+    k: usize,
+    backend: Option<&str>,
+) -> PyResult<Vec<Vec<usize>>> {
+    let coords = coords_from_array(coords)?;
+    let targets = coords_from_array(targets)?;
+    let backend = backend.map(str::to_owned);
+    py.detach(move || {
+        cartoboost_geostats::deterministic_neighbors_many_with_backend(
+            &coords,
+            &targets,
+            k,
+            backend.as_deref(),
+        )
+        .map_err(to_py_geostats_error)
+    })
+}
+
+#[pyfunction]
 fn geostats_fit_variogram_wls_value(
     py: Python<'_>,
     bins: Vec<BTreeMap<String, f64>>,
@@ -12983,6 +13006,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(forecast_evaluate_metrics, m)?)?;
     m.add_function(wrap_pyfunction!(graph_st_available_backends_value, m)?)?;
     m.add_function(wrap_pyfunction!(geostats_empirical_semivariogram_value, m)?)?;
+    m.add_function(wrap_pyfunction!(geostats_deterministic_neighbors_value, m)?)?;
     m.add_function(wrap_pyfunction!(geostats_fit_variogram_wls_value, m)?)?;
     m.add_function(wrap_pyfunction!(deep_response_curve_fit_value, m)?)?;
     m.add_function(wrap_pyfunction!(deep_response_curve_predict_value, m)?)?;
