@@ -67,6 +67,7 @@ use cartoboost_core::geo::{
     normalize_h3_resolution, normalize_s2_id_text, normalize_s2_level, scaffold_h3_parent_id,
     validate_equal_row_count, validate_parent_levels, GeoGridKind,
 };
+use cartoboost_core::graph_regularization::{CsrGraph, GraphLaplacian, GraphSmoother};
 use cartoboost_core::loss::{HuberLossConfig, LogL2LossConfig, LossConfig, QuantileLossConfig};
 use cartoboost_core::manifest::model_manifest_json as core_model_manifest_json;
 use cartoboost_core::metrics::{
@@ -12321,6 +12322,33 @@ fn accelerator_csr_diffusion_value(
     })
 }
 
+#[pyfunction]
+#[pyo3(signature = (indptr, indices, weights, values, smoothing, iterations, backend=None))]
+#[allow(clippy::too_many_arguments)]
+fn accelerator_graph_smooth_value(
+    py: Python<'_>,
+    indptr: Vec<usize>,
+    indices: Vec<usize>,
+    weights: Vec<f64>,
+    values: Vec<f64>,
+    smoothing: f64,
+    iterations: usize,
+    backend: Option<&str>,
+) -> PyResult<Vec<f64>> {
+    let node_count = values.len();
+    let graph = CsrGraph::new(node_count, indptr, indices, weights).map_err(to_py_value_error)?;
+    let laplacian = GraphLaplacian::new(graph);
+    let backend = backend.map(str::to_owned);
+    py.detach(move || {
+        GraphSmoother {
+            lambda: smoothing,
+            iterations,
+        }
+        .smooth_with_backend(&values, &laplacian, backend.as_deref())
+        .map_err(to_py_value_error)
+    })
+}
+
 type CsrDiffusionGradients = (Vec<f32>, Vec<f32>);
 
 #[pyfunction]
@@ -13329,6 +13357,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(accelerator_dense_layer_value, m)?)?;
     m.add_function(wrap_pyfunction!(accelerator_affine_scores_value, m)?)?;
     m.add_function(wrap_pyfunction!(accelerator_csr_diffusion_value, m)?)?;
+    m.add_function(wrap_pyfunction!(accelerator_graph_smooth_value, m)?)?;
     m.add_function(wrap_pyfunction!(
         accelerator_csr_diffusion_backward_value,
         m

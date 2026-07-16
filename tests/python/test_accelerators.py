@@ -4,11 +4,13 @@ import numpy as np
 from cartoboost.accelerators import (
     adamw_step,
     affine_scores,
+    available_backends,
     csr_diffusion,
     csr_diffusion_backward,
     csr_row_softmax,
     csr_row_softmax_backward,
     dense_layer,
+    graph_smooth,
     layer_norm,
     pair_sigmoid_scores,
     pairwise_squared_distances,
@@ -72,6 +74,34 @@ def test_affine_and_csr_graph_kernels_are_public_to_python() -> None:
         backend="cpu",
     )
     np.testing.assert_allclose(diffused, [[6.0, 8.0], [5.0, 7.0]])
+
+
+def test_graph_smoothing_runs_on_every_available_csr_backend() -> None:
+    nodes = 4_096
+    indptr = np.arange(nodes + 1, dtype=np.uint32)
+    indices = (np.arange(nodes, dtype=np.uint32) + 1) % nodes
+    weights = np.ones(nodes, dtype=np.float32)
+    values = np.sin(np.arange(nodes) * 0.03)
+    expected = graph_smooth(
+        indptr,
+        indices,
+        weights,
+        values,
+        smoothing=0.75,
+        iterations=4,
+        backend="cpu",
+    )
+    for backend in available_backends("csr_diffusion"):
+        actual = graph_smooth(
+            indptr,
+            indices,
+            weights,
+            values,
+            smoothing=0.75,
+            iterations=4,
+            backend=backend,
+        )
+        np.testing.assert_allclose(actual, expected, rtol=1.0e-4, atol=1.0e-4)
 
 
 def test_optimizer_normalization_and_sparse_attention_are_public() -> None:

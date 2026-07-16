@@ -204,6 +204,82 @@ def csr_diffusion(
     )
     return np.asarray(output, dtype=np.float32).reshape(indptr_array.shape[0] - 1, channels)
 
+
+def graph_smooth(
+    indptr: ArrayLike,
+    indices: ArrayLike,
+    weights: ArrayLike,
+    values: ArrayLike,
+    *,
+    smoothing: float,
+    iterations: int,
+    backend: str | None = None,
+) -> NDArray[np.float64]:
+    """Smooth scalar node values with thresholded backend CSR iterations."""
+
+    indptr_array = np.asarray(indptr, dtype=np.uint64).reshape(-1)
+    indices_array = np.asarray(indices, dtype=np.uint64).reshape(-1)
+    weight_array = np.asarray(weights, dtype=np.float64).reshape(-1)
+    value_array = np.asarray(values, dtype=np.float64).reshape(-1)
+    if indptr_array.size != value_array.size + 1:
+        raise ValueError("indptr length must equal node count plus one")
+    if indices_array.size != weight_array.size:
+        raise ValueError("indices and weights must have the same length")
+    if (
+        value_array.size == 0
+        or indptr_array[0] != 0
+        or indptr_array[-1] != indices_array.size
+        or np.any(indptr_array[1:] < indptr_array[:-1])
+        or np.any(indices_array >= value_array.size)
+        or np.any(~np.isfinite(weight_array))
+        or np.any(weight_array < 0.0)
+        or np.any(~np.isfinite(value_array))
+    ):
+        raise ValueError("graph smoothing requires valid finite non-negative CSR inputs")
+    if smoothing < 0.0 or not np.isfinite(smoothing):
+        raise ValueError("smoothing must be finite and non-negative")
+    if iterations < 0:
+        raise ValueError("iterations must be non-negative")
+    function = getattr(_native, "accelerator_graph_smooth_value", None)
+    if function is None:
+        if backend not in {None, "cpu"}:
+            raise RuntimeError("native accelerator support is unavailable")
+        current = value_array.copy()
+        degree = np.asarray(
+            [
+                np.sum(weight_array[int(indptr_array[row]) : int(indptr_array[row + 1])])
+                for row in range(value_array.size)
+            ],
+            dtype=np.float64,
+        )
+        for _ in range(iterations):
+            neighbor_sum = csr_diffusion(
+                indptr_array,
+                indices_array,
+                weight_array,
+                current[:, None],
+                channels=1,
+                backend="cpu",
+            ).reshape(-1)
+            current = np.where(
+                degree > 0.0,
+                (value_array + smoothing * neighbor_sum) / (1.0 + smoothing * degree),
+                current,
+            )
+        return current
+    return np.asarray(
+        function(
+            indptr_array.tolist(),
+            indices_array.tolist(),
+            weight_array.tolist(),
+            value_array.tolist(),
+            float(smoothing),
+            int(iterations),
+            backend,
+        ),
+        dtype=np.float64,
+    )
+
 def csr_diffusion_backward(
     indptr: ArrayLike,
     indices: ArrayLike,
@@ -534,6 +610,7 @@ __all__ = [
     "csr_row_softmax",
     "csr_row_softmax_backward",
     "dense_layer",
+    "graph_smooth",
     "layer_norm",
     "pair_sigmoid_scores",
     "pairwise_squared_distances",

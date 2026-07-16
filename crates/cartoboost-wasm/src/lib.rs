@@ -1009,6 +1009,8 @@ struct BrowserGraphForecastOptions {
     hidden_size: usize,
     #[serde(default = "default_graph_epochs")]
     epochs: usize,
+    #[serde(default = "default_graph_batch_size")]
+    batch_size: usize,
     #[serde(default = "default_graph_learning_rate")]
     learning_rate: f64,
     #[serde(default)]
@@ -1041,6 +1043,7 @@ impl Default for BrowserGraphForecastOptions {
             diffusion_steps: default_graph_diffusion_steps(),
             hidden_size: default_graph_hidden_size(),
             epochs: default_graph_epochs(),
+            batch_size: default_graph_batch_size(),
             learning_rate: default_graph_learning_rate(),
             attention_heads: None,
             graph_order: None,
@@ -1428,6 +1431,95 @@ pub async fn webgpu_csr_diffusion_wasm(
     webgpu_csr_diffusion_f32_async(&indptr, &indices, &weights, channels, &values)
         .await
         .map_err(|error| JsValue::from_str(&error.to_string()))
+}
+
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+#[wasm_bindgen(js_name = webgpuGraphSmooth)]
+pub async fn webgpu_graph_smooth_wasm(
+    indptr: Vec<u32>,
+    indices: Vec<u32>,
+    weights: Vec<f32>,
+    values: Vec<f64>,
+    smoothing: f64,
+    iterations: usize,
+) -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    let nodes = values.len();
+    if nodes == 0
+        || indptr.len() != nodes + 1
+        || indptr.first().copied() != Some(0)
+        || indptr.last().copied() != Some(indices.len() as u32)
+        || indices.len() != weights.len()
+        || indptr.windows(2).any(|window| window[1] < window[0])
+        || indices.iter().any(|index| *index as usize >= nodes)
+        || weights
+            .iter()
+            .any(|weight| !weight.is_finite() || *weight < 0.0)
+        || values.iter().any(|value| !value.is_finite())
+        || !smoothing.is_finite()
+        || smoothing < 0.0
+    {
+        return Err(JsValue::from_str(
+            "graph smoothing requires valid finite non-negative CSR inputs",
+        ));
+    }
+    let degrees = (0..nodes)
+        .map(|node| {
+            weights[indptr[node] as usize..indptr[node + 1] as usize]
+                .iter()
+                .map(|weight| f64::from(*weight))
+                .sum::<f64>()
+        })
+        .collect::<Vec<_>>();
+    let accelerated = indices.len().saturating_mul(iterations) >= 16_384;
+    let original = values;
+    let mut current = original.clone();
+    for _ in 0..iterations {
+        let neighbor_sums = if accelerated {
+            let current_f32 = current
+                .iter()
+                .map(|value| *value as f32)
+                .collect::<Vec<_>>();
+            webgpu_csr_diffusion_f32_async(&indptr, &indices, &weights, 1, &current_f32)
+                .await
+                .map_err(|error| JsValue::from_str(&error.to_string()))?
+                .into_iter()
+                .map(f64::from)
+                .collect::<Vec<_>>()
+        } else {
+            (0..nodes)
+                .map(|node| {
+                    (indptr[node] as usize..indptr[node + 1] as usize)
+                        .map(|offset| {
+                            f64::from(weights[offset]) * current[indices[offset] as usize]
+                        })
+                        .sum::<f64>()
+                })
+                .collect::<Vec<_>>()
+        };
+        current = (0..nodes)
+            .map(|node| {
+                if degrees[node] <= 0.0 {
+                    current[node]
+                } else {
+                    (original[node] + smoothing * neighbor_sums[node])
+                        / (1.0 + smoothing * degrees[node])
+                }
+            })
+            .collect();
+    }
+    serialize_json_response(
+        &json!({
+            "values": current,
+            "backend": {
+                "requested": "webgpu",
+                "selected": if accelerated { "webgpu" } else { "cpu" },
+                "accelerated": accelerated,
+                "operation": "csr_diffusion",
+            }
+        }),
+        "WebGPU graph smoothing",
+    )
 }
 
 #[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
@@ -3005,6 +3097,10 @@ fn default_graph_epochs() -> usize {
     160
 }
 
+fn default_graph_batch_size() -> usize {
+    32
+}
+
 fn default_graph_learning_rate() -> f64 {
     0.03
 }
@@ -4255,6 +4351,7 @@ fn run_graph_forecast_request(
             epochs: request.options.epochs,
             learning_rate: request.options.learning_rate,
             weight_decay: request.options.weight_decay.unwrap_or(1e-5),
+            batch_size: request.options.batch_size,
             backend: graph_st_select_backend_for_operations(
                 Some(&request.options.backend),
                 &[

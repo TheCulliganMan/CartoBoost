@@ -466,6 +466,7 @@ fn run_graph_forecast_request(
             epochs: request.options.epochs,
             learning_rate: request.options.learning_rate,
             weight_decay: request.options.weight_decay.unwrap_or(1e-5),
+            batch_size: request.options.batch_size,
             backend: graph_st_select_backend(Some(&request.options.backend))
                 .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?,
         };
