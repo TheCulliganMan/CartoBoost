@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 pub const RANKER_MODEL_ARTIFACT_VERSION: u32 = 1;
+const RANKER_DENSE_DISPATCH_MIN_OPS: usize = 16_384;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RankingObjective {
@@ -268,10 +269,13 @@ impl RankerModel {
         self.validate_dataset(x)?;
         let selection = select_backend_for(backend, BackendOperation::Dense)
             .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
-        if selection.selected == "cpu" || self.trees.is_empty() {
+        let width = self.trees.len() + 1;
+        if selection.selected == "cpu"
+            || self.trees.is_empty()
+            || x.n_rows().saturating_mul(width) < RANKER_DENSE_DISPATCH_MIN_OPS
+        {
             return self.predict_cpu(x);
         }
-        let width = self.trees.len() + 1;
         let additive = (0..x.n_rows())
             .into_par_iter()
             .map(|row| {

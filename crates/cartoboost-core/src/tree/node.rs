@@ -13,6 +13,7 @@ use serde_json::{json, Value};
 use std::path::Path;
 
 pub const MODEL_ARTIFACT_VERSION: u32 = 1;
+const TREE_DENSE_DISPATCH_MIN_OPS: usize = 16_384;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Model {
@@ -338,11 +339,14 @@ impl Model {
     pub fn try_predict_with_backend(&self, x: &Dataset, backend: Option<&str>) -> Result<Vec<f64>> {
         let selection = select_backend_for(backend, BackendOperation::Dense)
             .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
-        if selection.selected == "cpu" || self.trees.is_empty() {
+        let width = self.trees.len() + 1;
+        if selection.selected == "cpu"
+            || self.trees.is_empty()
+            || x.n_rows().saturating_mul(width) < TREE_DENSE_DISPATCH_MIN_OPS
+        {
             return self.try_predict_cpu(x);
         }
         let additive = self.try_predict_additive(x)?;
-        let width = self.trees.len() + 1;
         let input = additive
             .into_iter()
             .map(|row| {

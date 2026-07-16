@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 pub const CLASSIFIER_MODEL_ARTIFACT_VERSION: u32 = 1;
+const CLASSIFIER_DENSE_DISPATCH_MIN_OPS: usize = 16_384;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ClassificationObjective {
@@ -307,11 +308,15 @@ impl ClassifierModel {
         self.validate_dataset(x)?;
         let selection = select_backend_for(backend, BackendOperation::Dense)
             .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
-        if selection.selected == "cpu" || self.trees.is_empty() {
-            return self.decision_function(x);
-        }
         let outputs = self.output_dimension();
         let width = outputs * (self.trees.len() + 1);
+        if selection.selected == "cpu"
+            || self.trees.is_empty()
+            || x.n_rows().saturating_mul(width).saturating_mul(outputs)
+                < CLASSIFIER_DENSE_DISPATCH_MIN_OPS
+        {
+            return self.decision_function(x);
+        }
         let input = (0..x.n_rows())
             .into_par_iter()
             .map(|row| {
