@@ -9,6 +9,7 @@ use std::path::Path;
 use thiserror::Error;
 
 const SPATIAL_SPARSE_DISPATCH_MIN_EDGES: usize = 16_384;
+const SPATIAL_DENSE_DISPATCH_MIN_OPS: usize = 16_384;
 
 #[derive(Debug, Error)]
 pub enum SpatialEconError {
@@ -1046,7 +1047,9 @@ fn sparse_matrix_lag_with_backend(
 ) -> Result<Vec<Vec<f64>>> {
     validate_matrix(x, weights.n_nodes, "X")?;
     let cols = x[0].len();
-    if backend.selected != "cpu" {
+    if backend.selected != "cpu"
+        && weights.indices.len().saturating_mul(cols) >= SPATIAL_SPARSE_DISPATCH_MIN_EDGES
+    {
         let indptr = weights
             .indptr
             .iter()
@@ -1170,10 +1173,12 @@ fn ols_params_with_backend(
     y: &[f64],
     backend: &BackendSelection,
 ) -> Result<Vec<f64>> {
-    if backend.selected == "cpu" {
+    let cols = x[0].len();
+    if backend.selected == "cpu"
+        || x.len().saturating_mul(cols).saturating_mul(cols) < SPATIAL_DENSE_DISPATCH_MIN_OPS
+    {
         return ols_params(x, y);
     }
-    let cols = x[0].len();
     let transposed = (0..cols)
         .map(|col| x.iter().map(|row| row[col] as f32).collect::<Vec<_>>())
         .collect::<Vec<_>>();
@@ -1550,8 +1555,10 @@ mod tests {
 
     #[test]
     fn dense_regression_training_runs_on_every_available_backend() {
-        let weights = ring_weights(12);
-        let x = fixture_x();
+        let weights = ring_weights(4_096);
+        let x = (0..4_096)
+            .map(|idx| vec![idx as f64 / 512.0])
+            .collect::<Vec<_>>();
         let y = x
             .iter()
             .enumerate()

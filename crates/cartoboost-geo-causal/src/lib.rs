@@ -5,6 +5,9 @@ use cartoboost_neural::{
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+const GEO_CAUSAL_DENSE_DISPATCH_MIN_OPS: usize = 16_384;
+const GEO_CAUSAL_PAIRWISE_DISPATCH_MIN_PAIRS: usize = 16_384;
+
 #[derive(Debug, thiserror::Error)]
 pub enum GeoCausalError {
     #[error("{0}")]
@@ -1003,10 +1006,13 @@ fn ridge_fit_indexed_with_backend(
     indices: &[usize],
     backend: &BackendSelection,
 ) -> Result<Vec<f64>> {
-    if backend.selected == "cpu" {
+    let cols = features[0].len() + 1;
+    if backend.selected == "cpu"
+        || indices.len().saturating_mul(cols).saturating_mul(cols)
+            < GEO_CAUSAL_DENSE_DISPATCH_MIN_OPS
+    {
         return Ok(ridge_fit_indexed(features, outcomes, indices));
     }
-    let cols = features[0].len() + 1;
     let design = indices
         .iter()
         .map(|&idx| {
@@ -1136,10 +1142,13 @@ fn mean_region_distance_with_backend(
     regions: &[String],
     backend: &BackendSelection,
 ) -> Result<f64> {
-    if backend.selected == "cpu" {
+    let means = region_feature_means(features, regions, features[0].len());
+    if backend.selected == "cpu"
+        || means.len().saturating_mul(features[0].len()) < GEO_CAUSAL_PAIRWISE_DISPATCH_MIN_PAIRS
+    {
         return Ok(mean_region_distance(features, regions));
     }
-    let means = region_feature_means(features, regions, features[0].len())
+    let means = means
         .into_values()
         .map(|row| row.into_iter().map(|value| value as f32).collect())
         .collect::<Vec<Vec<f32>>>();

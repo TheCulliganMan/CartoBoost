@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 const PROB_PAIRWISE_DISPATCH_MIN_PAIRS: usize = 16_384;
+const PROB_DENSE_DISPATCH_MIN_OPS: usize = 16_384;
+const PROB_SPARSE_DISPATCH_MIN_OPS: usize = 16_384;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CalibrationMetadata {
@@ -1184,10 +1186,12 @@ fn ridge_fit_with_backend(
     ridge: f64,
     backend: &BackendSelection,
 ) -> Result<Vec<f64>> {
-    if backend.selected == "cpu" {
+    let cols = features[0].len() + 1;
+    if backend.selected == "cpu"
+        || features.len().saturating_mul(cols).saturating_mul(cols) < PROB_DENSE_DISPATCH_MIN_OPS
+    {
         return Ok(ridge_fit(features, target, ridge));
     }
-    let cols = features[0].len() + 1;
     let augmented = features
         .iter()
         .map(|row| {
@@ -1289,7 +1293,12 @@ fn diffuse_residual_field_with_backend(
     node_count: usize,
     backend: &BackendSelection,
 ) -> Result<Vec<Vec<f64>>> {
-    if backend.selected != "cpu" {
+    if backend.selected != "cpu"
+        && edges
+            .len()
+            .saturating_mul(residual_field.first().map_or(0, Vec::len))
+            >= PROB_SPARSE_DISPATCH_MIN_OPS
+    {
         let mut inbound_weight = vec![0.0; node_count];
         let mut rows = vec![Vec::<(u32, f32)>::new(); node_count];
         for edge in edges {
@@ -1635,14 +1644,16 @@ mod tests {
 
     #[test]
     fn conditional_flow_training_runs_on_every_available_backend() {
-        let hidden = vec![
-            vec![0.0, 1.0],
-            vec![1.0, 0.5],
-            vec![2.0, -0.5],
-            vec![3.0, 0.25],
-            vec![4.0, -1.0],
-        ];
-        let residuals = vec![0.2, 0.8, 1.5, 2.9, 3.6];
+        let hidden = (0..2_048)
+            .map(|idx| {
+                let x = idx as f64 / 128.0;
+                vec![x, (x * 0.7).sin()]
+            })
+            .collect::<Vec<_>>();
+        let residuals = hidden
+            .iter()
+            .map(|row| 0.2 + 0.8 * row[0] - 0.35 * row[1])
+            .collect::<Vec<_>>();
         let expected = ConditionalFlowDistributionHead::fit_with_backend(
             &hidden,
             &residuals,

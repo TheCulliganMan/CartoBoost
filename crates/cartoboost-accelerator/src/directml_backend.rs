@@ -458,6 +458,64 @@ fn directml_gemm(
     output_columns: usize,
     bias: &[f32],
 ) -> Result<Vec<f32>> {
+    if bias.len() != output_columns {
+        return Err(AcceleratorError::InvalidArgument(
+            "DirectML GEMM bias width must match output columns".to_string(),
+        ));
+    }
+    // The Windows inbox DirectML stack can remove the device for otherwise
+    // valid GEMMs once either matrix dimension grows beyond a small tile.
+    // Tiling also bounds transient resource sizes and gives every supported
+    // adapter the same dense contract.
+    const MAX_GEMM_TILE: usize = 32;
+    let mut output = vec![0.0_f32; rows * output_columns];
+    for row_start in (0..rows).step_by(MAX_GEMM_TILE) {
+        let tile_rows = (rows - row_start).min(MAX_GEMM_TILE);
+        for col_start in (0..cols).step_by(MAX_GEMM_TILE) {
+            let tile_cols = (cols - col_start).min(MAX_GEMM_TILE);
+            let mut left_tile = Vec::with_capacity(tile_rows * tile_cols);
+            for row in row_start..row_start + tile_rows {
+                let start = row * cols + col_start;
+                left_tile.extend_from_slice(&left[start..start + tile_cols]);
+            }
+            let right_start = col_start * output_columns;
+            let right_end = (col_start + tile_cols) * output_columns;
+            let partial = directml_gemm_tile(
+                &left_tile,
+                tile_rows,
+                tile_cols,
+                &right[right_start..right_end],
+                output_columns,
+            )
+            .map_err(|error| {
+                AcceleratorError::InvalidArgument(format!(
+                    "DirectML GEMM tile rows={tile_rows}, cols={tile_cols}, outputs={output_columns}, row_start={row_start}, col_start={col_start} failed: {error}"
+                ))
+            })?;
+            for tile_row in 0..tile_rows {
+                let output_start = (row_start + tile_row) * output_columns;
+                let partial_start = tile_row * output_columns;
+                for output_col in 0..output_columns {
+                    output[output_start + output_col] += partial[partial_start + output_col];
+                }
+            }
+        }
+    }
+    for row in output.chunks_exact_mut(output_columns) {
+        for (value, bias) in row.iter_mut().zip(bias) {
+            *value += bias;
+        }
+    }
+    Ok(output)
+}
+
+fn directml_gemm_tile(
+    left: &[f32],
+    rows: usize,
+    cols: usize,
+    right: &[f32],
+    output_columns: usize,
+) -> Result<Vec<f32>> {
     let left_tensor = TensorDescription::f32(&[1, 1, rows as u32, cols as u32]);
     let right_tensor = TensorDescription::f32(&[1, 1, cols as u32, output_columns as u32]);
     let bias_tensor = TensorDescription::f32_with_strides(
@@ -480,7 +538,8 @@ fn directml_gemm(
         Type: DML_OPERATOR_GEMM,
         Desc: (&gemm as *const DML_GEMM_OPERATOR_DESC).cast(),
     };
-    unsafe { execute_operator(&operator, &[left, right, bias], rows * output_columns) }
+    let zero_bias = vec![0.0; output_columns];
+    unsafe { execute_operator(&operator, &[left, right, &zero_bias], rows * output_columns) }
         .map_err(|error| as_neural("GEMM", error))
 }
 
