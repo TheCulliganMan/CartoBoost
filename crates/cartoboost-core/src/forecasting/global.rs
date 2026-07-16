@@ -13,6 +13,8 @@ use rayon::prelude::*;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
+type FutureCovariates = BTreeMap<(String, chrono::NaiveDateTime), BTreeMap<String, f64>>;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum GlobalForecastTargetMode {
     Level,
@@ -129,10 +131,14 @@ impl CartoBoostLagForecaster {
     pub fn predict_with_known_future_covariates(
         &self,
         horizon: usize,
-        known_future_covariates: &BTreeMap<(String, chrono::NaiveDateTime), BTreeMap<String, f64>>,
+        known_future_covariates: &FutureCovariates,
     ) -> Result<ForecastResult> {
         validate_horizon(horizon)?;
         let fitted = self.fitted.as_ref().ok_or_else(not_fitted)?;
+        if self.backend.selected != "cpu" {
+            return self
+                .predict_accelerated_with_covariates(horizon, Some(known_future_covariates));
+        }
         let predictions = fitted
             .history_by_series
             .iter()
@@ -370,6 +376,14 @@ impl Forecaster for CartoBoostLagForecaster {
 
 impl CartoBoostLagForecaster {
     fn predict_accelerated(&self, horizon: usize) -> Result<ForecastResult> {
+        self.predict_accelerated_with_covariates(horizon, None)
+    }
+
+    fn predict_accelerated_with_covariates(
+        &self,
+        horizon: usize,
+        known_future_covariates: Option<&FutureCovariates>,
+    ) -> Result<ForecastResult> {
         let fitted = self.fitted.as_ref().ok_or_else(not_fitted)?;
         let mut series = fitted
             .history_by_series
@@ -393,9 +407,16 @@ impl CartoBoostLagForecaster {
                     .frame
                     .frequency()
                     .advance(base_timestamps[index], step)?;
+                let future_covariates = known_future_covariates
+                    .and_then(|values| values.get(&(series_id.clone(), timestamp)));
                 feature_rows.push(
                     self.lag_builder
-                        .transform_next_sorted_prior(series_id, history, timestamp)?,
+                        .transform_next_sorted_prior_with_covariates(
+                            series_id,
+                            history,
+                            timestamp,
+                            future_covariates,
+                        )?,
                 );
                 timestamps.push(timestamp);
             }
@@ -434,9 +455,10 @@ impl CartoBoostLagForecaster {
                     model: self.model_name().to_string(),
                     mean,
                 });
-                let covariates = history
-                    .last()
-                    .map(|row| row.covariates.clone())
+                let covariates = known_future_covariates
+                    .and_then(|values| values.get(&(series_id.clone(), timestamp)))
+                    .cloned()
+                    .or_else(|| history.last().map(|row| row.covariates.clone()))
                     .unwrap_or_default();
                 history.push(ForecastRow::with_covariates(
                     series_id.clone(),
@@ -661,10 +683,14 @@ mod tests {
                 .into_iter()
                 .flat_map(|series_id| {
                     (1..=14).map(move |day| {
-                        ForecastRow::new(
+                        ForecastRow::with_covariates(
                             series_id,
                             ts(day),
                             f64::from(day) + if series_id == "lane-a" { 2.0 } else { 7.0 },
+                            BTreeMap::from([(
+                                "airport_event".to_string(),
+                                if day % 3 == 0 { 1.0 } else { 0.0 },
+                            )]),
                         )
                     })
                 })
@@ -675,6 +701,7 @@ mod tests {
         let lag = LagFeatureConfig {
             lags: vec![1, 2],
             rolling_mean_windows: vec![2],
+            covariate_features: vec!["airport_event".to_string()],
             ..LagFeatureConfig::default()
         };
         let booster = BoosterConfig {
@@ -693,6 +720,23 @@ mod tests {
         .unwrap();
         cpu.fit(&frame).unwrap();
         let expected = cpu.predict(3).unwrap();
+        let known_future = ["lane-a", "lane-b"]
+            .into_iter()
+            .flat_map(|series_id| {
+                (15..=17).map(move |day| {
+                    (
+                        (series_id.to_string(), ts(day)),
+                        BTreeMap::from([(
+                            "airport_event".to_string(),
+                            if day % 2 == 0 { 1.0 } else { 0.0 },
+                        )]),
+                    )
+                })
+            })
+            .collect::<BTreeMap<_, _>>();
+        let expected_with_covariates = cpu
+            .predict_with_known_future_covariates(3, &known_future)
+            .unwrap();
         for backend in cartoboost_accelerator::available_backends()
             .into_iter()
             .filter(|backend| backend != "cpu")
@@ -708,6 +752,18 @@ mod tests {
             accelerated.fit(&frame).unwrap();
             let actual = accelerated.predict(3).unwrap();
             for (expected, actual) in expected.predictions().iter().zip(actual.predictions()) {
+                assert_eq!(expected.series_id, actual.series_id);
+                assert_eq!(expected.timestamp, actual.timestamp);
+                assert!((expected.mean - actual.mean).abs() < 1.0e-4, "{backend}");
+            }
+            let actual_with_covariates = accelerated
+                .predict_with_known_future_covariates(3, &known_future)
+                .unwrap();
+            for (expected, actual) in expected_with_covariates
+                .predictions()
+                .iter()
+                .zip(actual_with_covariates.predictions())
+            {
                 assert_eq!(expected.series_id, actual.series_id);
                 assert_eq!(expected.timestamp, actual.timestamp);
                 assert!((expected.mean - actual.mean).abs() < 1.0e-4, "{backend}");
