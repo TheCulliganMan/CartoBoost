@@ -6544,6 +6544,11 @@ struct NativeCartoBoostClassifier {
     fuzzy_bandwidth: f64,
     fuzzy_kernel: String,
     n_threads: Option<usize>,
+    graph_indptr: Option<Vec<usize>>,
+    graph_indices: Option<Vec<usize>>,
+    graph_weights: Option<Vec<f64>>,
+    graph_smoothing: f64,
+    graph_smoothing_iterations: usize,
     model: Option<ClassifierModel>,
 }
 
@@ -6568,6 +6573,11 @@ impl NativeCartoBoostClassifier {
         fuzzy_bandwidth=0.0,
         fuzzy_kernel="linear",
         n_threads=None,
+        graph_indptr=None,
+        graph_indices=None,
+        graph_weights=None,
+        graph_smoothing=0.0,
+        graph_smoothing_iterations=4,
         backend="cpu"
     ))]
     #[allow(clippy::too_many_arguments)]
@@ -6589,6 +6599,11 @@ impl NativeCartoBoostClassifier {
         fuzzy_bandwidth: f64,
         fuzzy_kernel: &str,
         n_threads: Option<usize>,
+        graph_indptr: Option<Vec<usize>>,
+        graph_indices: Option<Vec<usize>>,
+        graph_weights: Option<Vec<f64>>,
+        graph_smoothing: f64,
+        graph_smoothing_iterations: usize,
         backend: &str,
     ) -> PyResult<Self> {
         validate_n_threads(n_threads)?;
@@ -6628,6 +6643,13 @@ impl NativeCartoBoostClassifier {
         parse_splitters(&splitters)?;
         parse_leaf_predictor(leaf_predictor)?;
         parse_fuzzy_kernel(fuzzy_kernel)?;
+        validate_graph_leaf_smoothing(
+            graph_indptr.as_deref(),
+            graph_indices.as_deref(),
+            graph_weights.as_deref(),
+            graph_smoothing,
+            graph_smoothing_iterations,
+        )?;
 
         Ok(Self {
             backend: backend.to_string(),
@@ -6648,6 +6670,11 @@ impl NativeCartoBoostClassifier {
             fuzzy_bandwidth,
             fuzzy_kernel: fuzzy_kernel.to_string(),
             n_threads,
+            graph_indptr,
+            graph_indices,
+            graph_weights,
+            graph_smoothing,
+            graph_smoothing_iterations,
             model: None,
         })
     }
@@ -6885,6 +6912,31 @@ impl NativeCartoBoostClassifier {
     }
 
     #[getter]
+    fn graph_indptr(&self) -> Option<Vec<usize>> {
+        self.graph_indptr.clone()
+    }
+
+    #[getter]
+    fn graph_indices(&self) -> Option<Vec<usize>> {
+        self.graph_indices.clone()
+    }
+
+    #[getter]
+    fn graph_weights(&self) -> Option<Vec<f64>> {
+        self.graph_weights.clone()
+    }
+
+    #[getter]
+    fn graph_smoothing(&self) -> f64 {
+        self.graph_smoothing
+    }
+
+    #[getter]
+    fn graph_smoothing_iterations(&self) -> usize {
+        self.graph_smoothing_iterations
+    }
+
+    #[getter]
     fn splitters(&self) -> Vec<String> {
         self.splitters.clone()
     }
@@ -6973,6 +7025,13 @@ impl NativeCartoBoostClassifier {
             objective: parse_classification_objective(&self.objective, self.class_count)?,
             class_count: self.class_count,
             class_weights: self.class_weights.clone(),
+            graph_leaf_smoothing: graph_leaf_smoothing_from_parts(
+                self.graph_indptr.as_deref(),
+                self.graph_indices.as_deref(),
+                self.graph_weights.as_deref(),
+                self.graph_smoothing,
+                self.graph_smoothing_iterations,
+            )?,
         })
     }
 
@@ -6991,7 +7050,13 @@ impl NativeCartoBoostClassifier {
             fuzzy_bandwidth,
             fuzzy_kernel,
             class_weights,
+            graph_indptr,
+            graph_indices,
+            graph_weights,
+            graph_smoothing,
+            graph_smoothing_iterations,
         ) = if let Some(config) = training_config {
+            let graph = graph_smoothing_parts(config.graph_leaf_smoothing.as_ref());
             (
                 config.max_depth,
                 config.min_samples_leaf,
@@ -7005,6 +7070,11 @@ impl NativeCartoBoostClassifier {
                 config.fuzzy_bandwidth,
                 fuzzy_kernel_name(config.fuzzy_kernel).to_string(),
                 config.class_weights,
+                graph.0,
+                graph.1,
+                graph.2,
+                graph.3,
+                graph.4,
             )
         } else {
             (
@@ -7020,6 +7090,11 @@ impl NativeCartoBoostClassifier {
                 0.0,
                 "linear".to_string(),
                 Vec::new(),
+                None,
+                None,
+                None,
+                0.0,
+                4,
             )
         };
         let backend = model
@@ -7047,6 +7122,11 @@ impl NativeCartoBoostClassifier {
             fuzzy_bandwidth,
             fuzzy_kernel,
             n_threads: None,
+            graph_indptr,
+            graph_indices,
+            graph_weights,
+            graph_smoothing,
+            graph_smoothing_iterations,
             model: Some(model),
         })
     }
@@ -7071,6 +7151,11 @@ struct NativeCartoBoostRanker {
     fuzzy_bandwidth: f64,
     fuzzy_kernel: String,
     n_threads: Option<usize>,
+    graph_indptr: Option<Vec<usize>>,
+    graph_indices: Option<Vec<usize>>,
+    graph_weights: Option<Vec<f64>>,
+    graph_smoothing: f64,
+    graph_smoothing_iterations: usize,
     model: Option<RankerModel>,
 }
 
@@ -7093,6 +7178,11 @@ impl NativeCartoBoostRanker {
         fuzzy_bandwidth=0.0,
         fuzzy_kernel="linear",
         n_threads=None,
+        graph_indptr=None,
+        graph_indices=None,
+        graph_weights=None,
+        graph_smoothing=0.0,
+        graph_smoothing_iterations=4,
         backend="cpu"
     ))]
     #[allow(clippy::too_many_arguments)]
@@ -7112,6 +7202,11 @@ impl NativeCartoBoostRanker {
         fuzzy_bandwidth: f64,
         fuzzy_kernel: &str,
         n_threads: Option<usize>,
+        graph_indptr: Option<Vec<usize>>,
+        graph_indices: Option<Vec<usize>>,
+        graph_weights: Option<Vec<f64>>,
+        graph_smoothing: f64,
+        graph_smoothing_iterations: usize,
         backend: &str,
     ) -> PyResult<Self> {
         validate_n_threads(n_threads)?;
@@ -7133,6 +7228,13 @@ impl NativeCartoBoostRanker {
         parse_splitters(&splitters)?;
         parse_leaf_predictor(leaf_predictor)?;
         parse_fuzzy_kernel(fuzzy_kernel)?;
+        validate_graph_leaf_smoothing(
+            graph_indptr.as_deref(),
+            graph_indices.as_deref(),
+            graph_weights.as_deref(),
+            graph_smoothing,
+            graph_smoothing_iterations,
+        )?;
 
         Ok(Self {
             backend: backend.to_string(),
@@ -7151,6 +7253,11 @@ impl NativeCartoBoostRanker {
             fuzzy_bandwidth,
             fuzzy_kernel: fuzzy_kernel.to_string(),
             n_threads,
+            graph_indptr,
+            graph_indices,
+            graph_weights,
+            graph_smoothing,
+            graph_smoothing_iterations,
             model: None,
         })
     }
@@ -7393,6 +7500,31 @@ impl NativeCartoBoostRanker {
     }
 
     #[getter]
+    fn graph_indptr(&self) -> Option<Vec<usize>> {
+        self.graph_indptr.clone()
+    }
+
+    #[getter]
+    fn graph_indices(&self) -> Option<Vec<usize>> {
+        self.graph_indices.clone()
+    }
+
+    #[getter]
+    fn graph_weights(&self) -> Option<Vec<f64>> {
+        self.graph_weights.clone()
+    }
+
+    #[getter]
+    fn graph_smoothing(&self) -> f64 {
+        self.graph_smoothing
+    }
+
+    #[getter]
+    fn graph_smoothing_iterations(&self) -> usize {
+        self.graph_smoothing_iterations
+    }
+
+    #[getter]
     fn splitters(&self) -> Vec<String> {
         self.splitters.clone()
     }
@@ -7471,6 +7603,13 @@ impl NativeCartoBoostRanker {
             fuzzy_bandwidth: self.fuzzy_bandwidth,
             fuzzy_kernel: parse_fuzzy_kernel(&self.fuzzy_kernel)?,
             objective: parse_ranking_objective(&self.objective)?,
+            graph_leaf_smoothing: graph_leaf_smoothing_from_parts(
+                self.graph_indptr.as_deref(),
+                self.graph_indices.as_deref(),
+                self.graph_weights.as_deref(),
+                self.graph_smoothing,
+                self.graph_smoothing_iterations,
+            )?,
         })
     }
 
@@ -7489,7 +7628,13 @@ impl NativeCartoBoostRanker {
             fuzzy_bandwidth,
             fuzzy_kernel,
             objective,
+            graph_indptr,
+            graph_indices,
+            graph_weights,
+            graph_smoothing,
+            graph_smoothing_iterations,
         ) = if let Some(config) = training_config {
+            let graph = graph_smoothing_parts(config.graph_leaf_smoothing.as_ref());
             (
                 config.max_depth,
                 config.min_samples_leaf,
@@ -7503,6 +7648,11 @@ impl NativeCartoBoostRanker {
                 config.fuzzy_bandwidth,
                 fuzzy_kernel_name(config.fuzzy_kernel).to_string(),
                 ranking_objective_name(config.objective).to_string(),
+                graph.0,
+                graph.1,
+                graph.2,
+                graph.3,
+                graph.4,
             )
         } else {
             (
@@ -7518,6 +7668,11 @@ impl NativeCartoBoostRanker {
                 0.0,
                 "linear".to_string(),
                 ranking_objective_name(model.objective).to_string(),
+                None,
+                None,
+                None,
+                0.0,
+                4,
             )
         };
         let backend = model
@@ -7543,6 +7698,11 @@ impl NativeCartoBoostRanker {
             fuzzy_bandwidth,
             fuzzy_kernel,
             n_threads: None,
+            graph_indptr,
+            graph_indices,
+            graph_weights,
+            graph_smoothing,
+            graph_smoothing_iterations,
             model: Some(model),
         })
     }
@@ -11449,6 +11609,54 @@ fn validate_graph_leaf_smoothing(
             "graph_indptr, graph_indices, and graph_weights must be provided together",
         )),
     }
+}
+
+fn graph_leaf_smoothing_from_parts(
+    indptr: Option<&[usize]>,
+    indices: Option<&[usize]>,
+    weights: Option<&[f64]>,
+    lambda: f64,
+    iterations: usize,
+) -> PyResult<Option<GraphLeafSmoothing>> {
+    validate_graph_leaf_smoothing(indptr, indices, weights, lambda, iterations)?;
+    match (indptr, indices, weights) {
+        (Some(indptr), Some(indices), Some(weights)) => {
+            let graph = CsrGraph::new(
+                indptr.len() - 1,
+                indptr.to_vec(),
+                indices.to_vec(),
+                weights.to_vec(),
+            )
+            .map_err(to_py_value_error)?;
+            GraphLeafSmoothing::new(graph, lambda, iterations)
+                .map(Some)
+                .map_err(to_py_value_error)
+        }
+        (None, None, None) => Ok(None),
+        _ => unreachable!("validation rejects partial CSR graph inputs"),
+    }
+}
+
+type GraphSmoothingParts = (
+    Option<Vec<usize>>,
+    Option<Vec<usize>>,
+    Option<Vec<f64>>,
+    f64,
+    usize,
+);
+
+fn graph_smoothing_parts(smoothing: Option<&GraphLeafSmoothing>) -> GraphSmoothingParts {
+    smoothing
+        .map(|smoothing| {
+            (
+                Some(smoothing.graph.indptr.clone()),
+                Some(smoothing.graph.indices.clone()),
+                Some(smoothing.graph.weights.clone()),
+                smoothing.lambda,
+                smoothing.iterations,
+            )
+        })
+        .unwrap_or((None, None, None, 0.0, 4))
 }
 
 fn validate_params(

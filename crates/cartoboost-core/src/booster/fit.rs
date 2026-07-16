@@ -424,7 +424,7 @@ fn validate_training_config(
     Ok(())
 }
 
-fn apply_graph_leaf_smoothing(
+pub(super) fn apply_graph_leaf_smoothing(
     tree: &mut crate::tree::Tree,
     x: &Dataset,
     smoothing: &GraphLeafSmoothing,

@@ -1,4 +1,5 @@
 use crate::data::{validate_weights, Dataset};
+use crate::graph_regularization::GraphLeafSmoothing;
 use crate::loss::LossConfig;
 use crate::objectives::{LambdaRankObjective, Objective, PairwiseLogitObjective};
 use crate::tree::{
@@ -6,7 +7,8 @@ use crate::tree::{
 };
 use crate::{CartoBoostError, Result};
 use cartoboost_accelerator::{
-    backend_dense_layer_f32, select_backend_for, BackendOperation, BackendSelection,
+    backend_dense_layer_f32, select_backend_for, select_backend_for_operations, BackendOperation,
+    BackendSelection,
 };
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -38,6 +40,8 @@ pub struct RankerConfig {
     pub fuzzy_bandwidth: f64,
     pub fuzzy_kernel: FuzzyKernel,
     pub objective: RankingObjective,
+    #[serde(default)]
+    pub graph_leaf_smoothing: Option<GraphLeafSmoothing>,
 }
 
 #[derive(Debug, Clone)]
@@ -66,6 +70,8 @@ pub struct RankerTrainingConfigMetadata {
     #[serde(default)]
     pub fuzzy_kernel: FuzzyKernel,
     pub objective: RankingObjective,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph_leaf_smoothing: Option<GraphLeafSmoothing>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -110,21 +116,24 @@ impl Default for RankerConfig {
             fuzzy_bandwidth: 0.0,
             fuzzy_kernel: FuzzyKernel::Linear,
             objective: RankingObjective::LambdaRank,
+            graph_leaf_smoothing: None,
         }
     }
 }
 
 impl Ranker {
     pub fn new(config: RankerConfig) -> Self {
+        let operations = ranker_backend_operations(&config);
         Self {
             config,
-            backend: select_backend_for(Some("cpu"), BackendOperation::Dense)
-                .expect("CPU dense backend"),
+            backend: select_backend_for_operations(Some("cpu"), &operations)
+                .expect("CPU ranker operations"),
         }
     }
 
     pub fn new_with_backend(config: RankerConfig, backend: Option<&str>) -> Result<Self> {
-        let backend = select_backend_for(backend, BackendOperation::Dense)
+        let operations = ranker_backend_operations(&config);
+        let backend = select_backend_for_operations(backend, &operations)
             .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
         Ok(Self { config, backend })
     }
@@ -141,6 +150,7 @@ impl Ranker {
         sample_weight: Option<&[f64]>,
     ) -> Result<RankerModel> {
         validate_ranker_config(&self.config, x.n_cols())?;
+        validate_graph_leaf_smoothing(&self.config, x.n_rows())?;
         if x.n_rows() != y.len() {
             return Err(CartoBoostError::InvalidInput(
                 "X row count must match y length".to_string(),
@@ -188,7 +198,10 @@ impl Ranker {
                     *target = -pair.gradient / hessian;
                     *hessian_weight = hessian;
                 });
-            let tree = builder.fit_in_context(x, &targets, &hessian_weights, &fit_context);
+            let mut tree = builder.fit_in_context(x, &targets, &hessian_weights, &fit_context);
+            if let Some(smoothing) = &self.config.graph_leaf_smoothing {
+                super::fit::apply_graph_leaf_smoothing(&mut tree, x, smoothing, &self.backend)?;
+            }
             let updates = (0..x.n_rows())
                 .into_par_iter()
                 .map(|row| tree.predict_dataset_row(x, row))
@@ -241,6 +254,7 @@ impl Ranker {
                 fuzzy_bandwidth: self.config.fuzzy_bandwidth,
                 fuzzy_kernel: self.config.fuzzy_kernel,
                 objective: self.config.objective,
+                graph_leaf_smoothing: self.config.graph_leaf_smoothing.clone(),
             }),
             training_history,
             trees,
@@ -476,6 +490,31 @@ pub fn mean_reciprocal_rank(y: &[f64], scores: &[f64], groups: &[usize]) -> Resu
     })
 }
 
+fn ranker_backend_operations(config: &RankerConfig) -> Vec<BackendOperation> {
+    let mut operations = vec![BackendOperation::Dense];
+    if config.graph_leaf_smoothing.is_some() {
+        operations.push(BackendOperation::CsrDiffusion);
+    }
+    operations
+}
+
+fn validate_graph_leaf_smoothing(config: &RankerConfig, row_count: usize) -> Result<()> {
+    if let Some(smoothing) = &config.graph_leaf_smoothing {
+        smoothing.validate_row_count(row_count)?;
+        if config.leaf_predictor != LeafPredictorKind::Constant {
+            return Err(CartoBoostError::InvalidInput(
+                "graph_leaf_smoothing requires constant leaves".to_string(),
+            ));
+        }
+        if config.fuzzy {
+            return Err(CartoBoostError::InvalidInput(
+                "graph_leaf_smoothing requires hard routing".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_ranker_config(config: &RankerConfig, feature_count: usize) -> Result<()> {
     if config.n_estimators == 0 {
         return Err(CartoBoostError::InvalidInput(
@@ -591,6 +630,7 @@ fn ranking_discount(position: usize) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::graph_regularization::{CsrGraph, GraphLeafSmoothing};
 
     #[test]
     fn ranker_improves_ndcg_over_reversed_scores_and_roundtrips() {
@@ -643,5 +683,31 @@ mod tests {
         let loaded = RankerModel::load(&path).unwrap();
 
         assert_eq!(loaded.predict(&x).unwrap().len(), y.len());
+    }
+
+    #[test]
+    fn ranker_applies_and_serializes_graph_leaf_smoothing() {
+        let x = Dataset::from_rows(vec![vec![0.0], vec![1.0], vec![0.0], vec![1.0]]).unwrap();
+        let graph = CsrGraph::new(4, vec![0, 1, 2, 3, 4], vec![1, 0, 3, 2], vec![1.0; 4]).unwrap();
+        let ranker = Ranker::new_with_backend(
+            RankerConfig {
+                n_estimators: 1,
+                max_depth: 1,
+                min_samples_leaf: 1,
+                graph_leaf_smoothing: Some(GraphLeafSmoothing::new(graph, 0.5, 2).unwrap()),
+                ..RankerConfig::default()
+            },
+            Some("cpu"),
+        )
+        .unwrap();
+        let model = ranker
+            .fit(&x, &[0.0, 2.0, 0.0, 3.0], &[2, 2], None)
+            .unwrap();
+
+        assert!(model
+            .training_config
+            .unwrap()
+            .graph_leaf_smoothing
+            .is_some());
     }
 }

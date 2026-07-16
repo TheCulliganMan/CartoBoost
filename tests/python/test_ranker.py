@@ -282,3 +282,25 @@ def test_ranker_weights_and_pickle_roundtrip(tmp_path: Path):
     assert restored.predict(X) == pytest.approx(expected)
     with pytest.raises(NotImplementedError, match="JSON only"):
         ranker.save_weights(tmp_path / "ranker.onnx", format="onnx")
+
+
+def test_ranker_graph_smoothing_roundtrip(tmp_path: Path):
+    ranker = CartoBoostRanker(
+        n_estimators=2,
+        max_depth=1,
+        min_samples_leaf=1,
+        graph_indptr=[0, 1, 2, 3, 4],
+        graph_indices=[1, 0, 3, 2],
+        graph_weights=[1.0, 1.0, 1.0, 1.0],
+        graph_smoothing=0.5,
+        graph_smoothing_iterations=2,
+        backend="cpu",
+    ).fit([[0.0], [1.0], [0.0], [1.0]], [0.0, 2.0, 0.0, 3.0], groups=[2, 2])
+    path = tmp_path / "ranker-graph.json"
+    expected = ranker.predict([[0.0], [1.0]])
+    ranker.save(path)
+    loaded = CartoBoostRanker.load(path)
+
+    assert loaded.graph_indices == [1, 0, 3, 2]
+    assert loaded.graph_smoothing_iterations == 2
+    assert loaded.predict([[0.0], [1.0]]) == pytest.approx(expected)

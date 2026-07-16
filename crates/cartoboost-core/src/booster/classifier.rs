@@ -1,4 +1,5 @@
 use crate::data::{validate_weights, Dataset};
+use crate::graph_regularization::GraphLeafSmoothing;
 use crate::loss::LossConfig;
 use crate::objectives::{
     BinaryLogLossObjective, MulticlassLogLossObjective, Objective, PredictionTransformKind,
@@ -8,7 +9,8 @@ use crate::tree::{
 };
 use crate::{CartoBoostError, Result};
 use cartoboost_accelerator::{
-    backend_dense_layer_f32, select_backend_for, BackendOperation, BackendSelection,
+    backend_dense_layer_f32, select_backend_for, select_backend_for_operations, BackendOperation,
+    BackendSelection,
 };
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -42,6 +44,8 @@ pub struct ClassifierConfig {
     pub objective: ClassificationObjective,
     pub class_count: usize,
     pub class_weights: Vec<f64>,
+    #[serde(default)]
+    pub graph_leaf_smoothing: Option<GraphLeafSmoothing>,
 }
 
 #[derive(Debug, Clone)]
@@ -73,6 +77,8 @@ pub struct ClassifierTrainingConfigMetadata {
     pub class_count: usize,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub class_weights: Vec<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph_leaf_smoothing: Option<GraphLeafSmoothing>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -113,21 +119,24 @@ impl Default for ClassifierConfig {
             objective: ClassificationObjective::BinaryLogLoss,
             class_count: 2,
             class_weights: Vec::new(),
+            graph_leaf_smoothing: None,
         }
     }
 }
 
 impl Classifier {
     pub fn new(config: ClassifierConfig) -> Self {
+        let operations = classifier_backend_operations(&config);
         Self {
             config,
-            backend: select_backend_for(Some("cpu"), BackendOperation::Dense)
-                .expect("CPU dense backend"),
+            backend: select_backend_for_operations(Some("cpu"), &operations)
+                .expect("CPU classifier operations"),
         }
     }
 
     pub fn new_with_backend(config: ClassifierConfig, backend: Option<&str>) -> Result<Self> {
-        let backend = select_backend_for(backend, BackendOperation::Dense)
+        let operations = classifier_backend_operations(&config);
+        let backend = select_backend_for_operations(backend, &operations)
             .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
         Ok(Self { config, backend })
     }
@@ -143,6 +152,7 @@ impl Classifier {
         sample_weight: Option<&[f64]>,
     ) -> Result<ClassifierModel> {
         validate_classifier_config(&self.config, x.n_cols())?;
+        validate_graph_leaf_smoothing(&self.config, x.n_rows())?;
         if x.n_rows() != y.len() {
             return Err(CartoBoostError::InvalidInput(
                 "X row count must match y length".to_string(),
@@ -204,7 +214,10 @@ impl Classifier {
                         *target = -pair.gradient / hessian;
                         *hessian_weight = hessian;
                     });
-                let tree = builder.fit_in_context(x, &targets, &hessian_weights, &fit_context);
+                let mut tree = builder.fit_in_context(x, &targets, &hessian_weights, &fit_context);
+                if let Some(smoothing) = &self.config.graph_leaf_smoothing {
+                    super::fit::apply_graph_leaf_smoothing(&mut tree, x, smoothing, &self.backend)?;
+                }
                 let mut margins = raw_predictions
                     .chunks(output_dimension)
                     .map(|row| row[output])
@@ -259,6 +272,7 @@ impl Classifier {
                 objective: self.config.objective,
                 class_count,
                 class_weights: self.config.class_weights.clone(),
+                graph_leaf_smoothing: self.config.graph_leaf_smoothing.clone(),
             }),
             training_history,
             trees,
@@ -466,6 +480,31 @@ impl ClassifierModel {
     }
 }
 
+fn classifier_backend_operations(config: &ClassifierConfig) -> Vec<BackendOperation> {
+    let mut operations = vec![BackendOperation::Dense];
+    if config.graph_leaf_smoothing.is_some() {
+        operations.push(BackendOperation::CsrDiffusion);
+    }
+    operations
+}
+
+fn validate_graph_leaf_smoothing(config: &ClassifierConfig, row_count: usize) -> Result<()> {
+    if let Some(smoothing) = &config.graph_leaf_smoothing {
+        smoothing.validate_row_count(row_count)?;
+        if config.leaf_predictor != LeafPredictorKind::Constant {
+            return Err(CartoBoostError::InvalidInput(
+                "graph_leaf_smoothing requires constant leaves".to_string(),
+            ));
+        }
+        if config.fuzzy {
+            return Err(CartoBoostError::InvalidInput(
+                "graph_leaf_smoothing requires hard routing".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_classifier_config(config: &ClassifierConfig, feature_count: usize) -> Result<()> {
     if config.n_estimators == 0 {
         return Err(CartoBoostError::InvalidInput(
@@ -664,6 +703,7 @@ impl From<&ClassifierConfig> for ClassifierTrainingConfigMetadata {
             objective: config.objective,
             class_count: config.class_count,
             class_weights: config.class_weights.clone(),
+            graph_leaf_smoothing: config.graph_leaf_smoothing.clone(),
         }
     }
 }
@@ -671,6 +711,7 @@ impl From<&ClassifierConfig> for ClassifierTrainingConfigMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::graph_regularization::{CsrGraph, GraphLeafSmoothing};
     use crate::objectives::{
         LogisticBoostingObjective, ObjectiveTask, PredictionTransformKind, ProbabilityBooster,
     };
@@ -794,5 +835,29 @@ mod tests {
             .iter()
             .all(|row| (row.iter().sum::<f64>() - 1.0).abs() < 1.0e-12));
         assert_eq!(model.predict(&x).unwrap(), y);
+    }
+
+    #[test]
+    fn classifier_applies_and_serializes_graph_leaf_smoothing() {
+        let x = Dataset::from_rows(vec![vec![0.0], vec![1.0], vec![2.0], vec![3.0]]).unwrap();
+        let graph = CsrGraph::new(4, vec![0, 1, 2, 3, 4], vec![1, 0, 3, 2], vec![1.0; 4]).unwrap();
+        let classifier = Classifier::new_with_backend(
+            ClassifierConfig {
+                n_estimators: 1,
+                max_depth: 1,
+                min_samples_leaf: 1,
+                graph_leaf_smoothing: Some(GraphLeafSmoothing::new(graph, 0.5, 2).unwrap()),
+                ..ClassifierConfig::default()
+            },
+            Some("cpu"),
+        )
+        .unwrap();
+        let model = classifier.fit(&x, &[0.0, 0.0, 1.0, 1.0], None).unwrap();
+
+        assert!(model
+            .training_config
+            .unwrap()
+            .graph_leaf_smoothing
+            .is_some());
     }
 }
