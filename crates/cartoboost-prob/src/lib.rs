@@ -1294,10 +1294,8 @@ fn diffuse_residual_field_with_backend(
     backend: &BackendSelection,
 ) -> Result<Vec<Vec<f64>>> {
     if backend.selected != "cpu"
-        && edges
-            .len()
-            .saturating_mul(residual_field.first().map_or(0, Vec::len))
-            >= PROB_SPARSE_DISPATCH_MIN_OPS
+        && backend.selected != "directml"
+        && edges.len().saturating_mul(residual_field.len()) >= PROB_SPARSE_DISPATCH_MIN_OPS
     {
         let mut inbound_weight = vec![0.0; node_count];
         let mut rows = vec![Vec::<(u32, f32)>::new(); node_count];
@@ -1406,15 +1404,21 @@ async fn diffuse_residual_field_webgpu(
 }
 
 fn scenario_panel_mean(scenarios: &[Vec<Vec<f64>>], horizon: usize, nodes: usize) -> Vec<Vec<f64>> {
-    let mut mean = vec![vec![0.0; nodes]; horizon];
-    for scenario in scenarios {
-        for t in 0..horizon {
-            for node in 0..nodes {
-                mean[t][node] += scenario[t][node] / scenarios.len() as f64;
-            }
-        }
-    }
-    mean
+    let denominator = scenarios.len() as f64;
+    (0..horizon)
+        .into_par_iter()
+        .map(|t| {
+            (0..nodes)
+                .map(|node| {
+                    scenarios
+                        .iter()
+                        .map(|scenario| scenario[t][node])
+                        .sum::<f64>()
+                        / denominator
+                })
+                .collect()
+        })
+        .collect()
 }
 
 fn scenario_panel_variance(
@@ -1423,16 +1427,24 @@ fn scenario_panel_variance(
     horizon: usize,
     nodes: usize,
 ) -> Vec<Vec<f64>> {
-    let mut variance = vec![vec![0.0; nodes]; horizon];
-    for scenario in scenarios {
-        for t in 0..horizon {
-            for node in 0..nodes {
-                let delta = scenario[t][node] - mean[t][node];
-                variance[t][node] += delta * delta / scenarios.len() as f64;
-            }
-        }
-    }
-    variance
+    let denominator = scenarios.len() as f64;
+    (0..horizon)
+        .into_par_iter()
+        .map(|t| {
+            (0..nodes)
+                .map(|node| {
+                    scenarios
+                        .iter()
+                        .map(|scenario| {
+                            let delta = scenario[t][node] - mean[t][node];
+                            delta * delta
+                        })
+                        .sum::<f64>()
+                        / denominator
+                })
+                .collect()
+        })
+        .collect()
 }
 
 fn mean_abs_panel_delta(a: &[Vec<f64>], b: &[Vec<f64>]) -> f64 {
@@ -1768,6 +1780,49 @@ mod tests {
                 assert!(
                     (actual - expected).abs() < 1.0e-4,
                     "scenario mismatch on {backend}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn large_scenario_ensemble_dispatches_consistently_across_backends() {
+        let nodes = 33;
+        let point_forecast = (0..8)
+            .map(|time| {
+                (0..nodes)
+                    .map(|node| 10.0 + time as f64 * 0.2 + node as f64 * 0.03)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let edges = (0..nodes - 1)
+            .map(|source| DiffusionEdge {
+                source,
+                target: source + 1,
+                weight: 0.8,
+            })
+            .collect::<Vec<_>>();
+        let expected =
+            GeoTemporalDiffusionScenarioModel::new_with_backend(128, 2, 0.3, Some("cpu"))
+                .unwrap()
+                .generate(&point_forecast, &edges)
+                .unwrap();
+        for backend in cartoboost_neural::available_backends() {
+            let actual =
+                GeoTemporalDiffusionScenarioModel::new_with_backend(128, 2, 0.3, Some(&backend))
+                    .unwrap()
+                    .generate(&point_forecast, &edges)
+                    .unwrap_or_else(|error| panic!("{backend} large ensemble failed: {error}"));
+            for (actual, expected) in actual
+                .scenarios
+                .iter()
+                .flatten()
+                .flatten()
+                .zip(expected.scenarios.iter().flatten().flatten())
+            {
+                assert!(
+                    (actual - expected).abs() <= 2.0e-4,
+                    "{backend}: expected {expected}, got {actual}"
                 );
             }
         }
