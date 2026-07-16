@@ -366,6 +366,7 @@ fn fit_ols(
         y,
         weights,
         Some(log_likelihood),
+        backend,
     )
 }
 
@@ -377,7 +378,7 @@ fn fit_spatial_lag_ml(
     backend: &BackendSelection,
 ) -> Result<SpatialRegressionModel> {
     let n_features = x[0].len();
-    let lag_y = sparse_matvec(weights, &y)?;
+    let lag_y = sparse_matvec_with_backend(weights, &y, backend)?;
     let lag_x = if include_lag_x {
         Some(sparse_matrix_lag_with_backend(weights, &x, backend)?)
     } else {
@@ -433,6 +434,7 @@ fn fit_spatial_lag_ml(
         y,
         weights,
         Some(profile.log_likelihood),
+        backend,
     )
 }
 
@@ -448,7 +450,7 @@ fn fit_spatial_error_ml(
         design[0].len() + 1,
         "spatial error maximum likelihood",
     )?;
-    let lag_y = sparse_matvec(weights, &y)?;
+    let lag_y = sparse_matvec_with_backend(weights, &y, backend)?;
     let lag_design = sparse_matrix_lag_with_backend(weights, &design, backend)?;
     let bound = spatial_parameter_bound(weights)?;
     let profile = maximize_spatial_profile(bound, |lambda| {
@@ -473,7 +475,7 @@ fn fit_spatial_error_ml(
     let coefficients = profile.params[1..].to_vec();
     let base_fitted = predict_design_with_backend(&design, &profile.params, backend)?;
     let disturbances = residuals(&y, &base_fitted);
-    let lagged_disturbances = sparse_matvec(weights, &disturbances)?;
+    let lagged_disturbances = sparse_matvec_with_backend(weights, &disturbances, backend)?;
     let innovations: Vec<f64> = disturbances
         .iter()
         .zip(lagged_disturbances)
@@ -495,6 +497,7 @@ fn fit_spatial_error_ml(
         y,
         weights,
         Some(profile.log_likelihood),
+        backend,
     )
 }
 
@@ -505,7 +508,7 @@ fn fit_two_stage_least_squares(
     backend: &BackendSelection,
 ) -> Result<SpatialRegressionModel> {
     let n_features = x[0].len();
-    let lag_y = sparse_matvec(weights, &y)?;
+    let lag_y = sparse_matvec_with_backend(weights, &y, backend)?;
     let lag_x = sparse_matrix_lag_with_backend(weights, &x, backend)?;
     let mut first_stage_design = with_intercept(&x);
     append_columns(&mut first_stage_design, &lag_x);
@@ -549,6 +552,7 @@ fn fit_two_stage_least_squares(
         y,
         weights,
         None,
+        backend,
     )
 }
 
@@ -650,6 +654,7 @@ fn finish_model(
     y: Vec<f64>,
     weights: &SpatialWeights,
     log_likelihood: Option<f64>,
+    backend: &BackendSelection,
 ) -> Result<SpatialRegressionModel> {
     let residuals: Vec<f64> = y
         .iter()
@@ -673,7 +678,7 @@ fn finish_model(
     let (direct_effects, indirect_effects, total_effects) =
         effects(rho, &coefficients, &durbin_coefficients, weights)?;
     let diagnostics = SpatialDiagnostics {
-        residual_morans_i: morans_i(&residuals, weights)?,
+        residual_morans_i: morans_i_with_backend(&residuals, weights, backend)?,
         log_likelihood,
         aic,
         bic,
@@ -754,7 +759,11 @@ fn effects(
     Ok((Some(direct), Some(indirect), Some(total)))
 }
 
-fn morans_i(residuals: &[f64], weights: &SpatialWeights) -> Result<f64> {
+fn morans_i_with_backend(
+    residuals: &[f64],
+    weights: &SpatialWeights,
+    backend: &BackendSelection,
+) -> Result<f64> {
     let n = residuals.len();
     let mean = residuals.iter().sum::<f64>() / n as f64;
     let centered: Vec<f64> = residuals.iter().map(|value| value - mean).collect();
@@ -764,7 +773,7 @@ fn morans_i(residuals: &[f64], weights: &SpatialWeights) -> Result<f64> {
             "residual Moran's I is undefined because residual variance is zero".to_string(),
         ));
     }
-    let w_centered = sparse_matvec(weights, &centered)?;
+    let w_centered = sparse_matvec_with_backend(weights, &centered, backend)?;
     let numerator = centered
         .iter()
         .zip(w_centered)
@@ -1018,11 +1027,41 @@ fn invert(matrix: Vec<Vec<f64>>) -> Result<Vec<Vec<f64>>> {
     Ok(augmented.into_iter().map(|row| row[n..].to_vec()).collect())
 }
 
-fn sparse_matvec(weights: &SpatialWeights, x: &[f64]) -> Result<Vec<f64>> {
+fn sparse_matvec_with_backend(
+    weights: &SpatialWeights,
+    x: &[f64],
+    backend: &BackendSelection,
+) -> Result<Vec<f64>> {
     if x.len() != weights.n_nodes {
         return Err(SpatialEconError::InvalidInput(
             "vector length must match spatial weights columns".to_string(),
         ));
+    }
+    if backend.selected != "cpu"
+        && backend.selected != "directml"
+        && weights.indices.len() >= SPATIAL_SPARSE_DISPATCH_MIN_EDGES
+    {
+        let indptr = weights
+            .indptr
+            .iter()
+            .map(|value| u32::try_from(*value))
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|_| SpatialEconError::InvalidInput("CSR indptr exceeds u32 range".into()))?;
+        let indices = weights
+            .indices
+            .iter()
+            .map(|value| u32::try_from(*value))
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|_| SpatialEconError::InvalidInput("CSR index exceeds u32 range".into()))?;
+        let edge_weights = weights
+            .data
+            .iter()
+            .map(|value| *value as f32)
+            .collect::<Vec<_>>();
+        let values = x.iter().map(|value| *value as f32).collect::<Vec<_>>();
+        return backend_csr_diffusion_f32(backend, &indptr, &indices, &edge_weights, 1, &values)
+            .map(|output| output.into_iter().map(f64::from).collect())
+            .map_err(|error| SpatialEconError::Backend(error.to_string()));
     }
     let mut out = vec![0.0; weights.n_nodes];
     for (row, out_value) in out.iter_mut().enumerate() {
@@ -1480,6 +1519,28 @@ mod tests {
                     .unwrap_or_else(|error| panic!("{backend_name} solve failed: {error}"));
             for (actual, expected) in actual.iter().zip(&expected) {
                 assert!((actual - expected).abs() <= 2.0e-4);
+            }
+        }
+    }
+
+    #[test]
+    fn large_spatial_vector_lag_runs_on_every_available_backend() {
+        let weights = ring_weights(SPATIAL_SPARSE_DISPATCH_MIN_EDGES / 2);
+        let values = (0..weights.n_nodes)
+            .map(|index| (index % 97) as f64 / 97.0 - 0.5)
+            .collect::<Vec<_>>();
+        let expected =
+            sparse_matvec_with_backend(&weights, &values, &default_backend_selection()).unwrap();
+        for backend_name in cartoboost_neural::available_backends() {
+            let backend = select_spatial_backend(Some(&backend_name))
+                .unwrap_or_else(|error| panic!("{backend_name} selection failed: {error}"));
+            let actual = sparse_matvec_with_backend(&weights, &values, &backend)
+                .unwrap_or_else(|error| panic!("{backend_name} vector lag failed: {error}"));
+            for (actual, expected) in actual.iter().zip(&expected) {
+                assert!(
+                    (actual - expected).abs() <= 2.0e-5,
+                    "{backend_name}: expected {expected}, got {actual}"
+                );
             }
         }
     }
