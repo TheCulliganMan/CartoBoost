@@ -61,7 +61,8 @@ use cartoboost_neural::{
     available_backends as deep_available_backends,
     choice_set_transformer_report_json as deep_choice_set_transformer_report_json,
     constrained_decision_select as deep_constrained_decision_select,
-    directional_pair_predictions as deep_directional_pair_predictions,
+    directional_pair_fit_with_options_and_backend as deep_directional_pair_fit,
+    directional_pair_predict as deep_directional_pair_predict,
     event_outcome_fit_with_backend as deep_event_outcome_fit,
     event_outcome_predict as deep_event_outcome_predict,
     graph_neural_operator_predict_json as deep_graph_neural_operator_predict_json,
@@ -70,15 +71,15 @@ use cartoboost_neural::{
     response_curve_predict as deep_response_curve_predict, select_backend, select_backend_for,
     service_residual_fit_with_backend as deep_service_residual_fit,
     service_residual_predict as deep_service_residual_predict,
-    temporal_entity_fit as deep_temporal_entity_fit,
+    temporal_entity_fit_with_backend as deep_temporal_entity_fit,
     temporal_entity_predict as deep_temporal_entity_predict, ArtifactFallbackKind,
     BackendOperation, BackendSelection, ComponentMode as NeuralComponentMode,
     DeepDirectionalPairRow, DeepEventArtifact, DeepResponseArtifact, DeepResponseRow,
     DeepServiceResidualArtifact, DeepServiceResidualRow, DeepTemporalEntityArtifact,
-    GraphSageConfig, GraphSageRegressor, HeteroGraphSageConfig, HeteroGraphSageRegressor,
-    HinSageConfig, HinSageRegressor, NBeatsConfig, NBeatsForecaster, NHiTSConfig, NHiTSForecaster,
-    NeuralEmbeddingRegressor, NeuralPanelConfig, NeuralPanelForecaster, NeuralPanelLoss,
-    NeuralPanelMode, Node2VecConfig, Node2VecRegressor,
+    DirectionalPairFitOptions, GraphSageConfig, GraphSageRegressor, HeteroGraphSageConfig,
+    HeteroGraphSageRegressor, HinSageConfig, HinSageRegressor, NBeatsConfig, NBeatsForecaster,
+    NHiTSConfig, NHiTSForecaster, NeuralEmbeddingRegressor, NeuralPanelConfig,
+    NeuralPanelForecaster, NeuralPanelLoss, NeuralPanelMode, Node2VecConfig, Node2VecRegressor,
     SpatialOperatorEdge as DeepSpatialOperatorEdge, StandaloneBoosterConfig,
     TrendMode as NeuralTrendMode,
 };
@@ -1271,11 +1272,20 @@ pub fn deep_event_outcome_predict_wasm(
 }
 
 #[wasm_bindgen(js_name = deepDirectionalPairPredict)]
-pub fn deep_directional_pair_predict_wasm(rows: JsValue) -> std::result::Result<JsValue, JsValue> {
+pub fn deep_directional_pair_predict_wasm(
+    rows: JsValue,
+    backend: Option<String>,
+) -> std::result::Result<JsValue, JsValue> {
     console_error_panic_hook::set_once();
     let rows: Vec<DeepDirectionalPairRow> = serde_wasm_bindgen::from_value(rows)
         .map_err(|error| JsValue::from_str(&format!("invalid pair rows: {error}")))?;
-    let predictions = deep_directional_pair_predictions(&rows)
+    let artifact = deep_directional_pair_fit(
+        &rows,
+        &DirectionalPairFitOptions::default(),
+        backend.as_deref(),
+    )
+    .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    let predictions = deep_directional_pair_predict(&artifact, &rows)
         .map_err(|error| JsValue::from_str(&error.to_string()))?;
     serialize_json_response(&predictions, "deep directional pair predictions")
 }
@@ -1820,11 +1830,12 @@ pub fn deep_temporal_entity_fit_wasm(
     y: JsValue,
     lookback: usize,
     horizon: usize,
+    backend: Option<String>,
 ) -> std::result::Result<JsValue, JsValue> {
     console_error_panic_hook::set_once();
     let y: Vec<Vec<f64>> = serde_wasm_bindgen::from_value(y)
         .map_err(|error| JsValue::from_str(&format!("invalid temporal panel: {error}")))?;
-    let artifact = deep_temporal_entity_fit(&y, lookback, horizon)
+    let artifact = deep_temporal_entity_fit(&y, lookback, horizon, backend.as_deref())
         .map_err(|error| JsValue::from_str(&error.to_string()))?;
     serialize_json_response(&artifact, "deep temporal entity artifact")
 }

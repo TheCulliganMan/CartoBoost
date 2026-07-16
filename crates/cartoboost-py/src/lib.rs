@@ -133,6 +133,7 @@ use cartoboost_geostats::{
 };
 use cartoboost_neural::{
     available_backends as neural_available_backends,
+    backend_dense_layer_f32 as neural_backend_dense_layer_f32,
     backend_dispatch_report as neural_backend_dispatch_report,
     backend_supports_operation as neural_backend_supports_operation,
     backend_workload_decision as neural_backend_workload_decision, build_embedding_table_artifact,
@@ -11884,6 +11885,23 @@ fn accelerator_capabilities_value() -> PyResult<String> {
 }
 
 #[pyfunction]
+#[pyo3(signature = (features, weights, biases, backend=None))]
+fn accelerator_dense_layer_value(
+    py: Python<'_>,
+    features: Vec<Vec<f32>>,
+    weights: Vec<f32>,
+    biases: Vec<f32>,
+    backend: Option<&str>,
+) -> PyResult<Vec<Vec<f32>>> {
+    let selection =
+        neural_select_backend_for(backend, BackendOperation::Dense).map_err(to_py_neural_error)?;
+    py.detach(move || {
+        neural_backend_dense_layer_f32(&selection, &features, &weights, &biases)
+            .map_err(to_py_neural_error)
+    })
+}
+
+#[pyfunction]
 #[pyo3(signature = (backend=None, len=4096))]
 fn deep_backend_dispatch_report_value(backend: Option<&str>, len: usize) -> PyResult<String> {
     let report = neural_backend_dispatch_report(backend, len).map_err(to_py_neural_error)?;
@@ -12645,6 +12663,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(deep_service_residual_predict_value, m)?)?;
     m.add_function(wrap_pyfunction!(deep_available_backends_value, m)?)?;
     m.add_function(wrap_pyfunction!(accelerator_capabilities_value, m)?)?;
+    m.add_function(wrap_pyfunction!(accelerator_dense_layer_value, m)?)?;
     m.add_function(wrap_pyfunction!(accelerator_workload_decision_value, m)?)?;
     m.add_function(wrap_pyfunction!(deep_backend_dispatch_report_value, m)?)?;
     m.add_function(wrap_pyfunction!(deep_constrained_decision_select_value, m)?)?;

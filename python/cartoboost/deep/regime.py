@@ -8,6 +8,8 @@ from typing import Any, cast
 import numpy as np
 
 from .._artifacts import ArtifactPersistenceMixin
+from ..accelerators import dense_layer, workload_decision
+from ..config import Backend
 
 EXPERT_NAMES = [
     "stable_recurring_pattern",
@@ -22,11 +24,18 @@ EXPERT_NAMES = [
 class RegimeMoEForecaster(ArtifactPersistenceMixin):
     """Deterministic mixture-of-experts forecaster for heterogeneous regimes."""
 
-    def __init__(self, *, expert_count: int = 6, ridge: float = 1e-6) -> None:
+    def __init__(
+        self,
+        *,
+        expert_count: int = 6,
+        ridge: float = 1e-6,
+        backend: Backend | str = Backend.CPU,
+    ) -> None:
         if expert_count != 6:
             raise ValueError("RegimeMoEForecaster currently exposes exactly six named experts")
         self.expert_count = int(expert_count)
         self.ridge = float(ridge)
+        self.backend = str(backend)
         self.is_fitted_ = False
 
     def fit(
@@ -69,13 +78,15 @@ class RegimeMoEForecaster(ArtifactPersistenceMixin):
         )
         self.feature_count_ = int(x.shape[1])
         self.router_feature_count_ = int(router.shape[1])
-        self.global_coef_ = _ridge_fit(x, y, self.ridge)
+        self.global_coef_, global_dispatch = _ridge_fit(x, y, self.ridge, self.backend)
         logits = self._router_logits(router)
         weights = _softmax(logits)
         expert_predictions = self._expert_predictions(x, y, weights)
-        self.mixer_coef_ = _ridge_fit(expert_predictions, y, self.ridge)
-        combined = _predict_linear(expert_predictions, self.mixer_coef_)
-        single = _predict_linear(x, self.global_coef_)
+        self.mixer_coef_, mixer_dispatch = _ridge_fit(
+            expert_predictions, y, self.ridge, self.backend
+        )
+        combined = _predict_linear(expert_predictions, self.mixer_coef_, self.backend)
+        single = _predict_linear(x, self.global_coef_, self.backend)
         self.residual_mean_ = float(np.mean(y - combined))
         self.train_rmse_ = _rmse(y, combined)
         self.single_expert_rmse_ = _rmse(y, single)
@@ -88,6 +99,25 @@ class RegimeMoEForecaster(ArtifactPersistenceMixin):
         self.metadata_ = {
             "model_class": self.__class__.__name__,
             "architecture": "regime_moe",
+            "backend": {
+                "requested": self.backend,
+                "selected": next(
+                    (
+                        str(decision["selected"])
+                        for decision in (*global_dispatch, *mixer_dispatch)
+                        if bool(decision["accelerated"])
+                    ),
+                    "cpu",
+                ),
+            },
+            "accelerated_operations": (
+                ["dense"]
+                if any(
+                    bool(decision["accelerated"])
+                    for decision in (*global_dispatch, *mixer_dispatch)
+                )
+                else []
+            ),
             "expert_names": list(EXPERT_NAMES),
             "router_entropy": float(np.mean(_entropy(weights))),
             "expert_usage": dict(self.expert_usage_),
@@ -133,7 +163,10 @@ class RegimeMoEForecaster(ArtifactPersistenceMixin):
         router = self._router_matrix(x.shape[0], **router_inputs)
         weights = _softmax(self._router_logits(router))
         expert_predictions = self._expert_predictions(x, None, weights)
-        combined = _predict_linear(expert_predictions, self.mixer_coef_) + self.residual_mean_
+        combined = (
+            _predict_linear(expert_predictions, self.mixer_coef_, self.backend)
+            + self.residual_mean_
+        )
         return {
             "expert_weights": weights,
             "expert_predictions": expert_predictions,
@@ -151,6 +184,7 @@ class RegimeMoEForecaster(ArtifactPersistenceMixin):
             raise RuntimeError("model must be fit before save")
         payload = {
             "ridge": self.ridge,
+            "backend": self.backend,
             "global_coef": self.global_coef_.tolist(),
             "mixer_coef": self.mixer_coef_.tolist(),
             "feature_count": self.feature_count_,
@@ -165,7 +199,10 @@ class RegimeMoEForecaster(ArtifactPersistenceMixin):
     @classmethod
     def load(cls, path: str | Path) -> RegimeMoEForecaster:
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
-        obj = cls(ridge=float(payload["ridge"]))
+        obj = cls(
+            ridge=float(payload["ridge"]),
+            backend=str(payload.get("backend", "cpu")),
+        )
         obj.global_coef_ = np.asarray(payload["global_coef"], dtype=float)
         obj.mixer_coef_ = np.asarray(payload["mixer_coef"], dtype=float)
         obj.feature_count_ = int(payload["feature_count"])
@@ -219,7 +256,7 @@ class RegimeMoEForecaster(ArtifactPersistenceMixin):
     def _expert_predictions(
         self, x: np.ndarray, y: np.ndarray | None, weights: np.ndarray
     ) -> np.ndarray:
-        base = _predict_linear(x, self.global_coef_)
+        base = _predict_linear(x, self.global_coef_, self.backend)
         if y is None:
             residual = np.zeros_like(base)
         else:
@@ -266,15 +303,45 @@ def _matrix(values: Any, name: str) -> np.ndarray:
     return arr
 
 
-def _ridge_fit(x: np.ndarray, y: np.ndarray, ridge: float) -> np.ndarray:
+def _ridge_fit(
+    x: np.ndarray,
+    y: np.ndarray,
+    ridge: float,
+    backend: str,
+) -> tuple[np.ndarray, tuple[dict[str, Any], dict[str, Any]]]:
     design = np.column_stack([np.ones(x.shape[0]), x])
     penalty = np.eye(design.shape[1]) * ridge
     penalty[0, 0] = 0.0
-    return np.linalg.solve(design.T @ design + penalty, design.T @ y)
+    gram, gram_dispatch = _dense_product(design.T, design, backend)
+    rhs_matrix, rhs_dispatch = _dense_product(design.T, y.reshape(-1, 1), backend)
+    return (
+        np.linalg.solve(gram + penalty, rhs_matrix[:, 0]),
+        (gram_dispatch, rhs_dispatch),
+    )
 
 
-def _predict_linear(x: np.ndarray, coef: np.ndarray) -> np.ndarray:
-    return np.column_stack([np.ones(x.shape[0]), x]) @ coef
+def _predict_linear(x: np.ndarray, coef: np.ndarray, backend: str) -> np.ndarray:
+    design = np.column_stack([np.ones(x.shape[0]), x])
+    product, _ = _dense_product(design, coef.reshape(-1, 1), backend)
+    return product[:, 0]
+
+
+def _dense_product(
+    left: np.ndarray,
+    right: np.ndarray,
+    backend: str,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    workload_size = int(left.shape[0] * left.shape[1] * right.shape[1])
+    dispatch = workload_decision(backend, "dense", workload_size, 16_384)
+    if dispatch["executed"] == "cpu":
+        return left @ right, dispatch
+    output = dense_layer(
+        left,
+        right,
+        np.zeros(right.shape[1], dtype=np.float32),
+        backend=str(dispatch["executed"]),
+    )
+    return output.astype(float), dispatch
 
 
 def _softmax(values: np.ndarray) -> np.ndarray:

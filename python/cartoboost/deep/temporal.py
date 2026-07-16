@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 
 from .._artifacts import ArtifactPersistenceMixin
+from ..accelerators import dense_layer, workload_decision
 from ..config import Backend
 from ._native import dumps, loads, require_native
 from .flow import flow_uncertainty_report
@@ -175,6 +176,7 @@ class TemporalEntityTransformer:
                 lookback=self.lookback,
                 horizon=self.horizon,
                 seed=int(self._params.get("seed", 0)),
+                backend=self.backend,
             ).fit(frame)
             self.metadata_ = dict(self._inverted_model.metadata_)
             self.is_fitted_ = True
@@ -229,6 +231,7 @@ class InvertedTemporalTransformer(ArtifactPersistenceMixin):
         lookback: int = 56,
         horizon: int = 14,
         seed: int = 0,
+        backend: Backend | str = Backend.CPU,
         shared_entity_embedding: Any | None = None,
     ) -> None:
         if lookback <= 0 or horizon <= 0:
@@ -236,6 +239,7 @@ class InvertedTemporalTransformer(ArtifactPersistenceMixin):
         self.lookback = int(lookback)
         self.horizon = int(horizon)
         self.seed = int(seed)
+        self.backend = str(backend)
         if shared_entity_embedding is not None:
             raise RuntimeError(
                 "NumPy representation primitives are not shipped in CartoBoost 0.3; "
@@ -258,7 +262,18 @@ class InvertedTemporalTransformer(ArtifactPersistenceMixin):
         centered = self.recent_ - self.recent_.mean(axis=0, keepdims=True)
         norm = np.linalg.norm(centered, axis=0, keepdims=True)
         norm = np.maximum(norm, 1e-12)
-        similarity = (centered.T @ centered) / (norm.T @ norm)
+        similarity_work = int(centered.shape[0] * centered.shape[1] ** 2)
+        dispatch = workload_decision(self.backend, "dense", similarity_work, 16_384)
+        if dispatch["executed"] == "cpu":
+            similarity_products = centered.T @ centered
+        else:
+            similarity_products = dense_layer(
+                centered.T,
+                centered,
+                np.zeros(centered.shape[1], dtype=np.float32),
+                backend=str(dispatch["executed"]),
+            ).astype(float)
+        similarity = similarity_products / (norm.T @ norm)
         self.attention_weights_ = _row_softmax(similarity)
         if y.shape[0] >= 2:
             self.local_trend_ = self.recent_[-1] - self.recent_[-2]
@@ -279,6 +294,10 @@ class InvertedTemporalTransformer(ArtifactPersistenceMixin):
             "cutoff": self.cutoff_,
             "attention_shape": list(self.attention_weights_.shape),
             "quadratic_time_token_attention": False,
+            "backend": dispatch,
+            "accelerated_operations": (
+                ["dense"] if bool(dispatch["accelerated"]) else []
+            ),
             "shared_representation": None,
             "shared_representation_consumed": False,
             "save_load_parity_checked": False,
@@ -341,6 +360,7 @@ class InvertedTemporalTransformer(ArtifactPersistenceMixin):
             "lookback": self.lookback,
             "horizon": self.horizon,
             "seed": self.seed,
+            "backend": self.backend,
             "entity_ids": self.entity_ids_,
             "cutoff": self.cutoff_,
             "last_values": self.last_values_.tolist(),
@@ -361,6 +381,7 @@ class InvertedTemporalTransformer(ArtifactPersistenceMixin):
             lookback=int(payload["lookback"]),
             horizon=int(payload["horizon"]),
             seed=int(payload["seed"]),
+            backend=str(payload.get("backend", "cpu")),
         )
         obj.entity_ids_ = list(payload["entity_ids"])
         obj.cutoff_ = str(payload["cutoff"])

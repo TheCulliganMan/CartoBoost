@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import numpy as np
+from numpy.typing import ArrayLike, NDArray
+
 from . import _native
 
 _ALL_OPERATIONS = [
@@ -98,5 +101,41 @@ def workload_decision(
         )
     )
 
+def dense_layer(
+    features: ArrayLike,
+    weights: ArrayLike,
+    biases: ArrayLike,
+    *,
+    backend: str | None = None,
+) -> NDArray[np.float32]:
+    """Execute a batched dense layer on the requested accelerator.
 
-__all__ = ["available_backends", "capabilities", "workload_decision"]
+    ``weights`` uses the native row-major ``[input_width, output_width]``
+    layout. Explicit accelerator requests are dispatched directly without
+    calibration; ``auto`` uses the shared backend selector.
+    """
+
+    feature_array = np.asarray(features, dtype=np.float32)
+    weight_array = np.asarray(weights, dtype=np.float32)
+    bias_array = np.asarray(biases, dtype=np.float32)
+    if feature_array.ndim != 2 or weight_array.ndim != 2 or bias_array.ndim != 1:
+        raise ValueError("features and weights must be matrices and biases must be a vector")
+    if feature_array.shape[1] != weight_array.shape[0]:
+        raise ValueError("feature width must equal the first weights dimension")
+    if weight_array.shape[1] != bias_array.shape[0]:
+        raise ValueError("weights output width must equal biases length")
+    function = getattr(_native, "accelerator_dense_layer_value", None)
+    if function is None:
+        if backend not in {None, "cpu"}:
+            raise RuntimeError("native accelerator support is unavailable")
+        return feature_array @ weight_array + bias_array
+    output = function(
+        feature_array.tolist(),
+        weight_array.reshape(-1).tolist(),
+        bias_array.tolist(),
+        backend,
+    )
+    return np.asarray(output, dtype=np.float32)
+
+
+__all__ = ["available_backends", "capabilities", "dense_layer", "workload_decision"]
