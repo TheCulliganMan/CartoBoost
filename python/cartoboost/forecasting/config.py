@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ..config import Backend
 from .registry import ForecastModelSpec, ForecastRegistry
 
 ROOT_FIELDS = {
@@ -33,6 +34,7 @@ MODEL_FIELDS = {
     "metadata",
 }
 RECONCILIATION_FIELDS = {
+    "backend",
     "method",
     "hierarchy",
     "summing_matrix",
@@ -66,6 +68,7 @@ class ReconciliationConfig:
     parent_column: str | None = None
     child_column: str | None = None
     non_negative: bool = False
+    backend: Backend | str = Backend.CPU
     params: Mapping[str, Any] = field(default_factory=dict)
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
@@ -99,6 +102,7 @@ class ReconciliationConfig:
                 "parent_column": self.parent_column,
                 "child_column": self.child_column,
                 "non_negative": self.non_negative,
+                "backend": str(self.backend),
                 "metadata": dict(self.metadata),
             }
         )
@@ -119,6 +123,7 @@ class ReconciliationConfig:
             "parent_column": self.parent_column,
             "child_column": self.child_column,
             "non_negative": self.non_negative,
+            "backend": str(self.backend),
             "params": dict(self.params),
             "metadata": dict(self.metadata),
         }
@@ -301,6 +306,7 @@ def _reconciliation_config_from_mapping(
         parent_column=data.get("parent_column"),
         child_column=data.get("child_column"),
         non_negative=bool(data.get("non_negative", False)),
+        backend=Backend(str(data.get("backend", "cpu"))),
         params=dict(data.get("params", {})),
         metadata=metadata,
     )

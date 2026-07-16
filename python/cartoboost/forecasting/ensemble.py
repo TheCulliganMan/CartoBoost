@@ -4,6 +4,8 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
+import numpy as np
+
 from ..config import Backend
 from ._native_wrappers import NativeForecastWrapper
 
@@ -230,12 +232,63 @@ class MinTraceReconciler(NativeForecastWrapper):
         )
 
 
+def reconcile_hierarchy(
+    hierarchy: Mapping[str, str | None] | list[tuple[str, str | None]],
+    base_forecasts: Any,
+    *,
+    method: str = "bottom_up",
+    variances: Any | None = None,
+    residuals: Any | None = None,
+    shrinkage: float = 0.5,
+    level: int | None = None,
+    backend: Backend | str = Backend.CPU,
+) -> dict[str, Any]:
+    """Reconcile a forecast panel through the shared accelerator contract."""
+
+    from cartoboost import _native
+
+    function = getattr(_native, "forecast_hierarchy_reconcile_value", None)
+    if function is None:
+        raise RuntimeError("native hierarchy reconciliation binding is unavailable")
+    edges = list(hierarchy.items()) if isinstance(hierarchy, Mapping) else list(hierarchy)
+    panel = np.asarray(base_forecasts, dtype=float)
+    if panel.ndim != 2 or not np.isfinite(panel).all():
+        raise ValueError("base_forecasts must be a finite two-dimensional array")
+    residual_rows = None
+    if residuals is not None:
+        residual_array = np.asarray(residuals, dtype=float)
+        if residual_array.ndim != 2 or not np.isfinite(residual_array).all():
+            raise ValueError("residuals must be a finite two-dimensional array")
+        residual_rows = residual_array.tolist()
+    variance_values = None
+    if variances is not None:
+        variance_array = np.asarray(variances, dtype=float).reshape(-1)
+        if not np.isfinite(variance_array).all():
+            raise ValueError("variances must be finite")
+        variance_values = variance_array.tolist()
+    payload = json.loads(
+        function(
+            [(str(node), None if parent is None else str(parent)) for node, parent in edges],
+            panel.tolist(),
+            str(method),
+            variance_values,
+            residual_rows,
+            float(shrinkage),
+            level,
+            str(backend),
+        )
+    )
+    payload["values"] = np.asarray(payload["values"], dtype=float)
+    return payload
+
+
 __all__ = [
     "BacktestWeightedEnsembleForecaster",
     "BottomUpReconciler",
     "MinTraceReconciler",
     "RuleBasedGating",
     "WeightedEnsembleForecaster",
+    "reconcile_hierarchy",
 ]
 
 

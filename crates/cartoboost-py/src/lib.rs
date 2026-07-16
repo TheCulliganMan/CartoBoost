@@ -35,7 +35,8 @@ use cartoboost_core::forecasting::{
     ForecastFrequency, ForecastMetricSet as CoreForecastMetricSet,
     ForecastObjective as CoreForecastObjective, ForecastPrediction,
     ForecastResult as CoreForecastResult, ForecastRow as CoreForecastRow, ForecastWindow,
-    Forecaster, GlobalForecastTargetMode, KalmanForecaster as CoreKalmanForecaster,
+    Forecaster, GlobalForecastTargetMode, HierarchyNode as CoreHierarchyNode,
+    HierarchySpec as CoreHierarchySpec, KalmanForecaster as CoreKalmanForecaster,
     KrigingForecaster as CoreKrigingForecaster, LagFeatureConfig,
     LocalLevelKalmanForecaster as CoreLocalLevelKalmanForecaster,
     NaiveForecaster as CoreNaiveForecaster,
@@ -44,8 +45,9 @@ use cartoboost_core::forecasting::{
     PiecewiseLinearRegressorStandardization,
     PiecewiseLinearSeasonalConfig as CorePiecewiseLinearSeasonalConfig,
     PiecewiseLinearSeasonalForecaster as CorePiecewiseLinearSeasonalForecaster,
-    PiecewiseLinearSeasonality, PiecewiseLinearTrendUncertaintyPolicy, ReferencePathConfig,
-    ReferenceSignal, RollingOriginBacktester as CoreRollingOriginBacktester,
+    PiecewiseLinearSeasonality, PiecewiseLinearTrendUncertaintyPolicy,
+    Reconciler as CoreReconciler, ReconciliationMethod as CoreReconciliationMethod,
+    ReferencePathConfig, ReferenceSignal, RollingOriginBacktester as CoreRollingOriginBacktester,
     RollingOriginSplitter as CoreRollingOriginSplitter, SbaForecaster as CoreSbaForecaster,
     SeasonalNaiveForecaster as CoreSeasonalNaiveForecaster, SequenceCandidate,
     SequenceCandidateEnsemble, SequenceCandidatePrediction, SequenceFrame, SequenceGroupPrediction,
@@ -9660,6 +9662,67 @@ fn forecast_proportional_total_reconciliation_value(
 }
 
 #[pyfunction]
+#[pyo3(signature = (hierarchy, base_forecasts, method="bottom_up", variances=None, residuals=None, shrinkage=0.5, level=None, backend=None))]
+#[allow(clippy::too_many_arguments)]
+fn forecast_hierarchy_reconcile_value(
+    py: Python<'_>,
+    hierarchy: Vec<(String, Option<String>)>,
+    base_forecasts: Vec<Vec<f64>>,
+    method: &str,
+    variances: Option<Vec<f64>>,
+    residuals: Option<Vec<Vec<f64>>>,
+    shrinkage: f64,
+    level: Option<usize>,
+    backend: Option<&str>,
+) -> PyResult<String> {
+    let hierarchy = CoreHierarchySpec::new(
+        hierarchy
+            .into_iter()
+            .map(|(id, parent)| CoreHierarchyNode { id, parent })
+            .collect(),
+    )
+    .map_err(to_py_value_error)?;
+    let method = match method {
+        "bottom_up" => CoreReconciliationMethod::BottomUp,
+        "top_down" => CoreReconciliationMethod::TopDown,
+        "middle_out" => CoreReconciliationMethod::MiddleOut {
+            level: level
+                .ok_or_else(|| PyValueError::new_err("middle_out reconciliation requires level"))?,
+        },
+        "ols" => CoreReconciliationMethod::Ols,
+        "wls" => CoreReconciliationMethod::Wls {
+            variances: variances
+                .ok_or_else(|| PyValueError::new_err("wls reconciliation requires variances"))?,
+        },
+        "mint" | "min_trace" => CoreReconciliationMethod::MinTShrink {
+            residuals: residuals.ok_or_else(|| {
+                PyValueError::new_err("min_trace reconciliation requires residuals")
+            })?,
+            shrinkage,
+        },
+        other => {
+            return Err(PyValueError::new_err(format!(
+                "unsupported reconciliation method {other:?}"
+            )));
+        }
+    };
+    let backend = backend.map(str::to_owned);
+    py.detach(move || {
+        let reconciler = CoreReconciler::new_with_backend(hierarchy, method, backend.as_deref())
+            .map_err(to_py_value_error)?;
+        let values = reconciler
+            .reconcile(&base_forecasts)
+            .map_err(to_py_value_error)?;
+        serde_json::to_string(&json!({
+            "values": values,
+            "backend_requested": reconciler.backend().requested,
+            "backend_selected": reconciler.backend().selected,
+        }))
+        .map_err(to_py_json_error)
+    })
+}
+
+#[pyfunction]
 fn forecast_weighted_blend_candidate_value(
     py: Python<'_>,
     primary_forecast: Vec<f64>,
@@ -12468,6 +12531,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
         forecast_proportional_total_reconciliation_value,
         m
     )?)?;
+    m.add_function(wrap_pyfunction!(forecast_hierarchy_reconcile_value, m)?)?;
     m.add_function(wrap_pyfunction!(
         forecast_weighted_blend_candidate_value,
         m
