@@ -133,8 +133,11 @@ use cartoboost_geostats::{
 };
 use cartoboost_neural::{
     available_backends as neural_available_backends,
+    backend_affine_scores as neural_backend_affine_scores,
+    backend_csr_diffusion_f32 as neural_backend_csr_diffusion_f32,
     backend_dense_layer_f32 as neural_backend_dense_layer_f32,
     backend_dispatch_report as neural_backend_dispatch_report,
+    backend_pairwise_squared_distances_f32 as neural_backend_pairwise_distances_f32,
     backend_supports_operation as neural_backend_supports_operation,
     backend_workload_decision as neural_backend_workload_decision, build_embedding_table_artifact,
     choice_set_transformer_report_json as core_choice_set_transformer_report_json,
@@ -11902,6 +11905,58 @@ fn accelerator_dense_layer_value(
 }
 
 #[pyfunction]
+#[pyo3(signature = (left, right, backend=None))]
+fn accelerator_pairwise_squared_distances_value(
+    py: Python<'_>,
+    left: Vec<Vec<f32>>,
+    right: Vec<Vec<f32>>,
+    backend: Option<&str>,
+) -> PyResult<Vec<Vec<f32>>> {
+    let selection = neural_select_backend_for(backend, BackendOperation::PairwiseDistance)
+        .map_err(to_py_neural_error)?;
+    py.detach(move || {
+        neural_backend_pairwise_distances_f32(&selection, &left, &right).map_err(to_py_neural_error)
+    })
+}
+
+#[pyfunction]
+#[pyo3(signature = (features, means, weights, intercepts, backend=None))]
+fn accelerator_affine_scores_value(
+    py: Python<'_>,
+    features: Vec<Vec<f64>>,
+    means: Vec<f64>,
+    weights: Vec<f64>,
+    intercepts: Vec<f64>,
+    backend: Option<&str>,
+) -> PyResult<Vec<f64>> {
+    let selection =
+        neural_select_backend_for(backend, BackendOperation::Affine).map_err(to_py_neural_error)?;
+    py.detach(move || {
+        neural_backend_affine_scores(&selection, &features, &means, &weights, &intercepts)
+            .map_err(to_py_neural_error)
+    })
+}
+
+#[pyfunction]
+#[pyo3(signature = (indptr, indices, weights, values, channels, backend=None))]
+fn accelerator_csr_diffusion_value(
+    py: Python<'_>,
+    indptr: Vec<u32>,
+    indices: Vec<u32>,
+    weights: Vec<f32>,
+    values: Vec<f32>,
+    channels: usize,
+    backend: Option<&str>,
+) -> PyResult<Vec<f32>> {
+    let selection = neural_select_backend_for(backend, BackendOperation::CsrDiffusion)
+        .map_err(to_py_neural_error)?;
+    py.detach(move || {
+        neural_backend_csr_diffusion_f32(&selection, &indptr, &indices, &weights, channels, &values)
+            .map_err(to_py_neural_error)
+    })
+}
+
+#[pyfunction]
 #[pyo3(signature = (backend=None, len=4096))]
 fn deep_backend_dispatch_report_value(backend: Option<&str>, len: usize) -> PyResult<String> {
     let report = neural_backend_dispatch_report(backend, len).map_err(to_py_neural_error)?;
@@ -12664,6 +12719,12 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(deep_available_backends_value, m)?)?;
     m.add_function(wrap_pyfunction!(accelerator_capabilities_value, m)?)?;
     m.add_function(wrap_pyfunction!(accelerator_dense_layer_value, m)?)?;
+    m.add_function(wrap_pyfunction!(accelerator_affine_scores_value, m)?)?;
+    m.add_function(wrap_pyfunction!(accelerator_csr_diffusion_value, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        accelerator_pairwise_squared_distances_value,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(accelerator_workload_decision_value, m)?)?;
     m.add_function(wrap_pyfunction!(deep_backend_dispatch_report_value, m)?)?;
     m.add_function(wrap_pyfunction!(deep_constrained_decision_select_value, m)?)?;

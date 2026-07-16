@@ -10,6 +10,8 @@ from typing import Literal
 import numpy as np
 
 from . import _native
+from .accelerators import pairwise_squared_distances, workload_decision
+from .config import Backend
 
 __path__ = [str(Path(__file__).with_suffix(""))]
 
@@ -576,6 +578,7 @@ def residual_morans_i(
     weights: Literal["inverse_distance", "radius"] = "inverse_distance",
     radius: float | None = None,
     distance_epsilon: float = 1e-12,
+    backend: Backend | str = Backend.CPU,
 ) -> float:
     """Return Moran's I for residual spatial autocorrelation.
 
@@ -601,7 +604,20 @@ def residual_morans_i(
     if denominator == 0.0:
         raise ValueError("residuals must have non-zero variance")
 
-    distances = _pairwise_distances(coords)
+    distance_work = int(coords.shape[0] * coords.shape[0] * coords.shape[1])
+    dispatch = workload_decision(str(backend), "pairwise_distance", distance_work, 16_384)
+    if dispatch["executed"] == "cpu":
+        distances = _pairwise_distances(coords)
+    else:
+        distances = np.sqrt(
+            np.maximum(
+                pairwise_squared_distances(
+                    coords,
+                    backend=str(dispatch["executed"]),
+                ).astype(float),
+                0.0,
+            )
+        )
     if weights == "inverse_distance":
         weight_matrix = 1.0 / np.maximum(distances, distance_epsilon)
         np.fill_diagonal(weight_matrix, 0.0)
