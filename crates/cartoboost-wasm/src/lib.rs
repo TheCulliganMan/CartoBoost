@@ -42,7 +42,7 @@ use cartoboost_geo_core::{
     SplitManifest as GeoCoreSplitManifest,
 };
 use cartoboost_geo_st::{
-    graph_metrics as graph_st_metrics, select_compute_backend as graph_st_select_backend,
+    graph_metrics as graph_st_metrics,
     select_compute_backend_for_operations as graph_st_select_backend_for_operations,
     CsrAdjacency as GraphStCsrAdjacency, DcrnnConfig as GraphStDcrnnConfig,
     DcrnnForecaster as GraphStDcrnnForecaster, GraphTemporalFrame as GraphStTemporalFrame,
@@ -4191,8 +4191,11 @@ fn run_graph_forecast_request(
             teacher_forcing_start: request.options.teacher_forcing_start,
             teacher_forcing_end: request.options.teacher_forcing_end,
             ridge: request.options.ridge,
-            backend: graph_st_select_backend(Some(&request.options.backend))
-                .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?,
+            backend: graph_st_select_backend_for_operations(
+                Some(&request.options.backend),
+                &[BackendOperation::Affine],
+            )
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?,
         };
         let mut model = GraphStDcrnnForecaster::new(config.clone())
             .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;

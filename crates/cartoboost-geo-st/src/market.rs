@@ -6,8 +6,8 @@
 
 use crate::{GeoStError, Result};
 use cartoboost_neural::{
-    backend_dense_layer_f32, select_backend, select_backend_for, BackendOperation,
-    BackendSelection, GraphSageConfig, GraphSageEncoder, HomogeneousGraph,
+    backend_dense_layer_f32, select_backend_for, BackendOperation, BackendSelection,
+    GraphSageConfig, GraphSageEncoder, HomogeneousGraph,
 };
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -299,7 +299,7 @@ impl Default for MarketStructureConfig {
 
 impl MarketStructureConfig {
     fn validate(&self) -> Result<()> {
-        select_backend(Some(&self.backend)).map_err(|error| {
+        select_backend_for(Some(&self.backend), BackendOperation::Dense).map_err(|error| {
             GeoStError::InvalidFrame(format!("invalid market accelerator backend: {error}"))
         })?;
         if self.top_k == 0
@@ -1202,7 +1202,7 @@ fn fit_graph_kernel(
     let config = GraphSageConfig {
         hidden_dims: vec![hidden_dim],
         epochs,
-        backend: select_backend(Some(backend)).map_err(|err| {
+        backend: select_backend_for(Some(backend), BackendOperation::Dense).map_err(|err| {
             GeoStError::InvalidFrame(format!("invalid market graph backend: {err}"))
         })?,
         ..GraphSageConfig::default()

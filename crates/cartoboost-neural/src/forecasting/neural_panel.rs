@@ -9,8 +9,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::scaler::StandardScaler;
 use crate::{
-    backend_dense_layer_f32, select_backend, select_backend_for, BackendOperation,
-    BackendSelection, NeuralError, Result,
+    backend_dense_layer_f32, select_backend_for, BackendOperation, BackendSelection, NeuralError,
+    Result,
 };
 
 type KnownFutureCovariates = BTreeMap<(String, NaiveDateTime), BTreeMap<String, f64>>;
@@ -2769,7 +2769,7 @@ pub fn fit_dense_regressor_with_backend(
             "dense regressor weight_decay must be finite and non-negative".to_string(),
         ));
     }
-    let backend = select_backend(backend)?;
+    let backend = select_backend_for(backend, BackendOperation::Dense)?;
     let panel_config = NeuralPanelConfig {
         epochs: config.epochs,
         learning_rate: config.learning_rate,
@@ -3424,6 +3424,27 @@ mod dispatch_tests {
                     .is_none(),
                 "{backend_name}"
             );
+        }
+    }
+
+    #[test]
+    fn reusable_dense_regressor_requires_dense_capability() {
+        let config = DenseRegressorConfig {
+            input_width: 2,
+            output_width: 1,
+            hidden_layers: vec![2],
+            epochs: 1,
+            learning_rate: 0.01,
+            weight_decay: 0.0,
+            seed: 7,
+        };
+        let examples = vec![(vec![0.0, 1.0], vec![1.0]), (vec![1.0, 0.0], vec![1.0])];
+        for backend_name in crate::available_backends() {
+            if !crate::backend_supports_operation(&backend_name, BackendOperation::Dense) {
+                continue;
+            }
+            fit_dense_regressor_with_backend(&config, examples.clone(), Some(&backend_name))
+                .unwrap_or_else(|error| panic!("{backend_name} dense regressor failed: {error}"));
         }
     }
 }

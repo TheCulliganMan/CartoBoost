@@ -110,9 +110,9 @@ use cartoboost_geo_core::{
 };
 use cartoboost_geo_st::{
     available_compute_backends as graph_st_available_compute_backends,
-    select_compute_backend as graph_st_select_compute_backend, CsrAdjacency as CoreStCsrAdjacency,
-    DcrnnConfig as CoreDcrnnConfig, DcrnnForecaster as CoreDcrnnForecaster,
-    DelayAwareGraphConfig as CoreDelayAwareGraphConfig,
+    select_compute_backend_for_operations as graph_st_select_compute_backend_for_operations,
+    CsrAdjacency as CoreStCsrAdjacency, DcrnnConfig as CoreDcrnnConfig,
+    DcrnnForecaster as CoreDcrnnForecaster, DelayAwareGraphConfig as CoreDelayAwareGraphConfig,
     DelayAwareGraphTransformer as CoreDelayAwareGraphTransformer,
     ExpertEventLabel as CoreExpertEventLabel,
     ExpertRelationshipPrior as CoreExpertRelationshipPrior,
@@ -3754,7 +3754,11 @@ impl NativeDcrnnForecaster {
                 teacher_forcing_start,
                 teacher_forcing_end,
                 ridge,
-                backend: graph_st_select_compute_backend(backend).map_err(to_py_geo_st_error)?,
+                backend: graph_st_select_compute_backend_for_operations(
+                    backend,
+                    &[BackendOperation::Affine],
+                )
+                .map_err(to_py_geo_st_error)?,
             })
             .map_err(to_py_geo_st_error)?,
         })
@@ -3863,7 +3867,11 @@ impl NativeSTAEformerForecaster {
                 epochs,
                 learning_rate,
                 ridge,
-                backend: graph_st_select_compute_backend(backend).map_err(to_py_geo_st_error)?,
+                backend: graph_st_select_compute_backend_for_operations(
+                    backend,
+                    &[BackendOperation::Affine],
+                )
+                .map_err(to_py_geo_st_error)?,
             })
             .map_err(to_py_geo_st_error)?,
         })
@@ -3941,7 +3949,11 @@ impl NativeGraphWaveNetForecaster {
                 epochs,
                 learning_rate,
                 ridge,
-                backend: graph_st_select_compute_backend(backend).map_err(to_py_geo_st_error)?,
+                backend: graph_st_select_compute_backend_for_operations(
+                    backend,
+                    &[BackendOperation::Affine],
+                )
+                .map_err(to_py_geo_st_error)?,
             })
             .map_err(to_py_geo_st_error)?,
         })
@@ -4005,7 +4017,11 @@ impl NativePropagationDelayGraphForecaster {
                 horizon,
                 edge_delay_prior: edge_delay_prior.unwrap_or_default(),
                 ridge,
-                backend: graph_st_select_compute_backend(backend).map_err(to_py_geo_st_error)?,
+                backend: graph_st_select_compute_backend_for_operations(
+                    backend,
+                    &[BackendOperation::CsrDiffusion],
+                )
+                .map_err(to_py_geo_st_error)?,
             })
             .map_err(to_py_geo_st_error)?,
         })
@@ -4091,7 +4107,14 @@ impl NativePaperGraphTransformerForecaster {
                 epochs,
                 learning_rate,
                 weight_decay,
-                backend: graph_st_select_compute_backend(backend).map_err(to_py_geo_st_error)?,
+                backend: graph_st_select_compute_backend_for_operations(
+                    backend,
+                    &[
+                        BackendOperation::ScalarGraph,
+                        BackendOperation::ScalarGraphTraining,
+                    ],
+                )
+                .map_err(to_py_geo_st_error)?,
             })
             .map_err(to_py_geo_st_error)?,
         })
