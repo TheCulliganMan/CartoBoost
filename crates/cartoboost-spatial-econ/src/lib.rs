@@ -8,6 +8,8 @@ use std::fs;
 use std::path::Path;
 use thiserror::Error;
 
+const SPATIAL_SPARSE_DISPATCH_MIN_EDGES: usize = 16_384;
+
 #[derive(Debug, Error)]
 pub enum SpatialEconError {
     #[error("{0}")]
@@ -882,7 +884,7 @@ fn solve_spatial_lag_mean_with_backend(
     weights: &SpatialWeights,
     backend: &BackendSelection,
 ) -> Result<Vec<f64>> {
-    if backend.selected == "cpu" {
+    if backend.selected == "cpu" || weights.indices.len() < SPATIAL_SPARSE_DISPATCH_MIN_EDGES {
         return solve_spatial_lag_mean(structural_mean, rho, weights);
     }
     validate_spatial_parameter(rho, spatial_parameter_bound(weights)?, "rho")?;

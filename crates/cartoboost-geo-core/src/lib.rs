@@ -5,6 +5,8 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+const GEO_PAIRWISE_DISPATCH_MIN_PAIRS: usize = 16_384;
+
 pub const EARTH_RADIUS_KM: f64 = 6_371.0;
 pub const EARTH_RADIUS_METERS: f64 = EARTH_RADIUS_KM * 1_000.0;
 
@@ -499,7 +501,9 @@ fn pairwise_coordinate_distances(
     coords: &CoordinateMatrix,
     backend: &BackendSelection,
 ) -> Result<Vec<f64>> {
-    if backend.selected == "cpu" {
+    if backend.selected == "cpu"
+        || coords.len().saturating_mul(coords.len()) < GEO_PAIRWISE_DISPATCH_MIN_PAIRS
+    {
         return Ok((0..coords.len())
             .flat_map(|left| (0..coords.len()).map(move |right| distance(coords, left, right)))
             .collect());
@@ -826,7 +830,7 @@ pub fn radial_anchor_distances_with_backend(
         return Ok(Vec::new());
     }
     let selection = geo_distance_backend(backend)?;
-    if selection.selected == "cpu" {
+    if selection.selected == "cpu" || anchors.len() < GEO_PAIRWISE_DISPATCH_MIN_PAIRS {
         return Ok(radial_anchor_distances(point, anchors));
     }
     let left = [vec![point[0] as f32, point[1] as f32]];
@@ -864,7 +868,9 @@ pub fn radial_anchor_distance_rows_with_backend(
         ));
     }
     let selection = geo_distance_backend(backend)?;
-    if selection.selected == "cpu" {
+    if selection.selected == "cpu"
+        || points.len().saturating_mul(anchors.len()) < GEO_PAIRWISE_DISPATCH_MIN_PAIRS
+    {
         return Ok(points
             .iter()
             .map(|&point| radial_anchor_distances(point, anchors))

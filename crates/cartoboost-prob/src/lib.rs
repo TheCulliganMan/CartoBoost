@@ -8,6 +8,8 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+const PROB_PAIRWISE_DISPATCH_MIN_PAIRS: usize = 16_384;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CalibrationMetadata {
     pub method: String,
@@ -871,7 +873,9 @@ pub fn nearest_calibration_residual_quantiles_with_backend(
         .zip(prediction)
         .map(|(&y, &p)| (y - p).abs())
         .collect::<Vec<_>>();
-    if backend.selected != "cpu" {
+    if backend.selected != "cpu"
+        && query_x.len().saturating_mul(calibration_x.len()) >= PROB_PAIRWISE_DISPATCH_MIN_PAIRS
+    {
         let calibration = calibration_x
             .iter()
             .zip(calibration_y)

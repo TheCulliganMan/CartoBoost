@@ -5,6 +5,8 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+const GEOSTATS_PAIRWISE_DISPATCH_MIN_PAIRS: usize = 16_384;
+
 #[derive(Debug, Error)]
 pub enum GeostatsError {
     #[error("invalid input: {0}")]
@@ -230,6 +232,8 @@ impl NearestNeighborGPRegressor {
         }
         if self.backend.selected != "cpu"
             && matches!(self.neighbor_index, NeighborIndex::BruteForce)
+            && coords.len().saturating_mul(self.coords.len())
+                >= GEOSTATS_PAIRWISE_DISPATCH_MIN_PAIRS
         {
             if coords
                 .iter()
@@ -502,7 +506,9 @@ pub fn empirical_semivariogram_with_backend(
         ..NngpConfig::default()
     }
     .validate()?;
-    let accelerated_distances = if backend.selected == "cpu" {
+    let accelerated_distances = if backend.selected == "cpu"
+        || coords.len().saturating_mul(coords.len()) < GEOSTATS_PAIRWISE_DISPATCH_MIN_PAIRS
+    {
         None
     } else {
         let transformed = coords
