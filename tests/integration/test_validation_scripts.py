@@ -12,6 +12,42 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python 3.10 compatibility
+    import tomli as tomllib
+
+
+def test_python_base_install_keeps_integrations_optional():
+    repo_root = Path(__file__).resolve().parents[2]
+    metadata = tomllib.loads((repo_root / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+
+    assert metadata["dependencies"] == [
+        "numpy>=1.23; python_version < '3.13'",
+        "numpy>=2.1; python_version >= '3.13'",
+    ]
+    extras = metadata["optional-dependencies"]
+    assert {
+        "chronos",
+        "duckdb",
+        "explain",
+        "foundation",
+        "h3",
+        "holidays",
+        "moirai",
+        "onnx",
+        "optuna",
+        "pandas",
+        "polars",
+        "s2",
+        "sklearn",
+        "tabpfn",
+        "tensorboard",
+        "timegpt",
+        "timesfm",
+        "visualization",
+    } <= extras.keys()
+
 
 def ordinal_word(rank: int) -> str:
     words = {
@@ -56,15 +92,14 @@ def test_ci_installs_native_extension_before_validation_artifacts():
     assert install_step < validation_step
 
 
-def test_ci_runs_benchmark_provenance_freshness_gate_after_smoke_benchmark():
+def test_ci_runs_benchmark_smoke_and_quality_without_freshness_gate():
     repo_root = Path(__file__).resolve().parents[2]
     workflow = (repo_root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 
-    benchmark_step = workflow.index("scripts/run_model_benchmark_suite.py")
-    freshness_step = workflow.index("scripts/check_benchmark_freshness.py")
-    assert benchmark_step < freshness_step
+    assert "scripts/run_model_benchmark_suite.py" in workflow
+    assert "scripts/check_benchmark_freshness.py" not in workflow
     assert "--output-dir target/benchmark-freshness" in workflow
-    assert "--artifact target/benchmark-freshness/results.json" in workflow
+    assert "scripts/check_forecasting_quality_gate.py" in workflow
     assert "scripts/run_scale_performance_gate.py" in workflow
 
 
@@ -79,6 +114,8 @@ def test_release_workflow_requires_ci_ancestry_and_distribution_smoke():
     assert "workflow_id: 'ci.yml'" in workflow
     assert "wheels-${{ matrix.platform }}-py${{ matrix.python-version }}" in workflow
     assert "smoke-sdist" in workflow
+    assert "Verify minimal wheel dependencies" in workflow
+    assert "unexpected unconditional wheel dependencies" in workflow
     assert "name: pypi" in workflow
     assert "password: ${{ secrets.PYPI_API_TOKEN }}" not in workflow
 

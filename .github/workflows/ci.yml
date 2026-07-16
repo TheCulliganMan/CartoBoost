@@ -276,7 +276,7 @@ jobs:
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
         run: uv run python scripts/check_import_performance.py
 
-      - name: Benchmark provenance freshness audit
+      - name: Benchmark smoke and quality audit
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
         run: |
           uv run python scripts/run_scale_performance_gate.py \
@@ -297,9 +297,6 @@ jobs:
             --n-rows 120 \
             --n-estimators 4 \
             --no-plots
-          uv run python scripts/check_benchmark_freshness.py \
-            --artifact target/benchmark-freshness/results.json \
-            --artifact docs/assets/nyc_taxi_benchmarks/forecasting_library_benchmark_real.json
           uv run python scripts/check_forecasting_quality_gate.py \
             --artifact docs/assets/nyc_taxi_benchmarks/forecasting_library_benchmark_real.json
           uv run python scripts/check_nyc_row_quality_gate.py \

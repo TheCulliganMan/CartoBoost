@@ -1,12 +1,19 @@
 # Changelog
 
+## 0.3.10 — Minimal Python Installation
+
+- Kept the standard Python installation limited to CartoBoost and NumPy.
+- Kept dataframe, geospatial, visualization, explainability, optimization,
+  accelerator, and foundation-model integrations available through named extras.
+- Added a release packaging guard that enforces the minimal dependency contract.
+
 ## 0.3.9 — Unified Model API and Portable Model Artifacts
 
 - Made every shipped modeling family available through the standard
   `cartoboost` and `cartoboost.forecasting` imports, including graph, spatial,
   probabilistic, causal, neural, and foundation-model adapters.
-- Made the full model dependency set part of the standard installation so
-  documented model classes are immediately available after installation.
+- Kept documented model classes available from the standard API, with optional
+  third-party backends installed through their named extras.
 - Added portable `save_weights`, `load_weights`, and pickle round-trips for
   native boosters, local forecasters, deep models, spatial estimators, and
   Python orchestration wrappers.
