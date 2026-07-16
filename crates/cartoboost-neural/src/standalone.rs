@@ -28,6 +28,7 @@ const GRAPHSAGE_LINK_ARTIFACT_TYPE: &str = "cartoboost.neural.standalone_graphsa
 const HETERO_GRAPHSAGE_REGRESSOR_ARTIFACT_TYPE: &str =
     "cartoboost.neural.standalone_hetero_graphsage_regressor";
 const HINSAGE_REGRESSOR_ARTIFACT_TYPE: &str = "cartoboost.neural.standalone_hinsage_regressor";
+const LINK_PAIR_DISPATCH_MIN_VALUES: usize = 16_384;
 const HETERO_GRAPHSAGE_LINK_ARTIFACT_TYPE: &str =
     "cartoboost.neural.standalone_hetero_graphsage_link_predictor";
 const HINSAGE_LINK_ARTIFACT_TYPE: &str = "cartoboost.neural.standalone_hinsage_link_predictor";
@@ -1404,14 +1405,38 @@ fn link_scores_with_backend(
     pairs: &[(usize, usize)],
     backend: &BackendSelection,
 ) -> Result<Vec<f64>> {
-    backend_pair_sigmoid_scores_f32(backend, embeddings, pairs).map_err(|err| match err {
-        cartoboost_accelerator::AcceleratorError::InvalidArgument(message)
-            if message.contains("pair scoring node ids must be within") =>
-        {
-            NeuralError::InvalidArgument("source or target node id exceeds node count".to_string())
-        }
-        other => other.into(),
-    })
+    let cpu_backend = if !should_accelerate_link_scores(
+        backend,
+        pairs.len(),
+        embeddings.first().map_or(0, Vec::len),
+    ) {
+        Some(select_backend_for(
+            Some("cpu"),
+            BackendOperation::PairScoring,
+        )?)
+    } else {
+        None
+    };
+    backend_pair_sigmoid_scores_f32(cpu_backend.as_ref().unwrap_or(backend), embeddings, pairs)
+        .map_err(|err| match err {
+            cartoboost_accelerator::AcceleratorError::InvalidArgument(message)
+                if message.contains("pair scoring node ids must be within") =>
+            {
+                NeuralError::InvalidArgument(
+                    "source or target node id exceeds node count".to_string(),
+                )
+            }
+            other => other.into(),
+        })
+}
+
+fn should_accelerate_link_scores(
+    backend: &BackendSelection,
+    pair_count: usize,
+    embedding_width: usize,
+) -> bool {
+    backend.selected != "cpu"
+        && pair_count.saturating_mul(embedding_width) >= LINK_PAIR_DISPATCH_MIN_VALUES
 }
 
 fn validate_pair_backend(backend: &BackendSelection) -> Result<()> {
@@ -1540,4 +1565,22 @@ fn validate_artifact_header(actual_type: &str, version: u32, expected_type: &str
 
 fn core_to_neural(err: cartoboost_core::CartoBoostError) -> NeuralError {
     NeuralError::InvalidArgument(err.to_string())
+}
+
+#[cfg(test)]
+mod dispatch_tests {
+    use super::*;
+
+    #[test]
+    fn link_inference_avoids_small_device_launches() {
+        for backend_name in crate::available_backends() {
+            let backend =
+                select_backend_for(Some(&backend_name), BackendOperation::PairScoring).unwrap();
+            assert!(!should_accelerate_link_scores(&backend, 1, 16));
+            assert_eq!(
+                should_accelerate_link_scores(&backend, 1_024, 16),
+                backend_name != "cpu"
+            );
+        }
+    }
 }

@@ -519,7 +519,7 @@ fn pairwise_coordinate_distances(
             values
                 .into_iter()
                 .flatten()
-                .map(|value| f64::from(value).sqrt())
+                .map(|value| f64::from(value.max(0.0)).sqrt())
                 .collect()
         })
         .map_err(|error| GeoCoreError::InvalidInput(error.to_string()))
@@ -842,7 +842,7 @@ pub fn radial_anchor_distances_with_backend(
         .map_err(|error| GeoCoreError::InvalidInput(error.to_string()))?;
     Ok(distances[0]
         .iter()
-        .map(|&value| f64::from(value).sqrt())
+        .map(|&value| f64::from(value.max(0.0)).sqrt())
         .collect())
 }
 
@@ -889,7 +889,7 @@ pub fn radial_anchor_distance_rows_with_backend(
             rows.into_iter()
                 .map(|row| {
                     row.into_iter()
-                        .map(|value| f64::from(value).sqrt())
+                        .map(|value| f64::from(value.max(0.0)).sqrt())
                         .collect()
                 })
                 .collect()

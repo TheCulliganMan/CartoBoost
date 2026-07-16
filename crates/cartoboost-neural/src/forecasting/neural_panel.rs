@@ -8,13 +8,18 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::scaler::StandardScaler;
-use crate::{backend_dense_layer_f32, select_backend, BackendSelection, NeuralError, Result};
+use crate::{
+    backend_dense_layer_f32, select_backend, select_backend_for, BackendOperation,
+    BackendSelection, NeuralError, Result,
+};
 
 type KnownFutureCovariates = BTreeMap<(String, NaiveDateTime), BTreeMap<String, f64>>;
 type KnownFutureCovariateIndex<'a> =
     BTreeMap<&'a str, BTreeMap<NaiveDateTime, &'a BTreeMap<String, f64>>>;
 type FeatureComponentBreakdown = (f64, f64, BTreeMap<String, f64>, BTreeMap<String, f64>);
 type ForwardTrace = (Vec<Vec<f64>>, Vec<Vec<f64>>);
+
+const PANEL_DENSE_INFERENCE_DISPATCH_MIN_OPS: usize = 16_384;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TrendMode {
@@ -2602,6 +2607,8 @@ impl MlpState {
     }
 
     fn forward(&self, input: &[f64], backend: &BackendSelection) -> Result<Vec<f64>> {
+        let cpu_backend = panel_dense_cpu_fallback(backend, self.max_layer_ops())?;
+        let execution_backend = cpu_backend.as_ref().unwrap_or(backend);
         let mut activation = padded_input(input, self.input_width);
         for (layer_idx, layer) in self.layers.iter().enumerate() {
             let is_last = layer_idx + 1 == self.layers.len();
@@ -2617,7 +2624,7 @@ impl MlpState {
                 .iter()
                 .map(|value| *value as f32)
                 .collect::<Vec<_>>();
-            let rows = backend_dense_layer_f32(backend, &features, &weights, &biases)?;
+            let rows = backend_dense_layer_f32(execution_backend, &features, &weights, &biases)?;
             activation = rows
                 .into_iter()
                 .next()
@@ -2634,6 +2641,20 @@ impl MlpState {
                 .collect();
         }
         Ok(activation)
+    }
+
+    fn max_layer_ops(&self) -> usize {
+        self.layers
+            .iter()
+            .map(|layer| {
+                layer
+                    .weights
+                    .first()
+                    .map_or(0, Vec::len)
+                    .saturating_mul(layer.weights.len())
+            })
+            .max()
+            .unwrap_or(0)
     }
 
     /// Evaluate the fitted dense network on CPU. This is intentionally public
@@ -3104,7 +3125,21 @@ fn forward_trace_with_backend(
     input: &[f64],
     backend: &BackendSelection,
 ) -> Result<ForwardTrace> {
-    if backend.selected == "cpu" {
+    let max_layer_ops = net
+        .layers
+        .iter()
+        .map(|layer| {
+            layer
+                .weights
+                .first()
+                .map_or(0, Vec::len)
+                .saturating_mul(layer.weights.len())
+        })
+        .max()
+        .unwrap_or(0);
+    let cpu_backend = panel_dense_cpu_fallback(backend, max_layer_ops)?;
+    let execution_backend = cpu_backend.as_ref().unwrap_or(backend);
+    if execution_backend.selected == "cpu" {
         return Ok(forward_trace(net, input));
     }
     let mut activations = vec![padded_input(input, net.input_width)];
@@ -3120,7 +3155,7 @@ fn forward_trace_with_backend(
             .iter()
             .map(|value| *value as f32)
             .collect::<Vec<_>>();
-        let linear = backend_dense_layer_f32(backend, &features, &weights, &biases)?
+        let linear = backend_dense_layer_f32(execution_backend, &features, &weights, &biases)?
             .into_iter()
             .next()
             .expect("backend dense layer returns one row")
@@ -3136,6 +3171,19 @@ fn forward_trace_with_backend(
         activations.push(next);
     }
     Ok((activations, preactivations))
+}
+
+fn panel_dense_cpu_fallback(
+    backend: &BackendSelection,
+    operations: usize,
+) -> Result<Option<BackendSelection>> {
+    if backend.selected != "cpu" && operations < PANEL_DENSE_INFERENCE_DISPATCH_MIN_OPS {
+        return Ok(Some(select_backend_for(
+            Some("cpu"),
+            BackendOperation::Dense,
+        )?));
+    }
+    Ok(None)
 }
 
 fn clone_zero_layers(layers: &[DenseLayer]) -> Vec<DenseLayer> {
@@ -3356,4 +3404,26 @@ fn split_lane(series_id: &str) -> (Option<&str>, Option<&str>) {
         return (Some(origin), Some(destination));
     }
     (None, None)
+}
+
+#[cfg(test)]
+mod dispatch_tests {
+    use super::*;
+
+    #[test]
+    fn panel_dense_inference_avoids_small_device_launches() {
+        for backend_name in crate::available_backends() {
+            let backend = select_backend_for(Some(&backend_name), BackendOperation::Dense).unwrap();
+            assert_eq!(
+                panel_dense_cpu_fallback(&backend, 16).unwrap().is_some(),
+                backend_name != "cpu"
+            );
+            assert!(
+                panel_dense_cpu_fallback(&backend, PANEL_DENSE_INFERENCE_DISPATCH_MIN_OPS)
+                    .unwrap()
+                    .is_none(),
+                "{backend_name}"
+            );
+        }
+    }
 }

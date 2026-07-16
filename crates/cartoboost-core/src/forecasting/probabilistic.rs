@@ -3,6 +3,8 @@ use crate::data::Dataset;
 use crate::loss::{LossConfig, QuantileLossConfig};
 use crate::tree::Model;
 use crate::{CartoBoostError, Result};
+use cartoboost_accelerator::backend::{select_backend_for, BackendOperation};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use super::quantiles::{
@@ -94,15 +96,33 @@ impl QuantileRegressorSet {
                 "targets must be finite".to_string(),
             ));
         }
-        let mut models = Vec::with_capacity(config.quantiles.len());
-        for &quantile in &config.quantiles {
-            let mut booster_config = config.booster_config.clone();
-            booster_config.loss = LossConfig::Quantile(QuantileLossConfig { alpha: quantile });
-            let mut model =
-                Booster::new_with_backend(booster_config, backend)?.fit(x, y, sample_weight)?;
-            model.target_name = Some(format!("quantile_{quantile:.3}"));
-            models.push(model);
-        }
+        let selection = select_backend_for(backend, BackendOperation::Dense)
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+        let fit_quantile =
+            |quantile: f64| {
+                let mut booster_config = config.booster_config.clone();
+                booster_config.loss = LossConfig::Quantile(QuantileLossConfig { alpha: quantile });
+                let mut model =
+                    Booster::new_with_backend(booster_config, Some(selection.selected.as_str()))?
+                        .fit(x, y, sample_weight)?;
+                model.target_name = Some(format!("quantile_{quantile:.3}"));
+                Ok(model)
+            };
+        let models = if selection.selected == "cpu" {
+            config
+                .quantiles
+                .par_iter()
+                .copied()
+                .map(fit_quantile)
+                .collect::<Result<Vec<_>>>()?
+        } else {
+            config
+                .quantiles
+                .iter()
+                .copied()
+                .map(fit_quantile)
+                .collect::<Result<Vec<_>>>()?
+        };
         Ok(Self {
             quantiles: config.quantiles,
             models,

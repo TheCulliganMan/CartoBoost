@@ -5,6 +5,8 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+const OPERATOR_CSR_DISPATCH_MIN_VALUES: usize = 16_384;
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SpatialOperatorEdge {
     pub source: usize,
@@ -328,7 +330,7 @@ fn graph_average_panel(
     nodes: usize,
     backend: &BackendSelection,
 ) -> Result<Vec<Vec<f64>>> {
-    if backend.selected == "cpu" {
+    if !should_accelerate_operator_diffusion(backend, panel.len(), edges.len()) {
         return panel
             .iter()
             .map(|row| graph_average(row, edges, nodes))
@@ -340,6 +342,15 @@ fn graph_average_panel(
         .chunks_exact(nodes)
         .map(|row| row.iter().map(|value| f64::from(*value)).collect())
         .collect())
+}
+
+fn should_accelerate_operator_diffusion(
+    backend: &BackendSelection,
+    time_steps: usize,
+    edge_count: usize,
+) -> bool {
+    backend.selected != "cpu"
+        && time_steps.saturating_mul(edge_count) >= OPERATOR_CSR_DISPATCH_MIN_VALUES
 }
 
 type GraphDiffusionInputs = (Vec<u32>, Vec<u32>, Vec<f32>, Vec<f32>);
@@ -428,6 +439,19 @@ fn invalid<T>(message: &str) -> Result<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn operator_diffusion_avoids_small_device_launches() {
+        for backend_name in crate::available_backends() {
+            let backend =
+                select_backend_for(Some(&backend_name), BackendOperation::CsrDiffusion).unwrap();
+            assert!(!should_accelerate_operator_diffusion(&backend, 1, 16));
+            assert_eq!(
+                should_accelerate_operator_diffusion(&backend, 1_024, 16),
+                backend_name != "cpu"
+            );
+        }
+    }
 
     #[test]
     fn graph_neural_operator_predicts_fields_and_uncertainty() {

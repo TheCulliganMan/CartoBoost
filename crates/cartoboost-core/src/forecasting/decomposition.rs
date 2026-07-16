@@ -7,6 +7,7 @@ use crate::forecasting::{
     ForecastResult, ForecastRow, Forecaster,
 };
 use crate::{CartoBoostError, Result};
+use rayon::prelude::*;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -96,30 +97,44 @@ impl Forecaster for STLCartoBoostForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
         self.fitted = None;
         frame.require_regular_for_model(self.model_name())?;
+        let series = history_by_series(frame.rows())
+            .into_iter()
+            .collect::<Vec<_>>();
+        let decomposed = series
+            .into_par_iter()
+            .map(|(series_id, rows)| {
+                let values = rows.iter().map(|row| row.target).collect::<Vec<_>>();
+                let decomposition = self.decomposition.decompose(&values)?;
+                let pattern = final_phase_pattern(
+                    &decomposition.seasonal,
+                    self.decomposition.season_length(),
+                )?;
+                let adjusted = rows
+                    .iter()
+                    .zip(&decomposition.seasonal)
+                    .map(|(row, seasonal)| {
+                        ForecastRow::new(
+                            row.series_id.clone(),
+                            row.timestamp,
+                            row.target - seasonal,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                Ok((
+                    series_id,
+                    adjusted,
+                    FittedSTLSeries {
+                        history_len: values.len(),
+                        seasonal_pattern: pattern,
+                    },
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
         let mut adjusted_rows = Vec::with_capacity(frame.rows().len());
         let mut fitted_series = BTreeMap::new();
-        for (series_id, rows) in history_by_series(frame.rows()) {
-            let values = rows.iter().map(|row| row.target).collect::<Vec<_>>();
-            let decomposition = self.decomposition.decompose(&values)?;
-            let pattern =
-                final_phase_pattern(&decomposition.seasonal, self.decomposition.season_length())?;
-            // The downstream model forecasts the seasonally adjusted series
-            // (trend + remainder). The repeated STL seasonal component is then
-            // added back at prediction time.
-            for (row, seasonal) in rows.iter().zip(&decomposition.seasonal) {
-                adjusted_rows.push(ForecastRow::new(
-                    row.series_id.clone(),
-                    row.timestamp,
-                    row.target - seasonal,
-                ));
-            }
-            fitted_series.insert(
-                series_id,
-                FittedSTLSeries {
-                    history_len: values.len(),
-                    seasonal_pattern: pattern,
-                },
-            );
+        for (series_id, adjusted, fitted) in decomposed {
+            adjusted_rows.extend(adjusted);
+            fitted_series.insert(series_id, fitted);
         }
         let adjusted_frame = ForecastFrame::with_metadata(
             adjusted_rows,
@@ -198,36 +213,51 @@ impl Forecaster for MSTLCartoBoostForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
         self.fitted = None;
         frame.require_regular_for_model(self.model_name())?;
+        let series = history_by_series(frame.rows())
+            .into_iter()
+            .collect::<Vec<_>>();
+        let decomposed = series
+            .into_par_iter()
+            .map(|(series_id, rows)| {
+                let values = rows.iter().map(|row| row.target).collect::<Vec<_>>();
+                let decomposition = self.decomposition.decompose(&values)?;
+                let total_seasonal = decomposition.total_seasonal();
+                let adjusted = rows
+                    .iter()
+                    .zip(&total_seasonal)
+                    .map(|(row, seasonal)| {
+                        ForecastRow::new(
+                            row.series_id.clone(),
+                            row.timestamp,
+                            row.target - seasonal,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let seasonal_patterns = decomposition
+                    .seasonal_components
+                    .iter()
+                    .map(|component| {
+                        Ok((
+                            component.season_length,
+                            final_phase_pattern(&component.values, component.season_length)?,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok((
+                    series_id,
+                    adjusted,
+                    FittedMSTLSeries {
+                        history_len: values.len(),
+                        seasonal_patterns,
+                    },
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
         let mut adjusted_rows = Vec::with_capacity(frame.rows().len());
         let mut fitted_series = BTreeMap::new();
-        for (series_id, rows) in history_by_series(frame.rows()) {
-            let values = rows.iter().map(|row| row.target).collect::<Vec<_>>();
-            let decomposition = self.decomposition.decompose(&values)?;
-            let total_seasonal = decomposition.total_seasonal();
-            for (row, seasonal) in rows.iter().zip(&total_seasonal) {
-                adjusted_rows.push(ForecastRow::new(
-                    row.series_id.clone(),
-                    row.timestamp,
-                    row.target - seasonal,
-                ));
-            }
-            let seasonal_patterns = decomposition
-                .seasonal_components
-                .iter()
-                .map(|component| {
-                    Ok((
-                        component.season_length,
-                        final_phase_pattern(&component.values, component.season_length)?,
-                    ))
-                })
-                .collect::<Result<Vec<_>>>()?;
-            fitted_series.insert(
-                series_id,
-                FittedMSTLSeries {
-                    history_len: values.len(),
-                    seasonal_patterns,
-                },
-            );
+        for (series_id, adjusted, fitted) in decomposed {
+            adjusted_rows.extend(adjusted);
+            fitted_series.insert(series_id, fitted);
         }
         let adjusted_frame = ForecastFrame::with_metadata(
             adjusted_rows,

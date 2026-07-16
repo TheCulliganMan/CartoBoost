@@ -4320,8 +4320,7 @@ fn run_regression_request(request: BrowserRegressionRequest) -> Result<BrowserRe
         request.options.backend.as_deref(),
     )?
     .fit(&train_x, train_y, None)?;
-    let predictions =
-        model.try_predict_with_backend(&holdout_x, request.options.backend.as_deref())?;
+    let predictions = model.try_predict(&holdout_x)?;
     let interval_predictions =
         regression_interval_predictions(&request.options, &train_x, train_y, &holdout_x)?;
     let metrics = regression_metrics(holdout_y, &predictions, train_rows, holdout_rows)?;
@@ -5119,8 +5118,8 @@ fn regression_interval_predictions(
         options.backend.as_deref(),
     )?
     .fit(train_x, train_y, None)?;
-    let lower = lower_model.try_predict_with_backend(holdout_x, options.backend.as_deref())?;
-    let upper = upper_model.try_predict_with_backend(holdout_x, options.backend.as_deref())?;
+    let lower = lower_model.try_predict(holdout_x)?;
+    let upper = upper_model.try_predict(holdout_x)?;
     let (lower, upper): (Vec<_>, Vec<_>) = lower
         .into_iter()
         .zip(upper)

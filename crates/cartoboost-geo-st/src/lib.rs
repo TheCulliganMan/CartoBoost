@@ -13,6 +13,8 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
 
+const GEO_ST_AFFINE_DISPATCH_MIN_OPS: usize = 16_384;
+
 pub mod market;
 pub use market::{
     ExpertEventLabel, ExpertRelationshipPrior, MarketExplanation, MarketPanelFrame,
@@ -85,6 +87,20 @@ pub fn select_compute_backend_for_operations(
         selected: neural.selected,
         available: neural.available,
     })
+}
+
+fn profitable_affine_backend(
+    backend: BackendSelection,
+    row_count: usize,
+    feature_count: usize,
+) -> Result<BackendSelection> {
+    if backend.selected != "cpu"
+        && row_count.saturating_mul(feature_count) < GEO_ST_AFFINE_DISPATCH_MIN_OPS
+    {
+        return cartoboost_neural::select_backend_for(Some("cpu"), BackendOperation::Affine)
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()));
+    }
+    Ok(backend)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -572,8 +588,13 @@ impl DcrnnForecaster {
                 .collect::<Vec<_>>();
             let means = vec![0.0; feature_len];
             let intercepts = vec![self.intercepts[h]; state.len()];
+            let execution_backend = profitable_affine_backend(
+                self.neural_backend_selection(),
+                rows.len(),
+                feature_len,
+            )?;
             let next = backend_affine_scores(
-                &self.neural_backend_selection(),
+                &execution_backend,
                 &rows,
                 &means,
                 &self.weights[h],
@@ -8416,8 +8437,13 @@ impl GraphWaveNetForecaster {
                 .collect::<Vec<_>>();
             let means = vec![0.0; feature_len];
             let intercepts = vec![self.intercepts[h]; self.node_ids.len()];
+            let execution_backend = profitable_affine_backend(
+                self.neural_backend_selection(),
+                rows.len(),
+                feature_len,
+            )?;
             let next = backend_affine_scores(
-                &self.neural_backend_selection(),
+                &execution_backend,
                 &rows,
                 &means,
                 &self.weights[h],
@@ -8647,8 +8673,13 @@ impl STAEformerForecaster {
                 .collect::<Vec<_>>();
             let means = vec![0.0; feature_len];
             let intercepts = vec![self.intercepts[h]; self.node_ids.len()];
+            let execution_backend = profitable_affine_backend(
+                self.neural_backend_selection(),
+                rows.len(),
+                feature_len,
+            )?;
             let next = backend_affine_scores(
-                &self.neural_backend_selection(),
+                &execution_backend,
                 &rows,
                 &means,
                 &self.weights[h],
@@ -10094,6 +10125,28 @@ mod tests {
         assert!(default_selection
             .available
             .contains(&default_selection.selected));
+    }
+
+    #[test]
+    fn graph_affine_inference_avoids_small_device_launches() {
+        for backend_name in available_compute_backends() {
+            let backend = cartoboost_neural::select_backend_for(
+                Some(&backend_name),
+                BackendOperation::Affine,
+            )
+            .unwrap();
+            let small = profitable_affine_backend(backend.clone(), 1, 4).unwrap();
+            assert_eq!(small.selected, "cpu");
+            let large = profitable_affine_backend(backend, 4_096, 4).unwrap();
+            assert_eq!(
+                large.selected,
+                if backend_name == "cpu" {
+                    "cpu"
+                } else {
+                    backend_name.as_str()
+                }
+            );
+        }
     }
 
     #[cfg(all(feature = "cuda", target_os = "linux"))]

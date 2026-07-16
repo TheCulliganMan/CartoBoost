@@ -5,6 +5,8 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+const DEEP_INFERENCE_DISPATCH_MIN_OPS: usize = 16_384;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DeepResponseRow {
     pub features: Vec<f64>,
@@ -392,7 +394,7 @@ pub fn response_curve_predict(
         .map(|row| artifact.intercept + artifact.candidate_slope * row.candidate_value)
         .collect::<Vec<_>>();
     let scores = if artifact.hidden_weights.is_empty() {
-        backend_affine_scores(
+        thresholded_affine_scores(
             &artifact.backend,
             &features,
             &artifact.feature_means,
@@ -483,7 +485,7 @@ pub fn event_outcome_predict(
     validate_matrix(features)?;
     let intercepts = vec![artifact.intercept; features.len()];
     let logits = if artifact.hidden_weights.is_empty() {
-        backend_affine_scores(
+        thresholded_affine_scores(
             &artifact.backend,
             features,
             &artifact.feature_means,
@@ -946,8 +948,15 @@ pub fn directional_pair_predict(
                 (0..hidden_width).map(move |hidden| artifact.hidden_weights[hidden][input] as f32)
             })
             .collect::<Vec<_>>();
-        let hidden = backend_dense_layer_f32(
+        let cpu_backend = inference_cpu_fallback(
             &artifact.backend,
+            BackendOperation::Dense,
+            inputs.len(),
+            input_width.saturating_mul(hidden_width),
+        )?;
+        let execution_backend = cpu_backend.as_ref().unwrap_or(&artifact.backend);
+        let hidden = backend_dense_layer_f32(
+            execution_backend,
             &inputs
                 .iter()
                 .map(|row| row.iter().map(|&value| value as f32).collect())
@@ -964,7 +973,7 @@ pub fn directional_pair_predict(
             .map(|row| row.into_iter().map(f32::tanh).collect())
             .collect::<Vec<Vec<f32>>>();
         return Ok(backend_dense_layer_f32(
-            &artifact.backend,
+            execution_backend,
             &activated,
             &artifact
                 .output_weights
@@ -998,7 +1007,7 @@ pub fn directional_pair_predict(
     if artifact.feature_weights.is_empty() {
         return Ok(intercepts);
     }
-    Ok(backend_affine_scores(
+    thresholded_affine_scores(
         &artifact.backend,
         &rows
             .iter()
@@ -1007,7 +1016,7 @@ pub fn directional_pair_predict(
         &artifact.feature_means,
         &artifact.feature_weights,
         &intercepts,
-    )?)
+    )
 }
 
 fn expand_pair_architecture_rows(
@@ -1323,7 +1332,7 @@ pub fn service_residual_predict(
         .collect::<Vec<_>>();
     let intercepts = vec![artifact.intercept; rows.len()];
     let residuals = if artifact.hidden_weights.is_empty() {
-        backend_affine_scores(
+        thresholded_affine_scores(
             &artifact.backend,
             &features,
             &artifact.feature_means,
@@ -1729,12 +1738,22 @@ pub fn temporal_entity_predict(
                 )
             })
             .collect::<Vec<_>>();
-        if artifact.backend.selected == "cpu" {
+        let feature_len = feature_rows[0].len();
+        let cpu_backend = inference_cpu_fallback(
+            &artifact.backend,
+            BackendOperation::Dense,
+            1,
+            artifact
+                .entity_count
+                .saturating_mul(feature_len)
+                .saturating_mul(artifact.entity_count),
+        )?;
+        let execution_backend = cpu_backend.as_ref().unwrap_or(&artifact.backend);
+        if execution_backend.selected == "cpu" {
             for (entity, value) in row.iter_mut().enumerate() {
                 *value = dot(&artifact.decoder_weights[h][entity], &feature_rows[entity]);
             }
         } else {
-            let feature_len = feature_rows[0].len();
             let mut block_features = vec![0.0_f32; artifact.entity_count * feature_len];
             let mut block_weights =
                 vec![0.0_f32; artifact.entity_count * feature_len * artifact.entity_count];
@@ -1747,7 +1766,7 @@ pub fn temporal_entity_predict(
                 }
             }
             row = backend_dense_layer_f32(
-                &artifact.backend,
+                execution_backend,
                 &[block_features],
                 &block_weights,
                 &vec![0.0; artifact.entity_count],
@@ -2171,7 +2190,14 @@ fn backend_tanh_scores(
         .iter()
         .map(|value| *value as f32)
         .collect::<Vec<_>>();
-    let activations = backend_dense_layer_f32(backend, &centered, &weights, &biases)?;
+    let cpu_backend = inference_cpu_fallback(
+        backend,
+        BackendOperation::Dense,
+        rows.len(),
+        dimensions.saturating_mul(hidden),
+    )?;
+    let execution_backend = cpu_backend.as_ref().unwrap_or(backend);
+    let activations = backend_dense_layer_f32(execution_backend, &centered, &weights, &biases)?;
     Ok(activations
         .into_iter()
         .zip(intercepts)
@@ -2183,6 +2209,42 @@ fn backend_tanh_scores(
                 + intercept
         })
         .collect())
+}
+
+fn thresholded_affine_scores(
+    backend: &BackendSelection,
+    features: &[Vec<f64>],
+    means: &[f64],
+    weights: &[f64],
+    intercepts: &[f64],
+) -> Result<Vec<f64>> {
+    let cpu_backend = inference_cpu_fallback(
+        backend,
+        BackendOperation::Affine,
+        features.len(),
+        weights.len(),
+    )?;
+    Ok(backend_affine_scores(
+        cpu_backend.as_ref().unwrap_or(backend),
+        features,
+        means,
+        weights,
+        intercepts,
+    )?)
+}
+
+fn inference_cpu_fallback(
+    backend: &BackendSelection,
+    operation: BackendOperation,
+    row_count: usize,
+    operations_per_row: usize,
+) -> Result<Option<BackendSelection>> {
+    if backend.selected != "cpu"
+        && row_count.saturating_mul(operations_per_row) < DEEP_INFERENCE_DISPATCH_MIN_OPS
+    {
+        return Ok(Some(select_backend_for(Some("cpu"), operation)?));
+    }
+    Ok(None)
 }
 
 fn linearized_feature_weights(
@@ -2667,6 +2729,26 @@ fn invalid<T>(message: impl Into<String>) -> Result<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deep_inference_dispatch_avoids_small_device_launches() {
+        for backend_name in crate::available_backends() {
+            let backend =
+                select_backend_for(Some(&backend_name), BackendOperation::Affine).unwrap();
+            assert_eq!(
+                inference_cpu_fallback(&backend, BackendOperation::Affine, 1, 4)
+                    .unwrap()
+                    .is_some(),
+                backend_name != "cpu"
+            );
+            assert!(
+                inference_cpu_fallback(&backend, BackendOperation::Affine, 4_096, 4)
+                    .unwrap()
+                    .is_none(),
+                "{backend_name}"
+            );
+        }
+    }
 
     #[test]
     fn directional_pair_fit_learns_ordered_pair_effects() {

@@ -997,7 +997,9 @@ fn reject_duplicate_coords_with_backend(
         }
         return Ok(());
     }
-    if backend.selected != "cpu" {
+    if backend.selected != "cpu"
+        && coords.len().saturating_mul(coords.len()) >= GEOSTATS_PAIRWISE_DISPATCH_MIN_PAIRS
+    {
         let rows = coords
             .iter()
             .map(|coord| vec![coord[0] as f32, coord[1] as f32])

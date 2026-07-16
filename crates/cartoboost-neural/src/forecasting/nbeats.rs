@@ -5,7 +5,7 @@ use cartoboost_core::{CartoBoostError, Result as CoreResult};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
-use crate::{backend_dense_layer_f32, backend_train_tanh_mlp_f32, BackendSelection};
+use crate::{backend_train_tanh_mlp_f32, BackendSelection};
 
 use super::dataloader::WindowDataset;
 use super::scaler::StandardScaler;
@@ -334,32 +334,6 @@ impl DeterministicMlp {
         // Forecasting invokes this for one origin at a time. A single-vector
         // device dispatch costs more than the dense work it replaces; training
         // remains batched on the selected accelerator.
-        if self.backend.selected != "cpu" {
-            return Ok(self.hidden(input));
-        }
-        let features = vec![input
-            .iter()
-            .take(self.input_size)
-            .map(|value| *value as f32)
-            .collect::<Vec<_>>()];
-        let weights = (0..self.input_size)
-            .flat_map(|input_idx| {
-                (0..self.hidden_size)
-                    .map(move |hidden_idx| self.w1[hidden_idx * self.input_size + input_idx] as f32)
-            })
-            .collect::<Vec<_>>();
-        let biases = self
-            .b1
-            .iter()
-            .map(|value| *value as f32)
-            .collect::<Vec<_>>();
-        let linear = backend_dense_layer_f32(&self.backend, &features, &weights, &biases)?;
-        Ok(linear
-            .into_iter()
-            .next()
-            .expect("backend dense layer returns one row")
-            .into_iter()
-            .map(|value| f64::from(value).tanh())
-            .collect())
+        Ok(self.hidden(input))
     }
 }

@@ -1129,8 +1129,18 @@ fn indexed_mse_with_backend(
         .iter()
         .map(|&index| features[index].clone())
         .collect::<Vec<_>>();
+    let cpu_backend =
+        if should_accelerate_affine(backend, rows.len(), weights.len().saturating_sub(1)) {
+            None
+        } else {
+            Some(
+                select_backend_for(Some("cpu"), BackendOperation::Affine)
+                    .map_err(|error| GeoCausalError::InvalidInput(error.to_string()))?,
+            )
+        };
+    let execution_backend = cpu_backend.as_ref().unwrap_or(backend);
     let predictions = backend_affine_scores(
-        backend,
+        execution_backend,
         &rows,
         &vec![0.0; weights.len() - 1],
         &weights[1..],
@@ -1146,6 +1156,15 @@ fn indexed_mse_with_backend(
         })
         .sum::<f64>()
         / indices.len() as f64)
+}
+
+fn should_accelerate_affine(
+    backend: &BackendSelection,
+    row_count: usize,
+    feature_count: usize,
+) -> bool {
+    backend.selected != "cpu"
+        && row_count.saturating_mul(feature_count) >= GEO_CAUSAL_AFFINE_DISPATCH_MIN_VALUES
 }
 
 fn mean_region_distance(features: &[Vec<f64>], regions: &[String]) -> f64 {
@@ -1252,6 +1271,19 @@ mod tests {
             }],
         )
         .unwrap()
+    }
+
+    #[test]
+    fn representation_affine_dispatch_avoids_small_device_launches() {
+        for backend_name in available_backends() {
+            let backend =
+                select_backend_for(Some(&backend_name), BackendOperation::Affine).unwrap();
+            assert!(!should_accelerate_affine(&backend, 1, 4));
+            assert_eq!(
+                should_accelerate_affine(&backend, 4_096, 4),
+                backend_name != "cpu"
+            );
+        }
     }
 
     #[test]

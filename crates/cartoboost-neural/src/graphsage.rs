@@ -1,5 +1,6 @@
 use crate::backend::{
-    backend_dense_layer_f32, backend_supports_operation, BackendOperation, BackendSelection,
+    backend_dense_layer_f32, backend_supports_operation, select_backend_for, BackendOperation,
+    BackendSelection,
 };
 use crate::error::{NeuralError, Result};
 use rayon::prelude::*;
@@ -9,6 +10,7 @@ use std::fs;
 use std::path::Path;
 
 const GRAPH_SAGE_ARTIFACT_TYPE: &str = "cartoboost.neural.graphsage_encoder";
+const GRAPH_SAGE_DENSE_DISPATCH_MIN_OPS: usize = 16_384;
 pub const GRAPH_SAGE_ARTIFACT_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1268,7 +1270,18 @@ fn forward_homogeneous(
         let mut weights = Vec::with_capacity(layer.in_dim * layer.out_dim * 2);
         weights.extend_from_slice(&layer.self_weight);
         weights.extend_from_slice(&layer.neigh_weight);
-        let preactivations = backend_dense_layer_f32(backend, &combined, &weights, &layer.bias)?;
+        let cpu_backend = graph_dense_cpu_fallback(
+            backend,
+            combined.len(),
+            layer.in_dim.saturating_mul(2),
+            layer.out_dim,
+        )?;
+        let preactivations = backend_dense_layer_f32(
+            cpu_backend.as_ref().unwrap_or(backend),
+            &combined,
+            &weights,
+            &layer.bias,
+        )?;
         let next = preactivations
             .par_iter()
             .map(|row| row.iter().map(|value| value.max(0.0)).collect::<Vec<_>>())
@@ -1362,7 +1375,18 @@ fn forward_hetero(
         for relation_weight in layer.relation_weights.iter().take(relation_count) {
             weights.extend_from_slice(relation_weight);
         }
-        let preactivations = backend_dense_layer_f32(backend, &combined, &weights, &layer.bias)?;
+        let cpu_backend = graph_dense_cpu_fallback(
+            backend,
+            combined.len(),
+            layer.in_dim.saturating_mul(relation_count + 1),
+            layer.out_dim,
+        )?;
+        let preactivations = backend_dense_layer_f32(
+            cpu_backend.as_ref().unwrap_or(backend),
+            &combined,
+            &weights,
+            &layer.bias,
+        )?;
         let next = preactivations
             .par_iter()
             .map(|row| row.iter().map(|value| value.max(0.0)).collect::<Vec<_>>())
@@ -1792,6 +1816,26 @@ fn validate_input_dim(input_dim: usize) -> Result<()> {
     Ok(())
 }
 
+fn graph_dense_cpu_fallback(
+    backend: &BackendSelection,
+    row_count: usize,
+    input_width: usize,
+    output_width: usize,
+) -> Result<Option<BackendSelection>> {
+    if backend.selected != "cpu"
+        && row_count
+            .saturating_mul(input_width)
+            .saturating_mul(output_width)
+            < GRAPH_SAGE_DENSE_DISPATCH_MIN_OPS
+    {
+        return Ok(Some(select_backend_for(
+            Some("cpu"),
+            BackendOperation::Dense,
+        )?));
+    }
+    Ok(None)
+}
+
 fn validate_dense_backend(backend: &BackendSelection) -> Result<()> {
     if backend_supports_operation(&backend.selected, BackendOperation::Dense) {
         Ok(())
@@ -1970,7 +2014,26 @@ impl SplitMix64 {
 
 #[cfg(test)]
 mod tests {
-    use super::source_observed_targets;
+    use super::*;
+
+    #[test]
+    fn graphsage_dense_dispatch_avoids_small_device_launches() {
+        for backend_name in crate::available_backends() {
+            let backend = select_backend_for(Some(&backend_name), BackendOperation::Dense).unwrap();
+            assert_eq!(
+                graph_dense_cpu_fallback(&backend, 1, 8, 8)
+                    .unwrap()
+                    .is_some(),
+                backend_name != "cpu"
+            );
+            assert!(
+                graph_dense_cpu_fallback(&backend, 256, 8, 8)
+                    .unwrap()
+                    .is_none(),
+                "{backend_name}"
+            );
+        }
+    }
 
     #[test]
     fn observed_targets_capture_edges_without_quadratic_negative_cache() {

@@ -487,6 +487,7 @@ fn geo_spatial_block_cv(
 #[pyo3(signature = (coords, n_folds, buffer_distance, dataset_fingerprint, coordinate_crs_note, model_version, dependency_versions, random_seed=None, split_id="buffered_spatial_cv", backend="cpu"))]
 #[allow(clippy::too_many_arguments)]
 fn geo_buffered_spatial_cv(
+    py: Python<'_>,
     coords: &NativeCoordinateMatrix,
     n_folds: usize,
     buffer_distance: f64,
@@ -507,16 +508,21 @@ fn geo_buffered_spatial_cv(
         coords.inner.len(),
         Some(split_id.to_string()),
     )?;
-    Ok(NativeSplitManifest {
-        inner: core_buffered_spatial_cv(
-            &coords.inner,
-            n_folds,
-            buffer_distance,
-            meta,
-            split_id.to_string(),
-            Some(backend),
-        )
-        .map_err(to_py_geo_core_error)?,
+    let coords = coords.inner.clone();
+    let split_id = split_id.to_string();
+    let backend = backend.to_string();
+    py.detach(move || {
+        Ok(NativeSplitManifest {
+            inner: core_buffered_spatial_cv(
+                &coords,
+                n_folds,
+                buffer_distance,
+                meta,
+                split_id,
+                Some(&backend),
+            )
+            .map_err(to_py_geo_core_error)?,
+        })
     })
 }
 
@@ -5755,13 +5761,8 @@ impl NativeCartoBoostRegressor {
             .ok_or_else(|| PyRuntimeError::new_err("CartoBoostRegressor is not fitted"))?;
         let dataset = dataset_from_parts(x, sparse_sets, None)?;
         let n_threads = self.n_threads;
-        let backend = self.backend.clone();
-        py.detach(|| {
-            run_with_optional_threads(n_threads, || {
-                model.try_predict_with_backend(&dataset, Some(&backend))
-            })
-        })
-        .map_err(to_py_value_error)
+        py.detach(|| run_with_optional_threads(n_threads, || model.try_predict(&dataset)))
+            .map_err(to_py_value_error)
     }
 
     #[pyo3(signature = (x, sparse_offsets=None, sparse_ids=None))]
@@ -6412,13 +6413,8 @@ impl NativeCartoBoostClassifier {
             .ok_or_else(|| PyRuntimeError::new_err("CartoBoostClassifier is not fitted"))?;
         let dataset = dataset_from_parts(x, sparse_sets, None)?;
         let n_threads = self.n_threads;
-        let backend = self.backend.clone();
-        py.detach(|| {
-            run_with_optional_threads(n_threads, || {
-                model.predict_with_backend(&dataset, Some(&backend))
-            })
-        })
-        .map_err(to_py_value_error)
+        py.detach(|| run_with_optional_threads(n_threads, || model.predict(&dataset)))
+            .map_err(to_py_value_error)
     }
 
     #[pyo3(signature = (x, sparse_offsets=None, sparse_ids=None))]
@@ -6435,13 +6431,8 @@ impl NativeCartoBoostClassifier {
             .ok_or_else(|| PyRuntimeError::new_err("CartoBoostClassifier is not fitted"))?;
         let dataset = dataset_from_arrays(x, sparse_offsets, sparse_ids, None)?;
         let n_threads = self.n_threads;
-        let backend = self.backend.clone();
-        py.detach(|| {
-            run_with_optional_threads(n_threads, || {
-                model.predict_with_backend(&dataset, Some(&backend))
-            })
-        })
-        .map_err(to_py_value_error)
+        py.detach(|| run_with_optional_threads(n_threads, || model.predict(&dataset)))
+            .map_err(to_py_value_error)
     }
 
     #[pyo3(signature = (x, sparse_sets=None))]
@@ -6457,13 +6448,8 @@ impl NativeCartoBoostClassifier {
             .ok_or_else(|| PyRuntimeError::new_err("CartoBoostClassifier is not fitted"))?;
         let dataset = dataset_from_parts(x, sparse_sets, None)?;
         let n_threads = self.n_threads;
-        let backend = self.backend.clone();
-        py.detach(|| {
-            run_with_optional_threads(n_threads, || {
-                model.predict_proba_with_backend(&dataset, Some(&backend))
-            })
-        })
-        .map_err(to_py_value_error)
+        py.detach(|| run_with_optional_threads(n_threads, || model.predict_proba(&dataset)))
+            .map_err(to_py_value_error)
     }
 
     #[pyo3(signature = (x, sparse_offsets=None, sparse_ids=None))]
@@ -6480,13 +6466,8 @@ impl NativeCartoBoostClassifier {
             .ok_or_else(|| PyRuntimeError::new_err("CartoBoostClassifier is not fitted"))?;
         let dataset = dataset_from_arrays(x, sparse_offsets, sparse_ids, None)?;
         let n_threads = self.n_threads;
-        let backend = self.backend.clone();
-        py.detach(|| {
-            run_with_optional_threads(n_threads, || {
-                model.predict_proba_with_backend(&dataset, Some(&backend))
-            })
-        })
-        .map_err(to_py_value_error)
+        py.detach(|| run_with_optional_threads(n_threads, || model.predict_proba(&dataset)))
+            .map_err(to_py_value_error)
     }
 
     #[pyo3(signature = (x, sparse_sets=None))]
@@ -6502,13 +6483,8 @@ impl NativeCartoBoostClassifier {
             .ok_or_else(|| PyRuntimeError::new_err("CartoBoostClassifier is not fitted"))?;
         let dataset = dataset_from_parts(x, sparse_sets, None)?;
         let n_threads = self.n_threads;
-        let backend = self.backend.clone();
-        py.detach(|| {
-            run_with_optional_threads(n_threads, || {
-                model.decision_function_with_backend(&dataset, Some(&backend))
-            })
-        })
-        .map_err(to_py_value_error)
+        py.detach(|| run_with_optional_threads(n_threads, || model.decision_function(&dataset)))
+            .map_err(to_py_value_error)
     }
 
     fn save(&self, py: Python<'_>, path: PathBuf) -> PyResult<()> {
@@ -6953,13 +6929,8 @@ impl NativeCartoBoostRanker {
             .ok_or_else(|| PyRuntimeError::new_err("CartoBoostRanker is not fitted"))?;
         let dataset = dataset_from_parts(x, sparse_sets, None)?;
         let n_threads = self.n_threads;
-        let backend = self.backend.clone();
-        py.detach(|| {
-            run_with_optional_threads(n_threads, || {
-                model.predict_with_backend(&dataset, Some(&backend))
-            })
-        })
-        .map_err(to_py_value_error)
+        py.detach(|| run_with_optional_threads(n_threads, || model.predict(&dataset)))
+            .map_err(to_py_value_error)
     }
 
     #[pyo3(signature = (x, sparse_offsets=None, sparse_ids=None))]
@@ -6976,13 +6947,8 @@ impl NativeCartoBoostRanker {
             .ok_or_else(|| PyRuntimeError::new_err("CartoBoostRanker is not fitted"))?;
         let dataset = dataset_from_arrays(x, sparse_offsets, sparse_ids, None)?;
         let n_threads = self.n_threads;
-        let backend = self.backend.clone();
-        py.detach(|| {
-            run_with_optional_threads(n_threads, || {
-                model.predict_with_backend(&dataset, Some(&backend))
-            })
-        })
-        .map_err(to_py_value_error)
+        py.detach(|| run_with_optional_threads(n_threads, || model.predict(&dataset)))
+            .map_err(to_py_value_error)
     }
 
     #[pyo3(signature = (x, y, groups, sparse_sets=None))]
@@ -11680,6 +11646,7 @@ fn geostats_empirical_semivariogram_value(
 
 #[pyfunction]
 fn geostats_fit_variogram_wls_value(
+    py: Python<'_>,
     bins: Vec<BTreeMap<String, f64>>,
     kernels: Vec<String>,
     range_candidates: Vec<f64>,
@@ -11707,14 +11674,17 @@ fn geostats_fit_variogram_wls_value(
         .iter()
         .map(|kernel| CoreCovarianceKernel::parse(kernel).map_err(to_py_geostats_error))
         .collect::<PyResult<Vec<_>>>()?;
-    let fit = geostats_fit_variogram_wls(
-        &parsed_bins,
-        &parsed_kernels,
-        &range_candidates,
-        &sill_candidates,
-        &nugget_candidates,
-    )
-    .map_err(to_py_geostats_error)?;
+    let fit = py
+        .detach(move || {
+            geostats_fit_variogram_wls(
+                &parsed_bins,
+                &parsed_kernels,
+                &range_candidates,
+                &sill_candidates,
+                &nugget_candidates,
+            )
+        })
+        .map_err(to_py_geostats_error)?;
     serde_json::to_string(&json!({
         "kernel": fit.kernel.as_str(),
         "range": fit.range,

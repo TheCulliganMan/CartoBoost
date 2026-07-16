@@ -420,8 +420,8 @@ impl ConditionalFlowDistributionHead {
             .map(|value| value.exp().max(1.0e-6) * self.residual_scale)
             .collect::<Vec<_>>();
         let samples = location
-            .iter()
-            .zip(scale.iter())
+            .par_iter()
+            .zip(scale.par_iter())
             .enumerate()
             .map(|(row, (&loc, &s))| {
                 (0..self.sample_count)
@@ -430,8 +430,8 @@ impl ConditionalFlowDistributionHead {
             })
             .collect::<Vec<_>>();
         let marginal_quantiles = location
-            .iter()
-            .zip(scale.iter())
+            .par_iter()
+            .zip(scale.par_iter())
             .map(|(&loc, &s)| {
                 self.quantiles
                     .iter()
@@ -440,13 +440,14 @@ impl ConditionalFlowDistributionHead {
             })
             .collect::<Vec<_>>();
         let joint_scenario_paths = (0..self.sample_count)
+            .into_par_iter()
             .map(|sample| samples.iter().map(|row| row[sample]).collect::<Vec<_>>())
             .collect::<Vec<_>>();
         let log_likelihood = match actual {
             Some(values) => values
-                .iter()
-                .zip(location.iter())
-                .zip(scale.iter())
+                .par_iter()
+                .zip(location.par_iter())
+                .zip(scale.par_iter())
                 .map(|((&y, &loc), &s)| gaussian_log_likelihood(y, loc, s))
                 .collect(),
             None => vec![0.0; location.len()],
@@ -581,8 +582,9 @@ impl GeoTemporalDiffusionScenarioModel {
         let horizon = point_forecast.len();
         let nodes = point_forecast[0].len();
         let mut residual_field = (0..self.scenario_count)
+            .into_par_iter()
             .flat_map(|scenario_idx| {
-                (0..horizon).map(move |t| {
+                (0..horizon).into_par_iter().map(move |t| {
                     (0..nodes)
                         .map(|node| {
                             self.shock_scale
@@ -599,16 +601,22 @@ impl GeoTemporalDiffusionScenarioModel {
             residual_field =
                 diffuse_residual_field_with_backend(&residual_field, edges, nodes, &self.backend)?;
         }
-        let mut scenarios = Vec::with_capacity(self.scenario_count);
-        for residual_field in residual_field.chunks_exact(horizon) {
-            let mut scenario = point_forecast.to_vec();
-            for t in 0..horizon {
-                for node in 0..nodes {
-                    scenario[t][node] += residual_field[t][node];
-                }
-            }
-            scenarios.push(scenario);
-        }
+        let scenarios = residual_field
+            .par_chunks_exact(horizon)
+            .map(|residual_field| {
+                point_forecast
+                    .par_iter()
+                    .zip(residual_field.par_iter())
+                    .map(|(forecast, residual)| {
+                        forecast
+                            .iter()
+                            .zip(residual)
+                            .map(|(value, delta)| value + delta)
+                            .collect()
+                    })
+                    .collect()
+            })
+            .collect::<Vec<_>>();
         let scenario_mean = scenario_panel_mean(&scenarios, horizon, nodes);
         let scenario_variance = scenario_panel_variance(&scenarios, &scenario_mean, horizon, nodes);
         let spatial_correlation = scenario_spatial_correlation(&scenario_mean, edges);
@@ -1310,7 +1318,6 @@ fn diffuse_residual_field_with_backend(
     backend: &BackendSelection,
 ) -> Result<Vec<Vec<f64>>> {
     if backend.selected != "cpu"
-        && backend.selected != "directml"
         && edges.len().saturating_mul(residual_field.len()) >= PROB_SPARSE_DISPATCH_MIN_OPS
     {
         let mut inbound_weight = vec![0.0; node_count];

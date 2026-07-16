@@ -5,7 +5,7 @@ use crate::graph_regularization::{GraphLeafSmoothing, GraphSplitRegularization};
 use crate::predictors::LinearLeafModel;
 use crate::{CartoBoostError, Result};
 use cartoboost_accelerator::backend::{
-    backend_dense_layer_f32, select_backend_for, BackendOperation,
+    backend_dense_layer_f32, select_backend_for, BackendOperation, BackendSelection,
 };
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -324,7 +324,7 @@ impl Model {
             .as_ref()
             .and_then(|config| config.backend.as_ref())
         {
-            return self.try_predict_with_backend(x, Some(&backend.selected));
+            return self.try_predict_with_selection(x, backend);
         }
         self.try_predict_cpu(x)
     }
@@ -339,6 +339,14 @@ impl Model {
     pub fn try_predict_with_backend(&self, x: &Dataset, backend: Option<&str>) -> Result<Vec<f64>> {
         let selection = select_backend_for(backend, BackendOperation::Dense)
             .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+        self.try_predict_with_selection(x, &selection)
+    }
+
+    fn try_predict_with_selection(
+        &self,
+        x: &Dataset,
+        selection: &BackendSelection,
+    ) -> Result<Vec<f64>> {
         let width = self.trees.len() + 1;
         if selection.selected == "cpu"
             || self.trees.is_empty()
@@ -356,7 +364,7 @@ impl Model {
             })
             .collect::<Vec<_>>();
         let weights = vec![1.0_f32; width];
-        let raw = backend_dense_layer_f32(&selection, &input, &weights, &[0.0])
+        let raw = backend_dense_layer_f32(selection, &input, &weights, &[0.0])
             .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
         Ok(raw
             .into_iter()

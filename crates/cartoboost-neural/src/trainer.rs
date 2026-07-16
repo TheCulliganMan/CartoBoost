@@ -7,6 +7,7 @@ use std::collections::HashMap;
 const DEFAULT_TRAINING_ITERS: usize = 24;
 const DEFAULT_HEAD_REGULARIZATION: f64 = 1e-2;
 const DEFAULT_PRIOR_STRENGTH: f64 = 1.0;
+const EMBEDDING_HEAD_DENSE_DISPATCH_MIN_OPS: usize = 16_384;
 
 struct IdState {
     id: u64,
@@ -262,7 +263,10 @@ fn solve_head_with_backend(
     bias: f64,
     backend: &BackendSelection,
 ) -> Result<Option<Vec<f32>>> {
-    if backend.selected == "cpu" {
+    if backend.selected == "cpu"
+        || states.len().saturating_mul(dim).saturating_mul(dim)
+            < EMBEDDING_HEAD_DENSE_DISPATCH_MIN_OPS
+    {
         return Ok(solve_head(dim, states, bias));
     }
     let weighted = states

@@ -292,6 +292,13 @@ impl ClassifierModel {
     }
 
     pub fn decision_function(&self, x: &Dataset) -> Result<Vec<Vec<f64>>> {
+        if let Some(backend) = self.artifact_backend() {
+            return self.decision_function_with_selection(x, backend);
+        }
+        self.decision_function_cpu(x)
+    }
+
+    fn decision_function_cpu(&self, x: &Dataset) -> Result<Vec<Vec<f64>>> {
         self.validate_dataset(x)?;
         Ok((0..x.n_rows())
             .into_par_iter()
@@ -304,9 +311,17 @@ impl ClassifierModel {
         x: &Dataset,
         backend: Option<&str>,
     ) -> Result<Vec<Vec<f64>>> {
-        self.validate_dataset(x)?;
         let selection = select_backend_for(backend, BackendOperation::Dense)
             .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+        self.decision_function_with_selection(x, &selection)
+    }
+
+    fn decision_function_with_selection(
+        &self,
+        x: &Dataset,
+        selection: &BackendSelection,
+    ) -> Result<Vec<Vec<f64>>> {
+        self.validate_dataset(x)?;
         let outputs = self.output_dimension();
         let width = outputs * (self.trees.len() + 1);
         if selection.selected == "cpu"
@@ -314,7 +329,7 @@ impl ClassifierModel {
             || x.n_rows().saturating_mul(width).saturating_mul(outputs)
                 < CLASSIFIER_DENSE_DISPATCH_MIN_OPS
         {
-            return self.decision_function(x);
+            return self.decision_function_cpu(x);
         }
         let input = (0..x.n_rows())
             .into_par_iter()
@@ -337,7 +352,7 @@ impl ClassifierModel {
                 weights[(round * outputs + output) * outputs + output] = 1.0;
             }
         }
-        let flat = backend_dense_layer_f32(&selection, &input, &weights, &vec![0.0; outputs])
+        let flat = backend_dense_layer_f32(selection, &input, &weights, &vec![0.0; outputs])
             .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
         Ok(flat
             .into_iter()
@@ -346,7 +361,10 @@ impl ClassifierModel {
     }
 
     pub fn predict_proba(&self, x: &Dataset) -> Result<Vec<Vec<f64>>> {
-        self.predict_proba_with_backend(x, self.artifact_backend())
+        if let Some(backend) = self.artifact_backend() {
+            return self.predict_proba_with_selection(x, backend);
+        }
+        self.predict_proba_with_backend(x, Some("cpu"))
     }
 
     pub fn predict_proba_with_backend(
@@ -363,15 +381,40 @@ impl ClassifierModel {
             .collect())
     }
 
-    pub fn predict(&self, x: &Dataset) -> Result<Vec<f64>> {
-        self.predict_with_backend(x, self.artifact_backend())
+    fn predict_proba_with_selection(
+        &self,
+        x: &Dataset,
+        selection: &BackendSelection,
+    ) -> Result<Vec<Vec<f64>>> {
+        let objective = make_objective(self.objective, self.class_values.len())?;
+        let transform = objective.prediction_transform();
+        let margins = self.decision_function_with_selection(x, selection)?;
+        Ok(margins
+            .into_par_iter()
+            .map(|row| transform_margin_row(transform, &row))
+            .collect())
     }
 
-    fn artifact_backend(&self) -> Option<&str> {
+    pub fn predict(&self, x: &Dataset) -> Result<Vec<f64>> {
+        Ok(self
+            .predict_proba(x)?
+            .into_iter()
+            .map(|probabilities| {
+                let class = probabilities
+                    .iter()
+                    .enumerate()
+                    .max_by(|left, right| left.1.total_cmp(right.1))
+                    .map(|(idx, _)| idx)
+                    .unwrap_or(0);
+                self.class_values[class]
+            })
+            .collect())
+    }
+
+    fn artifact_backend(&self) -> Option<&BackendSelection> {
         self.training_config
             .as_ref()
             .and_then(|config| config.backend.as_ref())
-            .map(|backend| backend.selected.as_str())
     }
 
     pub fn predict_with_backend(&self, x: &Dataset, backend: Option<&str>) -> Result<Vec<f64>> {

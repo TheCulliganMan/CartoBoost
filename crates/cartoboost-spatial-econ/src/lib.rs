@@ -1112,10 +1112,7 @@ fn sparse_matvec_with_backend(
             "vector length must match spatial weights columns".to_string(),
         ));
     }
-    if backend.selected != "cpu"
-        && backend.selected != "directml"
-        && weights.indices.len() >= SPATIAL_SPARSE_DISPATCH_MIN_EDGES
-    {
+    if backend.selected != "cpu" && weights.indices.len() >= SPATIAL_SPARSE_DISPATCH_MIN_EDGES {
         let indptr = weights
             .indptr
             .iter()
@@ -1235,8 +1232,10 @@ fn linear_predict_with_backend(
     x: &[Vec<f64>],
     backend: &BackendSelection,
 ) -> Result<Vec<f64>> {
+    let cpu_backend = spatial_affine_cpu_fallback(backend, x.len(), coefficients.len());
+    let execution_backend = cpu_backend.as_ref().unwrap_or(backend);
     backend_affine_scores(
-        backend,
+        execution_backend,
         x,
         &vec![0.0; coefficients.len()],
         coefficients,
@@ -1250,14 +1249,29 @@ fn predict_design_with_backend(
     params: &[f64],
     backend: &BackendSelection,
 ) -> Result<Vec<f64>> {
+    let cpu_backend = spatial_affine_cpu_fallback(backend, design.len(), params.len());
+    let execution_backend = cpu_backend.as_ref().unwrap_or(backend);
     backend_affine_scores(
-        backend,
+        execution_backend,
         design,
         &vec![0.0; params.len()],
         params,
         &vec![0.0; design.len()],
     )
     .map_err(|error| SpatialEconError::Backend(error.to_string()))
+}
+
+fn spatial_affine_cpu_fallback(
+    backend: &BackendSelection,
+    row_count: usize,
+    feature_count: usize,
+) -> Option<BackendSelection> {
+    if backend.selected != "cpu"
+        && row_count.saturating_mul(feature_count) < SPATIAL_DENSE_DISPATCH_MIN_OPS
+    {
+        return Some(default_backend_selection());
+    }
+    None
 }
 
 fn predict_design_cpu(design: &[Vec<f64>], params: &[f64]) -> Vec<f64> {
@@ -1472,6 +1486,21 @@ mod tests {
             "cpu" | "cuda" | "directml" | "rocm" | "metal" | "webgpu"
         ));
         assert!(selection.available.contains(&selection.selected));
+    }
+
+    #[test]
+    fn spatial_affine_dispatch_avoids_small_device_launches() {
+        for backend_name in cartoboost_neural::available_backends() {
+            let backend = select_spatial_backend(Some(&backend_name)).expect("backend selection");
+            assert_eq!(
+                spatial_affine_cpu_fallback(&backend, 1, 4).is_some(),
+                backend_name != "cpu"
+            );
+            assert!(
+                spatial_affine_cpu_fallback(&backend, 4_096, 4).is_none(),
+                "{backend_name}"
+            );
+        }
     }
 
     fn diagnostics(

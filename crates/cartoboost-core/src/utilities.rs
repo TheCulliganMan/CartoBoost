@@ -1759,7 +1759,10 @@ fn build_kriging_system_matrix_with_backend(
     config: OrdinaryKrigingConfig,
     backend: &BackendSelection,
 ) -> Result<Vec<Vec<f64>>> {
-    if backend.selected == "cpu" {
+    if backend.selected == "cpu"
+        || observations.len().saturating_mul(observations.len())
+            < KRIGING_PAIRWISE_DISPATCH_MIN_PAIRS
+    {
         return Ok(build_kriging_system_matrix(observations, config));
     }
     let points = observations

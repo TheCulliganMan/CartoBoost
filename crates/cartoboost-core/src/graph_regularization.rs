@@ -5,6 +5,17 @@ use cartoboost_accelerator::backend::{
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+const GRAPH_SMOOTHING_DISPATCH_MIN_VALUES: usize = 16_384;
+
+fn should_accelerate_graph_smoothing(
+    selected_backend: &str,
+    edge_count: usize,
+    iterations: usize,
+) -> bool {
+    selected_backend != "cpu"
+        && edge_count.saturating_mul(iterations) >= GRAPH_SMOOTHING_DISPATCH_MIN_VALUES
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum SymbolicRelationKind {
     OriginAdjacency,
@@ -298,7 +309,12 @@ impl GraphSmoother {
         }
         let backend = select_backend_for(backend, BackendOperation::CsrDiffusion)
             .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
-        let accelerator_csr = if backend.selected == "cpu" {
+        let use_accelerator = should_accelerate_graph_smoothing(
+            &backend.selected,
+            laplacian.graph.indices.len(),
+            self.iterations,
+        );
+        let accelerator_csr = if !use_accelerator {
             None
         } else {
             let too_large = || {
@@ -330,7 +346,7 @@ impl GraphSmoother {
         let mut current = values.to_vec();
         let mut next = current.clone();
         for _ in 0..self.iterations {
-            let neighbor_sums = if backend.selected == "cpu" {
+            let neighbor_sums = if !use_accelerator {
                 None
             } else {
                 let (indptr, indices, weights) = accelerator_csr.as_ref().expect("accelerator CSR");
@@ -989,6 +1005,17 @@ mod tests {
                     "{backend} produced {actual}, expected {expected}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn graph_smoothing_dispatch_avoids_small_device_launches() {
+        for backend in available_backends() {
+            assert!(!should_accelerate_graph_smoothing(&backend, 4, 5));
+            assert_eq!(
+                should_accelerate_graph_smoothing(&backend, 4_096, 4),
+                backend != "cpu"
+            );
         }
     }
 

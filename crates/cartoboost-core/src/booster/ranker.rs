@@ -251,7 +251,7 @@ impl Ranker {
 impl RankerModel {
     pub fn predict(&self, x: &Dataset) -> Result<Vec<f64>> {
         if let Some(backend) = self.artifact_backend() {
-            return self.predict_with_backend(x, Some(backend));
+            return self.predict_with_selection(x, backend);
         }
         self.predict_cpu(x)
     }
@@ -268,6 +268,14 @@ impl RankerModel {
         self.validate_dataset(x)?;
         let selection = select_backend_for(backend, BackendOperation::Dense)
             .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+        self.predict_with_selection(x, &selection)
+    }
+
+    fn predict_with_selection(
+        &self,
+        x: &Dataset,
+        selection: &BackendSelection,
+    ) -> Result<Vec<f64>> {
         let width = self.trees.len() + 1;
         if selection.selected == "cpu"
             || self.trees.is_empty()
@@ -288,16 +296,15 @@ impl RankerModel {
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
-        backend_dense_layer_f32(&selection, &additive, &vec![1.0; width], &[0.0])
+        backend_dense_layer_f32(selection, &additive, &vec![1.0; width], &[0.0])
             .map(|values| values.into_iter().map(|row| f64::from(row[0])).collect())
             .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))
     }
 
-    fn artifact_backend(&self) -> Option<&str> {
+    fn artifact_backend(&self) -> Option<&BackendSelection> {
         self.training_config
             .as_ref()
             .and_then(|config| config.backend.as_ref())
-            .map(|backend| backend.selected.as_str())
     }
 
     pub fn metrics(&self, x: &Dataset, y: &[f64], groups: &[usize]) -> Result<RankingMetricSet> {
