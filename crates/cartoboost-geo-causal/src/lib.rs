@@ -2,11 +2,13 @@ use cartoboost_neural::{
     backend_affine_scores, backend_dense_layer_f32, backend_pairwise_squared_distances_f32,
     select_backend_for, select_backend_for_operations, BackendOperation, BackendSelection,
 };
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 const GEO_CAUSAL_DENSE_DISPATCH_MIN_OPS: usize = 16_384;
 const GEO_CAUSAL_PAIRWISE_DISPATCH_MIN_PAIRS: usize = 16_384;
+const GEO_CAUSAL_AFFINE_DISPATCH_MIN_VALUES: usize = 16_384;
 
 #[derive(Debug, thiserror::Error)]
 pub enum GeoCausalError {
@@ -191,21 +193,30 @@ impl SyntheticDIDEstimator {
                     .to_string(),
             ));
         }
-        let mut estimates = Vec::with_capacity(n);
-        for idx in 0..n {
+        let estimate = |idx: usize| {
             let pseudo =
                 deterministic_pick(&controls, treated_count, self.config.seed + idx as u64);
-            estimates.push(
-                estimate_for_treated_units(
-                    panel,
-                    &self.config,
-                    Some(&pseudo),
-                    Vec::new(),
-                    &self.backend,
-                )?
-                .effect,
-            );
-        }
+            estimate_for_treated_units(
+                panel,
+                &self.config,
+                Some(&pseudo),
+                Vec::new(),
+                &self.backend,
+            )
+            .map(|estimate| estimate.effect)
+        };
+        // CPU placebo fits are independent and deterministic, so Rayon can
+        // saturate cores while indexed collection preserves seed order.
+        // Device backends remain serial because concurrent command submission
+        // to a shared adapter regresses small affine placebo workloads.
+        let estimates: Vec<f64> = if self.backend.selected == "cpu" && n > 1 {
+            (0..n)
+                .into_par_iter()
+                .map(estimate)
+                .collect::<Result<Vec<_>>>()?
+        } else {
+            (0..n).map(estimate).collect::<Result<Vec<_>>>()?
+        };
         if let Some(current) = &mut self.estimate {
             current.placebo_estimates = estimates.clone();
         }
@@ -329,23 +340,32 @@ impl GeoExperimentDesigner {
             spillover_warnings(panel, &candidate_test_geos),
             &backend,
         )?;
-        let mut placebo_estimates = Vec::new();
-        for idx in 0..placebo_n {
-            let controls: Vec<_> = panel
-                .unit_ids()
-                .into_iter()
-                .filter(|unit| !candidate_test_geos.contains(unit))
-                .collect();
-            if controls.len() <= candidate_test_geos.len() {
-                break;
-            }
+        let controls: Vec<_> = panel
+            .unit_ids()
+            .into_iter()
+            .filter(|unit| !candidate_test_geos.contains(unit))
+            .collect();
+        let placebo_count = if controls.len() <= candidate_test_geos.len() {
+            0
+        } else {
+            placebo_n
+        };
+        let placebo = |idx: usize| {
             let pseudo =
                 deterministic_pick(&controls, candidate_test_geos.len(), self.seed + idx as u64);
-            placebo_estimates.push(
-                estimate_for_treated_units(panel, &config, Some(&pseudo), Vec::new(), &backend)?
-                    .effect,
-            );
-        }
+            estimate_for_treated_units(panel, &config, Some(&pseudo), Vec::new(), &backend)
+                .map(|estimate| estimate.effect)
+        };
+        let placebo_estimates: Vec<f64> = if backend.selected == "cpu" && placebo_count > 1 {
+            (0..placebo_count)
+                .into_par_iter()
+                .map(placebo)
+                .collect::<Result<Vec<_>>>()?
+        } else {
+            (0..placebo_count)
+                .map(placebo)
+                .collect::<Result<Vec<_>>>()?
+        };
         let baseline = estimate.pre_treated_mean.abs().max(1e-9);
         let mut metadata = BTreeMap::new();
         metadata.insert("backend_requested".to_string(), backend.requested.clone());
@@ -663,8 +683,15 @@ fn weighted_group_period_mean(
             "weighted synthetic control has no observations".to_string(),
         ));
     }
+    let execution_backend =
+        if backend.selected != "cpu" && values.len() < GEO_CAUSAL_AFFINE_DISPATCH_MIN_VALUES {
+            select_backend_for(Some("cpu"), BackendOperation::Affine)
+                .map_err(|error| GeoCausalError::InvalidInput(error.to_string()))?
+        } else {
+            backend.clone()
+        };
     let total = backend_affine_scores(
-        backend,
+        &execution_backend,
         &[values],
         &vec![0.0; weights.len()],
         &weights,
@@ -1268,6 +1295,40 @@ mod tests {
                 "Synthetic DID mismatch on {backend}"
             );
             assert_eq!(estimator.placebo_test(2).unwrap().len(), 2);
+        }
+    }
+
+    #[test]
+    fn large_weighted_panel_mean_runs_on_every_affine_backend() {
+        let rows = (0..GEO_CAUSAL_AFFINE_DISPATCH_MIN_VALUES)
+            .map(|index| GeoCausalRow {
+                unit_id: "control".to_string(),
+                time: "pre".to_string(),
+                outcome: (index % 113) as f64 / 113.0,
+                treatment: false,
+                covariates: BTreeMap::new(),
+                latitude: None,
+                longitude: None,
+                region_id: None,
+            })
+            .collect();
+        let panel = GeoCausalPanel::new(rows, Vec::new()).unwrap();
+        let unit_weights = BTreeMap::from([("control".to_string(), 1.0)]);
+        let times = vec!["pre".to_string()];
+        let cpu = select_backend_for(Some("cpu"), BackendOperation::Affine).unwrap();
+        let expected = weighted_group_period_mean(&panel, &unit_weights, &times, &cpu).unwrap();
+        for backend_name in available_backends() {
+            if !backend_supports_operation(&backend_name, BackendOperation::Affine) {
+                continue;
+            }
+            let backend =
+                select_backend_for(Some(&backend_name), BackendOperation::Affine).unwrap();
+            let actual = weighted_group_period_mean(&panel, &unit_weights, &times, &backend)
+                .unwrap_or_else(|error| panic!("{backend_name} weighted mean failed: {error}"));
+            assert!(
+                (actual - expected).abs() <= 2.0e-4,
+                "{backend_name}: expected {expected}, got {actual}"
+            );
         }
     }
 
