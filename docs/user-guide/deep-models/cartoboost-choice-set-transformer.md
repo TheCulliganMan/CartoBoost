@@ -7,7 +7,7 @@ It scores candidate value, candidate features, context features, optional
 entity or pair embeddings, and existing utility or probability fields, then
 returns utilities and softmax choice probabilities.
 
-## Public Contract
+## Python Example
 
 ```python
 from cartoboost.deep import ChoiceSetTransformer
@@ -25,6 +25,11 @@ best_by_decision = report["counterfactual_best"]
 `UtilityNet`, `NestedChoiceHead`, and `CounterfactualCandidateScorer` are
 aliases for this surface.
 
+## Use When
+
+Use this model when candidates compete within a decision set and probabilities
+must sum within that set. Use `CartoBoostRanker` when only relative ordering is needed.
+
 ## Browser WASM Example
 
 <DeepModelWasmExample model="ChoiceSetTransformer" />
@@ -33,3 +38,9 @@ aliases for this surface.
 
 Use grouped validation by decision id. Report Brier score or ECE when chosen
 labels exist, and compare the selected candidate against simple rule baselines.
+
+## Limitations
+
+- Candidate-set composition affects every predicted probability.
+- Unobserved alternatives and biased choice sets can invalidate interpretation.
+- The current utility-softmax architecture is not candidate-to-candidate attention.

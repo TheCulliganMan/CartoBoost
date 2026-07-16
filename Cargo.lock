@@ -251,6 +251,7 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "wgpu",
+ "windows",
 ]
 
 [[package]]

@@ -17,7 +17,7 @@ CartoBoost exposes bounded, non-seasonal ARIMA models:
 
 <ForecastModelExample title="Auto ARIMA panel forecast" model="auto_arima" />
 
-## When To Use It
+## Use When
 
 Use ARIMA for one regular series when:
 
@@ -61,7 +61,7 @@ Common failure modes are easy to diagnose:
 | One lane fits well and another fails. | Local orders do not transfer across lane regimes. | Per-lane validation or a global lag model. |
 | AutoARIMA selects an implausibly explosive order. | The configured search is too broad or the history is too short. | Inspect stationarity/invertibility fields and use a longer rolling-origin evaluation. |
 
-## Model Surface
+## Python Example
 
 | Model | Import | Use when |
 | --- | --- | --- |
@@ -443,3 +443,10 @@ measures fixed ARIMA fit+predict and bounded AutoARIMA fit+predict. Treat those
 numbers as runtime checks, not modeling-quality evidence. Public quality claims
 should come from rolling-origin backtests with fixed splits, recorded
 RMSE/MAE/R2, and serious baselines on real or clearly labeled benchmark data.
+
+## Limitations
+
+- ARIMA assumes differencing and lagged linear dependence adequately describe the series.
+- Local fits do not share strength across sparse pickup zones or lanes.
+- Automatic order search can overfit short histories; select orders inside training folds only.
+- Exogenous events, spatial spillover, and nonlinear effects require explicit covariates or another model family.

@@ -1,19 +1,23 @@
 # Python API Reference
 
-> CartoBoost 0.3 keeps the root package intentionally small: the stable
-> estimators are `CartoBoostRegressor`, `CartoBoostClassifier`,
-> `CartoBoostRanker`, and `BoosterConfig`. Forecasting and validation use their
-> named stable modules; graph, geostatistical, causal, neural, probabilistic,
-> plotting, and deep surfaces are supported APIs under `cartoboost.supported`.
-> See [Migrating to 0.3](../migration-v0.3.md) before updating imports.
+Use this page to find CartoBoost classes, methods, input shapes, return values,
+and import paths. If you are choosing a model or learning the workflow, begin
+with [Getting Started](../getting-started.md) or
+[Choose A Model](../user-guide/model-types.md).
+
+The most common estimators—`CartoBoostRegressor`, `CartoBoostClassifier`, and
+`CartoBoostRanker`—are imported from `cartoboost`. Forecasting, validation,
+graph, neural, geostatistical, causal, probabilistic, plotting, and deep tools
+live in their named modules. See [Migrating to 0.3](../migration-v0.3.md) when
+updating older imports.
 
 This page lists the public Python entry points used to fit, evaluate, explain,
 and save CartoBoost regression, classification, ranking, forecasting,
 CartoBoost graph, and CartoBoost neural models.
 
-The API is organized around scientific model choice: fit the same train split
-as the baselines, predict the same validation rows, compute the same metrics,
-and keep artifacts that make the comparison reproducible.
+Examples assume that data preparation and train/validation splitting are
+already complete. Fit competing models on the same training rows and evaluate
+them on the same validation rows.
 
 ## Model-Choice Map
 
@@ -562,8 +566,8 @@ Python-owned JSON model artifacts include `artifact_type` and
 verify nested version markers, save/load prediction drift, and explicit failure
 for unsupported artifact versions.
 
-`ForecastRegistry.defaults()` is an internal supported/demo registry. The stable
-Python forecasting surface is intentionally limited to `NaiveForecaster`,
+`ForecastRegistry.defaults()` lists additional forecasting implementations used
+by examples and browser workflows. The stable Python forecasting API includes `NaiveForecaster`,
 `SeasonalNaiveForecaster`, `CartoBoostLagForecaster`, `AutoForecaster`,
 `ForecastFrame`, and `ForecastResult`; other registry entries are supported
 implementations and are not part of the v0.3 source contract.

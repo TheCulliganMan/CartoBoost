@@ -1,7 +1,11 @@
 # Benchmarks
 
-These pages are the benchmark report hub. Each report should answer the same
-reader questions:
+These reports show where CartoBoost has been measured, what the comparisons
+mean, and where the evidence is still limited. Start with the result table for
+the task closest to your own, then inspect its data, split, features, command,
+runtime, and artifact before transferring the conclusion.
+
+Each report answers the same reader questions:
 
 - What data was used?
 - What split was used?
@@ -17,23 +21,22 @@ topology, and lane-demand history. The benchmark docs separate real NYC TLC
 evidence from synthetic mechanism checks and report mixed results when external
 baselines are lower on a task.
 
-The benchmark manifests define the geo-modeling claim roster: NYC TLC
-zone/lane demand, METR-LA/PEMS graph forecasting, EPA air-quality
-interpolation, California housing sanity, synthetic spatial fields, synthetic
-graph diffusion, and synthetic geo-causal lift panels. Each family must declare
-leakage-safe splits, required competitors, diagnostics, leaderboard outputs,
-runtime, and memory before results can be promoted as benchmark evidence.
+The maintained evidence covers NYC TLC zone and lane tasks, graph forecasting,
+air-quality interpolation, housing sanity checks, synthetic spatial fields,
+synthetic graph diffusion, and synthetic geo-causal panels. Real datasets
+support task-specific quality comparisons; synthetic datasets demonstrate
+mechanisms and failure modes only.
 
 ## Report Map
 
 | Report | Evidence type | What to inspect first |
 | --- | --- | --- |
-| [Benchmark Methodology](methodology.md) | Evidence contract and v0.3 acceptance gates. | Required fields, split rules, metric roster, and rerun rules. |
+| [Benchmark Methodology](methodology.md) | Shared evaluation protocol. | Data identity, split rules, metric roster, timing, and reproducibility. |
 | [NYC Taxi Benchmarks](nyc-taxi.md) | Real TLC fare, duration, and pickup-demand regression. | Current-code CartoBoost versus external baselines, RMSE/MAE/R2/WAPE tables, timing breakdown. |
-| [NYC Taxi Path C Claims](nyc-taxi-path-c.md) | Claim-based real TLC gates for generic geo-temporal behavior. | Directional, temporal, known-future, spatial-transfer, and residual-correction falsifier rows. |
+| [NYC Taxi Path C Claims](nyc-taxi-path-c.md) | Real TLC tests of geo-temporal behavior. | Directional, temporal, known-future, spatial-transfer, and residual-correction results. |
 | [Forecasting Tool Benchmark](forecasting.md) | Real taxi lane demand, synthetic taxi-shaped forecasting, M4 sample, M5 full-roster sample, and M5/M6 full-run protocols. | RMSE/WAPE tables, M5/M6 model rosters, run commands, horizon plot, forecast-line plot. |
 | [Model Benchmark Suite](model-suite.md) | Public tabular regression and graph diagnostics. | CartoBoost versus external baselines, validation-search selections, full RMSE/MAE/R2/WAPE tables. |
-| [Deep Claim Benchmarks](deep-claims.md) | Synthetic mechanism checks for deep model claims. | Seven gate rows, exact command, and JSON artifact. |
+| [Deep Claim Benchmarks](deep-claims.md) | Synthetic mechanism checks for deep models. | Seven result rows, exact command, and JSON artifact. |
 | [Taxi Zone Acceptance](taxi-zone.md) | Deterministic taxi-lane feature acceptance. | Lane heatmap, hour profile, route midpoint geometry. |
 | [Neural Embedding Benchmark](neural-embedding-benchmark-latest.md) | Synthetic repeated-ID/cold-ID diagnostic. | Scenario table showing random/tail gains and cold-origin failure. |
 
@@ -50,11 +53,11 @@ runtime, and memory before results can be promoted as benchmark evidence.
 | NYC repeated regression JSON | `docs/assets/nyc_taxi_benchmarks/repeated_results.json` |
 | NYC repeated regression report | `docs/assets/nyc_taxi_benchmarks/repeated_results.md` |
 | NYC forecasting JSON | `docs/assets/nyc_taxi_benchmarks/forecasting_library_benchmark_real.json` |
-| Forecasting overhaul committed suite JSON | `docs/assets/nyc_taxi_benchmarks/forecasting_overhaul_committed_suite.json` |
-| Forecasting overhaul full-roster committed suite JSON | `docs/assets/nyc_taxi_benchmarks/forecasting_overhaul_committed_suite_full_roster.json` |
-| Forecasting overhaul M4 JSON | `docs/assets/nyc_taxi_benchmarks/forecasting_overhaul_m4_committed.json` |
-| Forecasting overhaul M5 JSON | `docs/assets/nyc_taxi_benchmarks/forecasting_overhaul_m5_committed.json` |
-| Forecasting overhaul M6 JSON | `docs/assets/nyc_taxi_benchmarks/forecasting_overhaul_m6_committed.json` |
+| Forecasting suite JSON | `docs/assets/nyc_taxi_benchmarks/forecasting_overhaul_committed_suite.json` |
+| Forecasting full-roster suite JSON | `docs/assets/nyc_taxi_benchmarks/forecasting_overhaul_committed_suite_full_roster.json` |
+| M4 forecasting JSON | `docs/assets/nyc_taxi_benchmarks/forecasting_overhaul_m4_committed.json` |
+| M5 forecasting JSON | `docs/assets/nyc_taxi_benchmarks/forecasting_overhaul_m5_committed.json` |
+| M6 forecasting JSON | `docs/assets/nyc_taxi_benchmarks/forecasting_overhaul_m6_committed.json` |
 | Synthetic forecasting suite JSON | `docs/assets/nyc_taxi_benchmarks/forecasting_library_suite_synthetic.json` |
 | M4 sample suite JSON | `docs/assets/nyc_taxi_benchmarks/forecasting_m4_suite_sample.json` |
 | M5 full-roster sample JSON | `docs/assets/nyc_taxi_benchmarks/forecasting_m5_full_roster_sample.json` |
@@ -69,7 +72,7 @@ runtime, and memory before results can be promoted as benchmark evidence.
 | Deep claim benchmark JSONL | `docs/assets/deep_claim_benchmarks/results.jsonl` |
 | Deep claim benchmark report | `docs/assets/deep_claim_benchmarks/results.md` |
 
-## Claim Rules
+## How To Read The Results
 
 A result is usable as benchmark evidence when it names the dataset, command,
 split, feature policy, models, metrics, and artifact path. It is only a public

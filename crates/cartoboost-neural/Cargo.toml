@@ -17,6 +17,15 @@ wgpu = { version = "29", optional = true }
 futures-channel = { version = "0.3", optional = true }
 libm = { version = "0.2", optional = true }
 
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", optional = true, features = [
+    "Win32_AI_MachineLearning_DirectML",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D12",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 cuda-core = { git = "https://github.com/NVlabs/cuda-oxide.git", package = "cuda-core", optional = true }
 cuda-device = { git = "https://github.com/NVlabs/cuda-oxide.git", package = "cuda-device", optional = true }
@@ -36,5 +45,7 @@ default = []
 cuda = ["cuda-oxide"]
 cuda-oxide = ["dep:cuda-core", "dep:cuda-device", "dep:cuda-host", "dep:libm"]
 rocm = ["dep:libloading"]
+hip = ["rocm"]
 metal = ["dep:metal", "dep:objc"]
 webgpu = ["dep:futures-channel", "dep:wgpu"]
+directml = ["dep:windows"]

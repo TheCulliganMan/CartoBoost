@@ -7,7 +7,7 @@ and observed responses, and you want to estimate how response changes as the
 candidate value changes. This is useful for price, threshold, bid, dose, offer,
 or service-level curves.
 
-## Public Contract
+## Python Example
 
 ```python
 from cartoboost.deep import ResponseCurveFrame, ResponseCurveModel
@@ -59,3 +59,9 @@ best = model.best_candidate(frame)
 Use grouped validation so candidates from the same decision do not leak across
 train and holdout. Report response metrics and whether the selected candidate
 improves the decision metric against simple candidate rules.
+
+## Limitations
+
+- Observational candidate-response curves are not automatically causal.
+- Monotonic constraints encode assumptions that must be justified before fitting.
+- Extrapolation beyond observed candidate values is unreliable.

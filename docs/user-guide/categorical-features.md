@@ -1,4 +1,4 @@
-# CartoBoost Categorical Features
+# Categorical Features
 
 CartoBoost accepts categorical columns in the CartoBoost regressor,
 classifier, and ranker Python wrappers. The fitted artifact records the

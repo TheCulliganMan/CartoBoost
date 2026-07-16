@@ -67,7 +67,7 @@ Common failure modes in panel data:
 | Event effect persists outside its window. | The event window is standing in for missing covariates. | Lag model with explicit calendar features. |
 | One lane fits and another fails. | Local components do not transfer across panels. | CartoBoost lag or AutoForecaster. |
 
-## Example
+## Python Example
 
 ```python
 from cartoboost.forecasting import ForecastFrame, PiecewiseLinearSeasonalForecaster
@@ -379,3 +379,16 @@ forecast run. The full plotting workflow can request forecast components and
 fitted history diagnostics, then plot trend, fitted values, residuals, built-in
 seasonalities, custom seasonalities, event windows, regressors, aggregate
 non-trend totals, fitted movement, and trend movement.
+
+## Validation
+
+Select changepoints, seasonalities, events, and regressors using training-side
+rolling origins. Compare against seasonal naive and a simpler trend model on
+identical rows. Report errors by horizon and inspect residuals around events.
+
+## Limitations
+
+- Additive components can miss interactions between location, event, and seasonality.
+- Too many changepoints or Fourier terms can overfit short histories.
+- Future regressors must be known at forecast time.
+- Irregular timestamps and missing targets require explicit handling.

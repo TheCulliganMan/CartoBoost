@@ -6,7 +6,7 @@ Use `SpatioTemporalGraphForecaster` when node-time targets live on directed
 weighted edges and the graph is part of the forecast hypothesis. It is the
 generic deep-model facade for graph sequence forecasting.
 
-## Public Contract
+## Python Example
 
 ```python
 import numpy as np
@@ -71,3 +71,9 @@ Use rolling-origin validation and compare against seasonal naive,
 `CartoBoostLagForecaster`, and a panel neural model when available. Report
 errors by horizon and node, and keep the graph restricted to information known
 at the cutoff.
+
+## Limitations
+
+- Graph construction and edge weights can dominate model behavior.
+- Missing nodes or changing topology need explicit handling.
+- Graph models add compute cost and should beat graph-free panel baselines on external origins.

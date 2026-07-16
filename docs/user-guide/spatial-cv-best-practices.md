@@ -1,12 +1,12 @@
-# Spatial CV Best Practices
+# Spatial Cross-Validation
 
 Use spatial validation when the claim is about generalizing to withheld places
 or regimes. Random CV can overstate quality when nearby pickup/dropoff rows
 share zone effects, road geometry, demand shocks, or weather conditions.
 
-CartoBoost 0.3 exposes split construction through the stable native manifest
-API in `cartoboost.validation`. The manifest records the fold indices,
-coordinate/temporal contract, dependency versions, and a reproducibility hash.
+Build splits with `cartoboost.validation`. A split manifest records fold
+indices, coordinate and time assumptions, dependency versions, and a
+reproducibility hash.
 Store that hash with the benchmark artifact and reuse the exact folds for every
 candidate model.
 

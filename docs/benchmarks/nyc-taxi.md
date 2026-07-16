@@ -112,8 +112,8 @@ same task, split, sample, target transformation, and global settings.
 
 ## Interpretation
 
-- This current reduced qualification profile passes the v0.3 regression quality
-  gate on three of four required duration/fare spatial and out-of-time
+- This reduced run meets the documented comparison threshold on three of four
+  duration/fare spatial and out-of-time
   comparisons. Fare spatial holdout remains the documented miss.
 - The official AutoGeo admission audit counts zero real family wins because the
   selector is not shipped and this artifact is not a leakage-safe AutoGeo

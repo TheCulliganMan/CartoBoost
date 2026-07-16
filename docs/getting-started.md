@@ -1,14 +1,14 @@
 # Getting Started
 
-import AgentLlmsCallout from '@site/src/components/AgentLlmsCallout';
+This guide takes you from a modeling question to a validated CartoBoost model.
+It is written for Python developers and data scientists working with tabular,
+spatial, or time-indexed data. You will install the package, fit a model, choose
+an appropriate validation split, compare a baseline, and save the result.
 
-This guide starts with the modeling decisions that matter for CartoBoost:
-target, place/time structure, validation, and baselines. The code snippets show
-the mechanics after those choices are clear.
+If you already know which API you need, jump to [Choose A Model](user-guide/model-types.md)
+or the [Python API Reference](reference/python-api.md).
 
-<AgentLlmsCallout />
-
-## 1. Frame The Scientific Question
+## 1. Define The Prediction Task
 
 CartoBoost is meant for regression and forecasting tasks where temporal or
 spatial structure is part of the hypothesis. Typical questions include:
@@ -23,7 +23,7 @@ Define the target and evaluation split before selecting model features. For
 temporal-spatial data, random splits can overstate quality when near-duplicate
 times, zones, or route patterns appear in both train and validation data.
 
-## 2. Choose Features For Place And Time
+## 2. Match Features To The Data Structure
 
 A first regression table might include:
 
@@ -152,7 +152,7 @@ Forecast tables are deterministic: `series_id`, `timestamp`, `horizon`,
 Use [Forecasting](forecasting.md) for rolling-origin backtesting, CartoBoost lag
 features, artifact persistence, CLI workflows, and model selection.
 
-## 7. Validate Against Real Baselines
+## 7. Validate Against Strong Baselines
 
 For temporal-spatial problems, hold out the latest rows before trusting model
 quality:
@@ -189,11 +189,11 @@ forecasting.
 For benchmark claims, document out-of-time, spatial-blocked, grouped, and
 leakage-aware validation details in the benchmark writeup.
 
-## 8. Add Advanced Structure When Justified
+## 8. Add Graph Or Neural Structure When Justified
 
-Graph, neural, causal, and foundation surfaces are supported APIs in the v0.3
-reset. Use them only when their evidence tier and native backend match the
-study requirement; they are intentionally excluded from the core quickstart.
+Graph, neural, and causal surfaces solve more specialized problems. Add them
+only when the data and validation design can test the extra structure; they are
+intentionally excluded from the core quickstart.
 
 Use learned embeddings when high-cardinality IDs carry stable signal that is not
 captured by dense features alone.

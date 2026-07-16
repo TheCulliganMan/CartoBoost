@@ -20,7 +20,7 @@ used as the base predictions for interval inspection. Use Python calibration
 for coverage claims because calibration needs explicit train, calibration, and
 holdout splits.
 
-## Public Contract
+## Python Example
 
 ### Quantile Regressor
 

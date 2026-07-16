@@ -6,7 +6,7 @@ Use `PropagationDelayGraphForecaster` when directed graph edges carry known or
 estimated propagation delays. The model consumes node-time panels, directed
 edges, edge distances, known future covariates, and delay priors.
 
-## Public Contract
+## Python Example
 
 ```python
 from cartoboost.deep import GraphTemporalFrame, PropagationDelayGraphForecaster
@@ -36,7 +36,18 @@ routes to the same implementation.
 
 <DeepModelWasmExample model="PropagationDelayGraphForecaster" />
 
+## Use When
+
+Use this model when directed edges have meaningful propagation delays known
+before the forecast cutoff. Prefer a simpler graph model when delay priors are unavailable.
+
 ## Validation
 
 Compare against non-graph temporal and static-adjacency graph baselines. Report
 edge-delay sensitivity and keep all graph inputs cutoff-safe.
+
+## Limitations
+
+- Incorrect delays can underperform a static adjacency model.
+- Future-derived graph weights or delays leak holdout information.
+- Accelerator availability varies by build and must be reported.

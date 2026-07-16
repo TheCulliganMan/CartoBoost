@@ -62,7 +62,7 @@ season length that is numerically feasible but does not match the data cadence
 still produces the wrong comparison, so verify both the declared frequency and
 cycle definition.
 
-## Single-Series Example
+## Python Example
 
 ```python
 from cartoboost.forecasting import NaiveForecaster, SeasonalNaiveForecaster
@@ -231,7 +231,7 @@ Keep the seasonal naive score in model-selection reports for hourly demand. If a
 richer model only clears naive, it may only be learning the daily cycle rather
 than adding useful zone, graph, weather, or calendar signal.
 
-## Validation Notes
+## Validation
 
 Seasonal naive is the minimum meaningful baseline for strongly seasonal demand.
 If a more complex model does not clear seasonal naive under rolling-origin
@@ -242,3 +242,10 @@ These models do not learn trend, holiday effects, disruption, zone spillover,
 or graph structure. That limitation is useful: when they perform well, the
 repeated cycle is strong; when they fail, the residuals show where richer
 forecasting models need to explain the system.
+
+## Limitations
+
+- Naive methods cannot anticipate trend changes, events, or spatial spillover.
+- Seasonal naive needs a correct frequency and enough history for the chosen period.
+- Missing timestamps must be resolved before lag alignment is meaningful.
+- Strong baseline performance means added complexity must earn its cost.

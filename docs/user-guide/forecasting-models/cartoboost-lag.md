@@ -48,7 +48,7 @@ the cadence can look plausible while answering the wrong question. A global
 model can also hide poor behavior for sparse or atypical zones, so report
 error by horizon and by zone or lane in addition to aggregate RMSE and MAE.
 
-## DataFrame Example
+## Python Example
 
 ```python
 from cartoboost.forecasting import CartoBoostLagForecaster
@@ -242,7 +242,7 @@ Interpretation:
 | One zone dominates MAE. | Shared model behavior is not matching that panel. | Check sparse history, missing zone metadata, or split that zone into its own validation slice. |
 | Same-hour-yesterday has lower error than the lag model. | The supervised model is overfitting or undertrained. | Increase data, simplify tree settings, and compare against seasonal naive before making a claim. |
 
-## Validation Notes
+## Validation
 
 Always use rolling-origin backtests. Lag and rolling features must be strictly
 historical relative to the forecast row. Keep split boundaries stable when
@@ -259,3 +259,10 @@ For panel forecasts, report at least:
 
 Do not validate on randomly shuffled rows. A shuffled split leaks future pickup
 patterns into training and makes lag features look stronger than they are.
+
+## Limitations
+
+- Recursive forecasts can accumulate error as the horizon grows.
+- Lag features require a regular, correctly ordered history for every series.
+- Cold series have no learned series-specific lag history and need explicit evaluation.
+- Known-future covariates must genuinely be available at prediction time.

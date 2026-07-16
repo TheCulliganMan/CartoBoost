@@ -19,7 +19,7 @@ edge structure itself.
 
 <NeuralModelExample title="Node2Vec graph browser model" pipeline="node2vec" />
 
-## Public Contract
+## Python Example
 
 ### Regressor
 
@@ -74,3 +74,9 @@ report = predictor.report(candidate_pairs, labels=[1, 1, 0], query_ids=[0, 0, 3]
 If the browser or Python workflow builds embeddings from validation edges, call
 that transductive scoring. For deployment-style evidence, build the graph from
 train-side edges, then score held-out labels or candidate pairs separately.
+
+## Limitations
+
+- Node2Vec uses topology, not node attributes or calibrated uncertainty.
+- Unseen nodes have no learned walk embedding.
+- Results depend on graph construction, direction, weights, walk settings, and seed.

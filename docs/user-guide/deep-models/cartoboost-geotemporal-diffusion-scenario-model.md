@@ -6,7 +6,7 @@ Use `GeoTemporalDiffusionScenarioModel` for experimental graph-wide residual
 scenario generation around an existing point forecast. It is not a replacement
 for the point forecaster and is excluded from stable model selection.
 
-## Public Contract
+## Python Example
 
 ```python
 from cartoboost.deep import GeoTemporalDiffusionScenarioModel
@@ -24,6 +24,11 @@ scenarios = model.generate(
 
 `FlowScenarioGenerator` and `ConditionalResidualDiffusion` are aliases.
 
+## Use When
+
+Use this experimental model for stress scenarios around an existing point
+forecast on a known graph. Do not use it as the primary point forecaster.
+
 ## Browser WASM Example
 
 <DeepModelWasmExample model="GeoTemporalDiffusionScenarioModel" />
@@ -32,3 +37,9 @@ scenarios = model.generate(
 
 Report scenario mean, variance, spatial correlation, and comparison to the
 point forecast. Keep capability metadata visible because this is experimental.
+
+## Limitations
+
+- Evidence is synthetic and does not establish real-world scenario calibration.
+- Scenario quality depends on the supplied point forecast and graph.
+- Treat outputs as sensitivity analysis, not guaranteed probability statements.

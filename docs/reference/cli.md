@@ -1,10 +1,8 @@
-# Source-checkout CLI Reference
+# Command-Line Reference
 
-The Rust CLI is a source-checkout dense numeric CSV interface for reproducible training,
-prediction, inspection, and simple evaluation. Use it for command-line evidence
-when the data is already encoded into comparable columns for CartoBoost and
-baseline tools. It is not installed by the PyPI wheel; prefix commands with
-`cargo run -p cartoboost-cli --`.
+The Rust CLI trains, predicts, inspects, and evaluates models from dense numeric
+CSV files. It is available from a source checkout, not from the PyPI wheel.
+Prefix every command with `cargo run -p cartoboost-cli --`.
 
 The CLI is intentionally narrower than the Python API. For sparse sets, graph
 features, neural residual embeddings, rolling-origin forecasting, or

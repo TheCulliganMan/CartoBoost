@@ -590,7 +590,7 @@ export function DeepModelWasmExample({model}: {model: string}): React.ReactEleme
         <div>
           <strong>{model} Wasm example</strong>
           <p style={{margin: '0.25rem 0 0'}}>
-            Runs the Rust-backed browser export with a small taxi-shaped sample.
+            Runs the Rust-backed browser export on a substantial multi-route taxi panel with a held-out prediction window.
           </p>
         </div>
         <button className="button button--primary" type="button" disabled={isRunning} onClick={() => void runExample()}>
@@ -1107,15 +1107,17 @@ function DeepModelResultCanvas({model, result}: {model: DeepModelDefinition; res
       <section className={`${styles.deepResultPanel} ${model.id === 'LSTTNForecaster' ? styles.deepResultPanelStacked : ''}`}>
         <div>
           <h3>Native browser run</h3>
-          <p>{model.description} This run uses the Rust browser export and a compact taxi-shaped example.</p>
+          <p>{model.description} This run uses the Rust browser export on a multi-route taxi panel with a real train/holdout split.</p>
         </div>
         <a className={styles.deepDocsLink} href={model.docsPath}>Read model guide</a>
       </section>
       <section className={`${styles.deepResultPanel} ${model.id === 'LSTTNForecaster' ? styles.deepResultPanelStacked : ''}`}>
         <h3>Model output</h3>
-        {model.id === 'LSTTNForecaster' && isLSTTNDebuggerResult(result)
-          ? <LSTTNH3ForecastDebugger result={result} />
-          : <DeepOutputVisualization model={model} visual={visual} />}
+        {model.id === 'MarketStructureExplorer' && isMarketStructureExplorerPayload(result)
+          ? <MarketStructureExplorer {...marketExplorerDataFromPayload(result)} />
+          : model.id === 'LSTTNForecaster' && isLSTTNDebuggerResult(result)
+            ? <LSTTNH3ForecastDebugger result={result} />
+            : <DeepOutputVisualization model={model} visual={visual} />}
         <dl className={styles.deepResultGrid}>
           {rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}
         </dl>
@@ -1219,24 +1221,28 @@ function runDeepModelWasmExample(wasmModule: WasmModule, model: string): unknown
         throw new Error('CartoBoost response curve Wasm exports are not available from this bundle.');
       }
       const rows = deepResponseCurveRows();
-      const artifact = wasmModule.deepResponseCurveFit(rows.slice(0, 6), 'binary', 'decreasing', 'cpu');
-      return {predictions: wasmModule.deepResponseCurvePredict(artifact, rows.slice(6))};
+      const artifact = wasmModule.deepResponseCurveFit(rows.slice(0, 448), 'binary', 'decreasing', 'cpu');
+      return {predictions: wasmModule.deepResponseCurvePredict(artifact, rows.slice(448))};
     }
     case 'EventOutcomeModel': {
       if (!wasmModule.deepEventOutcomeFit || !wasmModule.deepEventOutcomePredict) {
         throw new Error('CartoBoost event outcome Wasm exports are not available from this bundle.');
       }
       const features = deepEventFeatures();
-      const artifact = wasmModule.deepEventOutcomeFit(features.slice(0, 6), new Float64Array([0, 0, 1, 1, 0, 1]), 'cpu');
-      return {predictions: wasmModule.deepEventOutcomePredict(artifact, features.slice(6))};
+      const trainFeatures = features.slice(0, 896);
+      const labels = new Float64Array(trainFeatures.map(([distance, hour, congestion, airport]) =>
+        Number(congestion * 2.4 + distance * 0.05 + airport * 0.35 + Math.max(0, hour - 17) * 0.025 > 1.25),
+      ));
+      const artifact = wasmModule.deepEventOutcomeFit(trainFeatures, labels, 'cpu');
+      return {predictions: wasmModule.deepEventOutcomePredict(artifact, features.slice(896))};
     }
     case 'ServiceTimeResidualModel': {
       if (!wasmModule.deepServiceResidualFit || !wasmModule.deepServiceResidualPredict) {
         throw new Error('CartoBoost service residual Wasm exports are not available from this bundle.');
       }
       const rows = deepServiceResidualRows();
-      const artifact = wasmModule.deepServiceResidualFit(rows.slice(0, 6), 'cpu');
-      return {predictions: wasmModule.deepServiceResidualPredict(artifact, rows.slice(6))};
+      const artifact = wasmModule.deepServiceResidualFit(rows.slice(0, 576), 'cpu');
+      return {predictions: wasmModule.deepServiceResidualPredict(artifact, rows.slice(576))};
     }
     case 'SpatioTemporalGraphForecaster': {
       if (!wasmModule.runGraphForecast) {
@@ -1281,8 +1287,8 @@ function runDeepModelWasmExample(wasmModule: WasmModule, model: string): unknown
         throw new Error('CartoBoost temporal entity Wasm exports are not available from this bundle.');
       }
       const panel = deepTemporalPanel();
-      const artifact = wasmModule.deepTemporalEntityFit(panel, 4, 2);
-      return wasmModule.deepTemporalEntityPredict(artifact, 2);
+      const artifact = wasmModule.deepTemporalEntityFit(panel, 48, 12);
+      return wasmModule.deepTemporalEntityPredict(artifact, 12);
     }
     case 'ConditionalFlowDistributionHead':
     case 'JointHorizonFlowHead':
@@ -1291,13 +1297,20 @@ function runDeepModelWasmExample(wasmModule: WasmModule, model: string): unknown
         throw new Error('CartoBoost conditional flow Wasm exports are not available from this bundle.');
       }
       const hidden = deepFlowHidden();
+      const trainHidden = hidden.slice(0, 448);
+      const residuals = new Float64Array(trainHidden.map(([distance, hour, congestion], index) =>
+        Number((congestion * 2.1 + 0.18 * distance + 0.6 * Math.sin(hour / 3) + 0.25 * Math.cos(index / 11)).toFixed(4)),
+      ));
+      const holdoutActual = new Float64Array(hidden.slice(448).map(([distance, hour, congestion], index) =>
+        Number((congestion * 2.1 + 0.18 * distance + 0.6 * Math.sin(hour / 3) + 0.25 * Math.cos((index + 448) / 11)).toFixed(4)),
+      ));
       const artifact = wasmModule.deepConditionalFlowFit(
-        hidden.slice(0, 6),
-        new Float64Array([0.3, -0.2, 0.5, 0.1, -0.4, 0.2]),
+        trainHidden,
+        residuals,
         new Float64Array([0.05, 0.5, 0.95]),
-        12,
+        128,
       );
-      return wasmModule.deepConditionalFlowPredict(artifact, hidden.slice(6), new Float64Array([0.15, -0.05]));
+      return wasmModule.deepConditionalFlowPredict(artifact, hidden.slice(448), holdoutActual);
     }
     case 'GeoTemporalDiffusionScenarioModel':
     case 'FlowScenarioGenerator':
@@ -1306,14 +1319,10 @@ function runDeepModelWasmExample(wasmModule: WasmModule, model: string): unknown
         throw new Error('CartoBoost diffusion scenario Wasm export is not available from this bundle.');
       }
       return wasmModule.deepDiffusionScenarioGenerate(
-        [
-          [42, 35, 18],
-          [44, 36, 19],
-          [51, 40, 24],
-        ],
+        deepTemporalPanel().slice(-24),
         deepSpatialEdges(),
-        8,
-        2,
+        64,
+        12,
         0.6,
       );
     }
@@ -1324,22 +1333,15 @@ function runDeepModelWasmExample(wasmModule: WasmModule, model: string): unknown
         throw new Error('CartoBoost graph neural operator Wasm export is not available from this bundle.');
       }
       return wasmModule.deepGraphNeuralOperatorPredict(
+        deepTemporalPanel().slice(-24),
         [
-          [42, 35, 18],
-          [44, 36, 19],
-          [51, 40, 24],
-        ],
-        [
-          [0, 0],
-          [0.5, 0.4],
-          [1, 0.1],
+          [-73.977, 40.758], [-73.966, 40.784], [-73.991, 40.752],
+          [-73.987, 40.762], [-73.996, 40.739], [-73.977, 40.748],
         ],
         deepSpatialEdges(),
-        [
-          [0.1, 0.2, 0.0],
-          [0.1, 0.3, 0.1],
-          [0.2, 0.2, 0.1],
-        ],
+        Array.from({length: 24}, (_, hour) => Array.from({length: 6}, (_, node) =>
+          Number((0.15 + 0.55 * Math.exp(-((hour - 18) ** 2) / 16) + node * 0.02).toFixed(3)),
+        )),
         0.25,
         0.1,
       );
@@ -1360,7 +1362,11 @@ function runDeepModelWasmExample(wasmModule: WasmModule, model: string): unknown
       if (!wasmModule.deepRegimeMoeReport) {
         throw new Error('CartoBoost regime MoE Wasm export is not available from this bundle.');
       }
-      return wasmModule.deepRegimeMoeReport(deepRegimeFeatures(), new Float64Array([18, 21, 48, 51, 24, 55]));
+      const features = deepRegimeFeatures();
+      const target = new Float64Array(features.map(([distance, hour, congestion, airport], index) =>
+        Number((7 + distance * 3.1 + congestion * 12 + airport * 9 + 1.5 * Math.sin(index / 17) + Math.max(0, hour - 17) * 0.2).toFixed(3)),
+      ));
+      return wasmModule.deepRegimeMoeReport(features, target);
     }
     case 'ConstrainedDecisionOptimizer': {
       if (!wasmModule.deepConstrainedDecisionSelect) {
@@ -1369,7 +1375,7 @@ function runDeepModelWasmExample(wasmModule: WasmModule, model: string): unknown
       const choices = wasmModule.deepConstrainedDecisionSelect(
         deepDecisionCandidates(),
         'utility',
-        {fare: 35, eta_minutes: 28},
+        {fare: 45, eta_minutes: 40},
         'raise',
       );
       return {choices};
@@ -1419,90 +1425,106 @@ function marketStructureExampleRequest() {
 }
 
 function deepTemporalPanel() {
-  return [
-    [42, 35, 18],
-    [44, 36, 19],
-    [51, 40, 24],
-    [58, 46, 31],
-    [55, 45, 34],
-    [49, 43, 30],
-  ];
-}
-
-function deepFlowHidden() {
-  return [
-    [1.2, 8, 0.35],
-    [2.4, 9, 0.44],
-    [4.8, 17, 0.78],
-    [5.2, 18, 0.82],
-    [1.6, 11, 0.38],
-    [6.1, 19, 0.88],
-    [3.2, 16, 0.65],
-    [5.8, 20, 0.9],
-  ];
-}
-
-function deepSpatialEdges() {
-  return [
-    {source: 0, target: 1, weight: 0.7},
-    {source: 0, target: 2, weight: 0.3},
-    {source: 1, target: 2, weight: 1.0},
-  ];
-}
-
-function deepRegimeFeatures() {
-  return [
-    [1.8, 8, 0.35],
-    [2.1, 9, 0.42],
-    [12.4, 17, 0.83],
-    [13.1, 18, 0.88],
-    [3.2, 11, 0.51],
-    [14.8, 19, 0.91],
-  ];
-}
-
-function deepDirectionalPairRows() {
-  return [
-    {source_id: 'PULocationID:161', target_id: 'DOLocationID:236', timestamp: 0, features: [1.8, 8, 0.42], target: 18.4},
-    {source_id: 'PULocationID:161', target_id: 'DOLocationID:237', timestamp: 1, features: [2.1, 9, 0.48], target: 20.2},
-    {source_id: 'PULocationID:132', target_id: 'DOLocationID:161', timestamp: 2, features: [17.4, 17, 0.83], target: 58.7},
-  ];
-}
-
-function deepResponseCurveRows() {
-  return [18, 22, 26, 20, 24, 28, 21, 25].map((fare, index) => ({
-    features: [index % 2, 8 + (index % 4), 1.6 + index * 0.2],
-    candidate_value: fare,
-    response: index < 6 ? Number(fare <= 24) : undefined,
-    group_id: `route_offer_${Math.floor(index / 2)}`,
-    candidate_id: `fare_${fare}`,
+  return Array.from({length: 24 * 7}, (_, time) => Array.from({length: 6}, (_, route) => {
+    const hour = time % 24;
+    const weekday = Math.floor(time / 24) % 7;
+    const commute = Math.exp(-((hour - 8) ** 2) / 8) + 1.2 * Math.exp(-((hour - 18) ** 2) / 11);
+    const weekendScale = weekday >= 5 ? 0.78 : 1;
+    return Number((weekendScale * (28 + route * 6 + commute * (15 + route) + time * 0.018 + 2.4 * Math.sin(time / 19 + route))).toFixed(3));
   }));
 }
 
+function isMarketStructureExplorerPayload(result: unknown): result is MarketStructureExplorerPayload {
+  if (!result || typeof result !== 'object') return false;
+  const payload = result as Partial<MarketStructureExplorerPayload>;
+  return Array.isArray(payload.lanes) && Array.isArray(payload.forecasts) && Array.isArray(payload.kernels);
+}
+
+function deepFlowHidden() {
+  return Array.from({length: 512}, (_, index) => {
+    const hour = index % 24;
+    const route = index % 12;
+    const distance = 1.1 + route * 0.52 + (index % 5) * 0.08;
+    const congestion = 0.28 + 0.52 * Math.exp(-((hour - 18) ** 2) / 18);
+    return [Number(distance.toFixed(3)), hour, Number(congestion.toFixed(3)), route / 11, Math.sin(2 * Math.PI * hour / 24), Math.cos(2 * Math.PI * hour / 24)];
+  });
+}
+
+function deepSpatialEdges() {
+  return Array.from({length: 6}, (_, source) => [
+    {source, target: (source + 1) % 6, weight: 0.62},
+    {source, target: (source + 5) % 6, weight: 0.28},
+    {source, target: (source + 3) % 6, weight: 0.1},
+  ]).flat();
+}
+
+function deepRegimeFeatures() {
+  return Array.from({length: 720}, (_, index) => {
+    const hour = index % 24;
+    const route = index % 18;
+    const distance = 1.2 + route * 0.65;
+    const congestion = 0.25 + 0.63 * Math.exp(-((hour - 18) ** 2) / 14);
+    return [Number(distance.toFixed(3)), hour, Number(congestion.toFixed(3)), route % 3 === 0 ? 1 : 0];
+  });
+}
+
+function deepDirectionalPairRows() {
+  const zones = ['161', '236', '237', '132', '138', '230', '48', '186'];
+  return Array.from({length: 24 * 14}, (_, timestamp) => {
+    const sourceIndex = timestamp % zones.length;
+    const targetIndex = (sourceIndex + 1 + Math.floor(timestamp / zones.length) % (zones.length - 1)) % zones.length;
+    const hour = timestamp % 24;
+    const distance = 1.4 + Math.abs(targetIndex - sourceIndex) * 1.35;
+    const congestion = 0.3 + 0.55 * Math.exp(-((hour - 18) ** 2) / 16);
+    return {
+      source_id: `PULocationID:${zones[sourceIndex]}`,
+      target_id: `DOLocationID:${zones[targetIndex]}`,
+      timestamp,
+      features: [Number(distance.toFixed(3)), hour, Number(congestion.toFixed(3))],
+      target: Number((7 + distance * 3.2 + congestion * 11 + sourceIndex * 0.7 - targetIndex * 0.25).toFixed(3)),
+    };
+  });
+}
+
+function deepResponseCurveRows() {
+  return Array.from({length: 128}, (_, group) => [18, 22, 26, 30].map((fare, candidate) => {
+    const hour = group % 24;
+    const distance = 1.4 + (group % 14) * 0.42;
+    const airport = group % 9 === 0 ? 1 : 0;
+    const threshold = 27 + airport * 7 + distance * 0.9 - Math.max(0, hour - 17) * 0.18;
+    return {
+      features: [airport, hour, Number(distance.toFixed(3))],
+      candidate_value: fare,
+      response: group < 112 ? Number(fare <= threshold) : undefined,
+      group_id: `route_offer_${group}`,
+      candidate_id: `fare_${fare}_${candidate}`,
+    };
+  })).flat();
+}
+
 function deepEventFeatures() {
-  return [
-    [1.2, 8, 0.35],
-    [2.4, 9, 0.44],
-    [4.8, 17, 0.78],
-    [5.2, 18, 0.82],
-    [1.6, 11, 0.38],
-    [6.1, 19, 0.88],
-    [3.2, 16, 0.65],
-    [5.8, 20, 0.9],
-  ];
+  return Array.from({length: 1024}, (_, index) => {
+    const hour = index % 24;
+    const distance = 1.1 + (index % 20) * 0.38;
+    const congestion = 0.24 + 0.62 * Math.exp(-((hour - 18) ** 2) / 14);
+    const airport = index % 11 === 0 ? 1 : 0;
+    return [Number(distance.toFixed(3)), hour, Number(congestion.toFixed(3)), airport];
+  });
 }
 
 function deepServiceResidualRows() {
-  return [
-    {baseline_value: 16.5, actual_value: 17.4, features: [1.8, 8, 0.35]},
-    {baseline_value: 18.2, actual_value: 19.1, features: [2.1, 9, 0.42]},
-    {baseline_value: 46.0, actual_value: 49.8, features: [12.4, 17, 0.83]},
-    {baseline_value: 51.0, actual_value: 53.2, features: [13.1, 18, 0.88]},
-    {baseline_value: 22.4, actual_value: 23.0, features: [3.2, 11, 0.51]},
-    {baseline_value: 55.5, actual_value: 59.4, features: [14.8, 19, 0.91]},
-    {baseline_value: 24.1, features: [3.6, 16, 0.62]},
-    {baseline_value: 58.0, features: [15.2, 20, 0.94]},
-  ];
+  return Array.from({length: 640}, (_, index) => {
+    const hour = index % 24;
+    const distance = 1.2 + (index % 22) * 0.43;
+    const congestion = 0.22 + 0.65 * Math.exp(-((hour - 18) ** 2) / 15);
+    const baseline = 6 + distance * 3.3;
+    const residual = congestion * (3.2 + distance * 0.4) + 1.1 * Math.sin(index / 13);
+    return {
+      baseline_value: Number(baseline.toFixed(3)),
+      actual_value: index < 576 ? Number((baseline + residual).toFixed(3)) : undefined,
+      features: [Number(distance.toFixed(3)), hour, Number(congestion.toFixed(3))],
+    };
+  });
 }
 
 const LSTTN_H3_NODE_IDS = [
@@ -1608,7 +1630,7 @@ function lsttnH3ForecastRequest(counterfactual: LSTTNCounterfactual) {
       experts: 2,
       periodicity: LSTTN_DEBUG_PERIODICITY,
       recentWindow: LSTTN_DEBUG_RECENT_WINDOW,
-      epochs: 1,
+      epochs: 6,
       learningRate: 0.004,
       weightDecay: 0.00001,
       backend: 'cpu',
@@ -1670,35 +1692,58 @@ function lsttnH3Adjacency(isolated: boolean) {
 }
 
 function deepGraphForecastRequest(profile?: string) {
+  const nodeIds = ['PULocationID:161', 'PULocationID:236', 'PULocationID:132', 'PULocationID:230', 'PULocationID:48', 'PULocationID:186'];
+  const historyHours = profile ? 24 * 3 : 24 * 7;
+  const target = Array.from({length: historyHours}, (_, time) => nodeIds.map((_, node) => {
+    const hour = time % 24;
+    const weekday = Math.floor(time / 24) % 7;
+    const morningPeak = Math.exp(-((hour - (8 + node * 0.12)) ** 2) / 7);
+    const eveningPeak = Math.exp(-((hour - (18 - node * 0.08)) ** 2) / 10);
+    const weekend = weekday >= 5 ? 0.82 : 1;
+    const networkPulse = Math.sin(((time - node * 1.8) / 36) * Math.PI * 2);
+    return Number((weekend * (32 + node * 5 + morningPeak * 24 + eveningPeak * 31 + networkPulse * 3 + time * 0.025)).toFixed(3));
+  }));
   return {
     frame: {
-      nodeIds: ['PULocationID:161', 'PULocationID:236', 'PULocationID:132'],
-      timestamps: [0, 1, 2, 3, 4, 5],
-      target: [
-        [42, 35, 18],
-        [44, 36, 19],
-        [51, 40, 24],
-        [58, 46, 31],
-        [55, 45, 34],
-        [49, 43, 30],
-      ],
-      adjacency: {indptr: [0, 2, 3, 3], indices: [1, 2, 2], data: [0.7, 0.3, 1.0]},
-      horizon: 2,
+      nodeIds,
+      timestamps: Array.from({length: historyHours}, (_, index) => index),
+      target,
+      adjacency: {
+        indptr: [0, 2, 4, 6, 8, 10, 12],
+        indices: [1, 4, 0, 2, 1, 3, 2, 5, 0, 5, 3, 4],
+        data: [0.7, 0.3, 0.55, 0.45, 0.6, 0.4, 0.65, 0.35, 0.5, 0.5, 0.58, 0.42],
+      },
+      horizon: 24,
       frequency: 'hourly',
     },
     options: profile
-      ? {profile, lookback: 3, hiddenSize: 4, attentionHeads: 2, graphOrder: 2, experts: 2, periodicity: 3, recentWindow: 3, epochs: 5, backend: 'cpu'}
-      : {diffusionSteps: 1, hiddenSize: 4, epochs: 5, backend: 'cpu'},
+      ? {profile, lookback: 24, hiddenSize: 4, attentionHeads: 2, graphOrder: 2, experts: 3, periodicity: 24, recentWindow: 12, epochs: 8, backend: 'cpu'}
+      : {diffusionSteps: 2, hiddenSize: 8, epochs: 12, backend: 'cpu'},
   };
 }
 
 function deepDecisionCandidates() {
-  return [
-    {decision_id: 'ride_request_1', candidate_id: 'standard_route', candidate_value: 26, utility: 0.74, fare: 26, eta_minutes: 24},
-    {decision_id: 'ride_request_1', candidate_id: 'express_route', candidate_value: 34, utility: 0.82, fare: 34, eta_minutes: 18},
-    {decision_id: 'ride_request_2', candidate_id: 'local_pickup', candidate_value: 22, utility: 0.68, fare: 22, eta_minutes: 26},
-    {decision_id: 'ride_request_2', candidate_id: 'airport_queue', candidate_value: 42, utility: 0.91, fare: 42, eta_minutes: 32},
+  const plans = [
+    {name: 'standard_route', fareDelta: 0, etaDelta: 3, utilityDelta: 0},
+    {name: 'express_route', fareDelta: 7, etaDelta: -5, utilityDelta: 0.09},
+    {name: 'shared_route', fareDelta: -4, etaDelta: 7, utilityDelta: -0.05},
+    {name: 'low_traffic_route', fareDelta: 3, etaDelta: -2, utilityDelta: 0.04},
   ];
+  return Array.from({length: 48}, (_, request) => plans.map((plan, candidate) => {
+    const distance = 1.5 + (request % 16) * 0.48;
+    const hour = request % 24;
+    const peak = hour >= 16 && hour <= 20 ? 1 : 0;
+    const baseFare = 8 + distance * 3.1 + peak * 4;
+    const baseEta = 9 + distance * 2.5 + peak * 7;
+    return {
+      decision_id: `ride_request_${request + 1}`,
+      candidate_id: `${plan.name}_${candidate + 1}`,
+      candidate_value: Number((baseFare + plan.fareDelta).toFixed(2)),
+      utility: Number((0.58 + distance * 0.012 - peak * 0.04 + plan.utilityDelta).toFixed(4)),
+      fare: Number((baseFare + plan.fareDelta).toFixed(2)),
+      eta_minutes: Number(Math.max(4, baseEta + plan.etaDelta).toFixed(2)),
+    };
+  })).flat();
 }
 
 export function ForecastModelExample({
@@ -1937,7 +1982,7 @@ export function GeostatisticsModelExample({title}: {title: string}): React.React
               </tr>
             </thead>
             <tbody>
-              {result.predictions.slice(0, 6).map((row, index) => (
+              {result.predictions.slice(0, 12).map((row, index) => (
                 <tr key={`${row.x}-${row.y}-${index}`}>
                   <td>{formatFixed(row.x, 4)}</td>
                   <td>{formatFixed(row.y, 4)}</td>
@@ -2253,7 +2298,7 @@ export function ForecastModelRosterExample(): React.ReactElement {
 
 function neuralExampleRequest(pipeline: NeuralModelExampleProps['pipeline']) {
   const nodeTypes = [0, 1, 1, 0, 0, 1, 1, 0];
-  const rows = Array.from({length: 64}, (_, index) => {
+  const rows = Array.from({length: 512}, (_, index) => {
     const source = index % nodeTypes.length;
     const sourceType = nodeTypes[source];
     const compatibleTargets = nodeTypes
@@ -2299,17 +2344,17 @@ function neuralExampleRequest(pipeline: NeuralModelExampleProps['pipeline']) {
       holdoutFraction: 0.25,
       embeddingDim: 6,
       randomState: 42,
-      nEstimators: 48,
-      learningRate: 0.07,
-      maxDepth: 3,
+      nEstimators: BROWSER_BOOSTING_ROUNDS,
+      learningRate: 0.05,
+      maxDepth: 4,
       minSamplesLeaf: 3,
-      node2vecWalkLength: 10,
-      node2vecWalksPerNode: 6,
-      node2vecWindowSize: 3,
-      node2vecEpochs: 4,
+      node2vecWalkLength: 16,
+      node2vecWalksPerNode: 12,
+      node2vecWindowSize: 5,
+      node2vecEpochs: BROWSER_NODE2VEC_EPOCHS,
       node2vecSeed: 42,
-      graphSageEpochs: 6,
-      graphSageNegativeSamples: 3,
+      graphSageEpochs: BROWSER_GRAPHSAGE_EPOCHS,
+      graphSageNegativeSamples: 5,
       graphSageSeed: 42,
       includeModelVisualization: true,
     },
@@ -2317,7 +2362,7 @@ function neuralExampleRequest(pipeline: NeuralModelExampleProps['pipeline']) {
 }
 
 function regressionExampleRequest(mode: string, loss: string) {
-  const rows = Array.from({length: 72}, (_, index) => {
+  const rows = Array.from({length: 1200}, (_, index) => {
     const pickupLon = -74.02 + (index % 12) * 0.012;
     const pickupLat = 40.68 + (Math.floor(index / 12) % 6) * 0.018;
     const tripDistance = 0.9 + (index % 8) * 0.42;
@@ -2366,9 +2411,9 @@ function regressionExampleRequest(mode: string, loss: string) {
       periodicPeriods: {
         pickup_hour: 24,
       },
-      nEstimators: 36,
-      learningRate: 0.07,
-      maxDepth: 3,
+      nEstimators: BROWSER_BOOSTING_ROUNDS,
+      learningRate: 0.05,
+      maxDepth: 4,
       minSamplesLeaf: 3,
       includeModelVisualization: true,
     },
@@ -2376,70 +2421,63 @@ function regressionExampleRequest(mode: string, loss: string) {
 }
 
 function geostatisticsExampleRequest() {
-  const observations = [
-    {x: -73.9851, y: 40.7589, value: 12.4},
-    {x: -73.9772, y: 40.7527, value: 10.8},
-    {x: -73.968, y: 40.759, value: 9.7},
-    {x: -73.9969, y: 40.742, value: 13.6},
-    {x: -74.006, y: 40.7128, value: 16.2},
-    {x: -73.9897, y: 40.7336, value: 14.1},
-    {x: -73.958, y: 40.8006, value: 8.9},
-    {x: -73.9496, y: 40.7831, value: 9.4},
-    {x: -73.9213, y: 40.7433, value: 11.7},
-    {x: -73.873, y: 40.7769, value: 21.5},
-    {x: -73.7903, y: 40.6437, value: 31.2},
-    {x: -73.8628, y: 40.7681, value: 23.0},
-  ];
+  const zoneIds = ['4', '7', '13', '24', '33', '41', '43', '48', '68', '74', '75', '79', '87', '90', '100', '107', '113', '125', '132', '137', '138', '140', '142', '144', '148', '151', '158', '161', '162', '163', '164', '166', '170', '186', '209', '211', '224', '229', '230', '231', '233', '234', '236', '237', '238', '239', '246', '249'];
+  const observations = zoneIds.map((zoneId, index) => {
+    const point = TAXI_ZONE_CENTROIDS[zoneId];
+    const airportDistance = Math.min(
+      Math.hypot(point.lon + 73.7865, point.lat - 40.647),
+      Math.hypot(point.lon + 73.873, point.lat - 40.7738),
+    );
+    const value = 9.5 + Math.max(0, 0.16 - airportDistance) * 72 + 1.8 * Math.sin(index / 4);
+    return {x: point.lon, y: point.lat, value: Number(value.toFixed(3))};
+  });
+  const targets = Array.from({length: 30}, (_, index) => ({
+    x: -74.012 + (index % 6) * 0.0205,
+    y: 40.706 + Math.floor(index / 6) * 0.022,
+  }));
   return {
     observations,
-    targets: [
-      {x: -73.981, y: 40.756},
-      {x: -73.99, y: 40.725},
-      {x: -73.94, y: 40.776},
-      {x: -73.88, y: 40.77},
-      {x: -73.81, y: 40.65},
-      {x: -74.02, y: 40.7},
-    ],
+    targets,
     options: {
       kernel: 'matern_3_2',
       range: 0.045,
       sill: 36.0,
       nugget: 0.15,
-      nNeighbors: 6,
+      nNeighbors: 10,
     },
   };
 }
 
 function geoFeatureExampleRequest() {
+  const taxiPairs = [
+    ['Times Square to Upper East Side', '161', '236'], ['Upper East Side to Times Square', '236', '161'],
+    ['JFK to Midtown', '132', '100'], ['Midtown to JFK', '100', '132'],
+    ['LaGuardia to Upper West Side', '138', '239'], ['Upper West Side to LaGuardia', '239', '138'],
+    ['Chelsea to East Village', '68', '79'], ['East Village to Chelsea', '79', '68'],
+    ['Financial District to Central Park', '87', '43'], ['Central Park to Financial District', '43', '87'],
+    ['SoHo to Gramercy', '144', '137'], ['Gramercy to SoHo', '137', '144'],
+  ];
   return {
     planarRoutes: [
       {label: 'north', origin: [0.0, 0.0], destination: [0.0, 4.0]},
       {label: 'east', origin: [0.0, 0.0], destination: [4.0, 0.0]},
+      {label: 'south', origin: [0.0, 0.0], destination: [0.0, -4.0]},
+      {label: 'west', origin: [0.0, 0.0], destination: [-4.0, 0.0]},
+      {label: 'northeast', origin: [0.0, 0.0], destination: [3.0, 3.0]},
       {label: 'northwest', origin: [0.0, 0.0], destination: [-3.0, 3.0]},
+      {label: 'southeast', origin: [0.0, 0.0], destination: [3.0, -3.0]},
+      {label: 'southwest', origin: [0.0, 0.0], destination: [-3.0, -3.0]},
       {label: 'same point', origin: [2.0, 2.0], destination: [2.0, 2.0]},
     ],
-    latlngRoutes: [
-      {
-        label: 'Times Square to Upper East Side',
-        origin: [40.758, -73.9855],
-        destination: [40.7804, -73.957],
-      },
-      {
-        label: 'JFK to Midtown',
-        origin: [40.647, -73.7865],
-        destination: [40.7535, -73.9888],
-      },
-      {
-        label: 'LaGuardia to Upper West Side',
-        origin: [40.7769, -73.873],
-        destination: [40.7917, -73.973],
-      },
-    ],
-    radialPoints: [
-      {label: 'pickup midtown', point: [0.5, 2.0]},
-      {label: 'pickup west', point: [-2.0, 1.5]},
-      {label: 'pickup south', point: [0.0, -1.0]},
-    ],
+    latlngRoutes: taxiPairs.map(([label, sourceId, targetId]) => {
+      const source = TAXI_ZONE_CENTROIDS[sourceId];
+      const target = TAXI_ZONE_CENTROIDS[targetId];
+      return {label, origin: [source.lat, source.lon], destination: [target.lat, target.lon]};
+    }),
+    radialPoints: Array.from({length: 12}, (_, index) => ({
+      label: `pickup sector ${index + 1}`,
+      point: [Number((Math.cos(index * Math.PI / 6) * (1 + index * 0.18)).toFixed(3)), Number((Math.sin(index * Math.PI / 6) * (1 + index * 0.18)).toFixed(3))],
+    })),
     anchors: [
       {label: 'hub', point: [0.0, 0.0]},
       {label: 'airport', point: [4.0, -2.0]},
@@ -2453,6 +2491,10 @@ function geoFeatureExampleRequest() {
         {label: 'on corridor', point: [2.0, 2.0]},
         {label: 'left of corridor', point: [0.0, 2.0]},
         {label: 'right of corridor', point: [2.0, 0.0]},
+        {label: 'corridor start', point: [0.5, 0.5]},
+        {label: 'corridor end', point: [4.0, 4.0]},
+        {label: 'far left', point: [-1.0, 3.0]},
+        {label: 'far right', point: [3.0, -1.0]},
       ],
     },
   };
@@ -2838,8 +2880,13 @@ type NeuralModelExampleProps = {
 };
 const TAXI_LANE_SAMPLE_ROWS = 5000;
 const TAXI_VARIED_ROUTE_SAMPLE_ROWS = 2500;
-const VISUALIZED_MODEL_MAX_ROWS = 800;
-const VISUALIZED_NEURAL_MAX_ROWS = 240;
+// Fit enough of the uploaded table to expose meaningful spatial, periodic,
+// categorical, and graph structure while keeping browser runs interactive.
+const VISUALIZED_MODEL_MAX_ROWS = 2400;
+const VISUALIZED_NEURAL_MAX_ROWS = 1200;
+const BROWSER_BOOSTING_ROUNDS = 120;
+const BROWSER_NODE2VEC_EPOCHS = 12;
+const BROWSER_GRAPHSAGE_EPOCHS = 16;
 const TAXI_ZONE_CENTROIDS: Record<string, {lat: number; lon: number}> = {
   4: {lat: 40.723752, lon: -73.976968},
   7: {lat: 40.761493, lon: -73.919694},
@@ -3874,7 +3921,7 @@ export default function ModelingLabClient(): React.ReactElement {
               <ControlSection title="Choose a deep model" step="3">
                 <div className={styles.neuralSummary}>
                   <strong>{selectedDeepModel.label}</strong>
-                  <span>Pick a workflow, then run it in the main results canvas. No upload is required for these compact native examples.</span>
+                  <span>Pick a workflow, then run its substantial multi-route scenario in the main results canvas. No upload is required.</span>
                 </div>
                 <DeepModelCatalog selectedId={deepModelId} onSelect={selectDeepModel} />
               </ControlSection>
@@ -8075,14 +8122,14 @@ function buildSuggestedConfig({
       embeddingDim: 8,
       supportedPipelines: Object.keys(neuralPipelineLabels),
       node2vec: {
-        walkLength: 8,
-        walksPerNode: 4,
-        windowSize: 3,
-        epochs: 2,
+        walkLength: 16,
+        walksPerNode: 12,
+        windowSize: 5,
+        epochs: BROWSER_NODE2VEC_EPOCHS,
       },
       graphSage: {
-        epochs: 3,
-        negativeSamples: 2,
+        epochs: BROWSER_GRAPHSAGE_EPOCHS,
+        negativeSamples: 5,
         nodeFeatures: 'mean of selected denseFeatureCols by source/target node',
         nodeTypes: 'inferred from graph source/target column roles',
         edgeTypes: 'inferred from source node type and target node type',
@@ -8808,9 +8855,9 @@ async function runBrowserRegression({
           .filter((column) => inferFeatureKind(column) === 'periodic')
           .map((column) => [column, inferPeriodicPeriod(column)]),
       ),
-      nEstimators: 24,
-      learningRate: 0.06,
-      maxDepth: 3,
+      nEstimators: BROWSER_BOOSTING_ROUNDS,
+      learningRate: 0.05,
+      maxDepth: 4,
       minSamplesLeaf: Math.max(2, Math.min(20, Math.floor(rows.length / 20))),
       monotonicConstraints: modelingMode === 'axis' ? featureCols.map(inferMonotonicConstraint) : undefined,
       includeModelVisualization: true,
@@ -8883,17 +8930,17 @@ async function runBrowserNeural({
       holdoutFraction: 0.2,
       embeddingDim: 8,
       randomState: 42,
-      nEstimators: 20,
-      learningRate: 0.07,
+      nEstimators: BROWSER_BOOSTING_ROUNDS,
+      learningRate: 0.05,
       maxDepth: 4,
       minSamplesLeaf: Math.max(2, Math.min(20, Math.floor(rows.length / 20))),
-      node2vecWalkLength: 8,
-      node2vecWalksPerNode: 4,
-      node2vecWindowSize: 3,
-      node2vecEpochs: 2,
+      node2vecWalkLength: 16,
+      node2vecWalksPerNode: 12,
+      node2vecWindowSize: 5,
+      node2vecEpochs: BROWSER_NODE2VEC_EPOCHS,
       node2vecSeed: 42,
-      graphSageEpochs: 3,
-      graphSageNegativeSamples: 2,
+      graphSageEpochs: BROWSER_GRAPHSAGE_EPOCHS,
+      graphSageNegativeSamples: 5,
       graphSageSeed: 42,
       includeModelVisualization: true,
     },

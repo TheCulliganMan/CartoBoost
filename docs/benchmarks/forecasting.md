@@ -25,8 +25,8 @@ functime and external lag-tree baselines under the same protocol.
 Read: `cartoboost_auto_forecast` is 4.18% lower RMSE than the strongest completed
 external learned baseline (`lightgbm_lag`) across the three rolling origins. It
 does not beat the seasonal-naive library baseline, so the artifact does not
-claim a win against every forecasting library. The external-baseline gate is
-recorded directly in the JSON artifact and passes the v0.3 within-5% RMSE rule.
+claim a win against every forecasting library. The JSON artifact records that
+CartoBoost is within 5% RMSE of the strongest completed learned baseline.
 The current run loaded and aggregated 13,069,067 source rows in 4.746 seconds
 and completed in 11.201 seconds. It recorded 42.092 CPU-seconds and a 9,833
 MiB peak resident set; per-fold fit and prediction timings remain in the JSON
@@ -49,8 +49,8 @@ Comparability audit for `forecasting_library_benchmark_real.json`: every
 requested model completed on the same three rolling-origin folds and 7-day
 horizon, uses the same metric set, and records candidate selection without
 outer test-label selection. The strongest completed external learned baseline
-is `lightgbm_lag`; CartoBoost's 0.958234 RMSE ratio versus that baseline is
-inside the five-percent acceptance gate. The seasonal-naive result remains
+is `lightgbm_lag`; CartoBoost's 0.958234 RMSE ratio versus that baseline meets
+the documented five-percent comparison threshold. Seasonal naive remains
 reported as a separate, stronger forecasting-library reference.
 
 ## Synthetic Demand Checks

@@ -3,34 +3,29 @@ pub mod backend;
 #[cfg(all(feature = "cuda-oxide", target_os = "linux"))]
 mod cuda_oxide_backend;
 pub mod deep;
+#[cfg(all(feature = "directml", target_os = "windows"))]
+mod directml_backend;
 pub mod encoder;
 mod error;
 pub mod features;
 pub mod forecasting;
 pub mod graph_features;
 pub mod graphsage;
+#[cfg(all(feature = "rocm", any(target_os = "linux", target_os = "windows")))]
+mod hip_backend;
+mod metal_backend;
 pub mod node2vec;
 pub mod operator;
 pub mod standalone;
 mod trainer;
+#[cfg(feature = "webgpu")]
+mod webgpu_backend;
 
 pub use artifact::{
     build_embedding_table_artifact, write_embedding_table_artifact, ArtifactFallbackKind,
     EmbeddingChecksum, EmbeddingIdType, EmbeddingRow, EmbeddingTable, EmbeddingTableArtifact,
     EmbeddingTableMetadata, FallbackStrategy,
 };
-#[cfg(all(
-    feature = "cuda",
-    not(all(feature = "cuda-oxide", target_os = "linux")),
-    any(target_os = "linux", target_os = "windows")
-))]
-pub use backend::CudaCsrDiffusionWorkspace;
-#[cfg(all(
-    feature = "cuda",
-    not(all(feature = "cuda-oxide", target_os = "linux")),
-    any(target_os = "linux", target_os = "windows")
-))]
-pub use backend::CudaTensorArena;
 pub use backend::{
     available_backends, backend_adamw_step_f32, backend_affine_scores,
     backend_csr_diffusion_backward_f32, backend_csr_diffusion_f32,
@@ -40,8 +35,6 @@ pub use backend::{
     masked_inverse_scale_mae_f32, select_backend, BackendDispatchReport, BackendSelection,
     ComputeBackend, CsrDiffusionBackward,
 };
-#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
-pub use backend::{webgpu_dense_layer_f32_async, webgpu_dispatch_report_async};
 #[cfg(all(feature = "cuda-oxide", target_os = "linux"))]
 pub use cuda_oxide_backend::{CudaCsrDiffusionWorkspace, CudaTensorArena};
 pub use deep::{
@@ -99,3 +92,8 @@ pub use standalone::{
     STANDALONE_ARTIFACT_VERSION,
 };
 pub use trainer::{fit_embedding_table, fit_embedding_table_with_options};
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+pub use webgpu_backend::{
+    dense_layer_f32_async as webgpu_dense_layer_f32_async,
+    dispatch_report_async as webgpu_dispatch_report_async,
+};

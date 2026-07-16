@@ -7,7 +7,7 @@ regional or gridded panels. It consumes field values, coordinates, graph edges,
 and optional exogenous fields, then returns future, residual, and uncertainty
 fields.
 
-## Public Contract
+## Python Example
 
 ```python
 from cartoboost.deep import GraphNeuralOperator
@@ -24,6 +24,12 @@ benchmark = GraphNeuralOperator.synthetic_benchmark()
 
 `FourierGeoOperator` and `SpatioTemporalOperator` are aliases.
 
+## Use When
+
+Use this experimental operator for field-to-field prediction when coordinates
+and graph structure define the output domain. Start with kriging or a pointwise
+model for ordinary interpolation tasks.
+
 ## Browser WASM Example
 
 <DeepModelWasmExample model="GraphNeuralOperator" />
@@ -32,3 +38,9 @@ benchmark = GraphNeuralOperator.synthetic_benchmark()
 
 Report the maintained synthetic benchmark and compare against a pointwise MLP
 proxy before making any field-transfer claim.
+
+## Limitations
+
+- Current evidence is synthetic and mechanism-oriented.
+- Coordinate scaling and graph construction strongly affect learned fields.
+- Real-data use needs comparison with pointwise and spatial baselines.

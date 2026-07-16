@@ -1,15 +1,13 @@
-# Spatial Econometrics Models
+# Spatial Econometrics
 
-> Supported API: import these models from
-> `cartoboost.spatial_econometrics`. They do not carry the stable
-> root-package compatibility promise in CartoBoost 0.3.
+Import these models from `cartoboost.spatial_econometrics`.
 
 Classical spatial econometrics models are interpretable baselines for areal
 units, store trade areas, service zones, and route cells. Use them when the
 question is whether a sparse neighbor graph explains the target through a
 lagged response, lagged errors, or lagged covariates.
 
-These models are competitors to `CartoBoostRegressor`, not replacements. Fit
+Use these models as interpretable comparisons for `CartoBoostRegressor`. Fit
 them on the same training rows, with the same measured covariates and the same
 spatial weights, then compare residual diagnostics and holdout metrics.
 

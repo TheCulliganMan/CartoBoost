@@ -1,51 +1,16 @@
-# CartoBoost Deep Model Guides
+# Deep Models
 
-> CartoBoost 0.3 does not ship the former NumPy representation or selective-SSM
-> modules. They have no import or compatibility namespace; any future return
-> requires a native binding and real-data evidence.
+Use `cartoboost.deep` when one row is not enough to describe the prediction
+problem. These models handle ordered source-target pairs, candidate response
+curves, event probabilities, residual correction, graph sequences, scenario
+generation, and constrained decisions.
 
-Use `cartoboost.deep` when the modeling unit is more structured than one
-ordinary row: ordered pairs, candidate response curves, event probabilities,
-baseline residual correction, graph sequences, or constrained candidate
-selection.
+Start with the table below. Open the dedicated guide for a runnable Python and
+browser example, required inputs, validation design, and limitations. Most of
+these models are specialized or experimental, so compare them against a simpler
+boosting, forecasting, graph, or statistical baseline on the same holdout.
 
-`RegimeMoEForecaster` combines six named regime experts with router entropy,
-expert usage, expert predictions, combined predictions, and single-expert
-comparison metrics. `ConditionalFlowDistributionHead` fits a
-native residual distribution head over model hidden state plus optional horizon,
-entity/pair, and graph context features; it emits deterministic joint scenario
-samples, log likelihoods, marginal quantiles, tail-risk summaries, and
-calibration metrics when actual residuals are supplied. Artifacts record the
-model class,
-architecture, artifact version, schema hash, ID maps, hash-bucket settings,
-embedding dimension, seed, feature roles, training cutoff, training metrics,
-save/load parity status, and backend metadata.
-`GeoTemporalDiffusionScenarioModel` is an experimental scenario generator that
-diffuses deterministic residual shocks over a graph around an existing point
-forecast panel. It reports scenario mean, variance, spatial correlation, and
-comparison to the point forecast, and its metadata explicitly excludes it from
-stable model selection and primary benchmark evidence.
-`GraphNeuralOperator` is an advanced experimental field-to-field layer for
-spatial panels. It consumes field values, coordinates, optional graph edges,
-and optional exogenous fields, then returns future, residual, and uncertainty
-fields. `FourierGeoOperator` and `SpatioTemporalOperator` are aliases for the
-same native-backed surface in this first cut.
-`ChoiceSetTransformer` scores candidates jointly within each decision set. It
-emits utility, softmax choice probability, optional nested probability,
-counterfactual best candidates, and calibration metrics when chosen labels are
-available. `UtilityNet`, `NestedChoiceHead`, and
-`CounterfactualCandidateScorer` are aliases for that native-backed surface.
-Foundation adapters such as `ChronosAdapter`, `TimesFMAdapter`,
-`MoiraiAdapter`, `TimeGPTAdapter`, and `TabPFNAdapter` are optional wrappers for
-external models. They can cache outputs with external version and model-hash
-metadata, but they are never core dependencies and are only eligible for
-automatic model-selection orchestration; choose a registered model explicitly.
-
-These guides are for Python developers and data scientists choosing a model
-surface. Start with the page that matches the unit being modeled, then validate
-against a simpler baseline under the same split.
-
-## Evidence Status
+## Maturity And Evidence
 
 | Model surface | Architecture | Evidence label |
 | --- | --- | --- |
@@ -54,16 +19,12 @@ against a simpler baseline under the same split.
 | `PropagationDelayGraphForecaster` | `delay_aware_graph_transformer` | synthetic claim evidence |
 | `ConditionalFlowDistributionHead` | `conditional_residual_sampler` | synthetic claim evidence |
 | `ChoiceSetTransformer` | `choice_set_utility_softmax` | synthetic claim evidence |
-| `ResponseCurveModel`, `EventOutcomeModel`, `ServiceTimeResidualModel`, `ConstrainedDecisionOptimizer` | native utility/residual heads | API contract only |
+| `ResponseCurveModel`, `EventOutcomeModel`, `ServiceTimeResidualModel`, `ConstrainedDecisionOptimizer` | native utility/residual heads | API behavior only |
 | `GeoTemporalDiffusionScenarioModel` | `conditional_residual_diffusion` | experimental only |
 | `GraphNeuralOperator` | `graph_neural_operator` | experimental only |
 
-The generated capability matrix is maintained at
-`docs/reference/capability-matrix.md`, with the machine-readable artifact at
-`docs/assets/capabilities/model_capabilities.json`. Docs CI should run
-`PYTHONPATH=python python scripts/check_capability_status.py` so exported model
-classes cannot ship without architecture, backend, parameter, native-core,
-evidence, and maturity status.
+See the [Model Capabilities](../reference/capability-matrix.md) table for
+backend, parameter, evidence, and maturity details.
 
 ## Choose A Guide
 
@@ -169,6 +130,10 @@ compiled in. On Linux or WSL builds with ROCm support compiled in and a usable
 HIP device present, `backend="rocm"` is advertised for the same verified shared
 kernels. On Windows or Linux builds with the CUDA driver and NVRTC available,
 `backend="cuda"` is advertised for the same verified shared kernels.
+On Windows builds with the `directml` feature and a DirectX 12-capable adapter,
+`backend="directml"` provides the CUDA-parity tensor surface for dense and
+affine scoring, pair scoring, sparse diffusion and softmax forward/backward,
+AdamW, layer normalization, and scalar-graph inference.
 
 ## Input Validation
 

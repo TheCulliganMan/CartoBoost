@@ -13,7 +13,7 @@ not for serving a neural model directly.
 - Several downstream models should use the same train-side embedding columns.
 - You can report repeated-ID and cold-ID splits separately.
 
-## Public Contract
+## Python Example
 
 ```python
 from cartoboost.neural import NeuralEmbeddingFeatures
@@ -46,3 +46,9 @@ embedding table only on training rows when evaluating a holdout.
 If validation rows contain IDs observed during training, describe the result as
 repeated-ID generalization. If validation rows contain unseen IDs, report the
 fallback behavior explicitly.
+
+## Limitations
+
+- Generated columns inherit the embedding model's cold-ID behavior.
+- Fit the transformer on training rows only to avoid target leakage.
+- Downstream feature importance does not explain the internal embedding dimensions semantically.

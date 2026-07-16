@@ -6,7 +6,7 @@ Use `ServiceTimeResidualModel` when you already have a required baseline
 numeric estimate and want CartoBoost to learn the residual correction. The
 final prediction is the baseline plus the learned residual.
 
-## Public Contract
+## Python Example
 
 ```python
 from cartoboost.deep import ServiceTimeResidualModel
@@ -55,3 +55,9 @@ model.save("service-residual.json")
 Compare the corrected prediction against the baseline alone on the same split.
 Report residual MAE/RMSE and final prediction MAE/RMSE so readers can see
 whether the correction is useful or just adding variance.
+
+## Limitations
+
+- The baseline estimate is required and its errors bound final performance.
+- Residual correction can amplify noise when baseline error has little predictable structure.
+- Prediction intervals require separate calibration and validation.
