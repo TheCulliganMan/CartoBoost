@@ -68,6 +68,7 @@ class NeuralEmbeddingStandaloneRegressor(ArtifactPersistenceMixin):
         min_gain: float = 0.0,
         backend: Backend | str = Backend.CPU,
     ) -> None:
+        self.backend = _choice_value(backend)
         self._native = _NativeNeuralEmbeddingRegressor(
             dim=int(dim),
             fallback=str(fallback),
@@ -78,7 +79,7 @@ class NeuralEmbeddingStandaloneRegressor(ArtifactPersistenceMixin):
             max_depth=int(max_depth),
             min_samples_leaf=int(min_samples_leaf),
             min_gain=float(min_gain),
-            backend=_choice_value(backend),
+            backend=self.backend,
         )
 
     def fit(
@@ -115,6 +116,7 @@ class NeuralEmbeddingStandaloneRegressor(ArtifactPersistenceMixin):
     def load(cls, path: str | Path) -> NeuralEmbeddingStandaloneRegressor:
         instance = cls(dim=1)
         instance._native = _NativeNeuralEmbeddingRegressor.load_artifact_json(str(path))
+        instance.backend = str(instance._native.backend)
         return instance
 
 
@@ -144,6 +146,7 @@ class Node2VecStandaloneRegressor(ArtifactPersistenceMixin):
         min_gain: float = 0.0,
         backend: Backend | str = Backend.CPU,
     ) -> None:
+        self.backend = _choice_value(backend)
         self._native = _NativeNode2VecRegressor(
             dim=int(dim),
             walk_length=int(walk_length),
@@ -163,7 +166,7 @@ class Node2VecStandaloneRegressor(ArtifactPersistenceMixin):
             max_depth=int(max_depth),
             min_samples_leaf=int(min_samples_leaf),
             min_gain=float(min_gain),
-            backend=_choice_value(backend),
+            backend=self.backend,
         )
 
     def fit(
@@ -226,6 +229,7 @@ class Node2VecStandaloneRegressor(ArtifactPersistenceMixin):
     def load(cls, path: str | Path) -> Node2VecStandaloneRegressor:
         instance = cls(dim=1)
         instance._native = _NativeNode2VecRegressor.load_artifact_json(str(path))
+        instance.backend = str(instance._native.backend)
         return instance
 
 
@@ -248,8 +252,9 @@ class GraphSageStandaloneRegressor(ArtifactPersistenceMixin):
         max_depth: int = 4,
         min_samples_leaf: int = 2,
         min_gain: float = 0.0,
-        backend: Backend = Backend.CPU,
+        backend: Backend | str = Backend.CPU,
     ) -> None:
+        self.backend = _choice_value(backend)
         self._native = _NativeGraphSageRegressor(
             input_dim=int(input_dim),
             hidden_dims=[int(value) for value in hidden_dims],
@@ -264,7 +269,7 @@ class GraphSageStandaloneRegressor(ArtifactPersistenceMixin):
             max_depth=int(max_depth),
             min_samples_leaf=int(min_samples_leaf),
             min_gain=float(min_gain),
-            backend=_choice_value(backend),
+            backend=self.backend,
         )
 
     def fit(
@@ -333,6 +338,7 @@ class GraphSageStandaloneRegressor(ArtifactPersistenceMixin):
     def load(cls, path: str | Path) -> GraphSageStandaloneRegressor:
         instance = cls(input_dim=1)
         instance._native = _NativeGraphSageRegressor.load_artifact_json(str(path))
+        instance.backend = str(instance._native.backend)
         return instance
 
 
@@ -355,8 +361,9 @@ class HeteroGraphSageStandaloneRegressor(ArtifactPersistenceMixin):
         max_depth: int = 4,
         min_samples_leaf: int = 2,
         min_gain: float = 0.0,
-        backend: Backend = Backend.CPU,
+        backend: Backend | str = Backend.CPU,
     ) -> None:
+        self.backend = _choice_value(backend)
         self._native = _NativeHeteroGraphSageRegressor(
             input_dim=int(input_dim),
             relation_count=int(relation_count),
@@ -371,7 +378,7 @@ class HeteroGraphSageStandaloneRegressor(ArtifactPersistenceMixin):
             max_depth=int(max_depth),
             min_samples_leaf=int(min_samples_leaf),
             min_gain=float(min_gain),
-            backend=_choice_value(backend),
+            backend=self.backend,
         )
 
     def fit(
@@ -421,6 +428,7 @@ class HeteroGraphSageStandaloneRegressor(ArtifactPersistenceMixin):
     def load(cls, path: str | Path) -> HeteroGraphSageStandaloneRegressor:
         instance = cls(input_dim=1, relation_count=1)
         instance._native = _NativeHeteroGraphSageRegressor.load_artifact_json(str(path))
+        instance.backend = str(instance._native.backend)
         return instance
 
 
@@ -445,8 +453,9 @@ class HinSageStandaloneRegressor(ArtifactPersistenceMixin):
         max_depth: int = 4,
         min_samples_leaf: int = 2,
         min_gain: float = 0.0,
-        backend: Backend = Backend.CPU,
+        backend: Backend | str = Backend.CPU,
     ) -> None:
+        self.backend = _choice_value(backend)
         self._native = _NativeHinSageRegressor(
             input_dim=int(input_dim),
             node_type_count=int(node_type_count),
@@ -465,7 +474,7 @@ class HinSageStandaloneRegressor(ArtifactPersistenceMixin):
             max_depth=int(max_depth),
             min_samples_leaf=int(min_samples_leaf),
             min_gain=float(min_gain),
-            backend=_choice_value(backend),
+            backend=self.backend,
         )
 
     def fit(
@@ -517,6 +526,7 @@ class HinSageStandaloneRegressor(ArtifactPersistenceMixin):
     def load(cls, path: str | Path) -> HinSageStandaloneRegressor:
         instance = cls(input_dim=1, node_type_count=1, edge_type_triples=[(0, 0, 0)])
         instance._native = _NativeHinSageRegressor.load_artifact_json(str(path))
+        instance.backend = str(instance._native.backend)
         return instance
 
 

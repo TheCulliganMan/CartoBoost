@@ -175,6 +175,10 @@ impl NeuralEmbeddingRegressor {
         Ok(())
     }
 
+    pub fn backend(&self) -> &str {
+        &self.booster_config.backend
+    }
+
     pub fn predict(&self, ids: &[u64], dense: Option<&[Vec<f64>]>) -> Result<Vec<f64>> {
         let table = self
             .table
@@ -278,6 +282,10 @@ impl Node2VecRegressor {
             encoder,
             model: None,
         })
+    }
+
+    pub fn backend(&self) -> &str {
+        &self.booster_config.backend
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -432,6 +440,10 @@ impl GraphSageRegressor {
             model: None,
             edges: Vec::new(),
         })
+    }
+
+    pub fn backend(&self) -> &str {
+        &self.booster_config.backend
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -597,6 +609,10 @@ impl HeteroGraphSageRegressor {
             model: None,
             edges: Vec::new(),
         })
+    }
+
+    pub fn backend(&self) -> &str {
+        &self.booster_config.backend
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -781,6 +797,10 @@ impl HinSageRegressor {
             node_types: Vec::new(),
             edges: Vec::new(),
         })
+    }
+
+    pub fn backend(&self) -> &str {
+        &self.booster_config.backend
     }
 
     #[allow(clippy::too_many_arguments)]

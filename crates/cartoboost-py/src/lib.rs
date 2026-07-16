@@ -8049,6 +8049,11 @@ impl NativeStandaloneNeuralEmbeddingRegressor {
             .map_err(to_py_neural_error)
     }
 
+    #[getter]
+    fn backend(&self) -> &str {
+        self.model.backend()
+    }
+
     fn save_artifact_json(&self, py: Python<'_>, path: String) -> PyResult<()> {
         py.detach(|| self.model.save_artifact_json(path))
             .map_err(to_py_neural_error)
@@ -8176,6 +8181,11 @@ impl NativeStandaloneNode2VecRegressor {
             .map_err(to_py_neural_error)
     }
 
+    #[getter]
+    fn backend(&self) -> &str {
+        self.model.backend()
+    }
+
     #[classmethod]
     fn load_artifact_json(
         _cls: &Bound<'_, PyType>,
@@ -8286,6 +8296,11 @@ impl NativeStandaloneGraphSageRegressor {
             )
         })
         .map_err(to_py_neural_error)
+    }
+
+    #[getter]
+    fn backend(&self) -> &str {
+        self.model.backend()
     }
 
     fn save_artifact_json(&self, py: Python<'_>, path: String) -> PyResult<()> {
@@ -8403,6 +8418,11 @@ impl NativeStandaloneHeteroGraphSageRegressor {
             )
         })
         .map_err(to_py_neural_error)
+    }
+
+    #[getter]
+    fn backend(&self) -> &str {
+        self.model.backend()
     }
 
     fn save_artifact_json(&self, py: Python<'_>, path: String) -> PyResult<()> {
@@ -8526,6 +8546,11 @@ impl NativeStandaloneHinSageRegressor {
             )
         })
         .map_err(to_py_neural_error)
+    }
+
+    #[getter]
+    fn backend(&self) -> &str {
+        self.model.backend()
     }
 
     fn save_artifact_json(&self, py: Python<'_>, path: String) -> PyResult<()> {
