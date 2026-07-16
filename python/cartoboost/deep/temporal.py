@@ -279,7 +279,11 @@ class InvertedTemporalTransformer(ArtifactPersistenceMixin):
             self.local_trend_ = self.recent_[-1] - self.recent_[-2]
         else:
             self.local_trend_ = np.zeros(y.shape[1], dtype=float)
-        peer_level = self.recent_[-1] @ self.attention_weights_.T
+        peer_level, peer_dispatch = _dense_vector_product(
+            self.recent_[-1],
+            self.attention_weights_.T,
+            self.backend,
+        )
         self.cross_entity_delta_ = peer_level - self.recent_[-1]
         self.delta_coef_ = self._fit_delta_head(self.recent_)
         self.last_values_ = self.recent_[-1].copy()
@@ -296,7 +300,9 @@ class InvertedTemporalTransformer(ArtifactPersistenceMixin):
             "quadratic_time_token_attention": False,
             "backend": dispatch,
             "accelerated_operations": (
-                ["dense"] if bool(dispatch["accelerated"]) else []
+                ["dense"]
+                if bool(dispatch["accelerated"]) or bool(peer_dispatch["accelerated"])
+                else []
             ),
             "shared_representation": None,
             "shared_representation_consumed": False,
@@ -315,7 +321,12 @@ class InvertedTemporalTransformer(ArtifactPersistenceMixin):
         local_delta = self.local_trend_.copy()
         for step in range(1, horizon + 1):
             del step
-            cross_delta = current @ self.attention_weights_.T - current
+            peer_level, _ = _dense_vector_product(
+                current,
+                self.attention_weights_.T,
+                self.backend,
+            )
+            cross_delta = peer_level - current
             design = np.column_stack(
                 [
                     np.ones(current.shape[0], dtype=float),
@@ -419,14 +430,17 @@ class InvertedTemporalTransformer(ArtifactPersistenceMixin):
                 ]
             )
         coef = np.zeros((recent.shape[1], 3), dtype=float)
+        peer_levels, _ = _dense_product(
+            recent[1:-1],
+            self.attention_weights_.T,
+            self.backend,
+        )
         for entity_idx in range(recent.shape[1]):
             rows = []
             target = []
             for time_idx in range(1, recent.shape[0] - 1):
                 local_delta = recent[time_idx, entity_idx] - recent[time_idx - 1, entity_idx]
-                peer_delta = (recent[time_idx] @ self.attention_weights_.T - recent[time_idx])[
-                    entity_idx
-                ]
+                peer_delta = (peer_levels[time_idx - 1] - recent[time_idx])[entity_idx]
                 rows.append([1.0, local_delta, peer_delta])
                 target.append(recent[time_idx + 1, entity_idx] - recent[time_idx, entity_idx])
             coef[entity_idx], *_ = np.linalg.lstsq(
@@ -438,6 +452,33 @@ class InvertedTemporalTransformer(ArtifactPersistenceMixin):
 
 
 InvertedEntityTransformer = InvertedTemporalTransformer
+
+
+def _dense_vector_product(
+    values: np.ndarray,
+    weights: np.ndarray,
+    backend: str,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    output, dispatch = _dense_product(values.reshape(1, -1), weights, backend)
+    return output[0], dispatch
+
+
+def _dense_product(
+    values: np.ndarray,
+    weights: np.ndarray,
+    backend: str,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    workload_size = int(values.shape[0] * values.shape[1] * weights.shape[1])
+    dispatch = workload_decision(backend, "dense", workload_size, 16_384)
+    if dispatch["executed"] == "cpu":
+        return values @ weights, dispatch
+    output = dense_layer(
+        values,
+        weights,
+        np.zeros(weights.shape[1], dtype=np.float32),
+        backend=str(dispatch["executed"]),
+    )
+    return output.astype(float), dispatch
 
 
 def _row_softmax(values: np.ndarray) -> np.ndarray:

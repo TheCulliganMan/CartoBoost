@@ -5,6 +5,7 @@ import pickle
 import types
 
 import cartoboost.deep._native as native_helpers
+import cartoboost.deep.temporal as temporal_module
 import numpy as np
 import pytest
 from cartoboost.config import GraphBackbone
@@ -323,6 +324,52 @@ def test_inverted_transformer_runs_without_removed_representation() -> None:
     assert model.metadata_["shared_representation_consumed"] is False
     assert model.metadata_["shared_representation"] is None
     assert model.predict().shape == (2, 2)
+
+
+def test_inverted_transformer_dispatches_peer_attention_to_backend(monkeypatch) -> None:
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        temporal_module,
+        "workload_decision",
+        lambda backend, operation, workload_size, minimum_accelerated_size: {
+            "requested": backend,
+            "selected": backend,
+            "executed": "cuda",
+            "operation": operation,
+            "workload_size": workload_size,
+            "minimum_accelerated_size": minimum_accelerated_size,
+            "accelerated": True,
+            "fallback_reason": None,
+        },
+    )
+
+    def accelerated_dense(features, weights, biases, backend=None):
+        calls.append(str(backend))
+        return (
+            np.asarray(features, dtype=np.float32)
+            @ np.asarray(weights, dtype=np.float32)
+            + np.asarray(biases, dtype=np.float32)
+        )
+
+    monkeypatch.setattr(temporal_module, "dense_layer", accelerated_dense)
+    y = np.asarray(
+        [[step * 0.2 + entity for entity in range(4)] for step in range(8)],
+        dtype=float,
+    )
+    frame = EntityPanelFrame(y=y, timestamps=list(range(len(y))), entity_ids=list("abcd"))
+
+    model = InvertedTemporalTransformer(
+        lookback=6,
+        horizon=2,
+        backend="cuda",
+    ).fit(frame)
+    prediction = model.predict()
+
+    assert calls
+    assert set(calls) == {"cuda"}
+    assert prediction.shape == (2, 4)
+    assert model.metadata_["accelerated_operations"] == ["dense"]
 
 
 def test_deep_frame_builders_reject_non_finite_values():
