@@ -1,3 +1,4 @@
+import cartoboost.metrics as metrics_module
 import numpy as np
 import pytest
 from cartoboost import (
@@ -212,6 +213,44 @@ def test_residual_morans_i_supports_inverse_distance_and_radius_weights():
 
     assert inverse_i == pytest.approx(-1.0 / 13.0)
     assert radius_i == pytest.approx(1.0 / 3.0)
+
+
+def test_residual_morans_i_dispatches_distance_and_contraction(monkeypatch):
+    calls: list[tuple[str, str]] = []
+
+    def decision(backend, operation, workload_size, minimum_accelerated_size):
+        calls.append(("decision", operation))
+        return {"executed": "cpu" if backend == "cpu" else "cuda"}
+
+    def distances(left, right=None, backend=None):
+        calls.append(("distance", str(backend)))
+        left_array = np.asarray(left, dtype=float)
+        right_array = left_array if right is None else np.asarray(right, dtype=float)
+        delta = left_array[:, None, :] - right_array[None, :, :]
+        return np.sum(delta * delta, axis=2).astype(np.float32)
+
+    def dense(features, weights, biases, backend=None):
+        calls.append(("dense", str(backend)))
+        return (
+            np.asarray(features, dtype=np.float32)
+            @ np.asarray(weights, dtype=np.float32)
+            + np.asarray(biases, dtype=np.float32)
+        )
+
+    monkeypatch.setattr(metrics_module, "workload_decision", decision)
+    monkeypatch.setattr(metrics_module, "pairwise_squared_distances", distances)
+    monkeypatch.setattr(metrics_module, "dense_layer", dense)
+    coordinates = np.arange(256, dtype=float).reshape(-1, 1)
+    residuals = np.sin(coordinates[:, 0] * 0.1)
+
+    accelerated = residual_morans_i(coordinates, residuals, backend="cuda")
+    expected = residual_morans_i(coordinates, residuals, backend="cpu")
+
+    assert accelerated == pytest.approx(expected, rel=1e-5, abs=1e-5)
+    assert ("decision", "pairwise_distance") in calls
+    assert ("decision", "dense") in calls
+    assert ("distance", "cuda") in calls
+    assert ("dense", "cuda") in calls
 
 
 def test_metric_validation_rejects_bad_shapes_and_weights():

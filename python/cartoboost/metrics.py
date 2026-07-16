@@ -10,7 +10,7 @@ from typing import Literal
 import numpy as np
 
 from . import _native
-from .accelerators import pairwise_squared_distances, workload_decision
+from .accelerators import dense_layer, pairwise_squared_distances, workload_decision
 from .config import Backend
 
 __path__ = [str(Path(__file__).with_suffix(""))]
@@ -632,7 +632,23 @@ def residual_morans_i(
     if weight_sum == 0.0:
         raise ValueError("spatial weights contain no neighbor pairs")
 
-    numerator = float(centered @ weight_matrix @ centered)
+    contraction_work = int(weight_matrix.shape[0] * weight_matrix.shape[1])
+    contraction_dispatch = workload_decision(
+        str(backend),
+        "dense",
+        contraction_work,
+        16_384,
+    )
+    if contraction_dispatch["executed"] == "cpu":
+        weighted_residuals = weight_matrix @ centered
+    else:
+        weighted_residuals = dense_layer(
+            weight_matrix,
+            centered.reshape(-1, 1),
+            np.zeros(1, dtype=np.float32),
+            backend=str(contraction_dispatch["executed"]),
+        ).astype(float)[:, 0]
+    numerator = float(np.dot(centered, weighted_residuals))
     return coords.shape[0] / weight_sum * numerator / denominator
 
 
