@@ -13,6 +13,64 @@ permissions:
   contents: read
 
 jobs:
+  browser-webgpu-contract:
+    name: Browser WebGPU contract
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust with browser target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: browser-webgpu
+
+      - name: Check complete browser dependency graph
+        run: >-
+          cargo check -p cartoboost-wasm --target wasm32-unknown-unknown
+          --no-default-features --features webgpu
+
+  accelerator-contract:
+    name: Accelerator contract (${{ matrix.backend }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            backend: webgpu
+          - os: ubuntu-latest
+            backend: rocm
+          - os: macos-latest
+            backend: metal
+          - os: windows-latest
+            backend: directml
+          - os: windows-latest
+            backend: webgpu
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: accelerator-${{ matrix.os }}-${{ matrix.backend }}
+
+      - name: Check neural, graph, and Python feature propagation
+        shell: bash
+        run: |
+          cargo check -p cartoboost-neural --features "${{ matrix.backend }}"
+          cargo check -p cartoboost-geo-st --features "${{ matrix.backend }}"
+          cargo check -p cartoboost-py --features "${{ matrix.backend }}"
+
   rust:
     name: Rust
     runs-on: ubuntu-latest

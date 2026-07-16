@@ -1,3 +1,4 @@
+use cartoboost_accelerator::backend::available_backends;
 use cartoboost_core::forecasting::{
     proportional_total_reconciliation, HierarchySpec, Reconciler, ReconciliationMethod,
     TemporalAggregation, TemporalHierarchy,
@@ -67,6 +68,44 @@ fn bottom_up_and_top_down_reconciliation_return_coherent_forecasts() {
     assert_eq!(top_down[3][0], 20.0);
     assert_eq!(top_down[4][0], 30.0);
     assert_eq!(top_down[5][0], 50.0);
+}
+
+#[test]
+fn available_accelerators_match_cpu_reconciliation() {
+    let hierarchy = taxi_hierarchy();
+    let base = vec![
+        vec![100.0, 120.0, 110.0],
+        vec![70.0, 80.0, 75.0],
+        vec![40.0, 45.0, 42.0],
+        vec![20.0, 25.0, 24.0],
+        vec![30.0, 35.0, 31.0],
+        vec![50.0, 55.0, 52.0],
+    ];
+    let reference = Reconciler::new(hierarchy.clone(), ReconciliationMethod::BottomUp)
+        .reconcile(&base)
+        .expect("CPU reconciliation");
+
+    for backend in available_backends()
+        .into_iter()
+        .filter(|name| name != "cpu")
+    {
+        let accelerated = Reconciler::new_with_backend(
+            hierarchy.clone(),
+            ReconciliationMethod::BottomUp,
+            Some(&backend),
+        )
+        .unwrap_or_else(|error| panic!("{backend} selection failed: {error}"))
+        .reconcile(&base)
+        .unwrap_or_else(|error| panic!("{backend} reconciliation failed: {error}"));
+        for (actual_row, expected_row) in accelerated.iter().zip(&reference) {
+            for (actual, expected) in actual_row.iter().zip(expected_row) {
+                assert!(
+                    (actual - expected).abs() <= 1.0e-4,
+                    "{backend} produced {actual}, expected {expected}"
+                );
+            }
+        }
+    }
 }
 
 #[test]

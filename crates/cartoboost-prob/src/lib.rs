@@ -1,4 +1,10 @@
 use cartoboost_core::{CartoBoostError, Result};
+use cartoboost_neural::{
+    backend_affine_scores, backend_csr_diffusion_f32, backend_dense_layer_f32,
+    backend_pairwise_squared_distances_f32, select_backend, select_backend_for, BackendOperation,
+    BackendSelection,
+};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -59,6 +65,17 @@ pub struct ConditionalFlowDistributionHead {
     pub scale_weights: Vec<f64>,
     pub residual_scale: f64,
     pub metadata: BTreeMap<String, String>,
+    #[serde(default = "default_backend_selection")]
+    pub backend: BackendSelection,
+}
+
+fn default_backend_selection() -> BackendSelection {
+    select_backend(Some("cpu")).expect("CPU backend is always available")
+}
+
+fn select_csr_backend(requested: Option<&str>) -> Result<BackendSelection> {
+    select_backend_for(requested.or(Some("cpu")), BackendOperation::CsrDiffusion)
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -88,6 +105,8 @@ pub struct GeoTemporalDiffusionScenarioModel {
     pub shock_scale: f64,
     pub capability_tier: String,
     pub metadata: BTreeMap<String, String>,
+    #[serde(default = "default_backend_selection")]
+    pub backend: BackendSelection,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -231,7 +250,23 @@ pub fn conditional_flow_fit_json(
     quantiles: &[f64],
     sample_count: usize,
 ) -> Result<String> {
-    let model = ConditionalFlowDistributionHead::fit(hidden, residuals, quantiles, sample_count)?;
+    conditional_flow_fit_with_backend_json(hidden, residuals, quantiles, sample_count, Some("cpu"))
+}
+
+pub fn conditional_flow_fit_with_backend_json(
+    hidden: &[Vec<f64>],
+    residuals: &[f64],
+    quantiles: &[f64],
+    sample_count: usize,
+    backend: Option<&str>,
+) -> Result<String> {
+    let model = ConditionalFlowDistributionHead::fit_with_backend(
+        hidden,
+        residuals,
+        quantiles,
+        sample_count,
+        backend,
+    )?;
     serde_json::to_string(&model).map_err(|err| CartoBoostError::InvalidInput(err.to_string()))
 }
 
@@ -253,8 +288,30 @@ pub fn diffusion_scenario_generate_json(
     diffusion_steps: usize,
     shock_scale: f64,
 ) -> Result<String> {
-    let model =
-        GeoTemporalDiffusionScenarioModel::new(scenario_count, diffusion_steps, shock_scale)?;
+    diffusion_scenario_generate_with_backend_json(
+        point_forecast,
+        edges,
+        scenario_count,
+        diffusion_steps,
+        shock_scale,
+        Some("cpu"),
+    )
+}
+
+pub fn diffusion_scenario_generate_with_backend_json(
+    point_forecast: &[Vec<f64>],
+    edges: &[DiffusionEdge],
+    scenario_count: usize,
+    diffusion_steps: usize,
+    shock_scale: f64,
+    backend: Option<&str>,
+) -> Result<String> {
+    let model = GeoTemporalDiffusionScenarioModel::new_with_backend(
+        scenario_count,
+        diffusion_steps,
+        shock_scale,
+        backend,
+    )?;
     let prediction = model.generate(point_forecast, edges)?;
     serde_json::to_string(&prediction).map_err(|err| CartoBoostError::InvalidInput(err.to_string()))
 }
@@ -266,19 +323,31 @@ impl ConditionalFlowDistributionHead {
         quantiles: &[f64],
         sample_count: usize,
     ) -> Result<Self> {
+        Self::fit_with_backend(hidden, residuals, quantiles, sample_count, Some("cpu"))
+    }
+
+    pub fn fit_with_backend(
+        hidden: &[Vec<f64>],
+        residuals: &[f64],
+        quantiles: &[f64],
+        sample_count: usize,
+        backend: Option<&str>,
+    ) -> Result<Self> {
+        let backend = select_backend(backend)
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
         validate_same_non_empty_matrix(hidden, residuals, "hidden", "residuals")?;
         validate_quantile_grid(quantiles)?;
         if sample_count == 0 {
             return invalid("sample_count must be positive");
         }
-        let location_weights = ridge_fit(hidden, residuals, 1.0e-6);
-        let predicted = predict_linear(hidden, &location_weights)?;
+        let location_weights = ridge_fit_with_backend(hidden, residuals, 1.0e-6, &backend)?;
+        let predicted = predict_linear_with_backend(hidden, &location_weights, &backend)?;
         let abs_residuals = residuals
             .iter()
             .zip(predicted.iter())
             .map(|(&actual, &pred)| (actual - pred).abs().ln_1p())
             .collect::<Vec<_>>();
-        let scale_weights = ridge_fit(hidden, &abs_residuals, 1.0e-6);
+        let scale_weights = ridge_fit_with_backend(hidden, &abs_residuals, 1.0e-6, &backend)?;
         let residual_scale = (residuals.iter().map(|v| v * v).sum::<f64>()
             / residuals.len() as f64)
             .sqrt()
@@ -294,6 +363,8 @@ impl ConditionalFlowDistributionHead {
             "quantiles".to_string(),
             serde_json::to_string(quantiles).unwrap(),
         );
+        metadata.insert("backend_requested".to_string(), backend.requested.clone());
+        metadata.insert("backend_selected".to_string(), backend.selected.clone());
         Ok(Self {
             quantiles: quantiles.to_vec(),
             sample_count,
@@ -301,6 +372,7 @@ impl ConditionalFlowDistributionHead {
             scale_weights,
             residual_scale,
             metadata,
+            backend,
         })
     }
 
@@ -311,8 +383,34 @@ impl ConditionalFlowDistributionHead {
         if let Some(actual) = actual {
             validate_same_non_empty(actual, &vec![0.0; hidden.len()], "actual", "hidden")?;
         }
-        let location = predict_linear(hidden, &self.location_weights)?;
-        let raw_scale = predict_linear(hidden, &self.scale_weights)?;
+        let location = predict_linear_with_backend(hidden, &self.location_weights, &self.backend)?;
+        let raw_scale = predict_linear_with_backend(hidden, &self.scale_weights, &self.backend)?;
+        self.predict_from_linear_outputs(&location, &raw_scale, actual)
+    }
+
+    /// Complete conditional-flow inference from accelerator-computed linear
+    /// projections. This is the async browser WebGPU boundary: matrix work can
+    /// stay on the device while deterministic sampling and metrics remain in
+    /// the shared probability implementation.
+    pub fn predict_from_linear_outputs(
+        &self,
+        location: &[f64],
+        raw_scale: &[f64],
+        actual: Option<&[f64]>,
+    ) -> Result<FlowPrediction> {
+        if location.is_empty() || raw_scale.len() != location.len() {
+            return invalid("location and raw_scale must be non-empty and have equal length");
+        }
+        if location
+            .iter()
+            .chain(raw_scale)
+            .any(|value| !value.is_finite())
+        {
+            return invalid("location and raw_scale must be finite");
+        }
+        if let Some(actual) = actual {
+            validate_same_non_empty(actual, location, "actual", "location")?;
+        }
         let scale = raw_scale
             .iter()
             .map(|value| value.exp().max(1.0e-6) * self.residual_scale)
@@ -347,7 +445,7 @@ impl ConditionalFlowDistributionHead {
                 .zip(scale.iter())
                 .map(|((&y, &loc), &s)| gaussian_log_likelihood(y, loc, s))
                 .collect(),
-            None => vec![0.0; hidden.len()],
+            None => vec![0.0; location.len()],
         };
         let mut tail_risk_metrics = BTreeMap::new();
         tail_risk_metrics.insert(
@@ -427,6 +525,16 @@ impl ConditionalFlowDistributionHead {
 
 impl GeoTemporalDiffusionScenarioModel {
     pub fn new(scenario_count: usize, diffusion_steps: usize, shock_scale: f64) -> Result<Self> {
+        Self::new_with_backend(scenario_count, diffusion_steps, shock_scale, Some("cpu"))
+    }
+
+    pub fn new_with_backend(
+        scenario_count: usize,
+        diffusion_steps: usize,
+        shock_scale: f64,
+        backend: Option<&str>,
+    ) -> Result<Self> {
+        let backend = select_csr_backend(backend)?;
         if scenario_count == 0 {
             return invalid("scenario_count must be positive");
         }
@@ -447,12 +555,15 @@ impl GeoTemporalDiffusionScenarioModel {
             "primary_benchmark_evidence".to_string(),
             "false".to_string(),
         );
+        metadata.insert("backend_requested".to_string(), backend.requested.clone());
+        metadata.insert("backend_selected".to_string(), backend.selected.clone());
         Ok(Self {
             scenario_count,
             diffusion_steps,
             shock_scale,
             capability_tier: "experimental".to_string(),
             metadata,
+            backend,
         })
     }
 
@@ -465,11 +576,9 @@ impl GeoTemporalDiffusionScenarioModel {
         validate_edges(edges, point_forecast[0].len())?;
         let horizon = point_forecast.len();
         let nodes = point_forecast[0].len();
-        let mut scenarios = Vec::with_capacity(self.scenario_count);
-        for scenario_idx in 0..self.scenario_count {
-            let mut scenario = point_forecast.to_vec();
-            let mut residual_field = (0..horizon)
-                .map(|t| {
+        let mut residual_field = (0..self.scenario_count)
+            .flat_map(|scenario_idx| {
+                (0..horizon).map(move |t| {
                     (0..nodes)
                         .map(|node| {
                             self.shock_scale
@@ -480,10 +589,15 @@ impl GeoTemporalDiffusionScenarioModel {
                         })
                         .collect::<Vec<_>>()
                 })
-                .collect::<Vec<_>>();
-            for _ in 0..self.diffusion_steps {
-                residual_field = diffuse_residual_field(&residual_field, edges, nodes);
-            }
+            })
+            .collect::<Vec<_>>();
+        for _ in 0..self.diffusion_steps {
+            residual_field =
+                diffuse_residual_field_with_backend(&residual_field, edges, nodes, &self.backend)?;
+        }
+        let mut scenarios = Vec::with_capacity(self.scenario_count);
+        for residual_field in residual_field.chunks_exact(horizon) {
+            let mut scenario = point_forecast.to_vec();
             for t in 0..horizon {
                 for node in 0..nodes {
                     scenario[t][node] += residual_field[t][node];
@@ -522,6 +636,90 @@ impl GeoTemporalDiffusionScenarioModel {
             metadata,
         })
     }
+
+    /// Browser model-level generation using asynchronous WebGPU CSR dispatch.
+    #[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+    pub async fn generate_webgpu(
+        &self,
+        point_forecast: &[Vec<f64>],
+        edges: &[DiffusionEdge],
+    ) -> Result<DiffusionScenarioPrediction> {
+        validate_panel(point_forecast, "point_forecast")?;
+        validate_edges(edges, point_forecast[0].len())?;
+        let horizon = point_forecast.len();
+        let nodes = point_forecast[0].len();
+        let mut residual_field = (0..self.scenario_count)
+            .flat_map(|scenario_idx| {
+                (0..horizon).map(move |t| {
+                    (0..nodes)
+                        .map(|node| {
+                            self.shock_scale
+                                * deterministic_standard_sample(
+                                    scenario_idx * horizon + t,
+                                    node + self.diffusion_steps,
+                                )
+                        })
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect::<Vec<_>>();
+        for _ in 0..self.diffusion_steps {
+            residual_field = diffuse_residual_field_webgpu(&residual_field, edges, nodes).await?;
+        }
+        let mut scenarios = Vec::with_capacity(self.scenario_count);
+        for residual_field in residual_field.chunks_exact(horizon) {
+            let mut scenario = point_forecast.to_vec();
+            for t in 0..horizon {
+                for node in 0..nodes {
+                    scenario[t][node] += residual_field[t][node];
+                }
+            }
+            scenarios.push(scenario);
+        }
+        finish_diffusion_prediction(self, point_forecast, edges, scenarios)
+    }
+}
+
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+fn finish_diffusion_prediction(
+    model: &GeoTemporalDiffusionScenarioModel,
+    point_forecast: &[Vec<f64>],
+    edges: &[DiffusionEdge],
+    scenarios: Vec<Vec<Vec<f64>>>,
+) -> Result<DiffusionScenarioPrediction> {
+    let horizon = point_forecast.len();
+    let nodes = point_forecast[0].len();
+    let scenario_mean = scenario_panel_mean(&scenarios, horizon, nodes);
+    let scenario_variance = scenario_panel_variance(&scenarios, &scenario_mean, horizon, nodes);
+    let spatial_correlation = scenario_spatial_correlation(&scenario_mean, edges);
+    let mut point_forecast_comparison = BTreeMap::new();
+    point_forecast_comparison.insert(
+        "mean_absolute_delta".to_string(),
+        mean_abs_panel_delta(&scenario_mean, point_forecast),
+    );
+    point_forecast_comparison.insert(
+        "mean_variance".to_string(),
+        scenario_variance.iter().flatten().sum::<f64>() / (horizon * nodes) as f64,
+    );
+    let mut metadata = model.metadata.clone();
+    metadata.insert(
+        "scenario_count".to_string(),
+        model.scenario_count.to_string(),
+    );
+    metadata.insert(
+        "diffusion_steps".to_string(),
+        model.diffusion_steps.to_string(),
+    );
+    metadata.insert("shock_scale".to_string(), model.shock_scale.to_string());
+    metadata.insert("backend_selected".to_string(), "webgpu".to_string());
+    Ok(DiffusionScenarioPrediction {
+        scenarios,
+        scenario_mean,
+        scenario_variance,
+        spatial_correlation,
+        point_forecast_comparison,
+        metadata,
+    })
 }
 
 pub fn split_conformal_residual_quantile(
@@ -625,6 +823,35 @@ pub fn nearest_calibration_residual_quantiles(
     alpha: f64,
     order: SplitOrder,
 ) -> Result<Vec<f64>> {
+    nearest_calibration_residual_quantiles_with_backend(
+        actual,
+        prediction,
+        calibration_x,
+        calibration_y,
+        query_x,
+        query_y,
+        neighbor_count,
+        alpha,
+        order,
+        Some("cpu"),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn nearest_calibration_residual_quantiles_with_backend(
+    actual: &[f64],
+    prediction: &[f64],
+    calibration_x: &[f64],
+    calibration_y: &[f64],
+    query_x: &[f64],
+    query_y: &[f64],
+    neighbor_count: usize,
+    alpha: f64,
+    order: SplitOrder,
+    backend: Option<&str>,
+) -> Result<Vec<f64>> {
+    let backend = select_backend_for(backend.or(Some("cpu")), BackendOperation::PairwiseDistance)
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
     order.validate()?;
     validate_alpha(alpha)?;
     validate_same_non_empty(actual, prediction, "actual", "prediction")?;
@@ -644,9 +871,40 @@ pub fn nearest_calibration_residual_quantiles(
         .zip(prediction)
         .map(|(&y, &p)| (y - p).abs())
         .collect::<Vec<_>>();
+    if backend.selected != "cpu" {
+        let calibration = calibration_x
+            .iter()
+            .zip(calibration_y)
+            .map(|(&x, &y)| vec![x as f32, y as f32])
+            .collect::<Vec<_>>();
+        let queries = query_x
+            .iter()
+            .zip(query_y)
+            .map(|(&x, &y)| vec![x as f32, y as f32])
+            .collect::<Vec<_>>();
+        let distances = backend_pairwise_squared_distances_f32(&backend, &queries, &calibration)
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+        return distances
+            .into_par_iter()
+            .map(|row| {
+                let mut ranked = row.into_iter().enumerate().collect::<Vec<_>>();
+                ranked.sort_by(|left, right| {
+                    left.1
+                        .total_cmp(&right.1)
+                        .then_with(|| left.0.cmp(&right.0))
+                });
+                let local = ranked
+                    .into_iter()
+                    .take(neighbor_count.min(residuals.len()))
+                    .map(|(index, _)| residuals[index])
+                    .collect::<Vec<_>>();
+                conformal_quantile(&local, alpha)
+            })
+            .collect();
+    }
     query_x
-        .iter()
-        .zip(query_y)
+        .par_iter()
+        .zip(query_y.par_iter())
         .map(|(&x, &y)| {
             let mut distances = calibration_x
                 .iter()
@@ -916,7 +1174,53 @@ fn ridge_fit(features: &[Vec<f64>], target: &[f64], ridge: f64) -> Vec<f64> {
     solve_linear_system(xtx, xty)
 }
 
-fn predict_linear(features: &[Vec<f64>], weights: &[f64]) -> Result<Vec<f64>> {
+fn ridge_fit_with_backend(
+    features: &[Vec<f64>],
+    target: &[f64],
+    ridge: f64,
+    backend: &BackendSelection,
+) -> Result<Vec<f64>> {
+    if backend.selected == "cpu" {
+        return Ok(ridge_fit(features, target, ridge));
+    }
+    let cols = features[0].len() + 1;
+    let augmented = features
+        .iter()
+        .map(|row| {
+            std::iter::once(1.0_f32)
+                .chain(row.iter().map(|value| *value as f32))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let transposed = (0..cols)
+        .map(|col| augmented.iter().map(|row| row[col]).collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    let right = augmented
+        .iter()
+        .zip(target)
+        .flat_map(|(row, target)| row.iter().copied().chain(std::iter::once(*target as f32)))
+        .collect::<Vec<_>>();
+    let products = backend_dense_layer_f32(backend, &transposed, &right, &vec![0.0; cols + 1])
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    let mut xtx = vec![vec![0.0; cols]; cols];
+    let mut xty = vec![0.0; cols];
+    for row in 0..cols {
+        for col in 0..cols {
+            xtx[row][col] = f64::from(products[row][col]);
+        }
+        xty[row] = f64::from(products[row][cols]);
+    }
+    for (idx, row) in xtx.iter_mut().enumerate().skip(1) {
+        row[idx] += ridge.max(1.0e-12);
+    }
+    Ok(solve_linear_system(xtx, xty))
+}
+
+fn predict_linear_with_backend(
+    features: &[Vec<f64>],
+    weights: &[f64],
+    backend: &BackendSelection,
+) -> Result<Vec<f64>> {
     if weights.is_empty() {
         return invalid("linear weights must be non-empty");
     }
@@ -924,17 +1228,14 @@ fn predict_linear(features: &[Vec<f64>], weights: &[f64]) -> Result<Vec<f64>> {
     if features.iter().any(|row| row.len() != expected_width) {
         return invalid("feature width must match fitted flow artifact");
     }
-    Ok(features
-        .iter()
-        .map(|row| {
-            weights[0]
-                + row
-                    .iter()
-                    .zip(&weights[1..])
-                    .map(|(x, w)| x * w)
-                    .sum::<f64>()
-        })
-        .collect())
+    backend_affine_scores(
+        backend,
+        features,
+        &vec![0.0; expected_width],
+        &weights[1..],
+        &vec![weights[0]; features.len()],
+    )
+    .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))
 }
 
 fn solve_linear_system(mut matrix: Vec<Vec<f64>>, mut rhs: Vec<f64>) -> Vec<f64> {
@@ -978,11 +1279,55 @@ fn deterministic_standard_sample(row: usize, sample: usize) -> f64 {
     (value as f64 / 10_000.0 - 0.5) * 2.0
 }
 
-fn diffuse_residual_field(
+fn diffuse_residual_field_with_backend(
     residual_field: &[Vec<f64>],
     edges: &[DiffusionEdge],
     node_count: usize,
-) -> Vec<Vec<f64>> {
+    backend: &BackendSelection,
+) -> Result<Vec<Vec<f64>>> {
+    if backend.selected != "cpu" {
+        let mut inbound_weight = vec![0.0; node_count];
+        let mut rows = vec![Vec::<(u32, f32)>::new(); node_count];
+        for edge in edges {
+            inbound_weight[edge.target] += edge.weight.abs();
+        }
+        for edge in edges {
+            rows[edge.target].push((
+                u32::try_from(edge.source)
+                    .map_err(|_| CartoBoostError::InvalidInput("node index exceeds u32".into()))?,
+                (0.5 * edge.weight / inbound_weight[edge.target].max(1.0)) as f32,
+            ));
+        }
+        let mut indptr = Vec::with_capacity(node_count + 1);
+        let mut indices = Vec::new();
+        let mut weights = Vec::new();
+        indptr.push(0_u32);
+        for row in rows {
+            for (index, weight) in row {
+                indices.push(index);
+                weights.push(weight);
+            }
+            indptr.push(u32::try_from(indices.len()).map_err(|_| {
+                CartoBoostError::InvalidInput("diffusion edge count exceeds u32".into())
+            })?);
+        }
+        let values = residual_field
+            .iter()
+            .flat_map(|row| row.iter().map(|value| *value as f32))
+            .collect::<Vec<_>>();
+        let propagated =
+            backend_csr_diffusion_f32(backend, &indptr, &indices, &weights, 1, &values)
+                .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+        return Ok(residual_field
+            .iter()
+            .flatten()
+            .zip(propagated)
+            .map(|(value, delta)| *value + f64::from(delta))
+            .collect::<Vec<_>>()
+            .chunks_exact(node_count)
+            .map(|row| row.to_vec())
+            .collect());
+    }
     let mut next = residual_field.to_vec();
     let mut inbound_weight = vec![0.0; node_count];
     for edge in edges {
@@ -994,7 +1339,57 @@ fn diffuse_residual_field(
             next[t][edge.target] += 0.5 * edge.weight * row[edge.source] / denom;
         }
     }
-    next
+    Ok(next)
+}
+
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+async fn diffuse_residual_field_webgpu(
+    residual_field: &[Vec<f64>],
+    edges: &[DiffusionEdge],
+    node_count: usize,
+) -> Result<Vec<Vec<f64>>> {
+    let mut inbound_weight = vec![0.0; node_count];
+    let mut rows = vec![Vec::<(u32, f32)>::new(); node_count];
+    for edge in edges {
+        inbound_weight[edge.target] += edge.weight.abs();
+    }
+    for edge in edges {
+        rows[edge.target].push((
+            u32::try_from(edge.source)
+                .map_err(|_| CartoBoostError::InvalidInput("node index exceeds u32".into()))?,
+            (0.5 * edge.weight / inbound_weight[edge.target].max(1.0)) as f32,
+        ));
+    }
+    let mut indptr = Vec::with_capacity(node_count + 1);
+    let mut indices = Vec::new();
+    let mut weights = Vec::new();
+    indptr.push(0_u32);
+    for row in rows {
+        for (index, weight) in row {
+            indices.push(index);
+            weights.push(weight);
+        }
+        indptr.push(u32::try_from(indices.len()).map_err(|_| {
+            CartoBoostError::InvalidInput("diffusion edge count exceeds u32".into())
+        })?);
+    }
+    let values = residual_field
+        .iter()
+        .flat_map(|row| row.iter().map(|value| *value as f32))
+        .collect::<Vec<_>>();
+    let propagated =
+        cartoboost_neural::webgpu_csr_diffusion_f32_async(&indptr, &indices, &weights, 1, &values)
+            .await
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    Ok(residual_field
+        .iter()
+        .flatten()
+        .zip(propagated)
+        .map(|(value, delta)| *value + f64::from(delta))
+        .collect::<Vec<_>>()
+        .chunks_exact(node_count)
+        .map(|row| row.to_vec())
+        .collect())
 }
 
 fn scenario_panel_mean(scenarios: &[Vec<Vec<f64>>], horizon: usize, nodes: usize) -> Vec<Vec<f64>> {
@@ -1200,6 +1595,85 @@ mod tests {
         assert!(output.metrics.contains_key("interval_coverage"));
         assert!(output.metrics.contains_key("joint_path_calibration"));
         assert!(output.metrics.contains_key("tail_event_calibration"));
+
+        let model: ConditionalFlowDistributionHead = serde_json::from_str(&artifact).unwrap();
+        let location = hidden
+            .iter()
+            .map(|row| {
+                model.location_weights[0]
+                    + model
+                        .location_weights
+                        .iter()
+                        .skip(1)
+                        .zip(row)
+                        .map(|(weight, value)| weight * value)
+                        .sum::<f64>()
+            })
+            .collect::<Vec<_>>();
+        let raw_scale = hidden
+            .iter()
+            .map(|row| {
+                model.scale_weights[0]
+                    + model
+                        .scale_weights
+                        .iter()
+                        .skip(1)
+                        .zip(row)
+                        .map(|(weight, value)| weight * value)
+                        .sum::<f64>()
+            })
+            .collect::<Vec<_>>();
+        let from_device_boundary = model
+            .predict_from_linear_outputs(&location, &raw_scale, Some(&residuals))
+            .unwrap();
+        assert_eq!(from_device_boundary, output);
+    }
+
+    #[test]
+    fn conditional_flow_training_runs_on_every_available_backend() {
+        let hidden = vec![
+            vec![0.0, 1.0],
+            vec![1.0, 0.5],
+            vec![2.0, -0.5],
+            vec![3.0, 0.25],
+            vec![4.0, -1.0],
+        ];
+        let residuals = vec![0.2, 0.8, 1.5, 2.9, 3.6];
+        let expected = ConditionalFlowDistributionHead::fit_with_backend(
+            &hidden,
+            &residuals,
+            &[0.1, 0.5, 0.9],
+            8,
+            Some("cpu"),
+        )
+        .unwrap();
+        for backend in cartoboost_neural::available_backends() {
+            let actual = ConditionalFlowDistributionHead::fit_with_backend(
+                &hidden,
+                &residuals,
+                &[0.1, 0.5, 0.9],
+                8,
+                Some(&backend),
+            )
+            .unwrap_or_else(|error| panic!("{backend} conditional-flow fit failed: {error}"));
+            assert_eq!(actual.backend.selected, backend);
+            for (left, right) in actual
+                .location_weights
+                .iter()
+                .zip(&expected.location_weights)
+            {
+                assert!(
+                    (left - right).abs() < 2.0e-3,
+                    "{backend}: {left} != {right}"
+                );
+            }
+            for (left, right) in actual.scale_weights.iter().zip(&expected.scale_weights) {
+                assert!(
+                    (left - right).abs() < 2.0e-3,
+                    "{backend}: {left} != {right}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1245,6 +1719,46 @@ mod tests {
     }
 
     #[test]
+    fn batched_diffusion_scenarios_run_on_every_available_backend() {
+        let point_forecast = vec![vec![10.0, 12.0, 13.0], vec![11.0, 12.5, 14.0]];
+        let edges = vec![
+            DiffusionEdge {
+                source: 0,
+                target: 1,
+                weight: 1.0,
+            },
+            DiffusionEdge {
+                source: 1,
+                target: 2,
+                weight: 0.7,
+            },
+        ];
+        let expected = GeoTemporalDiffusionScenarioModel::new_with_backend(8, 3, 0.4, Some("cpu"))
+            .unwrap()
+            .generate(&point_forecast, &edges)
+            .unwrap();
+        for backend in cartoboost_neural::available_backends() {
+            let actual =
+                GeoTemporalDiffusionScenarioModel::new_with_backend(8, 3, 0.4, Some(&backend))
+                    .unwrap()
+                    .generate(&point_forecast, &edges)
+                    .unwrap_or_else(|error| panic!("{backend} scenarios failed: {error}"));
+            for (actual, expected) in actual
+                .scenarios
+                .iter()
+                .flatten()
+                .flatten()
+                .zip(expected.scenarios.iter().flatten().flatten())
+            {
+                assert!(
+                    (actual - expected).abs() < 1.0e-4,
+                    "scenario mismatch on {backend}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn benchmark_report_fields_group_coverage_by_horizon_and_block() {
         let report = benchmark_calibration_report_fields(
             &[10.0, 12.0, 20.0, 25.0],
@@ -1285,5 +1799,47 @@ mod tests {
         )
         .unwrap();
         assert_eq!(q, vec![1.0, 10.0]);
+    }
+
+    #[test]
+    fn nearest_calibration_runs_on_every_available_backend() {
+        let order = SplitOrder {
+            train_end_exclusive: 1,
+            calibration_start: 1,
+            calibration_end_exclusive: 5,
+            test_start: 5,
+        };
+        let expected = nearest_calibration_residual_quantiles_with_backend(
+            &[10.0, 20.0, 30.0, 100.0],
+            &[9.0, 18.0, 27.0, 90.0],
+            &[0.0, 1.0, 2.0, 100.0],
+            &[0.0, 1.0, 2.0, 100.0],
+            &[0.1, 1.8, 99.0],
+            &[0.1, 1.8, 99.0],
+            2,
+            0.1,
+            order,
+            Some("cpu"),
+        )
+        .unwrap();
+        for backend in cartoboost_neural::available_backends() {
+            let actual = nearest_calibration_residual_quantiles_with_backend(
+                &[10.0, 20.0, 30.0, 100.0],
+                &[9.0, 18.0, 27.0, 90.0],
+                &[0.0, 1.0, 2.0, 100.0],
+                &[0.0, 1.0, 2.0, 100.0],
+                &[0.1, 1.8, 99.0],
+                &[0.1, 1.8, 99.0],
+                2,
+                0.1,
+                order,
+                Some(&backend),
+            )
+            .unwrap_or_else(|error| panic!("{backend} calibration failed: {error}"));
+            assert_eq!(
+                actual, expected,
+                "nearest calibration mismatch on {backend}"
+            );
+        }
     }
 }

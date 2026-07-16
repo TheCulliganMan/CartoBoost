@@ -1,3 +1,7 @@
+use cartoboost_neural::{
+    backend_affine_scores, backend_dense_layer_f32, backend_pairwise_squared_distances_f32,
+    select_backend_for, select_backend_for_operations, BackendOperation, BackendSelection,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -133,21 +137,34 @@ pub struct SyntheticDIDEstimate {
 #[derive(Clone, Debug)]
 pub struct SyntheticDIDEstimator {
     config: SyntheticDIDConfig,
+    backend: BackendSelection,
     panel: Option<GeoCausalPanel>,
     estimate: Option<SyntheticDIDEstimate>,
 }
 
 impl SyntheticDIDEstimator {
     pub fn new(config: SyntheticDIDConfig) -> Self {
-        Self {
+        Self::new_with_backend(config, Some("cpu")).expect("CPU affine backend is always available")
+    }
+
+    pub fn new_with_backend(config: SyntheticDIDConfig, backend: Option<&str>) -> Result<Self> {
+        let backend = select_backend_for(backend.or(Some("cpu")), BackendOperation::Affine)
+            .map_err(|error| GeoCausalError::InvalidInput(error.to_string()))?;
+        Ok(Self {
             config,
+            backend,
             panel: None,
             estimate: None,
-        }
+        })
+    }
+
+    pub fn backend(&self) -> &BackendSelection {
+        &self.backend
     }
 
     pub fn fit(&mut self, panel: GeoCausalPanel) -> Result<()> {
-        let estimate = estimate_for_treated_units(&panel, &self.config, None, Vec::new())?;
+        let estimate =
+            estimate_for_treated_units(&panel, &self.config, None, Vec::new(), &self.backend)?;
         self.panel = Some(panel);
         self.estimate = Some(estimate);
         Ok(())
@@ -176,7 +193,14 @@ impl SyntheticDIDEstimator {
             let pseudo =
                 deterministic_pick(&controls, treated_count, self.config.seed + idx as u64);
             estimates.push(
-                estimate_for_treated_units(panel, &self.config, Some(&pseudo), Vec::new())?.effect,
+                estimate_for_treated_units(
+                    panel,
+                    &self.config,
+                    Some(&pseudo),
+                    Vec::new(),
+                    &self.backend,
+                )?
+                .effect,
             );
         }
         if let Some(current) = &mut self.estimate {
@@ -199,6 +223,8 @@ pub struct GeoExperimentDesign {
     pub placebo_estimates: Vec<f64>,
     pub assumptions: Vec<String>,
     pub warnings: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub metadata: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -231,6 +257,18 @@ impl GeoExperimentDesigner {
         candidate_count: usize,
         placebo_n: usize,
     ) -> Result<GeoExperimentDesign> {
+        self.design_with_backend(panel, candidate_count, placebo_n, Some("cpu"))
+    }
+
+    pub fn design_with_backend(
+        &self,
+        panel: &GeoCausalPanel,
+        candidate_count: usize,
+        placebo_n: usize,
+        backend: Option<&str>,
+    ) -> Result<GeoExperimentDesign> {
+        let backend = select_backend_for(backend.or(Some("cpu")), BackendOperation::Affine)
+            .map_err(|error| GeoCausalError::InvalidInput(error.to_string()))?;
         if candidate_count == 0 {
             return Err(GeoCausalError::InvalidInput(
                 "candidate_count must be positive".to_string(),
@@ -286,6 +324,7 @@ impl GeoExperimentDesigner {
             &config,
             Some(&candidate_test_geos),
             spillover_warnings(panel, &candidate_test_geos),
+            &backend,
         )?;
         let mut placebo_estimates = Vec::new();
         for idx in 0..placebo_n {
@@ -300,10 +339,15 @@ impl GeoExperimentDesigner {
             let pseudo =
                 deterministic_pick(&controls, candidate_test_geos.len(), self.seed + idx as u64);
             placebo_estimates.push(
-                estimate_for_treated_units(panel, &config, Some(&pseudo), Vec::new())?.effect,
+                estimate_for_treated_units(panel, &config, Some(&pseudo), Vec::new(), &backend)?
+                    .effect,
             );
         }
         let baseline = estimate.pre_treated_mean.abs().max(1e-9);
+        let mut metadata = BTreeMap::new();
+        metadata.insert("backend_requested".to_string(), backend.requested.clone());
+        metadata.insert("backend_selected".to_string(), backend.selected.clone());
+        metadata.insert("accelerated_operation".to_string(), "affine".to_string());
         Ok(GeoExperimentDesign {
             candidate_test_geos,
             balance_score: (estimate.pre_treated_mean - estimate.pre_synthetic_mean).abs(),
@@ -311,6 +355,7 @@ impl GeoExperimentDesigner {
             placebo_estimates,
             assumptions: estimate.assumptions,
             warnings: estimate.warnings,
+            metadata,
         })
     }
 }
@@ -335,10 +380,22 @@ pub struct SpatialPlaceboTester {
 
 impl SpatialPlaceboTester {
     pub fn placebo_estimates(&self, panel: GeoCausalPanel, n: usize) -> Result<Vec<f64>> {
-        let mut estimator = SyntheticDIDEstimator::new(SyntheticDIDConfig {
-            intervention_time: self.intervention_time.clone(),
-            seed: self.seed,
-        });
+        self.placebo_estimates_with_backend(panel, n, Some("cpu"))
+    }
+
+    pub fn placebo_estimates_with_backend(
+        &self,
+        panel: GeoCausalPanel,
+        n: usize,
+        backend: Option<&str>,
+    ) -> Result<Vec<f64>> {
+        let mut estimator = SyntheticDIDEstimator::new_with_backend(
+            SyntheticDIDConfig {
+                intervention_time: self.intervention_time.clone(),
+                seed: self.seed,
+            },
+            backend,
+        )?;
         estimator.fit(panel)?;
         estimator.placebo_test(n)
     }
@@ -349,10 +406,27 @@ pub fn spillover_diagnostics(panel: &GeoCausalPanel) -> SpilloverDiagnostics {
     spillover_diagnostics_for_units(panel, &treated)
 }
 
+pub fn spillover_diagnostics_with_backend(
+    panel: &GeoCausalPanel,
+    backend: Option<&str>,
+) -> Result<SpilloverDiagnostics> {
+    let treated = treated_units(panel);
+    spillover_diagnostics_for_units_with_backend(panel, &treated, backend)
+}
+
 pub fn spillover_diagnostics_for_units(
     panel: &GeoCausalPanel,
     treated: &[String],
 ) -> SpilloverDiagnostics {
+    spillover_diagnostics_for_units_with_backend(panel, treated, Some("cpu"))
+        .expect("validated geographic panels always support CPU spillover diagnostics")
+}
+
+pub fn spillover_diagnostics_for_units_with_backend(
+    panel: &GeoCausalPanel,
+    treated: &[String],
+    backend: Option<&str>,
+) -> Result<SpilloverDiagnostics> {
     let treated_set: BTreeSet<_> = treated.iter().cloned().collect();
     let controls: BTreeSet<_> = panel
         .unit_ids()
@@ -369,18 +443,26 @@ pub fn spillover_diagnostics_for_units(
         .map(|edge| (edge.from_unit.clone(), edge.to_unit.clone(), edge.weight))
         .collect();
     let coords = unit_coordinates(panel);
-    let mut distances = Vec::new();
-    for treated_unit in &treated_set {
-        for control_unit in &controls {
-            if let (Some((tlat, tlon)), Some((clat, clon))) =
-                (coords.get(treated_unit), coords.get(control_unit))
-            {
-                distances.push(cartoboost_geo_core::haversine_distance_km(
-                    *tlat, *tlon, *clat, *clon,
-                ));
-            }
-        }
-    }
+    let selection = select_backend_for(backend, BackendOperation::PairwiseDistance)
+        .map_err(|error| GeoCausalError::InvalidInput(error.to_string()))?;
+    let treated_points = treated
+        .iter()
+        .filter_map(|unit| coords.get(unit).map(|coord| unit_sphere(*coord)))
+        .collect::<Vec<_>>();
+    let control_points = controls
+        .iter()
+        .filter_map(|unit| coords.get(unit).map(|coord| unit_sphere(*coord)))
+        .collect::<Vec<_>>();
+    let distances = if treated_points.is_empty() || control_points.is_empty() {
+        Vec::new()
+    } else {
+        backend_pairwise_squared_distances_f32(&selection, &treated_points, &control_points)
+            .map_err(|error| GeoCausalError::InvalidInput(error.to_string()))?
+            .into_iter()
+            .flatten()
+            .map(chord_squared_to_km)
+            .collect::<Vec<_>>()
+    };
     let treated_weight_exposure = panel
         .spatial_weights()
         .iter()
@@ -397,7 +479,7 @@ pub fn spillover_diagnostics_for_units(
     if !adjacent_treated_control_pairs.is_empty() {
         warnings.push("treated and control units are adjacent under spatial weights; spillover may bias causal estimates".to_string());
     }
-    SpilloverDiagnostics {
+    Ok(SpilloverDiagnostics {
         adjacent_treated_control_pairs,
         min_treated_control_distance: distances.iter().copied().reduce(f64::min),
         mean_treated_control_distance: if distances.is_empty() {
@@ -408,7 +490,23 @@ pub fn spillover_diagnostics_for_units(
         treated_weight_exposure,
         control_weight_exposure,
         warnings,
-    }
+    })
+}
+
+fn unit_sphere((latitude, longitude): (f64, f64)) -> Vec<f32> {
+    let latitude = latitude.to_radians();
+    let longitude = longitude.to_radians();
+    vec![
+        (latitude.cos() * longitude.cos()) as f32,
+        (latitude.cos() * longitude.sin()) as f32,
+        latitude.sin() as f32,
+    ]
+}
+
+fn chord_squared_to_km(chord_squared: f32) -> f64 {
+    const EARTH_RADIUS_KM: f64 = 6_371.008_8;
+    let half_chord = (f64::from(chord_squared.max(0.0)).sqrt() * 0.5).min(1.0);
+    2.0 * EARTH_RADIUS_KM * half_chord.asin()
 }
 
 fn estimate_for_treated_units(
@@ -416,6 +514,7 @@ fn estimate_for_treated_units(
     config: &SyntheticDIDConfig,
     override_treated: Option<&[String]>,
     extra_warnings: Vec<String>,
+    backend: &BackendSelection,
 ) -> Result<SyntheticDIDEstimate> {
     if config.intervention_time.is_empty() {
         return Err(GeoCausalError::InvalidInput(
@@ -471,9 +570,10 @@ fn estimate_for_treated_units(
         .map(|time| (time.clone(), 1.0 / pre_times.len() as f64))
         .collect::<BTreeMap<_, _>>();
     normalize_weights(&mut time_weights);
-    let pre_synthetic_mean = weighted_group_period_mean(panel, &unit_weights, &pre_times)?;
+    let pre_synthetic_mean = weighted_group_period_mean(panel, &unit_weights, &pre_times, backend)?;
     let treated_post_mean = group_period_mean(panel, &treated, &post_times)?;
-    let synthetic_post_mean = weighted_group_period_mean(panel, &unit_weights, &post_times)?;
+    let synthetic_post_mean =
+        weighted_group_period_mean(panel, &unit_weights, &post_times, backend)?;
     let mut warnings = spillover_warnings(panel, &treated);
     warnings.extend(extra_warnings);
     warnings.sort();
@@ -538,9 +638,11 @@ fn weighted_group_period_mean(
     panel: &GeoCausalPanel,
     unit_weights: &BTreeMap<String, f64>,
     times: &[String],
+    backend: &BackendSelection,
 ) -> Result<f64> {
     let time_set: BTreeSet<_> = times.iter().collect();
-    let mut total = 0.0;
+    let mut values = Vec::new();
+    let mut weights = Vec::new();
     let mut denom = 0.0;
     for row in panel
         .rows()
@@ -548,7 +650,8 @@ fn weighted_group_period_mean(
         .filter(|row| time_set.contains(&row.time))
     {
         if let Some(weight) = unit_weights.get(&row.unit_id) {
-            total += row.outcome * weight;
+            values.push(row.outcome);
+            weights.push(*weight);
             denom += weight;
         }
     }
@@ -557,6 +660,14 @@ fn weighted_group_period_mean(
             "weighted synthetic control has no observations".to_string(),
         ));
     }
+    let total = backend_affine_scores(
+        backend,
+        &[values],
+        &vec![0.0; weights.len()],
+        &weights,
+        &[0.0],
+    )
+    .map_err(|error| GeoCausalError::InvalidInput(error.to_string()))?[0];
     Ok(total / denom)
 }
 
@@ -598,7 +709,29 @@ pub fn causal_representation_report_json(
     regions: &[String],
     heldout_region: &str,
 ) -> Result<String> {
-    let report = causal_representation_report(features, outcomes, regions, heldout_region)?;
+    causal_representation_report_json_with_backend(
+        features,
+        outcomes,
+        regions,
+        heldout_region,
+        Some("cpu"),
+    )
+}
+
+pub fn causal_representation_report_json_with_backend(
+    features: &[Vec<f64>],
+    outcomes: &[f64],
+    regions: &[String],
+    heldout_region: &str,
+    backend: Option<&str>,
+) -> Result<String> {
+    let report = causal_representation_report_with_backend(
+        features,
+        outcomes,
+        regions,
+        heldout_region,
+        backend,
+    )?;
     serde_json::to_string(&report).map_err(|err| GeoCausalError::InvalidInput(err.to_string()))
 }
 
@@ -608,7 +741,32 @@ pub fn causal_representation_report(
     regions: &[String],
     heldout_region: &str,
 ) -> Result<CausalRepresentationReport> {
+    causal_representation_report_with_backend(
+        features,
+        outcomes,
+        regions,
+        heldout_region,
+        Some("cpu"),
+    )
+}
+
+pub fn causal_representation_report_with_backend(
+    features: &[Vec<f64>],
+    outcomes: &[f64],
+    regions: &[String],
+    heldout_region: &str,
+    backend: Option<&str>,
+) -> Result<CausalRepresentationReport> {
     validate_representation_inputs(features, outcomes, regions, heldout_region)?;
+    let selection = select_backend_for_operations(
+        backend,
+        &[
+            BackendOperation::Affine,
+            BackendOperation::Dense,
+            BackendOperation::PairwiseDistance,
+        ],
+    )
+    .map_err(|error| GeoCausalError::InvalidInput(error.to_string()))?;
     let dim = features[0].len();
     let global_mean = column_mean(features);
     let region_mean = region_feature_means(features, regions, dim);
@@ -632,16 +790,31 @@ pub fn causal_representation_report(
         .enumerate()
         .filter_map(|(idx, region)| (region == heldout_region).then_some(idx))
         .collect::<Vec<_>>();
-    let raw_weights = ridge_fit_indexed(features, outcomes, &train_indices);
-    let invariant_weights = ridge_fit_indexed(&transformed, outcomes, &train_indices);
-    let raw_rmse = indexed_rmse(features, outcomes, &test_indices, &raw_weights);
-    let invariant_rmse = indexed_rmse(&transformed, outcomes, &test_indices, &invariant_weights);
+    let raw_weights =
+        ridge_fit_indexed_with_backend(features, outcomes, &train_indices, &selection)?;
+    let invariant_weights =
+        ridge_fit_indexed_with_backend(&transformed, outcomes, &train_indices, &selection)?;
+    let raw_rmse =
+        indexed_rmse_with_backend(features, outcomes, &test_indices, &raw_weights, &selection)?;
+    let invariant_rmse = indexed_rmse_with_backend(
+        &transformed,
+        outcomes,
+        &test_indices,
+        &invariant_weights,
+        &selection,
+    )?;
     let mut losses = BTreeMap::new();
     losses.insert(
         "supervised_outcome_loss".to_string(),
-        indexed_mse(&transformed, outcomes, &train_indices, &invariant_weights),
+        indexed_mse_with_backend(
+            &transformed,
+            outcomes,
+            &train_indices,
+            &invariant_weights,
+            &selection,
+        )?,
     );
-    let domain_loss = mean_region_distance(&transformed, regions);
+    let domain_loss = mean_region_distance_with_backend(&transformed, regions, &selection)?;
     losses.insert("domain_adversarial_loss".to_string(), domain_loss);
     losses.insert(
         "invariant_risk_penalty".to_string(),
@@ -672,6 +845,12 @@ pub fn causal_representation_report(
     metadata.insert(
         "supplements".to_string(),
         "SyntheticDIDEstimator,GeoExperimentDesigner".to_string(),
+    );
+    metadata.insert("backend_requested".to_string(), selection.requested.clone());
+    metadata.insert("backend_selected".to_string(), selection.selected.clone());
+    metadata.insert(
+        "accelerated_operations".to_string(),
+        "dense_ridge_products,affine_scoring,pairwise_domain_distance".to_string(),
     );
     Ok(CausalRepresentationReport {
         transformed_features: transformed,
@@ -818,6 +997,50 @@ fn ridge_fit_indexed(features: &[Vec<f64>], outcomes: &[f64], indices: &[usize])
     solve_linear(xtx, xty)
 }
 
+fn ridge_fit_indexed_with_backend(
+    features: &[Vec<f64>],
+    outcomes: &[f64],
+    indices: &[usize],
+    backend: &BackendSelection,
+) -> Result<Vec<f64>> {
+    if backend.selected == "cpu" {
+        return Ok(ridge_fit_indexed(features, outcomes, indices));
+    }
+    let cols = features[0].len() + 1;
+    let design = indices
+        .iter()
+        .map(|&idx| {
+            std::iter::once(1.0_f32)
+                .chain(features[idx].iter().map(|&value| value as f32))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let transposed = (0..cols)
+        .map(|col| design.iter().map(|row| row[col]).collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    let flattened_design = design.iter().flatten().copied().collect::<Vec<_>>();
+    let xtx = backend_dense_layer_f32(backend, &transposed, &flattened_design, &vec![0.0; cols])
+        .map_err(|error| GeoCausalError::InvalidInput(error.to_string()))?;
+    let selected_outcomes = indices
+        .iter()
+        .map(|&idx| outcomes[idx] as f32)
+        .collect::<Vec<_>>();
+    let xty = backend_dense_layer_f32(backend, &transposed, &selected_outcomes, &[0.0])
+        .map_err(|error| GeoCausalError::InvalidInput(error.to_string()))?;
+    let mut xtx = xtx
+        .into_iter()
+        .map(|row| row.into_iter().map(f64::from).collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    for (idx, row) in xtx.iter_mut().enumerate().skip(1) {
+        row[idx] += 1.0e-6;
+    }
+    let xty = xty
+        .into_iter()
+        .map(|row| f64::from(row[0]))
+        .collect::<Vec<_>>();
+    Ok(solve_linear(xtx, xty))
+}
+
 fn solve_linear(mut matrix: Vec<Vec<f64>>, mut rhs: Vec<f64>) -> Vec<f64> {
     let n = rhs.len();
     for pivot in 0..n {
@@ -852,30 +1075,44 @@ fn solve_linear(mut matrix: Vec<Vec<f64>>, mut rhs: Vec<f64>) -> Vec<f64> {
     rhs
 }
 
-fn indexed_rmse(
+fn indexed_rmse_with_backend(
     features: &[Vec<f64>],
     outcomes: &[f64],
     indices: &[usize],
     weights: &[f64],
-) -> f64 {
-    indexed_mse(features, outcomes, indices, weights).sqrt()
+    backend: &BackendSelection,
+) -> Result<f64> {
+    Ok(indexed_mse_with_backend(features, outcomes, indices, weights, backend)?.sqrt())
 }
 
-fn indexed_mse(features: &[Vec<f64>], outcomes: &[f64], indices: &[usize], weights: &[f64]) -> f64 {
-    indices
+fn indexed_mse_with_backend(
+    features: &[Vec<f64>],
+    outcomes: &[f64],
+    indices: &[usize],
+    weights: &[f64],
+    backend: &BackendSelection,
+) -> Result<f64> {
+    let rows = indices
         .iter()
-        .map(|&idx| {
-            let pred = weights[0]
-                + features[idx]
-                    .iter()
-                    .zip(&weights[1..])
-                    .map(|(x, w)| x * w)
-                    .sum::<f64>();
-            let err = pred - outcomes[idx];
-            err * err
+        .map(|&index| features[index].clone())
+        .collect::<Vec<_>>();
+    let predictions = backend_affine_scores(
+        backend,
+        &rows,
+        &vec![0.0; weights.len() - 1],
+        &weights[1..],
+        &vec![weights[0]; rows.len()],
+    )
+    .map_err(|error| GeoCausalError::InvalidInput(error.to_string()))?;
+    Ok(predictions
+        .iter()
+        .zip(indices)
+        .map(|(prediction, &index)| {
+            let error = prediction - outcomes[index];
+            error * error
         })
         .sum::<f64>()
-        / indices.len() as f64
+        / indices.len() as f64)
 }
 
 fn mean_region_distance(features: &[Vec<f64>], regions: &[String]) -> f64 {
@@ -892,6 +1129,31 @@ fn mean_region_distance(features: &[Vec<f64>], regions: &[String]) -> f64 {
         })
         .sum::<f64>()
         / means.len() as f64
+}
+
+fn mean_region_distance_with_backend(
+    features: &[Vec<f64>],
+    regions: &[String],
+    backend: &BackendSelection,
+) -> Result<f64> {
+    if backend.selected == "cpu" {
+        return Ok(mean_region_distance(features, regions));
+    }
+    let means = region_feature_means(features, regions, features[0].len())
+        .into_values()
+        .map(|row| row.into_iter().map(|value| value as f32).collect())
+        .collect::<Vec<Vec<f32>>>();
+    let global = vec![column_mean(features)
+        .into_iter()
+        .map(|value| value as f32)
+        .collect::<Vec<_>>()];
+    let distances = backend_pairwise_squared_distances_f32(backend, &means, &global)
+        .map_err(|error| GeoCausalError::InvalidInput(error.to_string()))?;
+    Ok(distances
+        .iter()
+        .map(|row| f64::from(row[0]).max(0.0).sqrt())
+        .sum::<f64>()
+        / distances.len() as f64)
 }
 
 fn mean_row_variation(features: &[Vec<f64>]) -> f64 {
@@ -914,6 +1176,7 @@ fn mean_row_variation(features: &[Vec<f64>]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cartoboost_neural::{available_backends, backend_supports_operation};
 
     fn known_effect_panel(effect: f64) -> GeoCausalPanel {
         let mut rows = Vec::new();
@@ -967,6 +1230,63 @@ mod tests {
     }
 
     #[test]
+    fn synthetic_did_runs_on_every_available_affine_backend() {
+        let panel = known_effect_panel(5.0);
+        let cpu_effect = {
+            let mut estimator = SyntheticDIDEstimator::new(SyntheticDIDConfig {
+                intervention_time: "2026-01-04".to_string(),
+                seed: 7,
+            });
+            estimator.fit(panel.clone()).unwrap();
+            estimator.estimate_effect().unwrap().effect
+        };
+        for backend in available_backends() {
+            if !backend_supports_operation(&backend, BackendOperation::Affine) {
+                continue;
+            }
+            let mut estimator = SyntheticDIDEstimator::new_with_backend(
+                SyntheticDIDConfig {
+                    intervention_time: "2026-01-04".to_string(),
+                    seed: 7,
+                },
+                Some(&backend),
+            )
+            .unwrap();
+            estimator.fit(panel.clone()).unwrap();
+            assert_eq!(estimator.backend().selected, backend);
+            assert!(
+                (estimator.estimate_effect().unwrap().effect - cpu_effect).abs() < 1.0e-4,
+                "Synthetic DID mismatch on {backend}"
+            );
+            assert_eq!(estimator.placebo_test(2).unwrap().len(), 2);
+        }
+    }
+
+    #[test]
+    fn geo_experiment_design_runs_on_every_available_backend() {
+        let panel = known_effect_panel(0.0);
+        let designer = GeoExperimentDesigner {
+            intervention_time: "2026-01-04".to_string(),
+            seed: 9,
+        };
+        let expected = designer
+            .design_with_backend(&panel, 1, 2, Some("cpu"))
+            .unwrap();
+        for backend in available_backends() {
+            let actual = designer
+                .design_with_backend(&panel, 1, 2, Some(&backend))
+                .unwrap_or_else(|error| panic!("{backend} design failed: {error}"));
+            assert_eq!(actual.candidate_test_geos, expected.candidate_test_geos);
+            assert_eq!(
+                actual.placebo_estimates.len(),
+                expected.placebo_estimates.len()
+            );
+            assert_eq!(actual.metadata["backend_selected"], backend);
+            assert!((actual.balance_score - expected.balance_score).abs() < 1.0e-4);
+        }
+    }
+
+    #[test]
     fn zero_effect_placebo_is_centered_near_zero_and_deterministic() {
         let panel = known_effect_panel(0.0);
         let mut a = SyntheticDIDEstimator::new(SyntheticDIDConfig {
@@ -1017,5 +1337,34 @@ mod tests {
             report.metadata.get("supplements").map(String::as_str),
             Some("SyntheticDIDEstimator,GeoExperimentDesigner")
         );
+
+        for backend in available_backends() {
+            if [
+                BackendOperation::Affine,
+                BackendOperation::Dense,
+                BackendOperation::PairwiseDistance,
+            ]
+            .into_iter()
+            .any(|operation| !backend_supports_operation(&backend, operation))
+            {
+                continue;
+            }
+            let accelerated = causal_representation_report_with_backend(
+                &features,
+                &outcomes,
+                &regions,
+                "c",
+                Some(&backend),
+            )
+            .unwrap();
+            assert!(
+                (accelerated.raw_rmse - report.raw_rmse).abs() < 1.0e-4,
+                "{backend}"
+            );
+            assert!(
+                (accelerated.invariant_rmse - report.invariant_rmse).abs() < 1.0e-4,
+                "{backend}"
+            );
+        }
     }
 }

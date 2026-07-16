@@ -89,6 +89,6 @@ fn save_load_preserves_predictions_for_small_deterministic_fixtures() {
         model.save(&path).expect("model saves");
         let restored = Model::load(&path).expect("model loads");
 
-        assert_eq!(restored.predict(&x), before);
+        assert_eq!(restored.predict(&x), before, "configuration {case_index}");
     }
 }

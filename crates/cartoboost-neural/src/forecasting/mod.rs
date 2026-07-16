@@ -7,9 +7,10 @@ pub mod scaler;
 pub use dataloader::{ForecastWindow, WindowDataset};
 pub use nbeats::{NBeatsConfig, NBeatsForecaster};
 pub use neural_panel::{
-    fit_dense_regressor, ComponentMode, DenseRegressorConfig, LaneNeuralPanelConfig,
-    LaneNeuralPanelForecaster, MlpState, NeuralPanelConfig, NeuralPanelForecaster, NeuralPanelLoss,
-    NeuralPanelMode, NeuralPanelWindow, NeuralPanelWindowDataset, TrendMode,
+    fit_dense_regressor, fit_dense_regressor_with_backend, ComponentMode, DenseRegressorConfig,
+    LaneNeuralPanelConfig, LaneNeuralPanelForecaster, MlpState, NeuralPanelConfig,
+    NeuralPanelForecaster, NeuralPanelLoss, NeuralPanelMode, NeuralPanelWindow,
+    NeuralPanelWindowDataset, TrendMode,
 };
 pub use nhits::{NHiTSConfig, NHiTSForecaster};
 pub use scaler::StandardScaler;

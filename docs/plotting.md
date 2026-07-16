@@ -179,7 +179,7 @@ Install the optional visualization dependency when using these helpers outside
 the development environment:
 
 ```bash
-uv add "cartoboost[visualization]"
+uv add geopandas matplotlib pydeck shapely
 ```
 
 ## Regression diagnostics
@@ -538,7 +538,7 @@ claim compares model families:
 
 ## Map visualizations
 
-The same `visualization` extra also enables map-focused diagnostics for rows
+The same visualization packages also enable map-focused diagnostics for rows
 with coordinates. Static maps use GeoPandas and Shapely; interactive maps use
 PyDeck. These packages are optional and loaded only when a map helper is called.
 
@@ -595,7 +595,7 @@ If the optional packages are missing, map helpers raise an `ImportError` with
 the install command:
 
 ```bash
-uv add "cartoboost[visualization]"
+uv add geopandas matplotlib pydeck shapely
 ```
 
 ## Saving figures

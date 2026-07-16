@@ -1,3 +1,6 @@
+use cartoboost_accelerator::{
+    backend_pairwise_squared_distances_f32, select_backend_for, BackendOperation, BackendSelection,
+};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -440,12 +443,32 @@ pub fn buffered_spatial_cv(
     meta: GeoFrameMeta,
     split_id: String,
 ) -> Result<SplitManifest> {
+    buffered_spatial_cv_with_backend(
+        coords,
+        n_folds,
+        buffer_distance,
+        meta,
+        split_id,
+        Some("cpu"),
+    )
+}
+
+pub fn buffered_spatial_cv_with_backend(
+    coords: &CoordinateMatrix,
+    n_folds: usize,
+    buffer_distance: f64,
+    meta: GeoFrameMeta,
+    split_id: String,
+    backend: Option<&str>,
+) -> Result<SplitManifest> {
     if !buffer_distance.is_finite() || buffer_distance < 0.0 {
         return Err(GeoCoreError::InvalidInput(
             "buffer_distance must be finite and non-negative".to_string(),
         ));
     }
     let base = spatial_block_cv(coords, n_folds, meta.clone(), split_id.clone())?;
+    let backend = geo_distance_backend(backend)?;
+    let distance_matrix = pairwise_coordinate_distances(coords, &backend)?;
     let mut folds = Vec::new();
     for fold in base.folds {
         let test = fold.test_indices;
@@ -453,9 +476,9 @@ pub fn buffered_spatial_cv(
             .train_indices
             .into_iter()
             .filter(|idx| {
-                !test
-                    .iter()
-                    .any(|test_idx| distance(coords, *idx, *test_idx) <= buffer_distance)
+                !test.iter().any(|test_idx| {
+                    distance_matrix[*idx * coords.len() + *test_idx] <= buffer_distance
+                })
             })
             .collect();
         folds.push(SplitFold {
@@ -465,6 +488,37 @@ pub fn buffered_spatial_cv(
         });
     }
     manifest(split_id, "buffered_spatial_cv", coords.len(), folds, meta)
+}
+
+fn geo_distance_backend(requested: Option<&str>) -> Result<BackendSelection> {
+    select_backend_for(requested, BackendOperation::PairwiseDistance)
+        .map_err(|error| GeoCoreError::InvalidInput(error.to_string()))
+}
+
+fn pairwise_coordinate_distances(
+    coords: &CoordinateMatrix,
+    backend: &BackendSelection,
+) -> Result<Vec<f64>> {
+    if backend.selected == "cpu" {
+        return Ok((0..coords.len())
+            .flat_map(|left| (0..coords.len()).map(move |right| distance(coords, left, right)))
+            .collect());
+    }
+    let points = coords
+        .x
+        .iter()
+        .zip(&coords.y)
+        .map(|(&x, &y)| vec![x as f32, y as f32])
+        .collect::<Vec<_>>();
+    backend_pairwise_squared_distances_f32(backend, &points, &points)
+        .map(|values| {
+            values
+                .into_iter()
+                .flatten()
+                .map(|value| f64::from(value).sqrt())
+                .collect()
+        })
+        .map_err(|error| GeoCoreError::InvalidInput(error.to_string()))
 }
 
 pub fn group_spatial_cv(
@@ -763,6 +817,80 @@ pub fn radial_anchor_distances(point: [f64; 2], anchors: &[[f64; 2]]) -> Vec<f64
         .collect()
 }
 
+pub fn radial_anchor_distances_with_backend(
+    point: [f64; 2],
+    anchors: &[[f64; 2]],
+    backend: Option<&str>,
+) -> Result<Vec<f64>> {
+    if anchors.is_empty() {
+        return Ok(Vec::new());
+    }
+    let selection = geo_distance_backend(backend)?;
+    if selection.selected == "cpu" {
+        return Ok(radial_anchor_distances(point, anchors));
+    }
+    let left = [vec![point[0] as f32, point[1] as f32]];
+    let right = anchors
+        .iter()
+        .map(|anchor| vec![anchor[0] as f32, anchor[1] as f32])
+        .collect::<Vec<_>>();
+    let distances = backend_pairwise_squared_distances_f32(&selection, &left, &right)
+        .map_err(|error| GeoCoreError::InvalidInput(error.to_string()))?;
+    Ok(distances[0]
+        .iter()
+        .map(|&value| f64::from(value).sqrt())
+        .collect())
+}
+
+pub fn radial_anchor_distance_rows_with_backend(
+    points: &[[f64; 2]],
+    anchors: &[[f64; 2]],
+    backend: Option<&str>,
+) -> Result<Vec<Vec<f64>>> {
+    if points.is_empty() {
+        return Ok(Vec::new());
+    }
+    if anchors.is_empty() {
+        return Ok(vec![Vec::new(); points.len()]);
+    }
+    if points
+        .iter()
+        .chain(anchors)
+        .flatten()
+        .any(|value| !value.is_finite())
+    {
+        return Err(GeoCoreError::InvalidInput(
+            "points and anchors must be finite".to_string(),
+        ));
+    }
+    let selection = geo_distance_backend(backend)?;
+    if selection.selected == "cpu" {
+        return Ok(points
+            .iter()
+            .map(|&point| radial_anchor_distances(point, anchors))
+            .collect());
+    }
+    let left = points
+        .iter()
+        .map(|point| vec![point[0] as f32, point[1] as f32])
+        .collect::<Vec<_>>();
+    let right = anchors
+        .iter()
+        .map(|point| vec![point[0] as f32, point[1] as f32])
+        .collect::<Vec<_>>();
+    backend_pairwise_squared_distances_f32(&selection, &left, &right)
+        .map(|rows| {
+            rows.into_iter()
+                .map(|row| {
+                    row.into_iter()
+                        .map(|value| f64::from(value).sqrt())
+                        .collect()
+                })
+                .collect()
+        })
+        .map_err(|error| GeoCoreError::InvalidInput(error.to_string()))
+}
+
 pub fn rbf_anchor_features(
     point: [f64; 2],
     anchors: &[[f64; 2]],
@@ -780,6 +908,48 @@ pub fn rbf_anchor_features(
             (-0.5 * distance_sq / (length_scale * length_scale)).exp()
         })
         .collect())
+}
+
+pub fn rbf_anchor_features_with_backend(
+    point: [f64; 2],
+    anchors: &[[f64; 2]],
+    length_scale: f64,
+    backend: Option<&str>,
+) -> Result<Vec<f64>> {
+    if !length_scale.is_finite() || length_scale <= 0.0 {
+        return Err(GeoCoreError::InvalidInput(
+            "length_scale must be finite and positive".to_string(),
+        ));
+    }
+    let distances = radial_anchor_distances_with_backend(point, anchors, backend)?;
+    Ok(distances
+        .into_iter()
+        .map(|distance| (-0.5 * distance * distance / (length_scale * length_scale)).exp())
+        .collect())
+}
+
+pub fn rbf_anchor_feature_rows_with_backend(
+    points: &[[f64; 2]],
+    anchors: &[[f64; 2]],
+    length_scale: f64,
+    backend: Option<&str>,
+) -> Result<Vec<Vec<f64>>> {
+    if !length_scale.is_finite() || length_scale <= 0.0 {
+        return Err(GeoCoreError::InvalidInput(
+            "length_scale must be finite and positive".to_string(),
+        ));
+    }
+    let denominator = length_scale * length_scale;
+    Ok(
+        radial_anchor_distance_rows_with_backend(points, anchors, backend)?
+            .into_iter()
+            .map(|row| {
+                row.into_iter()
+                    .map(|distance| (-0.5 * distance * distance / denominator).exp())
+                    .collect()
+            })
+            .collect(),
+    )
 }
 
 pub fn local_frame_features(point: [f64; 2], origin: [f64; 2], axis: [f64; 2]) -> Option<[f64; 2]> {
@@ -988,6 +1158,41 @@ mod tests {
                 .abs()
                 < 1.0e-6
         );
+    }
+
+    #[test]
+    fn backend_distance_helpers_match_cpu_contract() {
+        let points = [[1.0, 2.0], [-3.0, 4.0], [0.5, -1.5]];
+        let anchors = [[0.0, 0.0], [2.0, -2.0]];
+        let cpu = radial_anchor_distance_rows_with_backend(&points, &anchors, Some("cpu")).unwrap();
+        let cpu_rbf =
+            rbf_anchor_feature_rows_with_backend(&points, &anchors, 1.75, Some("cpu")).unwrap();
+        for backend in cartoboost_accelerator::available_backends() {
+            if backend == "cpu"
+                || !cartoboost_accelerator::backend_supports_operation(
+                    &backend,
+                    BackendOperation::PairwiseDistance,
+                )
+            {
+                continue;
+            }
+            let accelerated =
+                radial_anchor_distance_rows_with_backend(&points, &anchors, Some(&backend))
+                    .unwrap();
+            let accelerated_rbf =
+                rbf_anchor_feature_rows_with_backend(&points, &anchors, 1.75, Some(&backend))
+                    .unwrap();
+            for (expected, actual) in cpu.iter().flatten().zip(accelerated.iter().flatten()) {
+                assert!((expected - actual).abs() < 1.0e-4);
+            }
+            for (expected, actual) in cpu_rbf
+                .iter()
+                .flatten()
+                .zip(accelerated_rbf.iter().flatten())
+            {
+                assert!((expected - actual).abs() < 1.0e-4);
+            }
+        }
     }
 
     #[test]

@@ -1,3 +1,7 @@
+use cartoboost_neural::{
+    backend_pairwise_squared_distances_f32, select_backend_for, BackendOperation, BackendSelection,
+};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -161,10 +165,17 @@ pub struct NearestNeighborGPRegressor {
     neighbor_index: NeighborIndex,
     mean: f64,
     fitted: bool,
+    backend: BackendSelection,
 }
 
 impl NearestNeighborGPRegressor {
     pub fn new(config: NngpConfig) -> Result<Self> {
+        Self::new_with_backend(config, Some("cpu"))
+    }
+
+    pub fn new_with_backend(config: NngpConfig, backend: Option<&str>) -> Result<Self> {
+        let backend = select_backend_for(backend, BackendOperation::PairwiseDistance)
+            .map_err(|error| GeostatsError::InvalidInput(error.to_string()))?;
         Ok(Self {
             config: config.validate()?,
             coords: Vec::new(),
@@ -173,6 +184,7 @@ impl NearestNeighborGPRegressor {
             neighbor_index: NeighborIndex::BruteForce,
             mean: 0.0,
             fitted: false,
+            backend,
         })
     }
 
@@ -194,7 +206,11 @@ impl NearestNeighborGPRegressor {
                 )));
             }
         }
-        reject_duplicate_coords(coords, self.config.duplicate_tolerance)?;
+        reject_duplicate_coords_with_backend(
+            coords,
+            self.config.duplicate_tolerance,
+            &self.backend,
+        )?;
         self.coords = coords.to_vec();
         self.search_coords = coords
             .iter()
@@ -212,10 +228,126 @@ impl NearestNeighborGPRegressor {
         if !self.fitted {
             return Err(GeostatsError::NotFitted);
         }
+        if self.backend.selected != "cpu"
+            && matches!(self.neighbor_index, NeighborIndex::BruteForce)
+        {
+            if coords
+                .iter()
+                .flatten()
+                .any(|coordinate| !coordinate.is_finite())
+            {
+                return Err(GeostatsError::InvalidInput(
+                    "prediction coordinates must be finite".to_string(),
+                ));
+            }
+            let queries = coords
+                .iter()
+                .map(|coord| {
+                    transform_point(*coord, self.config)
+                        .into_iter()
+                        .map(|value| value as f32)
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            let observations = self
+                .search_coords
+                .iter()
+                .map(|coord| coord.iter().map(|value| *value as f32).collect::<Vec<_>>())
+                .collect::<Vec<_>>();
+            let distances =
+                backend_pairwise_squared_distances_f32(&self.backend, &queries, &observations)
+                    .map_err(|error| GeostatsError::InvalidInput(error.to_string()))?;
+            return coords
+                .par_iter()
+                .zip(distances.into_par_iter())
+                .map(|(coord, row)| {
+                    let mut ranked = row.into_iter().enumerate().collect::<Vec<_>>();
+                    ranked.sort_by(|left, right| {
+                        left.1
+                            .total_cmp(&right.1)
+                            .then_with(|| left.0.cmp(&right.0))
+                    });
+                    let neighbors = ranked
+                        .into_iter()
+                        .take(self.config.n_neighbors.min(self.coords.len()))
+                        .map(|(index, _)| index)
+                        .collect::<Vec<_>>();
+                    self.predict_one_with_neighbors(*coord, neighbors)
+                })
+                .collect();
+        }
         coords
-            .iter()
+            .par_iter()
             .map(|coord| self.predict_one(*coord))
             .collect()
+    }
+
+    /// Completes NNGP prediction from an accelerator-computed query-by-observation
+    /// squared-distance matrix. Covariance solves remain small and run on CPU.
+    pub fn predict_from_squared_distances(
+        &self,
+        coords: &[[f64; 2]],
+        distances: &[Vec<f32>],
+    ) -> Result<Vec<NngpPrediction>> {
+        if !self.fitted {
+            return Err(GeostatsError::NotFitted);
+        }
+        if distances.len() != coords.len()
+            || distances.iter().any(|row| {
+                row.len() != self.coords.len()
+                    || row.iter().any(|value| !value.is_finite() || *value < 0.0)
+            })
+        {
+            return Err(GeostatsError::InvalidInput(
+                "distance matrix must be finite query-by-observation squared distances".to_string(),
+            ));
+        }
+        coords
+            .par_iter()
+            .zip(distances.par_iter())
+            .map(|(coord, row)| {
+                let mut ranked = row.iter().copied().enumerate().collect::<Vec<_>>();
+                ranked.sort_by(|left, right| {
+                    left.1
+                        .total_cmp(&right.1)
+                        .then_with(|| left.0.cmp(&right.0))
+                });
+                let neighbors = ranked
+                    .into_iter()
+                    .take(self.config.n_neighbors.min(self.coords.len()))
+                    .map(|(index, _)| index)
+                    .collect();
+                self.predict_one_with_neighbors(*coord, neighbors)
+            })
+            .collect()
+    }
+
+    pub fn transformed_points(&self, coords: &[[f64; 2]]) -> Result<Vec<Vec<f32>>> {
+        if coords.iter().flatten().any(|value| !value.is_finite()) {
+            return Err(GeostatsError::InvalidInput(
+                "coordinates must be finite".to_string(),
+            ));
+        }
+        Ok(coords
+            .iter()
+            .map(|coord| {
+                transform_point(*coord, self.config)
+                    .into_iter()
+                    .map(|value| value as f32)
+                    .collect()
+            })
+            .collect())
+    }
+
+    pub fn transformed_observations(&self) -> Result<Vec<Vec<f32>>> {
+        if !self.fitted {
+            return Err(GeostatsError::NotFitted);
+        }
+        Ok(self
+            .search_coords
+            .iter()
+            .map(|coord| coord.iter().map(|value| *value as f32).collect())
+            .collect())
     }
 
     pub fn config(&self) -> NngpConfig {
@@ -224,6 +356,10 @@ impl NearestNeighborGPRegressor {
 
     pub fn neighbor_index_kind(&self) -> &'static str {
         self.neighbor_index.kind()
+    }
+
+    pub fn backend(&self) -> &BackendSelection {
+        &self.backend
     }
 
     fn predict_one(&self, coord: [f64; 2]) -> Result<NngpPrediction> {
@@ -238,6 +374,14 @@ impl NearestNeighborGPRegressor {
             search_coord,
             self.config.n_neighbors,
         );
+        self.predict_one_with_neighbors(coord, neighbors)
+    }
+
+    fn predict_one_with_neighbors(
+        &self,
+        coord: [f64; 2],
+        neighbors: Vec<usize>,
+    ) -> Result<NngpPrediction> {
         let n = neighbors.len();
         let mut k_nn = vec![vec![0.0; n]; n];
         let mut k_star = vec![0.0; n];
@@ -304,6 +448,26 @@ pub fn empirical_semivariogram(
     max_distance: Option<f64>,
     anisotropy: Anisotropy,
 ) -> Result<Vec<EmpiricalVariogramBin>> {
+    empirical_semivariogram_with_backend(
+        coords,
+        values,
+        bin_count,
+        max_distance,
+        anisotropy,
+        Some("cpu"),
+    )
+}
+
+pub fn empirical_semivariogram_with_backend(
+    coords: &[[f64; 2]],
+    values: &[f64],
+    bin_count: usize,
+    max_distance: Option<f64>,
+    anisotropy: Anisotropy,
+    backend: Option<&str>,
+) -> Result<Vec<EmpiricalVariogramBin>> {
+    let backend = select_backend_for(backend.or(Some("cpu")), BackendOperation::PairwiseDistance)
+        .map_err(|error| GeostatsError::InvalidInput(error.to_string()))?;
     if coords.len() != values.len() {
         return Err(GeostatsError::InvalidInput(
             "coords and values must have the same row count".to_string(),
@@ -338,11 +502,31 @@ pub fn empirical_semivariogram(
         ..NngpConfig::default()
     }
     .validate()?;
+    let accelerated_distances = if backend.selected == "cpu" {
+        None
+    } else {
+        let transformed = coords
+            .iter()
+            .map(|coord| {
+                transform_point(*coord, distance_config)
+                    .into_iter()
+                    .map(|value| value as f32)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        Some(
+            backend_pairwise_squared_distances_f32(&backend, &transformed, &transformed)
+                .map_err(|error| GeostatsError::InvalidInput(error.to_string()))?,
+        )
+    };
     let mut pairs = Vec::new();
     let mut observed_max: f64 = 0.0;
     for i in 0..coords.len() {
         for j in (i + 1)..coords.len() {
-            let distance = transformed_distance(coords[i], coords[j], distance_config);
+            let distance = accelerated_distances.as_ref().map_or_else(
+                || transformed_distance(coords[i], coords[j], distance_config),
+                |distances| f64::from(distances[i][j]).sqrt(),
+            );
             if !distance.is_finite() {
                 return Err(GeostatsError::InvalidInput(format!(
                     "variogram distance is not finite for rows {i} and {j}"
@@ -440,71 +624,88 @@ pub fn fit_variogram_wls(
     } else {
         kernels.to_vec()
     };
-    let mut best: Option<VariogramFit> = None;
-    for &kernel in &kernels {
-        for &range in range_candidates {
-            for &sill in sill_candidates {
-                for &nugget in nugget_candidates {
-                    let config = NngpConfig {
-                        kernel,
-                        range,
-                        sill,
-                        nugget,
-                        ..NngpConfig::default()
-                    }
-                    .validate()?;
-                    let mut weighted_sse = 0.0;
-                    for bin in bins {
-                        let model = nugget
-                            + sill
-                                * (1.0
-                                    - covariance(
-                                        [0.0, 0.0],
-                                        [bin.lag_center, 0.0],
-                                        NngpConfig {
-                                            nugget: 0.0,
-                                            ..config
-                                        },
-                                    ) / sill);
-                        if !model.is_finite() || model < 0.0 {
-                            return Err(GeostatsError::InvalidInput(
-                                "variogram candidate produced an invalid semivariance".to_string(),
-                            ));
-                        }
-                        let residual = bin.semivariance - model;
-                        let contribution = bin.pair_count as f64 * residual * residual;
-                        if !contribution.is_finite() || contribution < 0.0 {
-                            return Err(GeostatsError::InvalidInput(
-                                "variogram candidate produced a non-finite weighted error"
-                                    .to_string(),
-                            ));
-                        }
-                        weighted_sse += contribution;
-                        if !weighted_sse.is_finite() {
-                            return Err(GeostatsError::InvalidInput(
-                                "variogram weighted SSE is not finite".to_string(),
-                            ));
-                        }
-                    }
-                    let candidate = VariogramFit {
-                        kernel,
-                        range,
-                        sill,
-                        nugget,
-                        weighted_sse,
-                    };
-                    if best
-                        .as_ref()
-                        .is_none_or(|current| candidate.weighted_sse < current.weighted_sse)
-                    {
-                        best = Some(candidate);
-                    }
-                }
-            }
+    let per_kernel = range_candidates.len() * sill_candidates.len() * nugget_candidates.len();
+    let per_range = sill_candidates.len() * nugget_candidates.len();
+    let candidate_count = kernels.len() * per_kernel;
+    let candidates = (0..candidate_count)
+        .into_par_iter()
+        .map(|index| {
+            let kernel = kernels[index / per_kernel];
+            let within_kernel = index % per_kernel;
+            let range = range_candidates[within_kernel / per_range];
+            let within_range = within_kernel % per_range;
+            let sill = sill_candidates[within_range / nugget_candidates.len()];
+            let nugget = nugget_candidates[within_range % nugget_candidates.len()];
+            evaluate_variogram_candidate(bins, kernel, range, sill, nugget)
+                .map(|candidate| (index, candidate))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    candidates
+        .into_iter()
+        .min_by(|(left_index, left), (right_index, right)| {
+            left.weighted_sse
+                .total_cmp(&right.weighted_sse)
+                .then_with(|| left_index.cmp(right_index))
+        })
+        .map(|(_, candidate)| candidate)
+        .ok_or_else(|| {
+            GeostatsError::InvalidInput("no valid variogram candidates were supplied".to_string())
+        })
+}
+
+fn evaluate_variogram_candidate(
+    bins: &[EmpiricalVariogramBin],
+    kernel: CovarianceKernel,
+    range: f64,
+    sill: f64,
+    nugget: f64,
+) -> Result<VariogramFit> {
+    let config = NngpConfig {
+        kernel,
+        range,
+        sill,
+        nugget,
+        ..NngpConfig::default()
+    }
+    .validate()?;
+    let mut weighted_sse = 0.0;
+    for bin in bins {
+        let model = nugget
+            + sill
+                * (1.0
+                    - covariance(
+                        [0.0, 0.0],
+                        [bin.lag_center, 0.0],
+                        NngpConfig {
+                            nugget: 0.0,
+                            ..config
+                        },
+                    ) / sill);
+        if !model.is_finite() || model < 0.0 {
+            return Err(GeostatsError::InvalidInput(
+                "variogram candidate produced an invalid semivariance".to_string(),
+            ));
+        }
+        let residual = bin.semivariance - model;
+        let contribution = bin.pair_count as f64 * residual * residual;
+        if !contribution.is_finite() || contribution < 0.0 {
+            return Err(GeostatsError::InvalidInput(
+                "variogram candidate produced a non-finite weighted error".to_string(),
+            ));
+        }
+        weighted_sse += contribution;
+        if !weighted_sse.is_finite() {
+            return Err(GeostatsError::InvalidInput(
+                "variogram weighted SSE is not finite".to_string(),
+            ));
         }
     }
-    best.ok_or_else(|| {
-        GeostatsError::InvalidInput("no valid variogram candidates were supplied".to_string())
+    Ok(VariogramFit {
+        kernel,
+        range,
+        sill,
+        nugget,
+        weighted_sse,
     })
 }
 
@@ -762,7 +963,51 @@ fn transform_point(point: [f64; 2], config: NngpConfig) -> [f64; 2] {
     )
 }
 
-fn reject_duplicate_coords(coords: &[[f64; 2]], tolerance: f64) -> Result<()> {
+fn reject_duplicate_coords_with_backend(
+    coords: &[[f64; 2]],
+    tolerance: f64,
+    backend: &BackendSelection,
+) -> Result<()> {
+    if tolerance == 0.0 {
+        let mut seen = std::collections::BTreeMap::<(u64, u64), usize>::new();
+        for (index, coord) in coords.iter().enumerate() {
+            let key = (
+                if coord[0] == 0.0 {
+                    0
+                } else {
+                    coord[0].to_bits()
+                },
+                if coord[1] == 0.0 {
+                    0
+                } else {
+                    coord[1].to_bits()
+                },
+            );
+            if let Some(previous) = seen.insert(key, index) {
+                return Err(GeostatsError::InvalidInput(format!(
+                    "duplicate coordinates at rows {previous} and {index}; jitter or aggregate duplicates before fitting"
+                )));
+            }
+        }
+        return Ok(());
+    }
+    if backend.selected != "cpu" {
+        let rows = coords
+            .iter()
+            .map(|coord| vec![coord[0] as f32, coord[1] as f32])
+            .collect::<Vec<_>>();
+        let distances = backend_pairwise_squared_distances_f32(backend, &rows, &rows)
+            .map_err(|error| GeostatsError::InvalidInput(error.to_string()))?;
+        let tolerance_squared = tolerance * tolerance;
+        for (i, row) in distances.iter().enumerate().take(coords.len()) {
+            for (j, distance) in row.iter().enumerate().take(coords.len()).skip(i + 1) {
+                if f64::from(*distance) <= tolerance_squared {
+                    return Err(GeostatsError::InvalidInput(format!("duplicate coordinates at rows {i} and {j}; jitter or aggregate duplicates before fitting")));
+                }
+            }
+        }
+        return Ok(());
+    }
     for i in 0..coords.len() {
         for j in (i + 1)..coords.len() {
             if cartoboost_geo_core::euclidean_distance(coords[i], coords[j]) <= tolerance {
@@ -907,6 +1152,29 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_tolerance_fit_runs_on_every_available_backend() {
+        let config = NngpConfig {
+            duplicate_tolerance: 0.01,
+            ..NngpConfig::default()
+        };
+        for backend in cartoboost_neural::available_backends() {
+            let mut valid =
+                NearestNeighborGPRegressor::new_with_backend(config, Some(&backend)).unwrap();
+            valid
+                .fit(&[[0.0, 0.0], [0.5, 0.2], [1.0, -0.1]], &[1.0, 2.0, 3.0])
+                .unwrap_or_else(|error| panic!("{backend} valid fit failed: {error}"));
+            assert_eq!(valid.backend().selected, backend);
+
+            let mut duplicate =
+                NearestNeighborGPRegressor::new_with_backend(config, Some(&backend)).unwrap();
+            let error = duplicate
+                .fit(&[[0.0, 0.0], [0.005, 0.0]], &[1.0, 2.0])
+                .expect_err("near duplicate must be rejected");
+            assert!(error.to_string().contains("duplicate coordinates"));
+        }
+    }
+
+    #[test]
     fn kd_tree_neighbors_match_brute_force_ordering() {
         let coords = (0..80)
             .map(|idx| {
@@ -943,6 +1211,54 @@ mod tests {
     }
 
     #[test]
+    fn accelerator_distance_boundary_matches_regular_prediction() {
+        let coords = (0..24)
+            .map(|idx| [idx as f64 * 0.17, (idx as f64 * 0.31).sin()])
+            .collect::<Vec<_>>();
+        let targets = coords
+            .iter()
+            .map(|coord| coord[0].cos() + 0.25 * coord[1])
+            .collect::<Vec<_>>();
+        let config = NngpConfig {
+            n_neighbors: 7,
+            anisotropy: Anisotropy {
+                angle_degrees: 31.0,
+                scaling: 1.4,
+            },
+            ..NngpConfig::default()
+        };
+        let mut model = NearestNeighborGPRegressor::new(config).expect("model");
+        model.fit(&coords, &targets).expect("fit");
+        let queries = [[0.41, -0.2], [1.73, 0.8], [3.2, -0.4]];
+        let expected = model.predict(&queries).expect("regular prediction");
+        let query_rows = model.transformed_points(&queries).expect("queries");
+        let observation_rows = model.transformed_observations().expect("observations");
+        let distances = query_rows
+            .iter()
+            .map(|query| {
+                observation_rows
+                    .iter()
+                    .map(|observation| {
+                        query
+                            .iter()
+                            .zip(observation)
+                            .map(|(left, right)| (left - right).powi(2))
+                            .sum()
+                    })
+                    .collect::<Vec<f32>>()
+            })
+            .collect::<Vec<_>>();
+        let accelerated = model
+            .predict_from_squared_distances(&queries, &distances)
+            .expect("accelerated prediction");
+        for (expected, accelerated) in expected.iter().zip(&accelerated) {
+            assert_eq!(expected.neighbor_indices, accelerated.neighbor_indices);
+            assert!((expected.mean - accelerated.mean).abs() < 1.0e-12);
+            assert!((expected.variance - accelerated.variance).abs() < 1.0e-12);
+        }
+    }
+
+    #[test]
     fn variogram_fit_selects_candidate() {
         let coords = [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0], [3.0, 0.0]];
         let y = [0.0, 1.0, 1.5, 1.75];
@@ -957,6 +1273,41 @@ mod tests {
         )
         .expect("fit");
         assert!(fit.weighted_sse.is_finite());
+    }
+
+    #[test]
+    fn empirical_variogram_runs_on_every_available_backend() {
+        let coords = [[0.0, 0.0], [0.6, 0.2], [1.4, -0.1], [2.2, 0.4], [3.0, 0.0]];
+        let values = [0.0, 1.0, 1.4, 1.8, 2.1];
+        let anisotropy = Anisotropy {
+            angle_degrees: 23.0,
+            scaling: 1.3,
+        };
+        let expected = empirical_semivariogram_with_backend(
+            &coords,
+            &values,
+            2,
+            Some(10.0),
+            anisotropy,
+            Some("cpu"),
+        )
+        .unwrap();
+        for backend in cartoboost_neural::available_backends() {
+            let actual = empirical_semivariogram_with_backend(
+                &coords,
+                &values,
+                2,
+                Some(10.0),
+                anisotropy,
+                Some(&backend),
+            )
+            .unwrap_or_else(|error| panic!("{backend} variogram failed: {error}"));
+            assert_eq!(actual.len(), expected.len());
+            for (actual, expected) in actual.iter().zip(&expected) {
+                assert_eq!(actual.pair_count, expected.pair_count);
+                assert!((actual.semivariance - expected.semivariance).abs() < 1.0e-12);
+            }
+        }
     }
 
     #[test]

@@ -10,7 +10,7 @@
   sensor, location, entity id, hour, day of week, and series id. Taxi examples
   are allowed as one concrete framing device, but do not make the package or a
   model page feel taxi-specific.
-- Keep optional dependency docs split by extra. For example, document `cartoboost[h3]`, `cartoboost[s2]`, `cartoboost[duckdb]`, and `cartoboost[polars]` separately instead of implying one bundled geo/table extra.
+- Document optional third-party dependencies as direct installs such as `uv add h3`, `uv add s2sphere`, `uv add duckdb`, and `uv add polars`; CartoBoost does not publish package extras.
 - When documenting benchmark results, distinguish real NYC taxi runs from synthetic smoke or acceptance fixtures. Avoid broad superiority language unless the documented command and metrics support it.
 - Keep forecast benchmark tables reader-facing: one ranked model-comparison table per dataset family when possible. If a family includes multiple artifacts, use a `Run` column instead of scattering several small tables.
 - Avoid vague public table headers such as `Scope`. Use plain, concrete headers such as `Model`, `RMSE`, `MAE`, `WAPE`, `Read`, `Artifact`, `Details`, and `Result`.

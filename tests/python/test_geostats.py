@@ -7,6 +7,7 @@ from cartoboost import (
     empirical_semivariogram,
     fit_variogram_wls,
 )
+from cartoboost.accelerators import available_backends
 
 
 class MeanRegressor:
@@ -75,6 +76,31 @@ def test_variogram_utilities_return_weighted_fit():
     assert fit["weighted_sse"] >= 0.0
 
 
+def test_empirical_variogram_runs_on_every_available_backend():
+    coords = np.array([[0.0, 0.0], [0.6, 0.2], [1.4, -0.1], [2.2, 0.4], [3.0, 0.0]])
+    values = np.array([0.0, 1.0, 1.4, 1.8, 2.1])
+    expected = empirical_semivariogram(
+        coords,
+        values,
+        bin_count=2,
+        max_distance=10.0,
+        anisotropy_angle_degrees=23.0,
+        anisotropy_scaling=1.3,
+        backend="cpu",
+    )
+    for backend in available_backends("pairwise_distance"):
+        actual = empirical_semivariogram(
+            coords,
+            values,
+            bin_count=2,
+            max_distance=10.0,
+            anisotropy_angle_degrees=23.0,
+            anisotropy_scaling=1.3,
+            backend=backend,
+        )
+        assert actual == expected
+
+
 def test_residual_nngp_adds_base_prediction_and_returns_std():
     coords = np.array([[0.0, 0.0], [0.3, 0.0], [0.6, 0.0], [0.9, 0.0]])
     X = coords[:, :1]
@@ -88,3 +114,13 @@ def test_residual_nngp_adds_base_prediction_and_returns_std():
     assert pred.shape == y.shape
     assert np.all(std >= 0.0)
     assert model.score(X, y, coords=coords) >= 0.0
+
+
+@pytest.mark.parametrize("backend", available_backends("pairwise_distance"))
+def test_residual_nngp_constructs_spatial_stage_on_every_backend(backend):
+    coords = np.array([[0.0, 0.0], [0.3, 0.0], [0.6, 0.0], [0.9, 0.0]])
+    x = coords[:, :1]
+    y = np.array([2.0, 2.4, 1.8, 2.2])
+    model = ResidualNNGPRegressor(MeanRegressor(), backend=backend).fit(x, y, coords=coords)
+    assert model.gp_.backend_ == backend
+    assert np.all(np.isfinite(model.predict(x, coords=coords)))

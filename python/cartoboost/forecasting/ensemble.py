@@ -4,6 +4,7 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
+from ..config import Backend
 from ._native_wrappers import NativeForecastWrapper
 
 
@@ -20,6 +21,7 @@ class WeightedEnsembleForecaster(NativeForecastWrapper):
         lower_bound: float | None = None,
         upper_bound: float | None = None,
         metadata: Mapping[str, Any] | None = None,
+        backend: Backend | str = Backend.CPU,
     ) -> None:
         if not models:
             raise ValueError("WeightedEnsembleForecaster requires at least one model")
@@ -35,9 +37,11 @@ class WeightedEnsembleForecaster(NativeForecastWrapper):
             lower_bound=lower_bound,
             upper_bound=upper_bound,
             metadata={} if metadata is None else dict(metadata),
+            backend=str(backend),
         )
         self.models = dict(models)
         self.weights = weights
+        self.backend = str(backend)
 
     def _new_native_model(self) -> Any:
         try:
@@ -56,7 +60,7 @@ class WeightedEnsembleForecaster(NativeForecastWrapper):
         for name, model in self.models.items():
             native_model = _native_model_from_wrapper(model)
             native_members.append((name, native_model, self.weights[name]))
-        return native_ensemble_class(native_members)
+        return native_ensemble_class(native_members, self.backend)
 
     def get_metadata(self) -> dict[str, Any]:
         self._check_is_fitted()

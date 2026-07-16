@@ -418,6 +418,7 @@ fn lag_plus_forecaster_calibrates_residual_corrections() {
         objective: ForecastObjective::Wape,
         shrinkage_strength: 2.0,
         seasonal_bucket_period: Some(7),
+        backend: "cpu".to_string(),
     })
     .expect("forecaster");
 
@@ -499,6 +500,7 @@ fn lag_plus_rejects_short_panels_instead_of_disabling_calibration_or_pruning_lag
         objective: ForecastObjective::Wape,
         shrinkage_strength: 2.0,
         seasonal_bucket_period: Some(7),
+        backend: "cpu".to_string(),
     })
     .expect("forecaster");
 

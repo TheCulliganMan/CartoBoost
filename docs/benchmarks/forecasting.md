@@ -463,4 +463,4 @@ uv run --group dev --group bench python scripts/forecasting_library_benchmark.py
 - M5 full-roster evidence is a 100-series sample; the full-corpus artifact is a
   lag-only coverage run.
 - M6 is a daily-return proxy, not an official leaderboard submission.
-- Optional external baselines require their benchmark extras.
+- Optional external baselines require their third-party packages from the benchmark dependency group.

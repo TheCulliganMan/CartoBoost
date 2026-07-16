@@ -46,7 +46,7 @@ def test_missing_optional_dependency_gives_clear_skip_reason():
 
     if reason is not None:
         assert "timesfm" in reason
-        assert "cartoboost[foundation]" in reason
+        assert "install timesfm" in reason
         with pytest.raises(FoundationAdapterUnavailable, match="timesfm"):
             adapter.predict([1.0, 2.0])
 

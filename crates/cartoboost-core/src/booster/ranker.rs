@@ -5,6 +5,9 @@ use crate::tree::{
     FuzzyKernel, LeafPredictorKind, ModelMetadata, SplitterKind, TrainingMetric, Tree, TreeBuilder,
 };
 use crate::{CartoBoostError, Result};
+use cartoboost_accelerator::{
+    backend_dense_layer_f32, select_backend_for, BackendOperation, BackendSelection,
+};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -39,10 +42,13 @@ pub struct RankerConfig {
 #[derive(Debug, Clone)]
 pub struct Ranker {
     pub config: RankerConfig,
+    backend: BackendSelection,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RankerTrainingConfigMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<BackendSelection>,
     pub n_estimators: usize,
     pub learning_rate: f64,
     pub max_depth: usize,
@@ -109,7 +115,21 @@ impl Default for RankerConfig {
 
 impl Ranker {
     pub fn new(config: RankerConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            backend: select_backend_for(Some("cpu"), BackendOperation::Dense)
+                .expect("CPU dense backend"),
+        }
+    }
+
+    pub fn new_with_backend(config: RankerConfig, backend: Option<&str>) -> Result<Self> {
+        let backend = select_backend_for(backend, BackendOperation::Dense)
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+        Ok(Self { config, backend })
+    }
+
+    pub fn backend(&self) -> &BackendSelection {
+        &self.backend
     }
 
     pub fn fit(
@@ -168,9 +188,16 @@ impl Ranker {
                     *hessian_weight = hessian;
                 });
             let tree = builder.fit_in_context(x, &targets, &hessian_weights, &fit_context);
-            scores.par_iter_mut().enumerate().for_each(|(row, score)| {
-                *score += self.config.learning_rate * tree.predict_dataset_row(x, row);
-            });
+            let updates = (0..x.n_rows())
+                .into_par_iter()
+                .map(|row| tree.predict_dataset_row(x, row))
+                .collect::<Vec<_>>();
+            super::fit::accelerated_prediction_update(
+                &mut scores,
+                &updates,
+                self.config.learning_rate,
+                &self.backend,
+            )?;
             trees.push(tree);
             let metrics = ranking_metrics(y, &scores, groups)?;
             training_history.push(TrainingMetric {
@@ -199,6 +226,7 @@ impl Ranker {
             feature_count: x.n_cols(),
             feature_schema: Some(x.feature_schema_or_default()),
             training_config: Some(RankerTrainingConfigMetadata {
+                backend: Some(self.backend.clone()),
                 n_estimators: self.config.n_estimators,
                 learning_rate: self.config.learning_rate,
                 max_depth: self.config.max_depth,
@@ -222,11 +250,51 @@ impl Ranker {
 
 impl RankerModel {
     pub fn predict(&self, x: &Dataset) -> Result<Vec<f64>> {
+        if let Some(backend) = self.artifact_backend() {
+            return self.predict_with_backend(x, Some(backend));
+        }
+        self.predict_cpu(x)
+    }
+
+    fn predict_cpu(&self, x: &Dataset) -> Result<Vec<f64>> {
         self.validate_dataset(x)?;
         Ok((0..x.n_rows())
             .into_par_iter()
             .map(|row| self.predict_dataset_row(x, row))
             .collect())
+    }
+
+    pub fn predict_with_backend(&self, x: &Dataset, backend: Option<&str>) -> Result<Vec<f64>> {
+        self.validate_dataset(x)?;
+        let selection = select_backend_for(backend, BackendOperation::Dense)
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+        if selection.selected == "cpu" || self.trees.is_empty() {
+            return self.predict_cpu(x);
+        }
+        let width = self.trees.len() + 1;
+        let additive = (0..x.n_rows())
+            .into_par_iter()
+            .map(|row| {
+                std::iter::once(self.init_score)
+                    .chain(
+                        self.trees
+                            .iter()
+                            .map(move |tree| self.learning_rate * tree.predict_dataset_row(x, row)),
+                    )
+                    .map(|value| value as f32)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        backend_dense_layer_f32(&selection, &additive, &vec![1.0; width], &[0.0])
+            .map(|values| values.into_iter().map(|row| f64::from(row[0])).collect())
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))
+    }
+
+    fn artifact_backend(&self) -> Option<&str> {
+        self.training_config
+            .as_ref()
+            .and_then(|config| config.backend.as_ref())
+            .map(|backend| backend.selected.as_str())
     }
 
     pub fn metrics(&self, x: &Dataset, y: &[f64], groups: &[usize]) -> Result<RankingMetricSet> {
@@ -544,6 +612,18 @@ mod tests {
         let reversed_ndcg = ndcg_at_k(&y, &reversed, &groups, None).unwrap();
 
         assert!(metrics.ndcg > reversed_ndcg);
+        let expected = model.predict(&x).unwrap();
+        for backend in cartoboost_accelerator::available_backends()
+            .into_iter()
+            .filter(|name| name != "cpu")
+        {
+            let accelerated = model
+                .predict_with_backend(&x, Some(&backend))
+                .unwrap_or_else(|error| panic!("{backend} ranker inference failed: {error}"));
+            for (actual, expected) in accelerated.iter().zip(&expected) {
+                assert!((actual - expected).abs() <= 1.0e-4);
+            }
+        }
         assert!(metrics.map > 0.9);
         assert!(metrics.mrr > 0.9);
 

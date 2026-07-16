@@ -66,6 +66,7 @@ class NeuralEmbeddingStandaloneRegressor(ArtifactPersistenceMixin):
         max_depth: int = 4,
         min_samples_leaf: int = 2,
         min_gain: float = 0.0,
+        backend: Backend | str = Backend.CPU,
     ) -> None:
         self._native = _NativeNeuralEmbeddingRegressor(
             dim=int(dim),
@@ -77,6 +78,7 @@ class NeuralEmbeddingStandaloneRegressor(ArtifactPersistenceMixin):
             max_depth=int(max_depth),
             min_samples_leaf=int(min_samples_leaf),
             min_gain=float(min_gain),
+            backend=_choice_value(backend),
         )
 
     def fit(
@@ -140,6 +142,7 @@ class Node2VecStandaloneRegressor(ArtifactPersistenceMixin):
         max_depth: int = 4,
         min_samples_leaf: int = 2,
         min_gain: float = 0.0,
+        backend: Backend | str = Backend.CPU,
     ) -> None:
         self._native = _NativeNode2VecRegressor(
             dim=int(dim),
@@ -160,6 +163,7 @@ class Node2VecStandaloneRegressor(ArtifactPersistenceMixin):
             max_depth=int(max_depth),
             min_samples_leaf=int(min_samples_leaf),
             min_gain=float(min_gain),
+            backend=_choice_value(backend),
         )
 
     def fit(
@@ -519,8 +523,9 @@ class HinSageStandaloneRegressor(ArtifactPersistenceMixin):
 class Node2VecLinkPredictor(ArtifactPersistenceMixin):
     """Standalone Node2Vec edge scorer."""
 
-    def __init__(self, **kwargs: Any) -> None:
-        self._native = _NativeNode2VecLinkPredictor(**kwargs)
+    def __init__(self, *, backend: Backend | str = Backend.CPU, **kwargs: Any) -> None:
+        self.backend = _choice_value(backend)
+        self._native = _NativeNode2VecLinkPredictor(backend=self.backend, **kwargs)
 
     def fit(
         self,
@@ -558,6 +563,7 @@ class Node2VecLinkPredictor(ArtifactPersistenceMixin):
     def load(cls, path: str | Path) -> Node2VecLinkPredictor:
         instance = cls()
         instance._native = _NativeNode2VecLinkPredictor.load_artifact_json(str(path))
+        instance.backend = str(instance._native.backend)
         return instance
 
 

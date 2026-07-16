@@ -62,10 +62,12 @@ class Backend(ChoiceStrEnum):
     AUTO = "auto"
     CPU = "cpu"
     CUDA = "cuda"
+    DIRECTML = "directml"
+    DML = "dml"
     ROCM = "rocm"
+    HIP = "hip"
     METAL = "metal"
     WEBGPU = "webgpu"
-    MLX = "mlx"
 
 
 class FallbackMode(ChoiceStrEnum):

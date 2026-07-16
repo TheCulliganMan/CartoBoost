@@ -220,7 +220,7 @@ impl DeterministicMlp {
         epochs: usize,
         learning_rate: f64,
     ) -> crate::Result<()> {
-        if matches!(self.backend.selected.as_str(), "metal" | "cuda" | "rocm") {
+        if self.backend.selected != "cpu" {
             let inputs = examples
                 .iter()
                 .map(|(input, _)| {

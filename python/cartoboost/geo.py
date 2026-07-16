@@ -21,6 +21,7 @@ from ._native import (
     geo_spatial_block_cv,
     geo_spatial_temporal_blocked_split,
 )
+from .config import Backend
 
 __all__ = [
     "CoordinateMatrix",
@@ -91,6 +92,7 @@ def buffered_spatial_cv_manifest(
     dependency_versions: Mapping[str, str],
     random_seed: int | None = None,
     split_id: str = "buffered_spatial_cv",
+    backend: Backend | str = Backend.CPU,
 ) -> SplitManifest:
     """Create a spatial block manifest with training rows buffered away from each test block."""
     return geo_buffered_spatial_cv(
@@ -103,6 +105,7 @@ def buffered_spatial_cv_manifest(
         dict(dependency_versions),
         random_seed,
         split_id,
+        str(backend),
     )
 
 
@@ -333,6 +336,8 @@ def route_latlng_points(route: Any) -> list[tuple[float, float]]:
 def radial_anchor_distances(
     point: tuple[Any, Any],
     anchors: Sequence[tuple[Any, Any]],
+    *,
+    backend: Backend | str = Backend.CPU,
 ) -> list[float]:
     """Return distances from one point to each anchor."""
 
@@ -342,13 +347,17 @@ def radial_anchor_distances(
     ]
     return [
         float(value)
-        for value in _native_geo_feature("geo_radial_anchor_distances_value")(px, py, anchor_values)
+        for value in _native_geo_feature("geo_radial_anchor_distances_value")(
+            px, py, anchor_values, str(backend)
+        )
     ]
 
 
 def radial_anchor_distance_rows(
     points: Sequence[tuple[Any, Any]],
     anchors: Sequence[tuple[Any, Any]],
+    *,
+    backend: Backend | str = Backend.CPU,
 ) -> list[list[float]]:
     """Return one radial-distance feature row per point."""
 
@@ -356,7 +365,18 @@ def radial_anchor_distance_rows(
     anchor_values = list(anchors)
     if not anchor_values:
         raise ValueError("anchors must contain at least one coordinate pair")
-    return [radial_anchor_distances(point, anchor_values) for point in point_values]
+    normalized_points = [
+        _coordinate_pair(point, f"points[{idx}]") for idx, point in enumerate(point_values)
+    ]
+    normalized_anchors = [
+        _coordinate_pair(anchor, f"anchors[{idx}]") for idx, anchor in enumerate(anchor_values)
+    ]
+    return [
+        [float(value) for value in row]
+        for row in _native_geo_feature("geo_radial_anchor_distance_rows_value")(
+            normalized_points, normalized_anchors, str(backend)
+        )
+    ]
 
 
 def rbf_anchor_features(
@@ -364,6 +384,7 @@ def rbf_anchor_features(
     anchors: Sequence[tuple[Any, Any]],
     *,
     length_scale: float,
+    backend: Backend | str = Backend.CPU,
 ) -> list[float]:
     """Return Gaussian radial-basis features from one point to each anchor."""
 
@@ -378,6 +399,7 @@ def rbf_anchor_features(
             py,
             anchor_values,
             _finite_float(length_scale, "length_scale"),
+            str(backend),
         )
     ]
 
@@ -387,6 +409,7 @@ def rbf_anchor_feature_rows(
     anchors: Sequence[tuple[Any, Any]],
     *,
     length_scale: float,
+    backend: Backend | str = Backend.CPU,
 ) -> list[list[float]]:
     """Return one Gaussian radial-basis feature row per point."""
 
@@ -394,9 +417,20 @@ def rbf_anchor_feature_rows(
     anchor_values = list(anchors)
     if not anchor_values:
         raise ValueError("anchors must contain at least one coordinate pair")
+    normalized_points = [
+        _coordinate_pair(point, f"points[{idx}]") for idx, point in enumerate(point_values)
+    ]
+    normalized_anchors = [
+        _coordinate_pair(anchor, f"anchors[{idx}]") for idx, anchor in enumerate(anchor_values)
+    ]
     return [
-        rbf_anchor_features(point, anchor_values, length_scale=length_scale)
-        for point in point_values
+        [float(value) for value in row]
+        for row in _native_geo_feature("geo_rbf_anchor_feature_rows_value")(
+            normalized_points,
+            normalized_anchors,
+            _finite_float(length_scale, "length_scale"),
+            str(backend),
+        )
     ]
 
 

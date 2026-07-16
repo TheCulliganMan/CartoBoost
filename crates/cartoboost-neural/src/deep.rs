@@ -1,4 +1,7 @@
-use crate::{backend_affine_scores, select_backend, BackendSelection, NeuralError, Result};
+use crate::{
+    backend_affine_scores, backend_dense_layer_f32, backend_train_tanh_mlp_f32, select_backend_for,
+    select_backend_for_operations, BackendOperation, BackendSelection, NeuralError, Result,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -123,6 +126,8 @@ pub struct DeepDirectionalPairArtifact {
     pub output_weights: Vec<f64>,
     #[serde(default)]
     pub train_metrics: BTreeMap<String, f64>,
+    #[serde(default)]
+    pub backend: BackendSelection,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -292,6 +297,8 @@ pub struct DeepTemporalEntityArtifact {
     pub residual_scales: Vec<f64>,
     pub last_window: Vec<Vec<f64>>,
     pub schema_hash: String,
+    #[serde(default)]
+    pub backend: BackendSelection,
 }
 
 struct TanhFit {
@@ -315,7 +322,10 @@ pub fn response_curve_fit_with_backend(
     monotone: Option<&str>,
     backend: Option<&str>,
 ) -> Result<DeepResponseArtifact> {
-    let backend = select_backend(backend)?;
+    let backend = select_backend_for_operations(
+        backend,
+        &[BackendOperation::Dense, BackendOperation::TanhMlpTraining],
+    )?;
     validate_response_rows(rows, true)?;
     let dim = rows[0].features.len();
     let means = feature_means(rows.iter().map(|row| row.features.as_slice()), dim)?;
@@ -340,7 +350,7 @@ pub fn response_curve_fit_with_backend(
         Some(other) => return invalid(format!("unknown monotone mode {other:?}")),
         None => {}
     }
-    let fit = fit_tanh_response_network(rows, &means, slope, response_type, y_mean)?;
+    let fit = fit_tanh_response_network(rows, &means, slope, response_type, y_mean, &backend)?;
     let intercept = fit.intercept - slope * c_mean;
     let hidden_weights = fit.hidden_weights;
     let hidden_biases = fit.hidden_biases;
@@ -390,19 +400,15 @@ pub fn response_curve_predict(
             &intercepts,
         )?
     } else {
-        rows.iter()
-            .zip(intercepts)
-            .map(|(row, intercept)| {
-                neural_score(
-                    &row.features,
-                    &artifact.feature_means,
-                    &artifact.hidden_weights,
-                    &artifact.hidden_biases,
-                    &artifact.output_weights,
-                    intercept,
-                )
-            })
-            .collect()
+        backend_tanh_scores(
+            &artifact.backend,
+            &features,
+            &artifact.feature_means,
+            &artifact.hidden_weights,
+            &artifact.hidden_biases,
+            &artifact.output_weights,
+            &intercepts,
+        )?
     };
     rows.iter()
         .zip(scores)
@@ -429,7 +435,10 @@ pub fn event_outcome_fit_with_backend(
     labels: &[f64],
     backend: Option<&str>,
 ) -> Result<DeepEventArtifact> {
-    let backend = select_backend(backend)?;
+    let backend = select_backend_for_operations(
+        backend,
+        &[BackendOperation::Dense, BackendOperation::TanhMlpTraining],
+    )?;
     validate_matrix(features)?;
     if labels.len() != features.len() || labels.is_empty() {
         return invalid("labels must have the same nonzero row count as features");
@@ -443,7 +452,7 @@ pub fn event_outcome_fit_with_backend(
     let dim = features[0].len();
     let means = feature_means(features.iter().map(Vec::as_slice), dim)?;
     let y_mean = labels.iter().sum::<f64>() / labels.len() as f64;
-    let fit = fit_tanh_binary_network(features, labels, &means, y_mean)?;
+    let fit = fit_tanh_binary_network_with_backend(features, labels, &means, y_mean, &backend)?;
     let hidden_weights = fit.hidden_weights;
     let hidden_biases = fit.hidden_biases;
     let output_weights = fit.output_weights;
@@ -482,19 +491,15 @@ pub fn event_outcome_predict(
             &intercepts,
         )?
     } else {
-        features
-            .iter()
-            .map(|row| {
-                neural_score(
-                    row,
-                    &artifact.feature_means,
-                    &artifact.hidden_weights,
-                    &artifact.hidden_biases,
-                    &artifact.output_weights,
-                    artifact.intercept,
-                )
-            })
-            .collect()
+        backend_tanh_scores(
+            &artifact.backend,
+            features,
+            &artifact.feature_means,
+            &artifact.hidden_weights,
+            &artifact.hidden_biases,
+            &artifact.output_weights,
+            &intercepts,
+        )?
     };
     features
         .iter()
@@ -513,21 +518,32 @@ pub fn event_outcome_predict(
 pub fn directional_pair_fit(
     rows: &[DeepDirectionalPairRow],
 ) -> Result<DeepDirectionalPairArtifact> {
-    directional_pair_fit_with_options(rows, &DirectionalPairFitOptions::default())
+    directional_pair_fit_with_options_and_backend(rows, &DirectionalPairFitOptions::default(), None)
 }
 
 pub fn directional_pair_fit_with_options(
     rows: &[DeepDirectionalPairRow],
     options: &DirectionalPairFitOptions,
 ) -> Result<DeepDirectionalPairArtifact> {
-    match options.architecture.as_str() {
+    directional_pair_fit_with_options_and_backend(rows, options, None)
+}
+
+pub fn directional_pair_fit_with_options_and_backend(
+    rows: &[DeepDirectionalPairRow],
+    options: &DirectionalPairFitOptions,
+    backend: Option<&str>,
+) -> Result<DeepDirectionalPairArtifact> {
+    let backend = select_backend_for(backend, BackendOperation::Dense)?;
+    let mut artifact = match options.architecture.as_str() {
         "shrinkage_effects" => directional_pair_fit_shrinkage(rows, options),
         "pair_embedding_mlp" => directional_pair_fit_embedding_mlp(rows, options),
         "pair_temporal_ssm" | "pair_regime_moe" => {
             directional_pair_fit_expanded_embedding(rows, options)
         }
         other => invalid(format!("unknown directional pair architecture {other:?}")),
-    }
+    }?;
+    artifact.backend = backend;
+    Ok(artifact)
 }
 
 fn directional_pair_fit_expanded_embedding(
@@ -633,6 +649,7 @@ fn directional_pair_fit_shrinkage(
         hidden_biases: Vec::new(),
         output_weights: Vec::new(),
         train_metrics: BTreeMap::new(),
+        backend: BackendSelection::default(),
     })
 }
 
@@ -857,6 +874,7 @@ fn directional_pair_fit_embedding_mlp(
         hidden_biases,
         output_weights,
         train_metrics,
+        backend: BackendSelection::default(),
     })
 }
 
@@ -878,7 +896,7 @@ pub fn directional_pair_predict(
             expanded = expand_pair_architecture_rows(rows, &artifact.architecture);
             &expanded
         };
-        return Ok(rows
+        let inputs = rows
             .iter()
             .zip(prediction_rows.iter())
             .map(|(original_row, row)| {
@@ -903,7 +921,7 @@ pub fn directional_pair_predict(
                 } else {
                     artifact.pair_global_bucket
                 };
-                let (_, _, pred) = pair_mlp_forward(
+                let (input, _, _) = pair_mlp_forward(
                     row,
                     &artifact.feature_means,
                     src,
@@ -918,15 +936,52 @@ pub fn directional_pair_predict(
                     &artifact.output_weights,
                     artifact.intercept,
                 );
-                pred
+                input
             })
-            .collect());
+            .collect::<Vec<_>>();
+        let hidden_width = artifact.hidden_weights.len();
+        let input_width = inputs[0].len();
+        let hidden_weights = (0..input_width)
+            .flat_map(|input| {
+                (0..hidden_width).map(move |hidden| artifact.hidden_weights[hidden][input] as f32)
+            })
+            .collect::<Vec<_>>();
+        let hidden = backend_dense_layer_f32(
+            &artifact.backend,
+            &inputs
+                .iter()
+                .map(|row| row.iter().map(|&value| value as f32).collect())
+                .collect::<Vec<Vec<f32>>>(),
+            &hidden_weights,
+            &artifact
+                .hidden_biases
+                .iter()
+                .map(|&value| value as f32)
+                .collect::<Vec<_>>(),
+        )?;
+        let activated = hidden
+            .into_iter()
+            .map(|row| row.into_iter().map(f32::tanh).collect())
+            .collect::<Vec<Vec<f32>>>();
+        return Ok(backend_dense_layer_f32(
+            &artifact.backend,
+            &activated,
+            &artifact
+                .output_weights
+                .iter()
+                .map(|&value| value as f32)
+                .collect::<Vec<_>>(),
+            &[artifact.intercept as f32],
+        )?
+        .into_iter()
+        .map(|row| f64::from(row[0]))
+        .collect());
     }
-    Ok(rows
+    let intercepts = rows
         .iter()
         .map(|row| {
             let pair = format!("{}->{}", row.source_id, row.target_id);
-            let mut score = artifact.intercept
+            artifact.intercept
                 + artifact.pair_weights.get(&pair).copied().unwrap_or(0.0)
                 + artifact
                     .source_weights
@@ -937,14 +992,22 @@ pub fn directional_pair_predict(
                     .target_weights
                     .get(&row.target_id)
                     .copied()
-                    .unwrap_or(0.0);
-            for (idx, value) in row.features.iter().enumerate() {
-                score += artifact.feature_weights.get(idx).copied().unwrap_or(0.0)
-                    * (value - artifact.feature_means.get(idx).copied().unwrap_or(0.0));
-            }
-            score
+                    .unwrap_or(0.0)
         })
-        .collect())
+        .collect::<Vec<_>>();
+    if artifact.feature_weights.is_empty() {
+        return Ok(intercepts);
+    }
+    Ok(backend_affine_scores(
+        &artifact.backend,
+        &rows
+            .iter()
+            .map(|row| row.features.clone())
+            .collect::<Vec<_>>(),
+        &artifact.feature_means,
+        &artifact.feature_weights,
+        &intercepts,
+    )?)
 }
 
 fn expand_pair_architecture_rows(
@@ -1192,7 +1255,10 @@ pub fn service_residual_fit_with_backend(
     rows: &[DeepServiceResidualRow],
     backend: Option<&str>,
 ) -> Result<DeepServiceResidualArtifact> {
-    let backend = select_backend(backend)?;
+    let backend = select_backend_for_operations(
+        backend,
+        &[BackendOperation::Dense, BackendOperation::TanhMlpTraining],
+    )?;
     if rows.is_empty() {
         return invalid("service residual rows cannot be empty");
     }
@@ -1210,7 +1276,13 @@ pub fn service_residual_fit_with_backend(
         .iter()
         .map(|row| row.features.clone())
         .collect::<Vec<_>>();
-    let fit = fit_tanh_regression_network(&features, &residuals, &means, residual_mean)?;
+    let fit = fit_tanh_regression_network_with_backend(
+        &features,
+        &residuals,
+        &means,
+        residual_mean,
+        &backend,
+    )?;
     let hidden_weights = fit.hidden_weights;
     let hidden_biases = fit.hidden_biases;
     let output_weights = fit.output_weights;
@@ -1259,19 +1331,15 @@ pub fn service_residual_predict(
             &intercepts,
         )?
     } else {
-        features
-            .iter()
-            .map(|row| {
-                neural_score(
-                    row,
-                    &artifact.feature_means,
-                    &artifact.hidden_weights,
-                    &artifact.hidden_biases,
-                    &artifact.output_weights,
-                    artifact.intercept,
-                )
-            })
-            .collect()
+        backend_tanh_scores(
+            &artifact.backend,
+            &features,
+            &artifact.feature_means,
+            &artifact.hidden_weights,
+            &artifact.hidden_biases,
+            &artifact.output_weights,
+            &intercepts,
+        )?
     };
     rows.iter()
         .zip(residuals)
@@ -1491,6 +1559,16 @@ pub fn temporal_entity_fit(
     lookback: usize,
     horizon: usize,
 ) -> Result<DeepTemporalEntityArtifact> {
+    temporal_entity_fit_with_backend(y, lookback, horizon, Some("cpu"))
+}
+
+pub fn temporal_entity_fit_with_backend(
+    y: &[Vec<f64>],
+    lookback: usize,
+    horizon: usize,
+    backend: Option<&str>,
+) -> Result<DeepTemporalEntityArtifact> {
+    let backend = select_backend_for(backend, BackendOperation::Dense)?;
     validate_panel(y)?;
     if lookback == 0 || horizon == 0 {
         return invalid("lookback and horizon must be positive");
@@ -1513,19 +1591,65 @@ pub fn temporal_entity_fit(
     let mut residual_scales = vec![0.0; entity_count];
 
     let samples = y.len() - lookback - horizon + 1;
-    for h in 0..horizon {
-        for entity in 0..entity_count {
-            let mut xtx = vec![vec![0.0; feature_len]; feature_len];
-            let mut xty = vec![0.0; feature_len];
-            let mut target_sum = 0.0;
-            for sample in 0..samples {
+    for entity in 0..entity_count {
+        let feature_rows = (0..samples)
+            .map(|sample| {
                 let cutoff = sample + lookback;
-                let features = temporal_entity_features(
+                temporal_entity_features(
                     &y[sample..cutoff],
                     entity,
                     &attention_queries,
                     &attention_keys,
+                )
+            })
+            .collect::<Vec<_>>();
+        if backend.selected != "cpu" {
+            let transposed = (0..feature_len)
+                .map(|col| feature_rows.iter().map(|row| row[col] as f32).collect())
+                .collect::<Vec<Vec<f32>>>();
+            let flattened = feature_rows
+                .iter()
+                .flatten()
+                .map(|&value| value as f32)
+                .collect::<Vec<_>>();
+            let mut xtx = backend_dense_layer_f32(
+                &backend,
+                &transposed,
+                &flattened,
+                &vec![0.0; feature_len],
+            )?
+            .into_iter()
+            .map(|row| row.into_iter().map(f64::from).collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+            for (idx, row) in xtx.iter_mut().enumerate() {
+                row[idx] += 1.0e-4;
+            }
+            let targets = (0..samples)
+                .flat_map(|sample| {
+                    let cutoff = sample + lookback;
+                    (0..horizon).map(move |h| y[cutoff + h][entity] as f32)
+                })
+                .collect::<Vec<_>>();
+            let xty =
+                backend_dense_layer_f32(&backend, &transposed, &targets, &vec![0.0; horizon])?;
+            for h in 0..horizon {
+                decoder_weights[h][entity] = solve_dense_system(
+                    xtx.clone(),
+                    xty.iter().map(|row| f64::from(row[h])).collect(),
                 );
+                intercepts[h][entity] = (0..samples)
+                    .map(|sample| y[sample + lookback + h][entity])
+                    .sum::<f64>()
+                    / samples as f64;
+            }
+            continue;
+        }
+        for h in 0..horizon {
+            let mut xtx = vec![vec![0.0; feature_len]; feature_len];
+            let mut xty = vec![0.0; feature_len];
+            let mut target_sum = 0.0;
+            for (sample, features) in feature_rows.iter().enumerate() {
+                let cutoff = sample + lookback;
                 let target = y[cutoff + h][entity];
                 target_sum += target;
                 for row in 0..feature_len {
@@ -1573,6 +1697,7 @@ pub fn temporal_entity_fit(
         residual_scales,
         last_window: y[y.len() - lookback..].to_vec(),
         schema_hash: schema_hash(entity_count, "temporal_entity"),
+        backend,
     })
 }
 
@@ -1592,16 +1717,45 @@ pub fn temporal_entity_predict(
     let mut out = Vec::with_capacity(horizon);
     for _ in 0..horizon {
         let mut row = vec![0.0; artifact.entity_count];
-        for (entity, value) in row.iter_mut().enumerate() {
-            let h = out.len().min(artifact.decoder_weights.len() - 1);
-            let start = history.len() - artifact.lookback;
-            let features = temporal_entity_features(
-                &history[start..],
-                entity,
-                &artifact.attention_queries,
-                &artifact.attention_keys,
-            );
-            *value = dot(&artifact.decoder_weights[h][entity], &features);
+        let h = out.len().min(artifact.decoder_weights.len() - 1);
+        let start = history.len() - artifact.lookback;
+        let feature_rows = (0..artifact.entity_count)
+            .map(|entity| {
+                temporal_entity_features(
+                    &history[start..],
+                    entity,
+                    &artifact.attention_queries,
+                    &artifact.attention_keys,
+                )
+            })
+            .collect::<Vec<_>>();
+        if artifact.backend.selected == "cpu" {
+            for (entity, value) in row.iter_mut().enumerate() {
+                *value = dot(&artifact.decoder_weights[h][entity], &feature_rows[entity]);
+            }
+        } else {
+            let feature_len = feature_rows[0].len();
+            let mut block_features = vec![0.0_f32; artifact.entity_count * feature_len];
+            let mut block_weights =
+                vec![0.0_f32; artifact.entity_count * feature_len * artifact.entity_count];
+            for entity in 0..artifact.entity_count {
+                for (feature, value) in feature_rows[entity].iter().enumerate() {
+                    let input = entity * feature_len + feature;
+                    block_features[input] = *value as f32;
+                    block_weights[input * artifact.entity_count + entity] =
+                        artifact.decoder_weights[h][entity][feature] as f32;
+                }
+            }
+            row = backend_dense_layer_f32(
+                &artifact.backend,
+                &[block_features],
+                &block_weights,
+                &vec![0.0; artifact.entity_count],
+            )?
+            .remove(0)
+            .into_iter()
+            .map(f64::from)
+            .collect();
         }
         history.push(row.clone());
         out.push(row);
@@ -1642,6 +1796,7 @@ fn fit_tanh_response_network(
     candidate_slope: f64,
     response_type: &str,
     y_mean: f64,
+    backend: &BackendSelection,
 ) -> Result<TanhFit> {
     let features = rows
         .iter()
@@ -1659,9 +1814,15 @@ fn fit_tanh_response_network(
         .map(|row| row.response.unwrap_or(0.0))
         .collect::<Vec<_>>();
     let mut fit = if response_type == "binary" {
-        fit_tanh_binary_network(&features, &labels, &expanded_means, y_mean)?
+        fit_tanh_binary_network_with_backend(&features, &labels, &expanded_means, y_mean, backend)?
     } else {
-        fit_tanh_regression_network(&features, &labels, &expanded_means, y_mean)?
+        fit_tanh_regression_network_with_backend(
+            &features,
+            &labels,
+            &expanded_means,
+            y_mean,
+            backend,
+        )?
     };
     for hidden in &mut fit.hidden_weights {
         if let Some(last) = hidden.last_mut() {
@@ -1687,6 +1848,146 @@ fn fit_tanh_binary_network(
     )
 }
 
+fn fit_tanh_binary_network_with_backend(
+    features: &[Vec<f64>],
+    labels: &[f64],
+    means: &[f64],
+    y_mean: f64,
+    backend: &BackendSelection,
+) -> Result<TanhFit> {
+    if backend.selected == "cpu" {
+        return fit_tanh_binary_network(features, labels, means, y_mean);
+    }
+    let logit_targets = labels
+        .iter()
+        .map(|&label| logit((0.05 + 0.9 * label).clamp(0.05, 0.95)))
+        .collect::<Vec<_>>();
+    fit_tanh_regression_network_with_backend(
+        features,
+        &logit_targets,
+        means,
+        logit(y_mean.clamp(1.0e-6, 1.0 - 1.0e-6)),
+        backend,
+    )
+}
+
+#[cfg(any())]
+fn fit_tanh_binary_network_with_scalar_graph(
+    features: &[Vec<f64>],
+    labels: &[f64],
+    means: &[f64],
+    y_mean: f64,
+    backend: &BackendSelection,
+) -> Result<TanhFit> {
+    if backend.selected == "cpu" {
+        return fit_tanh_binary_network(features, labels, means, y_mean);
+    }
+    validate_matrix(features)?;
+    if labels.len() != features.len() {
+        return invalid("labels must match feature row count");
+    }
+    let dim = features[0].len();
+    let hidden = dim.clamp(2, 8);
+    let hidden_bias_offset = hidden * dim;
+    let output_offset = hidden_bias_offset + hidden;
+    let intercept_offset = output_offset + hidden;
+    let mut parameters = vec![0.0_f32; intercept_offset + 1];
+    for unit in 0..hidden {
+        parameters[output_offset + unit] = if unit % 2 == 0 { 0.05 } else { -0.05 };
+        for input in 0..dim {
+            parameters[unit * dim + input] = ((((unit + 1) * (input + 3)) % 7) as f32 - 3.0) * 0.03;
+        }
+    }
+    parameters[intercept_offset] = logit(y_mean.clamp(1.0e-6, 1.0 - 1.0e-6)) as f32;
+    let mut values = Vec::<f32>::new();
+    let mut opcodes = Vec::<u8>::new();
+    let mut left = Vec::<u32>::new();
+    let mut right = Vec::<u32>::new();
+    let mut parameter_ids = Vec::<u32>::new();
+    let mut push = |value: f32, opcode: u8, lhs: usize, rhs: usize, parameter: usize| {
+        let index = values.len();
+        values.push(value);
+        opcodes.push(opcode);
+        left.push(lhs as u32);
+        right.push(rhs as u32);
+        parameter_ids.push(parameter as u32);
+        index
+    };
+    let zero = push(0.0, 0, 0, 0, 0);
+    let mut total_loss = zero;
+    for (row, &label) in features.iter().zip(labels) {
+        let mut inputs = Vec::with_capacity(dim);
+        for (value, mean) in row.iter().zip(means) {
+            inputs.push(push((value - mean) as f32, 0, 0, 0, 0));
+        }
+        let mut activations = Vec::with_capacity(hidden);
+        for unit in 0..hidden {
+            let mut sum = push(0.0, 1, 0, 0, hidden_bias_offset + unit);
+            for (input, &input_node) in inputs.iter().enumerate() {
+                let weight = push(0.0, 1, 0, 0, unit * dim + input);
+                let product = push(0.0, 3, weight, input_node, 0);
+                sum = push(0.0, 2, sum, product, 0);
+            }
+            activations.push(push(0.0, 5, sum, sum, 0));
+        }
+        let mut raw = push(0.0, 1, 0, 0, intercept_offset);
+        for (unit, &activation) in activations.iter().enumerate() {
+            let weight = push(0.0, 1, 0, 0, output_offset + unit);
+            let product = push(0.0, 3, weight, activation, 0);
+            raw = push(0.0, 2, raw, product, 0);
+        }
+        let probability = push(0.0, 9, raw, raw, 0);
+        let negative_label = push(-(label as f32), 0, 0, 0, 0);
+        let error = push(0.0, 2, probability, negative_label, 0);
+        let squared = push(0.0, 3, error, error, 0);
+        total_loss = push(0.0, 2, total_loss, squared, 0);
+    }
+    let count = push(labels.len() as f32, 0, 0, 0, 0);
+    let loss = push(0.0, 4, total_loss, count, 0);
+    drop(push);
+    let mut first = vec![0.0_f32; parameters.len()];
+    let mut second = vec![0.0_f32; parameters.len()];
+    for step in 1..=240 {
+        backend_scalar_graph_train_step_f32(
+            backend,
+            &values,
+            &opcodes,
+            &left,
+            &right,
+            &parameter_ids,
+            loss,
+            &mut parameters,
+            &mut first,
+            &mut second,
+            step,
+            0.03,
+            1.0e-4,
+        )?;
+    }
+    Ok(TanhFit {
+        hidden_weights: (0..hidden)
+            .map(|unit| {
+                parameters[unit * dim..(unit + 1) * dim]
+                    .iter()
+                    .copied()
+                    .map(f64::from)
+                    .collect()
+            })
+            .collect(),
+        hidden_biases: parameters[hidden_bias_offset..output_offset]
+            .iter()
+            .copied()
+            .map(f64::from)
+            .collect(),
+        output_weights: parameters[output_offset..intercept_offset]
+            .iter()
+            .copied()
+            .map(f64::from)
+            .collect(),
+        intercept: f64::from(parameters[intercept_offset]),
+    })
+}
+
 fn fit_tanh_regression_network(
     features: &[Vec<f64>],
     labels: &[f64],
@@ -1694,6 +1995,76 @@ fn fit_tanh_regression_network(
     y_mean: f64,
 ) -> Result<TanhFit> {
     fit_tanh_network(features, labels, means, y_mean, false)
+}
+
+fn fit_tanh_regression_network_with_backend(
+    features: &[Vec<f64>],
+    labels: &[f64],
+    means: &[f64],
+    y_mean: f64,
+    backend: &BackendSelection,
+) -> Result<TanhFit> {
+    if backend.selected == "cpu" {
+        return fit_tanh_regression_network(features, labels, means, y_mean);
+    }
+    validate_matrix(features)?;
+    if labels.len() != features.len() {
+        return invalid("labels must match feature row count");
+    }
+    let dim = features[0].len();
+    let hidden = dim.clamp(2, 8);
+    let mut parameters = vec![0.0_f32; hidden * dim + hidden + hidden + 1];
+    let hidden_bias_offset = hidden * dim;
+    let output_offset = hidden_bias_offset + hidden;
+    let intercept_offset = output_offset + hidden;
+    for unit in 0..hidden {
+        parameters[output_offset + unit] = if unit % 2 == 0 { 0.05 } else { -0.05 };
+        for input in 0..dim {
+            parameters[unit * dim + input] = ((((unit + 1) * (input + 3)) % 7) as f32 - 3.0) * 0.03;
+        }
+    }
+    parameters[intercept_offset] = y_mean as f32;
+    let centered = features
+        .iter()
+        .map(|row| {
+            row.iter()
+                .zip(means)
+                .map(|(value, mean)| (value - mean) as f32)
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let targets = labels.iter().map(|&value| value as f32).collect::<Vec<_>>();
+    backend_train_tanh_mlp_f32(
+        backend,
+        &centered,
+        &targets,
+        hidden,
+        240,
+        0.02,
+        &mut parameters,
+    )?;
+    Ok(TanhFit {
+        hidden_weights: (0..hidden)
+            .map(|unit| {
+                parameters[unit * dim..(unit + 1) * dim]
+                    .iter()
+                    .copied()
+                    .map(f64::from)
+                    .collect()
+            })
+            .collect(),
+        hidden_biases: parameters[hidden_bias_offset..output_offset]
+            .iter()
+            .copied()
+            .map(f64::from)
+            .collect(),
+        output_weights: parameters[output_offset..intercept_offset]
+            .iter()
+            .copied()
+            .map(f64::from)
+            .collect(),
+        intercept: f64::from(parameters[intercept_offset]),
+    })
 }
 
 fn fit_tanh_network(
@@ -1765,29 +2136,53 @@ fn fit_tanh_network(
     })
 }
 
-fn neural_score(
-    row: &[f64],
+fn backend_tanh_scores(
+    backend: &BackendSelection,
+    rows: &[Vec<f64>],
     means: &[f64],
     hidden_weights: &[Vec<f64>],
     hidden_biases: &[f64],
     output_weights: &[f64],
-    intercept: f64,
-) -> f64 {
-    let mut score = intercept;
-    for (h, weights) in hidden_weights.iter().enumerate() {
-        let z = hidden_biases.get(h).copied().unwrap_or(0.0)
-            + weights
-                .iter()
-                .enumerate()
-                .map(|(idx, weight)| {
-                    weight
-                        * (row.get(idx).copied().unwrap_or(0.0)
-                            - means.get(idx).copied().unwrap_or(0.0))
-                })
-                .sum::<f64>();
-        score += output_weights.get(h).copied().unwrap_or(0.0) * z.tanh();
+    intercepts: &[f64],
+) -> Result<Vec<f64>> {
+    if rows.len() != intercepts.len() || hidden_weights.len() != hidden_biases.len() {
+        return Err(NeuralError::InvalidArgument(
+            "invalid batched tanh-network shape".to_string(),
+        ));
     }
-    score
+    let dimensions = means.len();
+    let hidden = hidden_weights.len();
+    let centered = rows
+        .iter()
+        .map(|row| {
+            row.iter()
+                .zip(means)
+                .map(|(value, mean)| (value - mean) as f32)
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let mut weights = vec![0.0_f32; dimensions * hidden];
+    for (unit, unit_weights) in hidden_weights.iter().enumerate() {
+        for (dimension, weight) in unit_weights.iter().take(dimensions).enumerate() {
+            weights[dimension * hidden + unit] = *weight as f32;
+        }
+    }
+    let biases = hidden_biases
+        .iter()
+        .map(|value| *value as f32)
+        .collect::<Vec<_>>();
+    let activations = backend_dense_layer_f32(backend, &centered, &weights, &biases)?;
+    Ok(activations
+        .into_iter()
+        .zip(intercepts)
+        .map(|(row, intercept)| {
+            row.iter()
+                .zip(output_weights)
+                .map(|(activation, weight)| f64::from(activation.tanh()) * weight)
+                .sum::<f64>()
+                + intercept
+        })
+        .collect())
 }
 
 fn linearized_feature_weights(
@@ -2646,6 +3041,180 @@ mod tests {
         assert_eq!(metal.backend.selected, "metal");
         for (left, right) in cpu_scores.iter().zip(&metal_scores) {
             assert!((left.response_score - right.response_score).abs() < 1.0e-4);
+        }
+    }
+
+    #[test]
+    fn temporal_entity_fit_and_predict_use_every_available_backend() {
+        let panel = (0..14)
+            .map(|step| {
+                vec![
+                    2.0 + step as f64 * 0.3,
+                    5.0 + (step as f64 * 0.4).sin(),
+                    1.0 + step as f64 * 0.15,
+                ]
+            })
+            .collect::<Vec<_>>();
+        let cpu = temporal_entity_fit_with_backend(&panel, 4, 2, Some("cpu")).unwrap();
+        let expected = temporal_entity_predict(&cpu, 2).unwrap();
+        for backend in crate::available_backends() {
+            let artifact = temporal_entity_fit_with_backend(&panel, 4, 2, Some(&backend))
+                .unwrap_or_else(|error| panic!("{backend} temporal fit failed: {error}"));
+            assert_eq!(artifact.backend.selected, backend);
+            let actual = temporal_entity_predict(&artifact, 2)
+                .unwrap_or_else(|error| panic!("{backend} temporal predict failed: {error}"));
+            for (actual, expected) in actual.iter().flatten().zip(expected.iter().flatten()) {
+                assert!(
+                    (actual - expected).abs() <= 0.1_f64.max(expected.abs() * 0.02),
+                    "{backend}: actual={actual} expected={expected}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn directional_pair_inference_uses_every_available_backend() {
+        let rows = nonlinear_pair_rows();
+        for mut options in [
+            DirectionalPairFitOptions::default(),
+            DirectionalPairFitOptions {
+                architecture: "pair_embedding_mlp".to_string(),
+                epochs: 20,
+                early_stopping_rounds: 5,
+                ..DirectionalPairFitOptions::default()
+            },
+        ] {
+            options.seed = 7;
+            let cpu = directional_pair_fit_with_options_and_backend(&rows, &options, Some("cpu"))
+                .unwrap();
+            let expected = directional_pair_predict(&cpu, &rows).unwrap();
+            for backend in crate::available_backends() {
+                let artifact =
+                    directional_pair_fit_with_options_and_backend(&rows, &options, Some(&backend))
+                        .unwrap_or_else(|error| {
+                            panic!("{backend} directional fit failed: {error}")
+                        });
+                assert_eq!(artifact.backend.selected, backend);
+                let actual = directional_pair_predict(&artifact, &rows).unwrap_or_else(|error| {
+                    panic!("{backend} directional predict failed: {error}")
+                });
+                for (actual, expected) in actual.iter().zip(&expected) {
+                    assert!(
+                        (actual - expected).abs() <= 2.0e-4,
+                        "{} {backend}: actual={actual} expected={expected}",
+                        options.architecture
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn continuous_tanh_models_train_on_every_available_backend() {
+        let response_rows = (0..16)
+            .map(|idx| {
+                let x = idx as f64 / 5.0;
+                DeepResponseRow {
+                    features: vec![x, x.sin()],
+                    candidate_value: 1.0 + x * 0.2,
+                    response: Some(0.7 + 0.4 * x + 0.2 * x.sin()),
+                    group_id: None,
+                    candidate_id: None,
+                }
+            })
+            .collect::<Vec<_>>();
+        let service_rows = response_rows
+            .iter()
+            .map(|row| DeepServiceResidualRow {
+                baseline_value: 10.0,
+                actual_value: Some(10.0 + row.response.unwrap()),
+                features: row.features.clone(),
+            })
+            .collect::<Vec<_>>();
+        let cpu_response =
+            response_curve_fit_with_backend(&response_rows, "continuous", None, Some("cpu"))
+                .unwrap();
+        let expected_response = response_curve_predict(&cpu_response, &response_rows).unwrap();
+        let cpu_service = service_residual_fit_with_backend(&service_rows, Some("cpu")).unwrap();
+        let expected_service = service_residual_predict(&cpu_service, &service_rows).unwrap();
+        for backend in crate::available_backends() {
+            let response =
+                response_curve_fit_with_backend(&response_rows, "continuous", None, Some(&backend))
+                    .unwrap_or_else(|error| panic!("{backend} response fit failed: {error}"));
+            let actual_response = response_curve_predict(&response, &response_rows).unwrap();
+            let service = service_residual_fit_with_backend(&service_rows, Some(&backend))
+                .unwrap_or_else(|error| panic!("{backend} service fit failed: {error}"));
+            let actual_service = service_residual_predict(&service, &service_rows).unwrap();
+            for (actual, expected) in actual_response.iter().zip(&expected_response) {
+                assert!(
+                    (actual.response_score - expected.response_score).abs() <= 0.08,
+                    "{backend}"
+                );
+            }
+            for (actual, expected) in actual_service.iter().zip(&expected_service) {
+                assert!(
+                    (actual.prediction - expected.prediction).abs() <= 0.08,
+                    "{backend}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn binary_tanh_models_train_on_every_available_backend() {
+        let features = (0..20)
+            .map(|idx| {
+                let x = idx as f64 / 19.0;
+                vec![x, x * x]
+            })
+            .collect::<Vec<_>>();
+        let labels = features
+            .iter()
+            .map(|row| if row[0] >= 0.5 { 1.0 } else { 0.0 })
+            .collect::<Vec<_>>();
+        let response_rows = features
+            .iter()
+            .zip(&labels)
+            .map(|(features, &label)| DeepResponseRow {
+                features: features.clone(),
+                candidate_value: features[0],
+                response: Some(label),
+                group_id: None,
+                candidate_id: None,
+            })
+            .collect::<Vec<_>>();
+        for backend in crate::available_backends() {
+            let event = event_outcome_fit_with_backend(&features, &labels, Some(&backend))
+                .unwrap_or_else(|error| panic!("{backend} event fit failed: {error}"));
+            let event_predictions = event_outcome_predict(&event, &features).unwrap();
+            assert_eq!(event.backend.selected, backend);
+            assert!(
+                event_predictions.last().unwrap().probability
+                    > event_predictions.first().unwrap().probability,
+                "{backend}"
+            );
+            let response = response_curve_fit_with_backend(
+                &response_rows,
+                "binary",
+                Some("increasing"),
+                Some(&backend),
+            )
+            .unwrap_or_else(|error| panic!("{backend} binary response fit failed: {error}"));
+            let response_predictions = response_curve_predict(&response, &response_rows).unwrap();
+            assert_eq!(response.backend.selected, backend);
+            assert!(
+                response_predictions
+                    .last()
+                    .unwrap()
+                    .response_probability
+                    .unwrap()
+                    > response_predictions
+                        .first()
+                        .unwrap()
+                        .response_probability
+                        .unwrap(),
+                "{backend}"
+            );
         }
     }
 }

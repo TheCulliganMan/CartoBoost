@@ -47,8 +47,8 @@ each one is good for, and which baseline to compare against.
 uv add cartoboost
 ```
 
-Optional extras:
+Optional dependencies are installed directly:
 
 ```sh
-uv add "cartoboost[explain,optuna,polars,onnx]"
+uv add shap optuna polars onnx
 ```

@@ -10,7 +10,7 @@ from typing import Any
 
 import numpy as np
 
-try:  # pragma: no cover - exercised when the optional sklearn extra is installed.
+try:  # pragma: no cover - exercised when the sklearn dependency is installed.
     from sklearn.base import BaseEstimator, RegressorMixin
 except ImportError:  # pragma: no cover - lightweight fallback for core installs.
 
@@ -37,6 +37,7 @@ from ._native import (
     categorical_transform as _native_categorical_transform,
 )
 from .config import (
+    Backend,
     ExplanationAlgorithm,
     ExplanationDecomposition,
     FuzzyKernel,
@@ -86,6 +87,7 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
         monotonic_constraints: list[int] | None = None,
         tensorboard_log_dir: str | Path | None = None,
         tensorboard_run_name: str | None = None,
+        backend: Backend | str = Backend.CPU,
     ) -> None:
         self.n_estimators = n_estimators
         self.learning_rate = learning_rate
@@ -110,6 +112,7 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
         self.monotonic_constraints = monotonic_constraints
         self.tensorboard_log_dir = tensorboard_log_dir
         self.tensorboard_run_name = tensorboard_run_name
+        self.backend = str(backend)
         self._model: Any | None = None
         self._backend_used: str | None = None
 
@@ -138,6 +141,7 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
             "monotonic_constraints": self.monotonic_constraints,
             "tensorboard_log_dir": self.tensorboard_log_dir,
             "tensorboard_run_name": self.tensorboard_run_name,
+            "backend": self.backend,
         }
 
     def set_params(self, **params: Any) -> CartoBoostRegressor:
@@ -246,6 +250,7 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
                 if self.monotonic_constraints is None
                 else [int(value) for value in self.monotonic_constraints]
             ),
+            backend=self.backend,
         )
         _fit_native(
             model,
@@ -655,6 +660,7 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
                 getattr(native_model, "constant_l2_regularization", 0.0)
             ),
             monotonic_constraints=list(getattr(native_model, "monotonic_constraints", [])) or None,
+            backend=str(getattr(native_model, "backend", "cpu")),
         )
         estimator._model = native_model
         estimator._backend_used = "rust"
@@ -1656,7 +1662,7 @@ def _save_weights_onnx(artifact: dict[str, Any], path: Path) -> None:
     try:
         import onnx
         from onnx import TensorProto, helper
-    except ImportError as exc:  # pragma: no cover - depends on optional extra
+    except ImportError as exc:  # pragma: no cover - depends on optional dependency
         raise ImportError("ONNX export requires installing the optional 'onnx' package") from exc
 
     model_payload = _onnx_model_payload(artifact)

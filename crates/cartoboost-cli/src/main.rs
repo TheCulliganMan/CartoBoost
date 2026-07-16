@@ -1,6 +1,9 @@
 use cartoboost_core::loss::{LossConfig, QuantileLossConfig};
 use cartoboost_core::tree::{FuzzyKernel, LeafPredictorKind, SplitterKind};
 use cartoboost_core::{Booster, BoosterConfig, Dataset, Model as CoreModel};
+use cartoboost_neural::{
+    available_backends, backend_supports_operation, select_backend_for, BackendOperation,
+};
 use std::collections::BTreeMap;
 use std::env;
 use std::error::Error;
@@ -40,13 +43,14 @@ fn run() -> CliResult<()> {
         "predict" => predict(opts),
         "eval" => evaluate(opts),
         "inspect" => inspect(opts),
+        "accelerators" => accelerators(opts),
         other => Err(format!("unknown command '{other}'").into()),
     }
 }
 
 fn print_help() {
     println!(
-        "cartoboost <command> [options]\n\nCommands:\n  train    --data <csv> [--config <toml>] [--model-out <path>] [--output json|csv]\n  predict  --model <path> --input <csv> [--predictions-out <path>] [--output json|csv]\n  eval     --model <path> --data <csv> [--output json|csv]\n  inspect  [--model <path>] [--config <toml>] [--data <csv>] [--output json|csv]"
+        "cartoboost <command> [options]\n\nCommands:\n  train         --data <csv> [--backend cpu|auto|cuda|rocm|metal|directml|webgpu] [--config <toml>] [--model-out <path>] [--output json|csv]\n  predict       --model <path> --input <csv> [--backend cpu|auto|cuda|rocm|metal|directml|webgpu] [--predictions-out <path>] [--output json|csv]\n  eval          --model <path> --data <csv> [--backend cpu|auto|cuda|rocm|metal|directml|webgpu] [--output json|csv]\n  inspect       [--model <path>] [--config <toml>] [--data <csv>] [--output json|csv]\n  accelerators  [--output json|csv]"
     );
 }
 
@@ -75,10 +79,18 @@ fn parse_options(raw: Vec<String>) -> CliResult<BTreeMap<String, String>> {
 
 fn validate_options(command: &str, opts: &BTreeMap<String, String>) -> CliResult<()> {
     let allowed = match command {
-        "train" => &["config", "data", "help", "model-out", "output"][..],
-        "predict" => &["help", "input", "model", "output", "predictions-out"][..],
-        "eval" => &["data", "help", "model", "output"][..],
+        "train" => &["backend", "config", "data", "help", "model-out", "output"][..],
+        "predict" => &[
+            "backend",
+            "help",
+            "input",
+            "model",
+            "output",
+            "predictions-out",
+        ][..],
+        "eval" => &["backend", "data", "help", "model", "output"][..],
         "inspect" => &["config", "data", "help", "model", "output"][..],
+        "accelerators" => &["help", "output"][..],
         _ => return Ok(()),
     };
     for key in opts.keys() {
@@ -86,6 +98,46 @@ fn validate_options(command: &str, opts: &BTreeMap<String, String>) -> CliResult
             return Err(format!("unknown option '--{key}' for command '{command}'").into());
         }
     }
+    Ok(())
+}
+
+fn accelerators(opts: BTreeMap<String, String>) -> CliResult<()> {
+    let output = output_format(&opts)?;
+    let available = available_backends();
+    if output == "csv" {
+        println!("backend,available,operations");
+        for backend in ["cpu", "cuda", "rocm", "metal", "directml", "webgpu"] {
+            let operations = BackendOperation::ALL
+                .into_iter()
+                .filter(|operation| backend_supports_operation(backend, *operation))
+                .map(BackendOperation::as_str)
+                .collect::<Vec<_>>()
+                .join(";");
+            println!(
+                "{backend},{},{}",
+                available.iter().any(|candidate| candidate == backend),
+                operations
+            );
+        }
+        return Ok(());
+    }
+    let rows = ["cpu", "cuda", "rocm", "metal", "directml", "webgpu"]
+        .into_iter()
+        .map(|backend| {
+            let operations = BackendOperation::ALL
+                .into_iter()
+                .filter(|operation| backend_supports_operation(backend, *operation))
+                .map(|operation| format!("\"{}\"", operation.as_str()))
+                .collect::<Vec<_>>()
+                .join(",");
+            format!(
+                "{{\"backend\":\"{backend}\",\"available\":{},\"operations\":[{operations}]}}",
+                available.iter().any(|candidate| candidate == backend)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    println!("{{\"backends\":[{rows}]}}");
     Ok(())
 }
 
@@ -108,23 +160,28 @@ fn train(opts: BTreeMap<String, String>) -> CliResult<()> {
         .get("model-out")
         .cloned()
         .unwrap_or_else(|| "cartoboost-model.json".to_string());
-    let mut model = Booster::new(cfg.booster_config()?).fit(&dataset, &y, None)?;
+    let backend = opts.get("backend").map(String::as_str).unwrap_or("cpu");
+    let booster = Booster::new_with_backend(cfg.booster_config()?, Some(backend))?;
+    let selected_backend = booster.backend().selected.clone();
+    let mut model = booster.fit(&dataset, &y, None)?;
     model.target_name = Some(target);
     model.save(&model_path)?;
 
     match output.as_str() {
         "csv" => println!(
-            "ok,command,rows,features,model_path\ntrue,train,{},{},{}",
+            "ok,command,rows,features,model_path,backend\ntrue,train,{},{},{},{}",
             rows.records.len(),
             feature_count,
-            csv_cell(&model_path)
+            csv_cell(&model_path),
+            csv_cell(&selected_backend)
         ),
         _ => println!(
-            "{{\"ok\":true,\"command\":\"train\",\"rows\":{},\"features\":{},\"model_path\":\"{}\",\"trees\":{}}}",
+            "{{\"ok\":true,\"command\":\"train\",\"rows\":{},\"features\":{},\"model_path\":\"{}\",\"trees\":{},\"backend\":\"{}\"}}",
             rows.records.len(),
             feature_count,
             json_escape(&model_path),
-            model.trees.len()
+            model.trees.len(),
+            json_escape(&selected_backend)
         ),
     }
     Ok(())
@@ -137,7 +194,11 @@ fn predict(opts: BTreeMap<String, String>) -> CliResult<()> {
     let rows = read_csv(input_path)?;
     if let Ok(model) = CoreModel::load(model_path) {
         let dataset = numeric_dataset_without_target(&rows, model.feature_count)?;
-        let predictions = model.try_predict(&dataset)?;
+        let requested_backend = opts.get("backend").map(String::as_str).unwrap_or("cpu");
+        let selected_backend =
+            select_backend_for(Some(requested_backend), BackendOperation::Dense)?;
+        let predictions =
+            model.try_predict_with_backend(&dataset, Some(&selected_backend.selected))?;
         let mut csv = String::from("row,prediction\n");
         for (idx, prediction) in predictions.iter().enumerate() {
             csv.push_str(&format!("{idx},{}\n", format_float(*prediction)));
@@ -149,8 +210,9 @@ fn predict(opts: BTreeMap<String, String>) -> CliResult<()> {
         match output.as_str() {
             "csv" => print!("{csv}"),
             _ => println!(
-                "{{\"ok\":true,\"command\":\"predict\",\"rows\":{},\"predictions_out\":{}}}",
+                "{{\"ok\":true,\"command\":\"predict\",\"rows\":{},\"backend\":\"{}\",\"predictions_out\":{}}}",
                 predictions.len(),
+                json_escape(&selected_backend.selected),
                 optional_json_string(opts.get("predictions-out"))
             ),
         }
@@ -195,7 +257,11 @@ fn evaluate(opts: BTreeMap<String, String>) -> CliResult<()> {
             .or_else(|| rows.headers.last().cloned())
             .unwrap_or_else(|| "target".to_string());
         let (dataset, y, _) = numeric_dataset_and_target(&rows, &target)?;
-        let predictions = model.try_predict(&dataset)?;
+        let requested_backend = opts.get("backend").map(String::as_str).unwrap_or("cpu");
+        let selected_backend =
+            select_backend_for(Some(requested_backend), BackendOperation::Dense)?;
+        let predictions =
+            model.try_predict_with_backend(&dataset, Some(&selected_backend.selected))?;
         let mae = y
             .iter()
             .zip(&predictions)
@@ -205,16 +271,18 @@ fn evaluate(opts: BTreeMap<String, String>) -> CliResult<()> {
 
         match output.as_str() {
             "csv" => println!(
-                "ok,command,rows,target,mae\ntrue,eval,{},{},{}",
+                "ok,command,rows,target,mae,backend\ntrue,eval,{},{},{},{}",
                 rows.records.len(),
                 csv_cell(&target),
-                format_float(mae)
+                format_float(mae),
+                csv_cell(&selected_backend.selected)
             ),
             _ => println!(
-                "{{\"ok\":true,\"command\":\"eval\",\"rows\":{},\"target\":\"{}\",\"mae\":{}}}",
+                "{{\"ok\":true,\"command\":\"eval\",\"rows\":{},\"target\":\"{}\",\"mae\":{},\"backend\":\"{}\"}}",
                 rows.records.len(),
                 json_escape(&target),
-                format_float(mae)
+                format_float(mae),
+                json_escape(&selected_backend.selected)
             ),
         }
         return Ok(());

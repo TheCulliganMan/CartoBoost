@@ -3,12 +3,16 @@ use crate::forecasting::{
     ForecastResult, Forecaster, RuleBasedGating,
 };
 use crate::{CartoBoostError, Result};
+use cartoboost_accelerator::{
+    backend_dense_layer_f32, select_backend_for, BackendOperation, BackendSelection,
+};
 use rayon::prelude::*;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
 pub struct WeightedEnsembleForecaster {
     members: Vec<WeightedMember>,
+    backend: BackendSelection,
 }
 
 pub type ForecastEnsemble = WeightedEnsembleForecaster;
@@ -23,6 +27,7 @@ pub struct GatedEnsembleForecaster {
     members: Vec<NamedMember>,
     gating: RuleBasedGating,
     weights: Option<BTreeMap<String, f64>>,
+    backend: BackendSelection,
 }
 
 struct NamedMember {
@@ -64,6 +69,15 @@ impl Eq for ForecastIntervalKey {}
 
 impl WeightedEnsembleForecaster {
     pub fn new(members: Vec<(String, Box<dyn Forecaster>, f64)>) -> Result<Self> {
+        Self::new_with_backend(members, Some("cpu"))
+    }
+
+    pub fn new_with_backend(
+        members: Vec<(String, Box<dyn Forecaster>, f64)>,
+        backend: Option<&str>,
+    ) -> Result<Self> {
+        let backend = select_backend_for(backend, BackendOperation::Dense)
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
         if members.is_empty() {
             return Err(CartoBoostError::InvalidInput(
                 "weighted ensemble requires at least one member".to_string(),
@@ -118,7 +132,10 @@ impl WeightedEnsembleForecaster {
         for member in &mut cleaned {
             member.weight = (member.weight / max_weight) / scaled_total;
         }
-        Ok(Self { members: cleaned })
+        Ok(Self {
+            members: cleaned,
+            backend,
+        })
     }
 
     pub fn weights(&self) -> BTreeMap<String, f64> {
@@ -134,6 +151,16 @@ impl GatedEnsembleForecaster {
         members: Vec<(String, Box<dyn Forecaster>)>,
         gating: RuleBasedGating,
     ) -> Result<Self> {
+        Self::new_with_backend(members, gating, Some("cpu"))
+    }
+
+    pub fn new_with_backend(
+        members: Vec<(String, Box<dyn Forecaster>)>,
+        gating: RuleBasedGating,
+        backend: Option<&str>,
+    ) -> Result<Self> {
+        let backend = select_backend_for(backend, BackendOperation::Dense)
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
         if members.is_empty() {
             return Err(CartoBoostError::InvalidInput(
                 "gated ensemble requires at least one member".to_string(),
@@ -160,6 +187,7 @@ impl GatedEnsembleForecaster {
             members: cleaned,
             gating,
             weights: None,
+            backend,
         })
     }
 
@@ -204,6 +232,7 @@ impl GatedEnsembleForecaster {
                 .map(|((member, weight), result)| (member.name.as_str(), weight, result))
                 .collect(),
             self.model_name(),
+            &self.backend,
         )
     }
 }
@@ -239,6 +268,7 @@ impl Forecaster for WeightedEnsembleForecaster {
                 .map(|(member, result)| (member.name.as_str(), member.weight, result))
                 .collect(),
             self.model_name(),
+            &self.backend,
         )
     }
 
@@ -250,6 +280,7 @@ impl Forecaster for WeightedEnsembleForecaster {
         json!({
             "model": self.model_name(),
             "weights": self.weights(),
+            "backend": self.backend,
         })
     }
 }
@@ -289,6 +320,7 @@ impl Forecaster for GatedEnsembleForecaster {
             "model": self.model_name(),
             "weights": self.weights,
             "gating": self.gating.metadata(),
+            "backend": self.backend,
         })
     }
 }
@@ -346,6 +378,7 @@ fn interval_key(interval: &ForecastIntervalPrediction) -> ForecastIntervalKey {
 fn aggregate_member_results(
     member_results: Vec<(&str, f64, ForecastResult)>,
     model_name: &str,
+    backend: &BackendSelection,
 ) -> Result<ForecastResult> {
     if member_results.is_empty() {
         return Err(CartoBoostError::InvalidInput(
@@ -359,6 +392,8 @@ fn aggregate_member_results(
     let mut expected_interval_keys: Option<Vec<ForecastIntervalKey>> = None;
     let mut weighted_intervals: Vec<(ForecastIntervalKey, f64, f64)> = Vec::new();
     let mut has_member_details = false;
+    let mut accelerator_columns = Vec::<Vec<f32>>::new();
+    let mut accelerator_weights = Vec::<f32>::new();
 
     for (member_name, weight, result) in member_results {
         if !weight.is_finite() || weight <= 0.0 {
@@ -397,6 +432,14 @@ fn aggregate_member_results(
             })
             .collect::<Result<BTreeMap<_, _>>>()?;
         has_member_details |= !details.is_empty();
+        accelerator_columns.push(
+            result
+                .predictions()
+                .iter()
+                .map(|prediction| prediction.mean as f32)
+                .collect(),
+        );
+        accelerator_weights.push(weight as f32);
         for prediction in result.predictions() {
             let key = forecast_key(prediction);
             let weighted_mean = weight * prediction.mean;
@@ -438,6 +481,23 @@ fn aggregate_member_results(
                 })
                 .collect();
             expected_interval_keys = Some(current_interval_keys);
+        }
+    }
+
+    if backend.selected != "cpu" {
+        let keys = expected_keys.as_ref().expect("validated ensemble keys");
+        let features = (0..keys.len())
+            .map(|row| {
+                accelerator_columns
+                    .iter()
+                    .map(|column| column[row])
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let accelerated = backend_dense_layer_f32(backend, &features, &accelerator_weights, &[0.0])
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+        for (key, output) in keys.iter().cloned().zip(accelerated) {
+            weighted.insert(key, f64::from(output[0]));
         }
     }
 
@@ -573,6 +633,47 @@ mod tests {
             .collect();
 
         assert_eq!(means, vec![12.5, 14.0]);
+    }
+
+    #[test]
+    fn accelerated_weighted_ensemble_matches_cpu() {
+        for backend in cartoboost_accelerator::available_backends() {
+            if backend == "cpu"
+                || !cartoboost_accelerator::backend_supports_operation(
+                    &backend,
+                    BackendOperation::Dense,
+                )
+            {
+                continue;
+            }
+            let ensemble = WeightedEnsembleForecaster::new_with_backend(
+                vec![
+                    (
+                        "left".to_string(),
+                        Box::new(FixedForecaster {
+                            predictions: vec![prediction("PU1", 4, 1, 10.0)],
+                            name: "left",
+                        }),
+                        0.25,
+                    ),
+                    (
+                        "right".to_string(),
+                        Box::new(FixedForecaster {
+                            predictions: vec![prediction("PU1", 4, 1, 30.0)],
+                            name: "right",
+                        }),
+                        0.75,
+                    ),
+                ],
+                Some(&backend),
+            )
+            .unwrap();
+            let result = ensemble.predict(1).unwrap();
+            assert!(
+                (result.predictions()[0].mean - 25.0).abs() < 1.0e-4,
+                "backend {backend}"
+            );
+        }
     }
 
     #[test]

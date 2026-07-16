@@ -53,15 +53,15 @@ python -c "import cartoboost; print(cartoboost.__version__)"
 python examples/quickstart.py
 ```
 
-For pandas-backed forecasting examples, install the explicit optional extra:
+For pandas-backed forecasting examples, install pandas directly:
 
 ```sh
-uv add "cartoboost[pandas]"
+uv add pandas
 ```
 
-Optional packages are installed only when needed. For example, use
-`cartoboost[polars]` for Polars inputs, `cartoboost[optuna]` for Optuna tuning,
-or `cartoboost[onnx]` for the supported ONNX export subset.
+Optional packages are installed only when needed. Install `polars` for Polars
+inputs, `optuna` for Optuna tuning, or `onnx` for the supported ONNX export
+subset.
 
 ## 4. Fit A Regression Model
 

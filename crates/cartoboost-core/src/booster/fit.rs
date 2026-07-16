@@ -10,6 +10,9 @@ use crate::tree::{
     TrainingConfigMetadata, TrainingMetric, TreeBuilder, MODEL_ARTIFACT_VERSION,
 };
 use crate::{CartoBoostError, Result};
+use cartoboost_accelerator::{
+    backend_dense_layer_f32, select_backend_for, BackendOperation, BackendSelection,
+};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -38,6 +41,7 @@ pub struct BoosterConfig {
 #[derive(Debug, Clone)]
 pub struct Booster {
     pub config: BoosterConfig,
+    backend: BackendSelection,
 }
 
 impl Default for BoosterConfig {
@@ -67,7 +71,21 @@ impl Default for BoosterConfig {
 
 impl Booster {
     pub fn new(config: BoosterConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            backend: select_backend_for(Some("cpu"), BackendOperation::Dense)
+                .expect("CPU dense backend is always available"),
+        }
+    }
+
+    pub fn new_with_backend(config: BoosterConfig, backend: Option<&str>) -> Result<Self> {
+        let backend = select_backend_for(backend, BackendOperation::Dense)
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+        Ok(Self { config, backend })
+    }
+
+    pub fn backend(&self) -> &BackendSelection {
+        &self.backend
     }
 
     pub fn fit(&self, x: &Dataset, y: &[f64], sample_weight: Option<&[f64]>) -> Result<Model> {
@@ -175,12 +193,13 @@ impl Booster {
                     builder.fit_with_leaf_updates_in_context(x, &residuals, &weights, &fit_context)
                 });
                 profile::timed(profile::PRED_UPDATE, || {
-                    pred.par_iter_mut()
-                        .zip(updates.par_iter())
-                        .for_each(|(prediction, update)| {
-                            *prediction += self.config.learning_rate * update;
-                        });
-                });
+                    accelerated_prediction_update(
+                        &mut pred,
+                        &updates,
+                        self.config.learning_rate,
+                        &self.backend,
+                    )
+                })?;
                 tree
             } else {
                 profile::timed(profile::TREE_FIT, || {
@@ -188,17 +207,21 @@ impl Booster {
                 })
             };
             if let Some(smoothing) = &self.config.graph_leaf_smoothing {
-                apply_graph_leaf_smoothing(&mut tree, x, smoothing)?;
+                apply_graph_leaf_smoothing(&mut tree, x, smoothing, &self.backend)?;
             }
             if !use_leaf_updates || self.config.graph_leaf_smoothing.is_some() {
                 profile::timed(profile::PRED_UPDATE, || {
-                    pred.par_iter_mut()
-                        .enumerate()
-                        .for_each(|(row, prediction)| {
-                            *prediction +=
-                                self.config.learning_rate * tree.predict_dataset_row(x, row);
-                        });
-                });
+                    let updates = (0..x.n_rows())
+                        .into_par_iter()
+                        .map(|row| tree.predict_dataset_row(x, row))
+                        .collect::<Vec<_>>();
+                    accelerated_prediction_update(
+                        &mut pred,
+                        &updates,
+                        self.config.learning_rate,
+                        &self.backend,
+                    )
+                })?;
             }
             trees.push(tree);
             training_history.push(TrainingMetric {
@@ -217,6 +240,7 @@ impl Booster {
             feature_schema: Some(x.feature_schema_or_default()),
             target_name: None,
             training_config: Some(TrainingConfigMetadata {
+                backend: Some(self.backend.clone()),
                 n_estimators: self.config.n_estimators,
                 learning_rate: self.config.learning_rate,
                 max_depth: self.config.max_depth,
@@ -243,6 +267,34 @@ impl Booster {
         profile::report("booster_fit", profile_started.elapsed());
         Ok(model)
     }
+}
+
+pub(crate) fn accelerated_prediction_update(
+    predictions: &mut [f64],
+    updates: &[f64],
+    learning_rate: f64,
+    backend: &BackendSelection,
+) -> Result<()> {
+    if backend.selected == "cpu" {
+        predictions
+            .par_iter_mut()
+            .zip(updates.par_iter())
+            .for_each(|(prediction, update)| {
+                *prediction += learning_rate * update;
+            });
+        return Ok(());
+    }
+    let features = predictions
+        .iter()
+        .zip(updates)
+        .map(|(&prediction, &update)| vec![prediction as f32, update as f32])
+        .collect::<Vec<_>>();
+    let output = backend_dense_layer_f32(backend, &features, &[1.0, learning_rate as f32], &[0.0])
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    for (prediction, row) in predictions.iter_mut().zip(output) {
+        *prediction = f64::from(row[0]);
+    }
+    Ok(())
 }
 
 fn weighted_rmse(targets: &[f64], predictions: &[f64], weights: &[f64]) -> f64 {
@@ -373,6 +425,7 @@ fn apply_graph_leaf_smoothing(
     tree: &mut crate::tree::Tree,
     x: &Dataset,
     smoothing: &GraphLeafSmoothing,
+    backend: &BackendSelection,
 ) -> Result<()> {
     smoothing.validate_row_count(x.n_rows())?;
     if smoothing.lambda == 0.0 || smoothing.iterations == 0 {
@@ -387,9 +440,11 @@ fn apply_graph_leaf_smoothing(
         .map(|row| leaf_id_for_row(&tree.root, x, row, 0))
         .collect::<Vec<_>>();
     let leaf_graph = leaf_graph_from_row_graph(&smoothing.graph, &row_leaf_ids, leaf_values.len())?;
-    let smoothed = smoothing
-        .smoother()
-        .smooth_leaf_values(&leaf_values, &GraphLaplacian::new(leaf_graph))?;
+    let smoothed = smoothing.smoother().smooth_leaf_values_with_backend(
+        &leaf_values,
+        &GraphLaplacian::new(leaf_graph),
+        Some(&backend.selected),
+    )?;
     let mut next_leaf = 0usize;
     assign_leaf_values(&mut tree.root, &smoothed, &mut next_leaf);
     Ok(())
@@ -548,6 +603,77 @@ mod tests {
 
         assert_eq!(model.artifact_version, MODEL_ARTIFACT_VERSION);
         assert_predictions_close(&model.predict(&x), &y);
+    }
+
+    #[test]
+    fn accelerated_booster_training_updates_match_cpu() {
+        let x = Dataset::from_rows(
+            (0..256)
+                .map(|row| vec![row as f64 / 32.0, (row as f64 * 0.17).sin()])
+                .collect(),
+        )
+        .unwrap();
+        let y = (0..256)
+            .map(|row| if row % 7 < 3 { 2.0 } else { -1.0 })
+            .collect::<Vec<_>>();
+        let config = BoosterConfig {
+            n_estimators: 4,
+            learning_rate: 0.1,
+            max_depth: 2,
+            min_samples_leaf: 2,
+            min_gain: 0.0,
+            splitters: vec![SplitterKind::Axis],
+            ..BoosterConfig::default()
+        };
+        let cpu = Booster::new(config.clone()).fit(&x, &y, None).unwrap();
+        for backend in cartoboost_accelerator::available_backends() {
+            if backend == "cpu"
+                || !cartoboost_accelerator::backend_supports_operation(
+                    &backend,
+                    BackendOperation::Dense,
+                )
+            {
+                continue;
+            }
+            let accelerated = Booster::new_with_backend(config.clone(), Some(&backend))
+                .unwrap()
+                .fit(&x, &y, None)
+                .unwrap();
+            for (expected, actual) in cpu.predict(&x).iter().zip(accelerated.predict(&x)) {
+                assert!(
+                    (expected - actual).abs() < 1.0e-4,
+                    "backend {backend}: {expected} != {actual}"
+                );
+            }
+            let inference = accelerated
+                .try_predict_with_backend(&x, Some(&backend))
+                .unwrap();
+            let persisted_backend_inference = accelerated.try_predict(&x).unwrap();
+            assert_eq!(persisted_backend_inference.len(), inference.len());
+            for (persisted, explicit) in persisted_backend_inference.iter().zip(&inference) {
+                assert!(
+                    (persisted - explicit).abs() < 1.0e-6,
+                    "backend {backend} persisted selection was not reused"
+                );
+            }
+            for (expected, actual) in cpu.predict(&x).iter().zip(inference) {
+                assert!(
+                    (expected - actual).abs() < 1.0e-4,
+                    "backend {backend} inference: {expected} != {actual}"
+                );
+            }
+            assert_eq!(
+                accelerated
+                    .training_config
+                    .as_ref()
+                    .unwrap()
+                    .backend
+                    .as_ref()
+                    .unwrap()
+                    .selected,
+                backend
+            );
+        }
     }
 
     fn assert_predictions_close(actual: &[f64], expected: &[f64]) {

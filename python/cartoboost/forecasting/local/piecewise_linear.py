@@ -719,8 +719,7 @@ def _country_holiday_event_tuples(
     except Exception as exc:  # pragma: no cover - exercised with broken optional installs.
         raise ImportError(
             "country holidays require the optional 'holidays' package. "
-            "Install CartoBoost with the holidays extra or install a compatible "
-            "holidays release."
+            "Install a compatible holidays release with `pip install holidays`."
         ) from exc
 
     substitutions = {"TU": "TR"}

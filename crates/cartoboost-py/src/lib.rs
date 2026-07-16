@@ -76,11 +76,12 @@ use cartoboost_core::metrics::{
 };
 use cartoboost_core::tree::{FlatAxisPredictor, FuzzyKernel, LeafPredictorKind, SplitterKind};
 use cartoboost_core::utilities::{
-    empirical_variogram, fit_local_level_kalman, fit_local_linear_kalman,
-    fit_ordinary_kriging_variogram, intermittent_demand_forecast, local_level_kalman_forecast,
-    local_level_kalman_forecast_distribution, local_linear_kalman_forecast,
-    local_linear_kalman_forecast_distribution, ordinary_kriging_leave_one_out,
-    ordinary_kriging_leave_one_out_diagnostics, ordinary_kriging_predict_many,
+    empirical_variogram_with_backend, fit_local_level_kalman, fit_local_linear_kalman,
+    fit_ordinary_kriging_variogram_with_backend, intermittent_demand_forecast,
+    local_level_kalman_forecast, local_level_kalman_forecast_distribution,
+    local_linear_kalman_forecast, local_linear_kalman_forecast_distribution,
+    ordinary_kriging_leave_one_out_diagnostics_with_backend,
+    ordinary_kriging_leave_one_out_with_backend, ordinary_kriging_predict_many_with_backend,
     IntermittentDemandMethod, KrigingDrift, KrigingObservation, KrigingVariogramModel,
     LocalLevelKalmanConfig, LocalLinearKalmanConfig, OrdinaryKrigingConfig,
 };
@@ -90,13 +91,14 @@ use cartoboost_core::{
     RankerConfig, RankerModel, RankingObjective,
 };
 use cartoboost_geo_causal::{
-    causal_representation_report_json as core_geo_causal_representation_report_json,
-    spillover_diagnostics as core_geo_causal_spillover_diagnostics, GeoCausalPanel, GeoCausalRow,
-    GeoExperimentDesigner as CoreGeoExperimentDesigner, SpatialPlaceboTester, SpatialWeight,
-    SyntheticDIDConfig, SyntheticDIDEstimator as CoreSyntheticDIDEstimator,
+    causal_representation_report_json_with_backend as core_geo_causal_representation_report_json,
+    spillover_diagnostics_with_backend as core_geo_causal_spillover_diagnostics, GeoCausalPanel,
+    GeoCausalRow, GeoExperimentDesigner as CoreGeoExperimentDesigner, SpatialPlaceboTester,
+    SpatialWeight, SyntheticDIDConfig, SyntheticDIDEstimator as CoreSyntheticDIDEstimator,
 };
 use cartoboost_geo_core::{
-    buffered_spatial_cv as core_buffered_spatial_cv, group_spatial_cv as core_group_spatial_cv,
+    buffered_spatial_cv_with_backend as core_buffered_spatial_cv,
+    group_spatial_cv as core_group_spatial_cv,
     rolling_origin_panel_split as core_rolling_origin_panel_split,
     spatial_block_cv as core_spatial_block_cv,
     spatial_temporal_blocked_split as core_spatial_temporal_blocked_split,
@@ -123,34 +125,35 @@ use cartoboost_geo_st::{
     STAEformerConfig as CoreSTAEformerConfig, STAEformerForecaster as CoreSTAEformerForecaster,
 };
 use cartoboost_geostats::{
-    empirical_semivariogram as geostats_empirical_semivariogram,
     fit_variogram_wls as geostats_fit_variogram_wls, Anisotropy as CoreGeostatsAnisotropy,
     CovarianceKernel as CoreCovarianceKernel,
     NearestNeighborGPRegressor as CoreNearestNeighborGPRegressor, NngpConfig as CoreNngpConfig,
 };
 use cartoboost_neural::{
     available_backends as neural_available_backends,
-    backend_dispatch_report as neural_backend_dispatch_report, build_embedding_table_artifact,
+    backend_dispatch_report as neural_backend_dispatch_report,
+    backend_supports_operation as neural_backend_supports_operation,
+    build_embedding_table_artifact,
     choice_set_transformer_report_json as core_choice_set_transformer_report_json,
     compute_directional_features,
     constrained_decision_select_with_options as core_deep_constrained_decision_select,
-    directional_pair_fit as core_deep_directional_pair_fit,
     directional_pair_predict as core_deep_directional_pair_predict,
     directional_pair_predictions as core_deep_directional_pair_predictions,
     event_outcome_fit_with_backend as core_deep_event_outcome_fit,
-    event_outcome_predict as core_deep_event_outcome_predict, fit_embedding_table_with_options,
-    materialize_source_target_pair_nodes,
+    event_outcome_predict as core_deep_event_outcome_predict,
+    fit_embedding_table_with_options_and_backend, materialize_source_target_pair_nodes,
     response_curve_fit_with_backend as core_deep_response_curve_fit,
     response_curve_predict as core_deep_response_curve_predict,
-    select_backend as neural_select_backend,
+    select_backend_for as neural_select_backend_for,
+    select_backend_for_operations as neural_select_backend_for_operations,
     service_residual_fit_with_backend as core_deep_service_residual_fit,
     service_residual_predict as core_deep_service_residual_predict,
-    temporal_entity_fit as core_deep_temporal_entity_fit,
+    temporal_entity_fit_with_backend as core_deep_temporal_entity_fit,
     temporal_entity_predict as core_deep_temporal_entity_predict, validate_directed_metapath,
-    write_embedding_table_artifact, ArtifactFallbackKind, DeepDirectionalPairArtifact,
-    DeepDirectionalPairRow, DeepEventArtifact, DeepResponseArtifact, DeepResponseRow,
-    DeepServiceResidualArtifact, DeepServiceResidualRow, DeepTemporalEntityArtifact,
-    DirectionalPairFitOptions, EmbeddingTable, GraphSageConfig, GraphSageEncoder,
+    write_embedding_table_artifact, ArtifactFallbackKind, BackendOperation,
+    DeepDirectionalPairArtifact, DeepDirectionalPairRow, DeepEventArtifact, DeepResponseArtifact,
+    DeepResponseRow, DeepServiceResidualArtifact, DeepServiceResidualRow,
+    DeepTemporalEntityArtifact, EmbeddingTable, GraphSageConfig, GraphSageEncoder,
     GraphSageLinkPredictor, GraphSageRegressor, HeteroGraph, HeteroGraphSageConfig,
     HeteroGraphSageEncoder, HeteroGraphSageLinkPredictor, HeteroGraphSageRegressor,
     HeteroTypedEdge, HinSageConfig, HinSageEncoder, HinSageGraph, HinSageLinkPredictor,
@@ -174,14 +177,14 @@ use cartoboost_neural::{
 };
 use cartoboost_prob::{
     benchmark_calibration_report_fields as core_prob_benchmark_calibration_report_fields,
-    conditional_flow_fit_json as core_prob_conditional_flow_fit_json,
+    conditional_flow_fit_with_backend_json as core_prob_conditional_flow_fit_json,
     conditional_flow_predict_json as core_prob_conditional_flow_predict_json,
     crps_approximation as core_prob_crps_approximation,
-    diffusion_scenario_generate_json as core_prob_diffusion_scenario_generate_json,
+    diffusion_scenario_generate_with_backend_json as core_prob_diffusion_scenario_generate_json,
     group_conformal_residual_quantiles as core_prob_group_conformal_residual_quantiles,
     interval_coverage as core_prob_interval_coverage,
     mean_interval_width as core_prob_mean_interval_width,
-    nearest_calibration_residual_quantiles as core_prob_nearest_calibration_residual_quantiles,
+    nearest_calibration_residual_quantiles_with_backend as core_prob_nearest_calibration_residual_quantiles,
     pinball_loss as core_prob_pinball_loss, pit_bins as core_prob_pit_bins,
     rolling_origin_conformal_residual_quantiles as core_prob_rolling_origin_conformal_residual_quantiles,
     split_conformal_residual_quantile as core_prob_split_conformal_residual_quantile,
@@ -479,7 +482,7 @@ fn geo_spatial_block_cv(
 }
 
 #[pyfunction]
-#[pyo3(signature = (coords, n_folds, buffer_distance, dataset_fingerprint, coordinate_crs_note, model_version, dependency_versions, random_seed=None, split_id="buffered_spatial_cv"))]
+#[pyo3(signature = (coords, n_folds, buffer_distance, dataset_fingerprint, coordinate_crs_note, model_version, dependency_versions, random_seed=None, split_id="buffered_spatial_cv", backend="cpu"))]
 #[allow(clippy::too_many_arguments)]
 fn geo_buffered_spatial_cv(
     coords: &NativeCoordinateMatrix,
@@ -491,6 +494,7 @@ fn geo_buffered_spatial_cv(
     dependency_versions: BTreeMap<String, String>,
     random_seed: Option<u64>,
     split_id: &str,
+    backend: &str,
 ) -> PyResult<NativeSplitManifest> {
     let meta = geo_meta(
         dataset_fingerprint,
@@ -508,6 +512,7 @@ fn geo_buffered_spatial_cv(
             buffer_distance,
             meta,
             split_id.to_string(),
+            Some(backend),
         )
         .map_err(to_py_geo_core_error)?,
     })
@@ -678,13 +683,18 @@ macro_rules! native_spatial_regressor {
         #[derive(Clone, Debug)]
         struct $name {
             model: Option<SpatialRegressionModel>,
+            backend: String,
         }
 
         #[pymethods]
         impl $name {
             #[new]
-            fn new() -> Self {
-                Self { model: None }
+            #[pyo3(signature = (backend=None))]
+            fn new(backend: Option<&str>) -> Self {
+                Self {
+                    model: None,
+                    backend: backend.unwrap_or("cpu").to_string(),
+                }
             }
 
             fn fit(
@@ -696,7 +706,15 @@ macro_rules! native_spatial_regressor {
             ) -> PyResult<()> {
                 let weights = spatial_weights.weights.clone();
                 let model = py
-                    .detach(|| SpatialRegressionModel::fit($kind, x, y, &weights))
+                    .detach(|| {
+                        SpatialRegressionModel::fit_with_backend(
+                            $kind,
+                            x,
+                            y,
+                            &weights,
+                            Some(&self.backend),
+                        )
+                    })
                     .map_err(to_py_spatial_error)?;
                 self.model = Some(model);
                 Ok(())
@@ -746,6 +764,13 @@ macro_rules! native_spatial_regressor {
                 Ok(model.intercept())
             }
 
+            fn backend(&self) -> String {
+                self.model.as_ref().map_or_else(
+                    || self.backend.clone(),
+                    |model| model.backend().selected.clone(),
+                )
+            }
+
             fn save(&self, py: Python<'_>, path: PathBuf) -> PyResult<()> {
                 let model = self.model.as_ref().ok_or_else(|| {
                     PyRuntimeError::new_err(format!("{} is not fitted", $py_name))
@@ -766,7 +791,11 @@ macro_rules! native_spatial_regressor {
                         $kind
                     )));
                 }
-                Ok(Self { model: Some(model) })
+                let backend = model.backend().selected.clone();
+                Ok(Self {
+                    model: Some(model),
+                    backend,
+                })
             }
         }
     };
@@ -1667,13 +1696,14 @@ fn utility_intermittent_demand_forecast(
 }
 
 #[pyfunction]
-#[pyo3(signature = (observations, targets, range=1.0, nugget=1.0e-6))]
+#[pyo3(signature = (observations, targets, range=1.0, nugget=1.0e-6, backend="cpu"))]
 fn utility_ordinary_kriging_predict(
     py: Python<'_>,
     observations: Vec<(f64, f64, f64)>,
     targets: Vec<(f64, f64)>,
     range: f64,
     nugget: f64,
+    backend: &str,
 ) -> PyResult<Vec<PyKrigingPrediction>> {
     let observations = observations
         .into_iter()
@@ -1681,7 +1711,14 @@ fn utility_ordinary_kriging_predict(
         .collect::<Vec<_>>();
     let config = OrdinaryKrigingConfig::new(range, nugget).map_err(to_py_value_error)?;
     let predictions = py
-        .detach(|| ordinary_kriging_predict_many(&observations, &targets, config))
+        .detach(|| {
+            ordinary_kriging_predict_many_with_backend(
+                &observations,
+                &targets,
+                config,
+                Some(backend),
+            )
+        })
         .map_err(to_py_value_error)?;
     Ok(predictions
         .into_iter()
@@ -1709,7 +1746,8 @@ fn utility_ordinary_kriging_predict(
     anisotropy_scaling=1.0,
     max_neighbors=None,
     min_neighbors=1,
-    max_distance=None
+    max_distance=None,
+    backend="cpu"
 ))]
 #[allow(clippy::too_many_arguments)]
 fn utility_ordinary_kriging_predict_detailed(
@@ -1726,6 +1764,7 @@ fn utility_ordinary_kriging_predict_detailed(
     max_neighbors: Option<usize>,
     min_neighbors: usize,
     max_distance: Option<f64>,
+    backend: &str,
 ) -> PyResult<Vec<PyDetailedKrigingPrediction>> {
     let observations = observations
         .into_iter()
@@ -1744,7 +1783,14 @@ fn utility_ordinary_kriging_predict_detailed(
         max_distance,
     )?;
     let predictions = py
-        .detach(|| ordinary_kriging_predict_many(&observations, &targets, config))
+        .detach(|| {
+            ordinary_kriging_predict_many_with_backend(
+                &observations,
+                &targets,
+                config,
+                Some(backend),
+            )
+        })
         .map_err(to_py_value_error)?;
     Ok(predictions
         .into_iter()
@@ -1773,7 +1819,8 @@ fn utility_ordinary_kriging_predict_detailed(
     anisotropy_scaling=1.0,
     max_neighbors=None,
     min_neighbors=1,
-    max_distance=None
+    max_distance=None,
+    backend="cpu"
 ))]
 #[allow(clippy::too_many_arguments)]
 fn utility_ordinary_kriging_leave_one_out(
@@ -1789,6 +1836,7 @@ fn utility_ordinary_kriging_leave_one_out(
     max_neighbors: Option<usize>,
     min_neighbors: usize,
     max_distance: Option<f64>,
+    backend: &str,
 ) -> PyResult<Vec<PyDetailedKrigingPrediction>> {
     let observations = observations
         .into_iter()
@@ -1807,7 +1855,9 @@ fn utility_ordinary_kriging_leave_one_out(
         max_distance,
     )?;
     let predictions = py
-        .detach(|| ordinary_kriging_leave_one_out(&observations, config))
+        .detach(|| {
+            ordinary_kriging_leave_one_out_with_backend(&observations, config, Some(backend))
+        })
         .map_err(to_py_value_error)?;
     Ok(predictions
         .into_iter()
@@ -1830,7 +1880,8 @@ fn utility_ordinary_kriging_leave_one_out(
     bin_count=10,
     max_distance=None,
     anisotropy_angle_degrees=0.0,
-    anisotropy_scaling=1.0
+    anisotropy_scaling=1.0,
+    backend="cpu"
 ))]
 fn utility_empirical_variogram(
     py: Python<'_>,
@@ -1839,6 +1890,7 @@ fn utility_empirical_variogram(
     max_distance: Option<f64>,
     anisotropy_angle_degrees: f64,
     anisotropy_scaling: f64,
+    backend: &str,
 ) -> PyResult<String> {
     let observations = observations
         .into_iter()
@@ -1846,12 +1898,13 @@ fn utility_empirical_variogram(
         .collect::<Vec<_>>();
     let bins = py
         .detach(|| {
-            empirical_variogram(
+            empirical_variogram_with_backend(
                 &observations,
                 bin_count,
                 max_distance,
                 anisotropy_angle_degrees,
                 anisotropy_scaling,
+                Some(backend),
             )
         })
         .map_err(to_py_value_error)?;
@@ -1879,7 +1932,8 @@ fn utility_empirical_variogram(
     sill_candidates=None,
     bin_count=10,
     anisotropy_angle_degrees=0.0,
-    anisotropy_scaling=1.0
+    anisotropy_scaling=1.0,
+    backend="cpu"
 ))]
 #[allow(clippy::too_many_arguments)]
 fn utility_fit_ordinary_kriging_variogram(
@@ -1892,6 +1946,7 @@ fn utility_fit_ordinary_kriging_variogram(
     bin_count: usize,
     anisotropy_angle_degrees: f64,
     anisotropy_scaling: f64,
+    backend: &str,
 ) -> PyResult<String> {
     let observations = observations
         .into_iter()
@@ -1907,7 +1962,7 @@ fn utility_fit_ordinary_kriging_variogram(
     let sills = sill_candidates.unwrap_or_default();
     let fit = py
         .detach(|| {
-            fit_ordinary_kriging_variogram(
+            fit_ordinary_kriging_variogram_with_backend(
                 &observations,
                 &models,
                 &ranges,
@@ -1916,6 +1971,7 @@ fn utility_fit_ordinary_kriging_variogram(
                 bin_count,
                 anisotropy_angle_degrees,
                 anisotropy_scaling,
+                Some(backend),
             )
         })
         .map_err(to_py_value_error)?;
@@ -1948,7 +2004,8 @@ fn utility_fit_ordinary_kriging_variogram(
     anisotropy_scaling=1.0,
     max_neighbors=None,
     min_neighbors=1,
-    max_distance=None
+    max_distance=None,
+    backend="cpu"
 ))]
 #[allow(clippy::too_many_arguments)]
 fn utility_ordinary_kriging_leave_one_out_diagnostics(
@@ -1964,6 +2021,7 @@ fn utility_ordinary_kriging_leave_one_out_diagnostics(
     max_neighbors: Option<usize>,
     min_neighbors: usize,
     max_distance: Option<f64>,
+    backend: &str,
 ) -> PyResult<String> {
     let observations = observations
         .into_iter()
@@ -1982,7 +2040,13 @@ fn utility_ordinary_kriging_leave_one_out_diagnostics(
         max_distance,
     )?;
     let (predictions, diagnostics) = py
-        .detach(|| ordinary_kriging_leave_one_out_diagnostics(&observations, config))
+        .detach(|| {
+            ordinary_kriging_leave_one_out_diagnostics_with_backend(
+                &observations,
+                config,
+                Some(backend),
+            )
+        })
         .map_err(to_py_value_error)?;
     let payload = json!({
         "predictions": predictions.iter().map(|prediction| {
@@ -3499,7 +3563,7 @@ struct NativeMarketStructureForecaster {
 #[pymethods]
 impl NativeMarketStructureForecaster {
     #[new]
-    #[pyo3(signature = (top_k=8, neural_hidden_dim=16, neural_epochs=20, head_epochs=80, head_learning_rate=0.02, huber_delta=1.0, quantile_levels=None, graph_strength=0.55, local_strength=0.35, correlation_floor=0.10, shift_zscore=2.0, calibrate_intervals=true))]
+    #[pyo3(signature = (top_k=8, neural_hidden_dim=16, neural_epochs=20, head_epochs=80, head_learning_rate=0.02, huber_delta=1.0, quantile_levels=None, graph_strength=0.55, local_strength=0.35, correlation_floor=0.10, shift_zscore=2.0, calibrate_intervals=true, backend="cpu"))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         top_k: usize,
@@ -3514,9 +3578,11 @@ impl NativeMarketStructureForecaster {
         correlation_floor: f64,
         shift_zscore: f64,
         calibrate_intervals: bool,
+        backend: &str,
     ) -> PyResult<Self> {
         Ok(Self {
             model: CoreMarketStructureForecaster::new(CoreMarketStructureConfig {
+                backend: backend.to_string(),
                 top_k,
                 neural_hidden_dim,
                 neural_epochs,
@@ -4107,7 +4173,8 @@ impl NativeNBeatsForecaster {
                 hidden_size,
                 epochs,
                 learning_rate,
-                backend: neural_select_backend(backend).map_err(to_py_neural_error)?,
+                backend: neural_select_backend_for(backend, BackendOperation::TanhMlpTraining)
+                    .map_err(to_py_neural_error)?,
             })
             .map_err(to_py_neural_error)?,
         })
@@ -4151,7 +4218,8 @@ impl NativeNHiTSForecaster {
                 epochs,
                 learning_rate,
                 pooling_size,
-                backend: neural_select_backend(backend).map_err(to_py_neural_error)?,
+                backend: neural_select_backend_for(backend, BackendOperation::TanhMlpTraining)
+                    .map_err(to_py_neural_error)?,
             })
             .map_err(to_py_neural_error)?,
         })
@@ -4589,7 +4657,7 @@ struct NativeAutoForecastModel {
 #[pymethods]
 impl NativeAutoForecastModel {
     #[new]
-    #[pyo3(signature = (lags=None, rolling_windows=None, partial_rolling_mean_windows=None, rolling_std_windows=None, rolling_min_windows=None, rolling_max_windows=None, ewm_alpha_percents=None, difference_lags=None, rolling_trend_windows=None, covariate_features=None, covariate_indicator_values=None, covariate_calendar_interactions=false, calendar_features=true, rich_calendar_features=false, elapsed_calendar_features=false, elapsed_calendar_periods=None, season_length=7, validation_window=None, validation_origin_count=2, objective="rmse_wape", baseline_displacement_gain=0.03, hard_winner_relative_gain=0.05, min_blend_weight=0.15, max_blend_weight=0.85, max_direct_horizon=28, max_candidate_count=None, recursive=true, n_estimators=None, learning_rate=None, max_depth=None, min_samples_leaf=None, min_gain=None, splitters=None, trend_features=true, target_mode="level"))]
+    #[pyo3(signature = (lags=None, rolling_windows=None, partial_rolling_mean_windows=None, rolling_std_windows=None, rolling_min_windows=None, rolling_max_windows=None, ewm_alpha_percents=None, difference_lags=None, rolling_trend_windows=None, covariate_features=None, covariate_indicator_values=None, covariate_calendar_interactions=false, calendar_features=true, rich_calendar_features=false, elapsed_calendar_features=false, elapsed_calendar_periods=None, season_length=7, validation_window=None, validation_origin_count=2, objective="rmse_wape", baseline_displacement_gain=0.03, hard_winner_relative_gain=0.05, min_blend_weight=0.15, max_blend_weight=0.85, max_direct_horizon=28, max_candidate_count=None, recursive=true, n_estimators=None, learning_rate=None, max_depth=None, min_samples_leaf=None, min_gain=None, splitters=None, trend_features=true, target_mode="level", backend="cpu"))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         lags: Option<Vec<usize>>,
@@ -4627,6 +4695,7 @@ impl NativeAutoForecastModel {
         splitters: Option<Vec<String>>,
         trend_features: bool,
         target_mode: &str,
+        backend: &str,
     ) -> PyResult<Self> {
         if !recursive {
             return Err(PyValueError::new_err(
@@ -4721,6 +4790,7 @@ impl NativeAutoForecastModel {
                 max_blend_weight,
                 max_direct_horizon,
                 max_candidate_count,
+                backend: backend.to_string(),
             })
             .map_err(to_py_value_error)?,
         })
@@ -4744,7 +4814,7 @@ impl NativeAutoForecastModel {
 #[pymethods]
 impl NativeCartoBoostLagForecaster {
     #[new]
-    #[pyo3(signature = (lags=None, rolling_windows=None, partial_rolling_mean_windows=None, rolling_std_windows=None, rolling_min_windows=None, rolling_max_windows=None, ewm_alpha_percents=None, difference_lags=None, rolling_trend_windows=None, covariate_features=None, covariate_indicator_values=None, covariate_calendar_interactions=false, calendar_features=true, rich_calendar_features=false, elapsed_calendar_features=false, elapsed_calendar_periods=None, recursive=true, prediction_interval_levels=None, n_estimators=None, learning_rate=None, max_depth=None, min_samples_leaf=None, min_gain=None, splitters=None, trend_features=true, target_mode="level"))]
+    #[pyo3(signature = (lags=None, rolling_windows=None, partial_rolling_mean_windows=None, rolling_std_windows=None, rolling_min_windows=None, rolling_max_windows=None, ewm_alpha_percents=None, difference_lags=None, rolling_trend_windows=None, covariate_features=None, covariate_indicator_values=None, covariate_calendar_interactions=false, calendar_features=true, rich_calendar_features=false, elapsed_calendar_features=false, elapsed_calendar_periods=None, recursive=true, prediction_interval_levels=None, n_estimators=None, learning_rate=None, max_depth=None, min_samples_leaf=None, min_gain=None, splitters=None, trend_features=true, target_mode="level", backend="cpu"))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         lags: Option<Vec<usize>>,
@@ -4773,6 +4843,7 @@ impl NativeCartoBoostLagForecaster {
         splitters: Option<Vec<String>>,
         trend_features: bool,
         target_mode: &str,
+        backend: &str,
     ) -> PyResult<Self> {
         if !recursive {
             return Err(PyValueError::new_err(
@@ -4853,10 +4924,12 @@ impl NativeCartoBoostLagForecaster {
         )?;
         let target_mode = parse_global_target_mode(target_mode)?;
         Ok(Self {
-            model: CoreCartoBoostLagForecaster::new_with_target_mode(
+            model: CoreCartoBoostLagForecaster::new_with_backend(
                 config,
                 booster_config,
                 target_mode,
+                cartoboost_core::forecasting::GlobalForecastSampleWeightMode::Uniform,
+                Some(backend),
             )
             .map_err(to_py_value_error)?,
         })
@@ -4904,7 +4977,12 @@ struct NativeWeightedEnsembleForecaster {
 #[pymethods]
 impl NativeWeightedEnsembleForecaster {
     #[new]
-    fn new(py: Python<'_>, members: Vec<(String, Py<PyAny>, f64)>) -> PyResult<Self> {
+    #[pyo3(signature = (members, backend="cpu"))]
+    fn new(
+        py: Python<'_>,
+        members: Vec<(String, Py<PyAny>, f64)>,
+        backend: &str,
+    ) -> PyResult<Self> {
         let members = members
             .iter()
             .map(|(name, model, weight)| {
@@ -4912,7 +4990,8 @@ impl NativeWeightedEnsembleForecaster {
             })
             .collect::<PyResult<Vec<_>>>()?;
         Ok(Self {
-            model: CoreWeightedEnsembleForecaster::new(members).map_err(to_py_value_error)?,
+            model: CoreWeightedEnsembleForecaster::new_with_backend(members, Some(backend))
+                .map_err(to_py_value_error)?,
         })
     }
 
@@ -5378,7 +5457,7 @@ struct NativeNearestNeighborGPRegressor {
 #[pymethods]
 impl NativeNearestNeighborGPRegressor {
     #[new]
-    #[pyo3(signature = (kernel="exponential", range=1.0, sill=1.0, nugget=1.0e-6, n_neighbors=16, anisotropy_angle_degrees=0.0, anisotropy_scaling=1.0, brute_force_threshold=2048, duplicate_tolerance=0.0))]
+    #[pyo3(signature = (kernel="exponential", range=1.0, sill=1.0, nugget=1.0e-6, n_neighbors=16, anisotropy_angle_degrees=0.0, anisotropy_scaling=1.0, brute_force_threshold=2048, duplicate_tolerance=0.0, backend="cpu"))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         kernel: &str,
@@ -5390,6 +5469,7 @@ impl NativeNearestNeighborGPRegressor {
         anisotropy_scaling: f64,
         brute_force_threshold: usize,
         duplicate_tolerance: f64,
+        backend: &str,
     ) -> PyResult<Self> {
         let config = CoreNngpConfig {
             kernel: CoreCovarianceKernel::parse(kernel).map_err(to_py_geostats_error)?,
@@ -5405,7 +5485,8 @@ impl NativeNearestNeighborGPRegressor {
             duplicate_tolerance,
         };
         Ok(Self {
-            model: CoreNearestNeighborGPRegressor::new(config).map_err(to_py_geostats_error)?,
+            model: CoreNearestNeighborGPRegressor::new_with_backend(config, Some(backend))
+                .map_err(to_py_geostats_error)?,
         })
     }
 
@@ -5460,11 +5541,16 @@ impl NativeNearestNeighborGPRegressor {
         }))
         .map_err(to_py_json_error)
     }
+
+    fn backend(&self) -> String {
+        self.model.backend().selected.clone()
+    }
 }
 
 #[pyclass(name = "CartoBoostRegressor")]
 #[derive(Clone, Debug)]
 struct NativeCartoBoostRegressor {
+    backend: String,
     n_estimators: usize,
     learning_rate: f64,
     max_depth: usize,
@@ -5491,7 +5577,7 @@ struct NativeCartoBoostRegressor {
 #[pymethods]
 impl NativeCartoBoostRegressor {
     #[new]
-    #[pyo3(signature = (n_estimators=100, learning_rate=0.05, max_depth=4, min_samples_leaf=20, min_gain=1e-8, loss="l2", quantile_alpha=0.5, huber_delta=1.0, log_offset=1.0, splitters=None, leaf_predictor="constant", linear_leaf_features=None, l2_regularization=1.0, constant_l2_regularization=0.0, fuzzy=false, fuzzy_bandwidth=0.0, fuzzy_kernel="linear", n_threads=None, monotonic_constraints=None))]
+    #[pyo3(signature = (n_estimators=100, learning_rate=0.05, max_depth=4, min_samples_leaf=20, min_gain=1e-8, loss="l2", quantile_alpha=0.5, huber_delta=1.0, log_offset=1.0, splitters=None, leaf_predictor="constant", linear_leaf_features=None, l2_regularization=1.0, constant_l2_regularization=0.0, fuzzy=false, fuzzy_bandwidth=0.0, fuzzy_kernel="linear", n_threads=None, monotonic_constraints=None, backend="cpu"))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         n_estimators: usize,
@@ -5513,6 +5599,7 @@ impl NativeCartoBoostRegressor {
         fuzzy_kernel: &str,
         n_threads: Option<usize>,
         monotonic_constraints: Option<Vec<i8>>,
+        backend: &str,
     ) -> PyResult<Self> {
         validate_n_threads(n_threads)?;
         validate_params(
@@ -5535,6 +5622,7 @@ impl NativeCartoBoostRegressor {
         parse_fuzzy_kernel(fuzzy_kernel)?;
 
         Ok(Self {
+            backend: backend.to_string(),
             n_estimators,
             learning_rate,
             max_depth,
@@ -5559,6 +5647,11 @@ impl NativeCartoBoostRegressor {
         })
     }
 
+    #[getter]
+    fn backend(&self) -> &str {
+        &self.backend
+    }
+
     #[pyo3(signature = (x, y, sample_weight=None, sparse_sets=None, feature_schema_json=None))]
     fn fit(
         &mut self,
@@ -5574,10 +5667,15 @@ impl NativeCartoBoostRegressor {
         let leaf_predictor = parse_leaf_predictor(&self.leaf_predictor)?;
         let config = self.booster_config(splitters, leaf_predictor)?;
         let n_threads = self.n_threads;
+        let backend = self.backend.clone();
         let model = py
             .detach(move || {
                 run_with_optional_threads(n_threads, || {
-                    Booster::new(config).fit(&dataset, &y, sample_weight.as_deref())
+                    Booster::new_with_backend(config, Some(&backend))?.fit(
+                        &dataset,
+                        &y,
+                        sample_weight.as_deref(),
+                    )
                 })
             })
             .map_err(to_py_value_error)?;
@@ -5606,10 +5704,15 @@ impl NativeCartoBoostRegressor {
         let leaf_predictor = parse_leaf_predictor(&self.leaf_predictor)?;
         let config = self.booster_config(splitters, leaf_predictor)?;
         let n_threads = self.n_threads;
+        let backend = self.backend.clone();
         let model = py
             .detach(move || {
                 run_with_optional_threads(n_threads, || {
-                    Booster::new(config).fit(&dataset, &targets, weights.as_deref())
+                    Booster::new_with_backend(config, Some(&backend))?.fit(
+                        &dataset,
+                        &targets,
+                        weights.as_deref(),
+                    )
                 })
             })
             .map_err(to_py_value_error)?;
@@ -5650,8 +5753,13 @@ impl NativeCartoBoostRegressor {
             .ok_or_else(|| PyRuntimeError::new_err("CartoBoostRegressor is not fitted"))?;
         let dataset = dataset_from_parts(x, sparse_sets, None)?;
         let n_threads = self.n_threads;
-        py.detach(|| run_with_optional_threads(n_threads, || model.try_predict(&dataset)))
-            .map_err(to_py_value_error)
+        let backend = self.backend.clone();
+        py.detach(|| {
+            run_with_optional_threads(n_threads, || {
+                model.try_predict_with_backend(&dataset, Some(&backend))
+            })
+        })
+        .map_err(to_py_value_error)
     }
 
     #[pyo3(signature = (x, sparse_offsets=None, sparse_ids=None))]
@@ -6006,7 +6114,14 @@ impl NativeCartoBoostRegressor {
                 Vec::new(),
             )
         };
+        let backend = model
+            .training_config
+            .as_ref()
+            .and_then(|config| config.backend.as_ref())
+            .map(|selection| selection.selected.clone())
+            .unwrap_or_else(|| "cpu".to_string());
         Ok(Self {
+            backend,
             n_estimators: model.trees.len(),
             learning_rate: model.learning_rate,
             max_depth,
@@ -6080,6 +6195,7 @@ impl NativeCartoBoostRegressor {
 #[pyclass(name = "CartoBoostClassifier")]
 #[derive(Clone, Debug)]
 struct NativeCartoBoostClassifier {
+    backend: String,
     n_estimators: usize,
     learning_rate: f64,
     max_depth: usize,
@@ -6120,7 +6236,8 @@ impl NativeCartoBoostClassifier {
         fuzzy=false,
         fuzzy_bandwidth=0.0,
         fuzzy_kernel="linear",
-        n_threads=None
+        n_threads=None,
+        backend="cpu"
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -6141,6 +6258,7 @@ impl NativeCartoBoostClassifier {
         fuzzy_bandwidth: f64,
         fuzzy_kernel: &str,
         n_threads: Option<usize>,
+        backend: &str,
     ) -> PyResult<Self> {
         validate_n_threads(n_threads)?;
         validate_params(
@@ -6181,6 +6299,7 @@ impl NativeCartoBoostClassifier {
         parse_fuzzy_kernel(fuzzy_kernel)?;
 
         Ok(Self {
+            backend: backend.to_string(),
             n_estimators,
             learning_rate,
             max_depth,
@@ -6202,6 +6321,11 @@ impl NativeCartoBoostClassifier {
         })
     }
 
+    #[getter]
+    fn backend(&self) -> &str {
+        &self.backend
+    }
+
     #[pyo3(signature = (x, y, sample_weight=None, sparse_sets=None, feature_schema_json=None))]
     fn fit(
         &mut self,
@@ -6215,10 +6339,15 @@ impl NativeCartoBoostClassifier {
         let dataset = dataset_from_parts(x, sparse_sets, feature_schema_json)?;
         let config = self.classifier_config()?;
         let n_threads = self.n_threads;
+        let backend = self.backend.clone();
         let model = py
             .detach(move || {
                 run_with_optional_threads(n_threads, || {
-                    Classifier::new(config).fit(&dataset, &y, sample_weight.as_deref())
+                    Classifier::new_with_backend(config, Some(&backend))?.fit(
+                        &dataset,
+                        &y,
+                        sample_weight.as_deref(),
+                    )
                 })
             })
             .map_err(to_py_value_error)?;
@@ -6252,10 +6381,15 @@ impl NativeCartoBoostClassifier {
             .transpose()?;
         let config = self.classifier_config()?;
         let n_threads = self.n_threads;
+        let backend = self.backend.clone();
         let model = py
             .detach(move || {
                 run_with_optional_threads(n_threads, || {
-                    Classifier::new(config).fit(&dataset, &targets, weights.as_deref())
+                    Classifier::new_with_backend(config, Some(&backend))?.fit(
+                        &dataset,
+                        &targets,
+                        weights.as_deref(),
+                    )
                 })
             })
             .map_err(to_py_value_error)?;
@@ -6276,8 +6410,13 @@ impl NativeCartoBoostClassifier {
             .ok_or_else(|| PyRuntimeError::new_err("CartoBoostClassifier is not fitted"))?;
         let dataset = dataset_from_parts(x, sparse_sets, None)?;
         let n_threads = self.n_threads;
-        py.detach(|| run_with_optional_threads(n_threads, || model.predict(&dataset)))
-            .map_err(to_py_value_error)
+        let backend = self.backend.clone();
+        py.detach(|| {
+            run_with_optional_threads(n_threads, || {
+                model.predict_with_backend(&dataset, Some(&backend))
+            })
+        })
+        .map_err(to_py_value_error)
     }
 
     #[pyo3(signature = (x, sparse_offsets=None, sparse_ids=None))]
@@ -6294,8 +6433,13 @@ impl NativeCartoBoostClassifier {
             .ok_or_else(|| PyRuntimeError::new_err("CartoBoostClassifier is not fitted"))?;
         let dataset = dataset_from_arrays(x, sparse_offsets, sparse_ids, None)?;
         let n_threads = self.n_threads;
-        py.detach(|| run_with_optional_threads(n_threads, || model.predict(&dataset)))
-            .map_err(to_py_value_error)
+        let backend = self.backend.clone();
+        py.detach(|| {
+            run_with_optional_threads(n_threads, || {
+                model.predict_with_backend(&dataset, Some(&backend))
+            })
+        })
+        .map_err(to_py_value_error)
     }
 
     #[pyo3(signature = (x, sparse_sets=None))]
@@ -6311,8 +6455,13 @@ impl NativeCartoBoostClassifier {
             .ok_or_else(|| PyRuntimeError::new_err("CartoBoostClassifier is not fitted"))?;
         let dataset = dataset_from_parts(x, sparse_sets, None)?;
         let n_threads = self.n_threads;
-        py.detach(|| run_with_optional_threads(n_threads, || model.predict_proba(&dataset)))
-            .map_err(to_py_value_error)
+        let backend = self.backend.clone();
+        py.detach(|| {
+            run_with_optional_threads(n_threads, || {
+                model.predict_proba_with_backend(&dataset, Some(&backend))
+            })
+        })
+        .map_err(to_py_value_error)
     }
 
     #[pyo3(signature = (x, sparse_offsets=None, sparse_ids=None))]
@@ -6329,8 +6478,13 @@ impl NativeCartoBoostClassifier {
             .ok_or_else(|| PyRuntimeError::new_err("CartoBoostClassifier is not fitted"))?;
         let dataset = dataset_from_arrays(x, sparse_offsets, sparse_ids, None)?;
         let n_threads = self.n_threads;
-        py.detach(|| run_with_optional_threads(n_threads, || model.predict_proba(&dataset)))
-            .map_err(to_py_value_error)
+        let backend = self.backend.clone();
+        py.detach(|| {
+            run_with_optional_threads(n_threads, || {
+                model.predict_proba_with_backend(&dataset, Some(&backend))
+            })
+        })
+        .map_err(to_py_value_error)
     }
 
     #[pyo3(signature = (x, sparse_sets=None))]
@@ -6346,8 +6500,13 @@ impl NativeCartoBoostClassifier {
             .ok_or_else(|| PyRuntimeError::new_err("CartoBoostClassifier is not fitted"))?;
         let dataset = dataset_from_parts(x, sparse_sets, None)?;
         let n_threads = self.n_threads;
-        py.detach(|| run_with_optional_threads(n_threads, || model.decision_function(&dataset)))
-            .map_err(to_py_value_error)
+        let backend = self.backend.clone();
+        py.detach(|| {
+            run_with_optional_threads(n_threads, || {
+                model.decision_function_with_backend(&dataset, Some(&backend))
+            })
+        })
+        .map_err(to_py_value_error)
     }
 
     fn save(&self, py: Python<'_>, path: PathBuf) -> PyResult<()> {
@@ -6557,7 +6716,14 @@ impl NativeCartoBoostClassifier {
                 Vec::new(),
             )
         };
+        let backend = model
+            .training_config
+            .as_ref()
+            .and_then(|config| config.backend.as_ref())
+            .map(|selection| selection.selected.clone())
+            .unwrap_or_else(|| "cpu".to_string());
         Ok(Self {
+            backend,
             n_estimators: model.trees.len(),
             learning_rate: model.learning_rate,
             max_depth,
@@ -6583,6 +6749,7 @@ impl NativeCartoBoostClassifier {
 #[pyclass(name = "CartoBoostRanker")]
 #[derive(Clone, Debug)]
 struct NativeCartoBoostRanker {
+    backend: String,
     n_estimators: usize,
     learning_rate: f64,
     max_depth: usize,
@@ -6619,7 +6786,8 @@ impl NativeCartoBoostRanker {
         fuzzy=false,
         fuzzy_bandwidth=0.0,
         fuzzy_kernel="linear",
-        n_threads=None
+        n_threads=None,
+        backend="cpu"
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -6638,6 +6806,7 @@ impl NativeCartoBoostRanker {
         fuzzy_bandwidth: f64,
         fuzzy_kernel: &str,
         n_threads: Option<usize>,
+        backend: &str,
     ) -> PyResult<Self> {
         validate_n_threads(n_threads)?;
         validate_params(
@@ -6660,6 +6829,7 @@ impl NativeCartoBoostRanker {
         parse_fuzzy_kernel(fuzzy_kernel)?;
 
         Ok(Self {
+            backend: backend.to_string(),
             n_estimators,
             learning_rate,
             max_depth,
@@ -6677,6 +6847,11 @@ impl NativeCartoBoostRanker {
             n_threads,
             model: None,
         })
+    }
+
+    #[getter]
+    fn backend(&self) -> &str {
+        &self.backend
     }
 
     #[pyo3(signature = (
@@ -6701,10 +6876,16 @@ impl NativeCartoBoostRanker {
         let dataset = dataset_from_parts(x, sparse_sets, feature_schema_json)?;
         let config = self.ranker_config()?;
         let n_threads = self.n_threads;
+        let backend = self.backend.clone();
         let model = py
             .detach(move || {
                 run_with_optional_threads(n_threads, || {
-                    Ranker::new(config).fit(&dataset, &y, &groups, sample_weight.as_deref())
+                    Ranker::new_with_backend(config, Some(&backend))?.fit(
+                        &dataset,
+                        &y,
+                        &groups,
+                        sample_weight.as_deref(),
+                    )
                 })
             })
             .map_err(to_py_value_error)?;
@@ -6740,10 +6921,16 @@ impl NativeCartoBoostRanker {
             .transpose()?;
         let config = self.ranker_config()?;
         let n_threads = self.n_threads;
+        let backend = self.backend.clone();
         let model = py
             .detach(move || {
                 run_with_optional_threads(n_threads, || {
-                    Ranker::new(config).fit(&dataset, &targets, &groups, weights.as_deref())
+                    Ranker::new_with_backend(config, Some(&backend))?.fit(
+                        &dataset,
+                        &targets,
+                        &groups,
+                        weights.as_deref(),
+                    )
                 })
             })
             .map_err(to_py_value_error)?;
@@ -6764,8 +6951,13 @@ impl NativeCartoBoostRanker {
             .ok_or_else(|| PyRuntimeError::new_err("CartoBoostRanker is not fitted"))?;
         let dataset = dataset_from_parts(x, sparse_sets, None)?;
         let n_threads = self.n_threads;
-        py.detach(|| run_with_optional_threads(n_threads, || model.predict(&dataset)))
-            .map_err(to_py_value_error)
+        let backend = self.backend.clone();
+        py.detach(|| {
+            run_with_optional_threads(n_threads, || {
+                model.predict_with_backend(&dataset, Some(&backend))
+            })
+        })
+        .map_err(to_py_value_error)
     }
 
     #[pyo3(signature = (x, sparse_offsets=None, sparse_ids=None))]
@@ -6782,8 +6974,13 @@ impl NativeCartoBoostRanker {
             .ok_or_else(|| PyRuntimeError::new_err("CartoBoostRanker is not fitted"))?;
         let dataset = dataset_from_arrays(x, sparse_offsets, sparse_ids, None)?;
         let n_threads = self.n_threads;
-        py.detach(|| run_with_optional_threads(n_threads, || model.predict(&dataset)))
-            .map_err(to_py_value_error)
+        let backend = self.backend.clone();
+        py.detach(|| {
+            run_with_optional_threads(n_threads, || {
+                model.predict_with_backend(&dataset, Some(&backend))
+            })
+        })
+        .map_err(to_py_value_error)
     }
 
     #[pyo3(signature = (x, y, groups, sparse_sets=None))]
@@ -7027,7 +7224,14 @@ impl NativeCartoBoostRanker {
                 ranking_objective_name(model.objective).to_string(),
             )
         };
+        let backend = model
+            .training_config
+            .as_ref()
+            .and_then(|config| config.backend.as_ref())
+            .map(|selection| selection.selected.clone())
+            .unwrap_or_else(|| "cpu".to_string());
         Ok(Self {
+            backend,
             n_estimators: model.trees.len(),
             learning_rate: model.learning_rate,
             max_depth,
@@ -7247,19 +7451,21 @@ struct NativeNeuralEmbeddingFeatures {
     random_state: Option<i64>,
     parent_resolution: Option<u8>,
     support_prior_strength: f64,
+    backend: String,
     table: Option<EmbeddingTable>,
 }
 
 #[pymethods]
 impl NativeNeuralEmbeddingFeatures {
     #[new]
-    #[pyo3(signature = (dim, fallback="global_mean_vector", random_state=None, parent_resolution=None, support_prior_strength=1.0))]
+    #[pyo3(signature = (dim, fallback="global_mean_vector", random_state=None, parent_resolution=None, support_prior_strength=1.0, backend="cpu"))]
     fn new(
         dim: usize,
         fallback: &str,
         random_state: Option<i64>,
         parent_resolution: Option<u8>,
         support_prior_strength: f64,
+        backend: &str,
     ) -> PyResult<Self> {
         if dim == 0 {
             return Err(PyValueError::new_err("dim must be positive"));
@@ -7278,6 +7484,7 @@ impl NativeNeuralEmbeddingFeatures {
             random_state,
             parent_resolution,
             support_prior_strength,
+            backend: backend.to_string(),
             table: None,
         })
     }
@@ -7300,13 +7507,14 @@ impl NativeNeuralEmbeddingFeatures {
 
         let table = py
             .detach(|| {
-                fit_embedding_table_with_options(
+                fit_embedding_table_with_options_and_backend(
                     self.dim,
                     &ids,
                     &target,
                     self.fallback.clone(),
                     random_state,
                     self.support_prior_strength,
+                    Some(&self.backend),
                 )
             })
             .map_err(|err| PyValueError::new_err(err.to_string()))?;
@@ -7331,13 +7539,14 @@ impl NativeNeuralEmbeddingFeatures {
         let random_state = self.random_state.map(|value| value as u64);
         let (table, block) = py
             .detach(|| {
-                let table = fit_embedding_table_with_options(
+                let table = fit_embedding_table_with_options_and_backend(
                     self.dim,
                     &ids,
                     &target,
                     self.fallback.clone(),
                     random_state,
                     self.support_prior_strength,
+                    Some(&self.backend),
                 )?;
                 let block = table.encode_ids(&ids, "neural_embedding")?;
                 Ok::<_, cartoboost_neural::NeuralError>((table, block))
@@ -7404,6 +7613,7 @@ impl NativeNeuralEmbeddingFeatures {
             random_state: None,
             parent_resolution,
             support_prior_strength: 1.0,
+            backend: "cpu".to_string(),
             table: Some(table),
         })
     }
@@ -7498,7 +7708,8 @@ impl NativeGraphSageEncoder {
             seed,
             add_self_loop,
             l2_regularization,
-            backend: neural_select_backend(backend).map_err(to_py_neural_error)?,
+            backend: neural_select_backend_for(backend, BackendOperation::Dense)
+                .map_err(to_py_neural_error)?,
         };
 
         let encoder =
@@ -7778,7 +7989,7 @@ struct NativeStandaloneNeuralEmbeddingRegressor {
 #[pymethods]
 impl NativeStandaloneNeuralEmbeddingRegressor {
     #[new]
-    #[pyo3(signature = (dim, fallback="global_mean_vector", random_state=None, support_prior_strength=1.0, n_estimators=80, learning_rate=0.07, max_depth=4, min_samples_leaf=2, min_gain=0.0))]
+    #[pyo3(signature = (dim, fallback="global_mean_vector", random_state=None, support_prior_strength=1.0, n_estimators=80, learning_rate=0.07, max_depth=4, min_samples_leaf=2, min_gain=0.0, backend=None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         dim: usize,
@@ -7790,6 +8001,7 @@ impl NativeStandaloneNeuralEmbeddingRegressor {
         max_depth: usize,
         min_samples_leaf: usize,
         min_gain: f64,
+        backend: Option<&str>,
     ) -> PyResult<Self> {
         let fallback = parse_embedding_fallback(fallback, None)?;
         let model = StandaloneNeuralEmbeddingRegressor::new(
@@ -7803,6 +8015,7 @@ impl NativeStandaloneNeuralEmbeddingRegressor {
                 max_depth,
                 min_samples_leaf,
                 min_gain,
+                backend,
             ),
         )
         .map_err(to_py_neural_error)?;
@@ -7859,7 +8072,7 @@ struct NativeStandaloneNode2VecRegressor {
 #[pymethods]
 impl NativeStandaloneNode2VecRegressor {
     #[new]
-    #[pyo3(signature = (dim=16, walk_length=16, walks_per_node=8, window_size=5, epochs=3, learning_rate=0.025, min_learning_rate=0.0001, negative_samples=5, p=1.0, q=1.0, seed=0xA2B2_C2D2_E2F2_1234, l2_regularization=0.0, normalize=true, n_estimators=80, booster_learning_rate=0.07, max_depth=4, min_samples_leaf=2, min_gain=0.0))]
+    #[pyo3(signature = (dim=16, walk_length=16, walks_per_node=8, window_size=5, epochs=3, learning_rate=0.025, min_learning_rate=0.0001, negative_samples=5, p=1.0, q=1.0, seed=0xA2B2_C2D2_E2F2_1234, l2_regularization=0.0, normalize=true, n_estimators=80, booster_learning_rate=0.07, max_depth=4, min_samples_leaf=2, min_gain=0.0, backend=None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         dim: usize,
@@ -7880,6 +8093,7 @@ impl NativeStandaloneNode2VecRegressor {
         max_depth: usize,
         min_samples_leaf: usize,
         min_gain: f64,
+        backend: Option<&str>,
     ) -> PyResult<Self> {
         let config = Node2VecConfig {
             dim,
@@ -7904,6 +8118,7 @@ impl NativeStandaloneNode2VecRegressor {
                 max_depth,
                 min_samples_leaf,
                 min_gain,
+                backend,
             ),
         )
         .map_err(to_py_neural_error)?;
@@ -8005,7 +8220,8 @@ impl NativeStandaloneGraphSageRegressor {
             seed,
             add_self_loop,
             l2_regularization,
-            backend: neural_select_backend(backend).map_err(to_py_neural_error)?,
+            backend: neural_select_backend_for(backend, BackendOperation::Dense)
+                .map_err(to_py_neural_error)?,
         };
         let model = GraphSageRegressor::new(
             config,
@@ -8016,6 +8232,7 @@ impl NativeStandaloneGraphSageRegressor {
                 max_depth,
                 min_samples_leaf,
                 min_gain,
+                backend,
             ),
         )
         .map_err(to_py_neural_error)?;
@@ -8119,7 +8336,8 @@ impl NativeStandaloneHeteroGraphSageRegressor {
             negative_samples,
             seed,
             l2_regularization,
-            backend: neural_select_backend(backend).map_err(to_py_neural_error)?,
+            backend: neural_select_backend_for(backend, BackendOperation::Dense)
+                .map_err(to_py_neural_error)?,
         };
         let model = HeteroGraphSageRegressor::new(
             config,
@@ -8131,6 +8349,7 @@ impl NativeStandaloneHeteroGraphSageRegressor {
                 max_depth,
                 min_samples_leaf,
                 min_gain,
+                backend,
             ),
         )
         .map_err(to_py_neural_error)?;
@@ -8237,7 +8456,8 @@ impl NativeStandaloneHinSageRegressor {
             seed,
             l2_regularization,
             neighbor_samples: neighbor_samples.unwrap_or_default(),
-            backend: neural_select_backend(backend).map_err(to_py_neural_error)?,
+            backend: neural_select_backend_for(backend, BackendOperation::Dense)
+                .map_err(to_py_neural_error)?,
         };
         let model = HinSageRegressor::new(
             config,
@@ -8250,6 +8470,7 @@ impl NativeStandaloneHinSageRegressor {
                 max_depth,
                 min_samples_leaf,
                 min_gain,
+                backend,
             ),
         )
         .map_err(to_py_neural_error)?;
@@ -8330,7 +8551,7 @@ struct NativeStandaloneNode2VecLinkPredictor {
 #[pymethods]
 impl NativeStandaloneNode2VecLinkPredictor {
     #[new]
-    #[pyo3(signature = (dim=16, walk_length=16, walks_per_node=8, window_size=5, epochs=3, learning_rate=0.025, min_learning_rate=0.0001, negative_samples=5, p=1.0, q=1.0, seed=0xA2B2_C2D2_E2F2_1234, l2_regularization=0.0, normalize=true))]
+    #[pyo3(signature = (dim=16, walk_length=16, walks_per_node=8, window_size=5, epochs=3, learning_rate=0.025, min_learning_rate=0.0001, negative_samples=5, p=1.0, q=1.0, seed=0xA2B2_C2D2_E2F2_1234, l2_regularization=0.0, normalize=true, backend=None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         dim: usize,
@@ -8346,6 +8567,7 @@ impl NativeStandaloneNode2VecLinkPredictor {
         seed: u64,
         l2_regularization: f32,
         normalize: bool,
+        backend: Option<&str>,
     ) -> PyResult<Self> {
         let config = Node2VecConfig {
             dim,
@@ -8362,7 +8584,8 @@ impl NativeStandaloneNode2VecLinkPredictor {
             l2_regularization,
             normalize,
         };
-        let model = Node2VecLinkPredictor::new(config).map_err(to_py_neural_error)?;
+        let model =
+            Node2VecLinkPredictor::new_with_backend(config, backend).map_err(to_py_neural_error)?;
         Ok(Self { model })
     }
 
@@ -8381,6 +8604,11 @@ impl NativeStandaloneNode2VecLinkPredictor {
     fn predict_scores(&self, py: Python<'_>, pairs: Vec<(usize, usize)>) -> PyResult<Vec<f64>> {
         py.detach(|| self.model.predict_scores(&pairs))
             .map_err(to_py_neural_error)
+    }
+
+    #[getter]
+    fn backend(&self) -> String {
+        self.model.backend().selected.clone()
     }
 
     fn save_artifact_json(&self, py: Python<'_>, path: String) -> PyResult<()> {
@@ -8431,7 +8659,11 @@ impl NativeStandaloneGraphSageLinkPredictor {
             seed,
             add_self_loop,
             l2_regularization,
-            backend: neural_select_backend(backend).map_err(to_py_neural_error)?,
+            backend: neural_select_backend_for_operations(
+                backend,
+                &[BackendOperation::Dense, BackendOperation::PairScoring],
+            )
+            .map_err(to_py_neural_error)?,
         };
         let model = GraphSageLinkPredictor::new(config, input_dim).map_err(to_py_neural_error)?;
         Ok(Self { model })
@@ -8504,7 +8736,11 @@ impl NativeStandaloneHeteroGraphSageLinkPredictor {
             negative_samples,
             seed,
             l2_regularization,
-            backend: neural_select_backend(backend).map_err(to_py_neural_error)?,
+            backend: neural_select_backend_for_operations(
+                backend,
+                &[BackendOperation::Dense, BackendOperation::PairScoring],
+            )
+            .map_err(to_py_neural_error)?,
         };
         let model = HeteroGraphSageLinkPredictor::new(config, input_dim, relation_count)
             .map_err(to_py_neural_error)?;
@@ -8581,7 +8817,11 @@ impl NativeStandaloneHinSageLinkPredictor {
             seed,
             l2_regularization,
             neighbor_samples: neighbor_samples.unwrap_or_default(),
-            backend: neural_select_backend(backend).map_err(to_py_neural_error)?,
+            backend: neural_select_backend_for_operations(
+                backend,
+                &[BackendOperation::Dense, BackendOperation::PairScoring],
+            )
+            .map_err(to_py_neural_error)?,
         };
         let model =
             HinSageLinkPredictor::new(config, input_dim, node_type_count, edge_type_triples)
@@ -8659,7 +8899,8 @@ impl NativeHeteroGraphSageEncoder {
             negative_samples,
             seed,
             l2_regularization,
-            backend: neural_select_backend(backend).map_err(to_py_neural_error)?,
+            backend: neural_select_backend_for(backend, BackendOperation::Dense)
+                .map_err(to_py_neural_error)?,
         };
         let encoder = HeteroGraphSageEncoder::new(config.clone(), input_dim, relation_count)
             .map_err(to_py_neural_error)?;
@@ -8819,7 +9060,8 @@ impl NativeHinSageEncoder {
             seed,
             l2_regularization,
             neighbor_samples: neighbor_samples.unwrap_or_default(),
-            backend: neural_select_backend(backend).map_err(to_py_neural_error)?,
+            backend: neural_select_backend_for(backend, BackendOperation::Dense)
+                .map_err(to_py_neural_error)?,
         };
         let encoder = HinSageEncoder::new(
             config.clone(),
@@ -9483,34 +9725,50 @@ fn prob_pit_bins_value(
     serde_json::to_string(&bins).map_err(|err| PyValueError::new_err(err.to_string()))
 }
 
-#[pyfunction]
+#[pyfunction(signature = (hidden, residuals, quantiles, sample_count, backend=None))]
 fn prob_conditional_flow_fit_value(
+    py: Python<'_>,
     hidden: Vec<Vec<f64>>,
     residuals: Vec<f64>,
     quantiles: Vec<f64>,
     sample_count: usize,
+    backend: Option<&str>,
 ) -> PyResult<String> {
-    core_prob_conditional_flow_fit_json(&hidden, &residuals, &quantiles, sample_count)
+    let backend = backend.map(str::to_owned);
+    py.detach(move || {
+        core_prob_conditional_flow_fit_json(
+            &hidden,
+            &residuals,
+            &quantiles,
+            sample_count,
+            backend.as_deref(),
+        )
         .map_err(to_py_value_error)
+    })
 }
 
 #[pyfunction(signature = (artifact_json, hidden, actual=None))]
 fn prob_conditional_flow_predict_value(
+    py: Python<'_>,
     artifact_json: String,
     hidden: Vec<Vec<f64>>,
     actual: Option<Vec<f64>>,
 ) -> PyResult<String> {
-    core_prob_conditional_flow_predict_json(&artifact_json, &hidden, actual.as_deref())
-        .map_err(to_py_value_error)
+    py.detach(move || {
+        core_prob_conditional_flow_predict_json(&artifact_json, &hidden, actual.as_deref())
+            .map_err(to_py_value_error)
+    })
 }
 
-#[pyfunction]
+#[pyfunction(signature = (point_forecast, edges, scenario_count, diffusion_steps, shock_scale, backend=None))]
 fn prob_diffusion_scenario_generate_value(
+    py: Python<'_>,
     point_forecast: Vec<Vec<f64>>,
     edges: Vec<(usize, usize, f64)>,
     scenario_count: usize,
     diffusion_steps: usize,
     shock_scale: f64,
+    backend: Option<&str>,
 ) -> PyResult<String> {
     let edges = edges
         .into_iter()
@@ -9520,14 +9778,18 @@ fn prob_diffusion_scenario_generate_value(
             weight,
         })
         .collect::<Vec<_>>();
-    core_prob_diffusion_scenario_generate_json(
-        &point_forecast,
-        &edges,
-        scenario_count,
-        diffusion_steps,
-        shock_scale,
-    )
-    .map_err(to_py_value_error)
+    let backend = backend.map(str::to_owned);
+    py.detach(move || {
+        core_prob_diffusion_scenario_generate_json(
+            &point_forecast,
+            &edges,
+            scenario_count,
+            diffusion_steps,
+            shock_scale,
+            backend.as_deref(),
+        )
+        .map_err(to_py_value_error)
+    })
 }
 
 #[pyfunction]
@@ -9622,8 +9884,10 @@ fn prob_rolling_origin_conformal_residual_quantiles_value(
 }
 
 #[pyfunction]
+#[pyo3(signature = (actual, prediction, calibration_x, calibration_y, query_x, query_y, neighbor_count, alpha, train_end_exclusive, calibration_start, calibration_end_exclusive, test_start, backend=None))]
 #[allow(clippy::too_many_arguments)]
 fn prob_nearest_conformal_residual_quantiles_value(
+    py: Python<'_>,
     actual: Vec<f64>,
     prediction: Vec<f64>,
     calibration_x: Vec<f64>,
@@ -9636,24 +9900,29 @@ fn prob_nearest_conformal_residual_quantiles_value(
     calibration_start: usize,
     calibration_end_exclusive: usize,
     test_start: usize,
+    backend: Option<&str>,
 ) -> PyResult<Vec<f64>> {
-    core_prob_nearest_calibration_residual_quantiles(
-        &actual,
-        &prediction,
-        &calibration_x,
-        &calibration_y,
-        &query_x,
-        &query_y,
-        neighbor_count,
-        alpha,
-        CoreProbSplitOrder {
-            train_end_exclusive,
-            calibration_start,
-            calibration_end_exclusive,
-            test_start,
-        },
-    )
-    .map_err(to_py_value_error)
+    let backend = backend.map(str::to_owned);
+    py.detach(move || {
+        core_prob_nearest_calibration_residual_quantiles(
+            &actual,
+            &prediction,
+            &calibration_x,
+            &calibration_y,
+            &query_x,
+            &query_y,
+            neighbor_count,
+            alpha,
+            CoreProbSplitOrder {
+                train_end_exclusive,
+                calibration_start,
+                calibration_end_exclusive,
+                test_start,
+            },
+            backend.as_deref(),
+        )
+        .map_err(to_py_value_error)
+    })
 }
 
 #[pyfunction(signature = (
@@ -10269,26 +10538,80 @@ fn geo_route_feature_vector_value(
         .map(|vector| (vector[0], vector[1], vector[2], vector[3], vector[4]))
 }
 
-#[pyfunction]
+#[pyfunction(signature = (point_x, point_y, anchors, backend="cpu"))]
 fn geo_radial_anchor_distances_value(
     point_x: f64,
     point_y: f64,
     anchors: Vec<(f64, f64)>,
-) -> Vec<f64> {
+    backend: &str,
+) -> PyResult<Vec<f64>> {
     let anchors = anchors.into_iter().map(|(x, y)| [x, y]).collect::<Vec<_>>();
-    cartoboost_geo_core::radial_anchor_distances([point_x, point_y], &anchors)
+    cartoboost_geo_core::radial_anchor_distances_with_backend(
+        [point_x, point_y],
+        &anchors,
+        Some(backend),
+    )
+    .map_err(to_py_geo_core_error)
 }
 
-#[pyfunction]
+#[pyfunction(signature = (point_x, point_y, anchors, length_scale, backend="cpu"))]
 fn geo_rbf_anchor_features_value(
     point_x: f64,
     point_y: f64,
     anchors: Vec<(f64, f64)>,
     length_scale: f64,
+    backend: &str,
 ) -> PyResult<Vec<f64>> {
     let anchors = anchors.into_iter().map(|(x, y)| [x, y]).collect::<Vec<_>>();
-    cartoboost_geo_core::rbf_anchor_features([point_x, point_y], &anchors, length_scale)
+    cartoboost_geo_core::rbf_anchor_features_with_backend(
+        [point_x, point_y],
+        &anchors,
+        length_scale,
+        Some(backend),
+    )
+    .map_err(to_py_geo_core_error)
+}
+
+#[pyfunction(signature = (points, anchors, backend="cpu"))]
+fn geo_radial_anchor_distance_rows_value(
+    py: Python<'_>,
+    points: Vec<(f64, f64)>,
+    anchors: Vec<(f64, f64)>,
+    backend: &str,
+) -> PyResult<Vec<Vec<f64>>> {
+    let points = points.into_iter().map(|(x, y)| [x, y]).collect::<Vec<_>>();
+    let anchors = anchors.into_iter().map(|(x, y)| [x, y]).collect::<Vec<_>>();
+    let backend = backend.to_owned();
+    py.detach(move || {
+        cartoboost_geo_core::radial_anchor_distance_rows_with_backend(
+            &points,
+            &anchors,
+            Some(&backend),
+        )
         .map_err(to_py_geo_core_error)
+    })
+}
+
+#[pyfunction(signature = (points, anchors, length_scale, backend="cpu"))]
+fn geo_rbf_anchor_feature_rows_value(
+    py: Python<'_>,
+    points: Vec<(f64, f64)>,
+    anchors: Vec<(f64, f64)>,
+    length_scale: f64,
+    backend: &str,
+) -> PyResult<Vec<Vec<f64>>> {
+    let points = points.into_iter().map(|(x, y)| [x, y]).collect::<Vec<_>>();
+    let anchors = anchors.into_iter().map(|(x, y)| [x, y]).collect::<Vec<_>>();
+    let backend = backend.to_owned();
+    py.detach(move || {
+        cartoboost_geo_core::rbf_anchor_feature_rows_with_backend(
+            &points,
+            &anchors,
+            length_scale,
+            Some(&backend),
+        )
+        .map_err(to_py_geo_core_error)
+    })
 }
 
 #[pyfunction]
@@ -10387,6 +10710,7 @@ fn standalone_booster_config(
     max_depth: usize,
     min_samples_leaf: usize,
     min_gain: f64,
+    backend: Option<&str>,
 ) -> StandaloneBoosterConfig {
     StandaloneBoosterConfig {
         n_estimators,
@@ -10394,6 +10718,7 @@ fn standalone_booster_config(
         max_depth,
         min_samples_leaf,
         min_gain,
+        backend: backend.unwrap_or("cpu").to_string(),
     }
 }
 
@@ -11221,7 +11546,11 @@ fn to_py_spatial_error(err: SpatialEconError) -> PyErr {
     }
 }
 
-fn to_py_neural_error(err: cartoboost_neural::NeuralError) -> PyErr {
+fn to_py_neural_error<E>(err: E) -> PyErr
+where
+    E: Into<cartoboost_neural::NeuralError>,
+{
+    let err = err.into();
     PyValueError::new_err(err.to_string())
 }
 
@@ -11252,29 +11581,36 @@ fn coords_from_array(coords: PyReadonlyArray2<'_, f64>) -> PyResult<Vec<[f64; 2]
 }
 
 #[pyfunction]
-#[pyo3(signature = (coords, values, bin_count=12, max_distance=None, anisotropy_angle_degrees=0.0, anisotropy_scaling=1.0))]
+#[pyo3(signature = (coords, values, bin_count=12, max_distance=None, anisotropy_angle_degrees=0.0, anisotropy_scaling=1.0, backend=None))]
+#[allow(clippy::too_many_arguments)]
 fn geostats_empirical_semivariogram_value(
+    py: Python<'_>,
     coords: PyReadonlyArray2<'_, f64>,
     values: PyReadonlyArray1<'_, f64>,
     bin_count: usize,
     max_distance: Option<f64>,
     anisotropy_angle_degrees: f64,
     anisotropy_scaling: f64,
+    backend: Option<&str>,
 ) -> PyResult<String> {
     let coords = coords_from_array(coords)?;
     let values = values.as_slice()?.to_vec();
-    geostats_empirical_semivariogram(
-        &coords,
-        &values,
-        bin_count,
-        max_distance,
-        CoreGeostatsAnisotropy {
-            angle_degrees: anisotropy_angle_degrees,
-            scaling: anisotropy_scaling,
-        },
-    )
-    .map_err(to_py_geostats_error)
-    .and_then(|bins| serde_json::to_string(&bins).map_err(to_py_json_error))
+    let backend = backend.map(str::to_owned);
+    py.detach(move || {
+        cartoboost_geostats::empirical_semivariogram_with_backend(
+            &coords,
+            &values,
+            bin_count,
+            max_distance,
+            CoreGeostatsAnisotropy {
+                angle_degrees: anisotropy_angle_degrees,
+                scaling: anisotropy_scaling,
+            },
+            backend.as_deref(),
+        )
+        .map_err(to_py_geostats_error)
+        .and_then(|bins| serde_json::to_string(&bins).map_err(to_py_json_error))
+    })
 }
 
 #[pyfunction]
@@ -11327,48 +11663,75 @@ fn geostats_fit_variogram_wls_value(
 #[pyfunction]
 #[pyo3(signature = (rows_json, response_type, monotone=None, backend=None))]
 fn deep_response_curve_fit_value(
+    py: Python<'_>,
     rows_json: &str,
     response_type: &str,
     monotone: Option<&str>,
     backend: Option<&str>,
 ) -> PyResult<String> {
     let rows: Vec<DeepResponseRow> = serde_json::from_str(rows_json).map_err(to_py_json_error)?;
-    let artifact = core_deep_response_curve_fit(&rows, response_type, monotone, backend)
+    let response_type = response_type.to_owned();
+    let monotone = monotone.map(str::to_owned);
+    let backend = backend.map(str::to_owned);
+    py.detach(move || {
+        let artifact = core_deep_response_curve_fit(
+            &rows,
+            &response_type,
+            monotone.as_deref(),
+            backend.as_deref(),
+        )
         .map_err(to_py_neural_error)?;
-    serde_json::to_string(&artifact).map_err(to_py_json_error)
+        serde_json::to_string(&artifact).map_err(to_py_json_error)
+    })
 }
 
 #[pyfunction]
-fn deep_response_curve_predict_value(artifact_json: &str, rows_json: &str) -> PyResult<String> {
+fn deep_response_curve_predict_value(
+    py: Python<'_>,
+    artifact_json: &str,
+    rows_json: &str,
+) -> PyResult<String> {
     let artifact: DeepResponseArtifact =
         serde_json::from_str(artifact_json).map_err(to_py_json_error)?;
     let rows: Vec<DeepResponseRow> = serde_json::from_str(rows_json).map_err(to_py_json_error)?;
-    let predictions =
-        core_deep_response_curve_predict(&artifact, &rows).map_err(to_py_neural_error)?;
-    serde_json::to_string(&predictions).map_err(to_py_json_error)
+    py.detach(move || {
+        let predictions =
+            core_deep_response_curve_predict(&artifact, &rows).map_err(to_py_neural_error)?;
+        serde_json::to_string(&predictions).map_err(to_py_json_error)
+    })
 }
 
 #[pyfunction]
 #[pyo3(signature = (features_json, labels, backend=None))]
 fn deep_event_outcome_fit_value(
+    py: Python<'_>,
     features_json: &str,
     labels: Vec<f64>,
     backend: Option<&str>,
 ) -> PyResult<String> {
     let features: Vec<Vec<f64>> = serde_json::from_str(features_json).map_err(to_py_json_error)?;
-    let artifact =
-        core_deep_event_outcome_fit(&features, &labels, backend).map_err(to_py_neural_error)?;
-    serde_json::to_string(&artifact).map_err(to_py_json_error)
+    let backend = backend.map(str::to_owned);
+    py.detach(move || {
+        let artifact = core_deep_event_outcome_fit(&features, &labels, backend.as_deref())
+            .map_err(to_py_neural_error)?;
+        serde_json::to_string(&artifact).map_err(to_py_json_error)
+    })
 }
 
 #[pyfunction]
-fn deep_event_outcome_predict_value(artifact_json: &str, features_json: &str) -> PyResult<String> {
+fn deep_event_outcome_predict_value(
+    py: Python<'_>,
+    artifact_json: &str,
+    features_json: &str,
+) -> PyResult<String> {
     let artifact: DeepEventArtifact =
         serde_json::from_str(artifact_json).map_err(to_py_json_error)?;
     let features: Vec<Vec<f64>> = serde_json::from_str(features_json).map_err(to_py_json_error)?;
-    let predictions =
-        core_deep_event_outcome_predict(&artifact, &features).map_err(to_py_neural_error)?;
-    serde_json::to_string(&predictions).map_err(to_py_json_error)
+    py.detach(move || {
+        let predictions =
+            core_deep_event_outcome_predict(&artifact, &features).map_err(to_py_neural_error)?;
+        serde_json::to_string(&predictions).map_err(to_py_json_error)
+    })
 }
 
 #[pyfunction]
@@ -11379,26 +11742,35 @@ fn deep_directional_pair_predict_value(rows_json: &str) -> PyResult<Vec<f64>> {
 }
 
 #[pyfunction]
-#[pyo3(signature = (rows_json, options_json=None))]
+#[pyo3(signature = (rows_json, options_json=None, backend=None))]
 fn deep_directional_pair_fit_value(
+    py: Python<'_>,
     rows_json: &str,
     options_json: Option<&str>,
+    backend: Option<&str>,
 ) -> PyResult<String> {
     let rows: Vec<DeepDirectionalPairRow> =
         serde_json::from_str(rows_json).map_err(to_py_json_error)?;
-    let artifact = if let Some(options_json) = options_json {
-        let options: DirectionalPairFitOptions =
-            serde_json::from_str(options_json).map_err(to_py_json_error)?;
-        cartoboost_neural::directional_pair_fit_with_options(&rows, &options)
-            .map_err(to_py_neural_error)?
-    } else {
-        core_deep_directional_pair_fit(&rows).map_err(to_py_neural_error)?
-    };
+    let options = options_json
+        .map(|value| serde_json::from_str(value).map_err(to_py_json_error))
+        .transpose()?
+        .unwrap_or_default();
+    let backend = backend.map(str::to_owned);
+    let artifact = py
+        .detach(move || {
+            cartoboost_neural::directional_pair_fit_with_options_and_backend(
+                &rows,
+                &options,
+                backend.as_deref(),
+            )
+        })
+        .map_err(to_py_neural_error)?;
     serde_json::to_string(&artifact).map_err(to_py_json_error)
 }
 
 #[pyfunction]
 fn deep_directional_pair_predict_artifact_value(
+    py: Python<'_>,
     artifact_json: &str,
     rows_json: &str,
 ) -> PyResult<Vec<f64>> {
@@ -11406,21 +11778,51 @@ fn deep_directional_pair_predict_artifact_value(
         serde_json::from_str(artifact_json).map_err(to_py_json_error)?;
     let rows: Vec<DeepDirectionalPairRow> =
         serde_json::from_str(rows_json).map_err(to_py_json_error)?;
-    core_deep_directional_pair_predict(&artifact, &rows).map_err(to_py_neural_error)
+    py.detach(move || core_deep_directional_pair_predict(&artifact, &rows))
+        .map_err(to_py_neural_error)
 }
 
 #[pyfunction]
 #[pyo3(signature = (rows_json, backend=None))]
-fn deep_service_residual_fit_value(rows_json: &str, backend: Option<&str>) -> PyResult<String> {
+fn deep_service_residual_fit_value(
+    py: Python<'_>,
+    rows_json: &str,
+    backend: Option<&str>,
+) -> PyResult<String> {
     let rows: Vec<DeepServiceResidualRow> =
         serde_json::from_str(rows_json).map_err(to_py_json_error)?;
-    let artifact = core_deep_service_residual_fit(&rows, backend).map_err(to_py_neural_error)?;
-    serde_json::to_string(&artifact).map_err(to_py_json_error)
+    let backend = backend.map(str::to_owned);
+    py.detach(move || {
+        let artifact = core_deep_service_residual_fit(&rows, backend.as_deref())
+            .map_err(to_py_neural_error)?;
+        serde_json::to_string(&artifact).map_err(to_py_json_error)
+    })
 }
 
 #[pyfunction]
 fn deep_available_backends_value() -> Vec<String> {
     neural_available_backends()
+}
+
+#[pyfunction]
+fn accelerator_capabilities_value() -> PyResult<String> {
+    let available = neural_available_backends();
+    let backends = ["cpu", "cuda", "rocm", "metal", "directml", "webgpu"]
+        .into_iter()
+        .map(|backend| {
+            let operations = BackendOperation::ALL
+                .into_iter()
+                .filter(|operation| neural_backend_supports_operation(backend, *operation))
+                .map(|operation| operation.as_str())
+                .collect::<Vec<_>>();
+            json!({
+                "backend": backend,
+                "available": available.iter().any(|candidate| candidate == backend),
+                "operations": operations,
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::to_string(&json!({"backends": backends})).map_err(to_py_json_error)
 }
 
 #[pyfunction]
@@ -11436,14 +11838,20 @@ fn graph_st_available_backends_value() -> Vec<String> {
 }
 
 #[pyfunction]
-fn deep_service_residual_predict_value(artifact_json: &str, rows_json: &str) -> PyResult<String> {
+fn deep_service_residual_predict_value(
+    py: Python<'_>,
+    artifact_json: &str,
+    rows_json: &str,
+) -> PyResult<String> {
     let artifact: DeepServiceResidualArtifact =
         serde_json::from_str(artifact_json).map_err(to_py_json_error)?;
     let rows: Vec<DeepServiceResidualRow> =
         serde_json::from_str(rows_json).map_err(to_py_json_error)?;
-    let predictions =
-        core_deep_service_residual_predict(&artifact, &rows).map_err(to_py_neural_error)?;
-    serde_json::to_string(&predictions).map_err(to_py_json_error)
+    py.detach(move || {
+        let predictions =
+            core_deep_service_residual_predict(&artifact, &rows).map_err(to_py_neural_error)?;
+        serde_json::to_string(&predictions).map_err(to_py_json_error)
+    })
 }
 
 #[pyfunction]
@@ -11483,35 +11891,47 @@ fn deep_choice_set_transformer_report_value(
         .map_err(to_py_neural_error)
 }
 
-#[pyfunction]
+#[pyfunction(signature = (y_json, lookback, horizon, backend=None))]
 fn deep_temporal_entity_fit_value(
+    py: Python<'_>,
     y_json: &str,
     lookback: usize,
     horizon: usize,
+    backend: Option<&str>,
 ) -> PyResult<String> {
     let y: Vec<Vec<f64>> = serde_json::from_str(y_json).map_err(to_py_json_error)?;
-    let artifact =
-        core_deep_temporal_entity_fit(&y, lookback, horizon).map_err(to_py_neural_error)?;
+    let backend = backend.map(str::to_owned);
+    let artifact = py
+        .detach(move || core_deep_temporal_entity_fit(&y, lookback, horizon, backend.as_deref()))
+        .map_err(to_py_neural_error)?;
     serde_json::to_string(&artifact).map_err(to_py_json_error)
 }
 
 #[pyfunction]
-fn deep_temporal_entity_predict_value(artifact_json: &str, horizon: usize) -> PyResult<String> {
+fn deep_temporal_entity_predict_value(
+    py: Python<'_>,
+    artifact_json: &str,
+    horizon: usize,
+) -> PyResult<String> {
     let artifact: DeepTemporalEntityArtifact =
         serde_json::from_str(artifact_json).map_err(to_py_json_error)?;
-    let prediction =
-        core_deep_temporal_entity_predict(&artifact, horizon).map_err(to_py_neural_error)?;
+    let prediction = py
+        .detach(move || core_deep_temporal_entity_predict(&artifact, horizon))
+        .map_err(to_py_neural_error)?;
     serde_json::to_string(&prediction).map_err(to_py_json_error)
 }
 
-#[pyfunction]
+#[pyfunction(signature = (field_values_json, coordinates_json, edges, exogenous_fields_json, smoothing, coordinate_scale, backend=None))]
+#[allow(clippy::too_many_arguments)]
 fn deep_graph_neural_operator_predict_value(
+    py: Python<'_>,
     field_values_json: &str,
     coordinates_json: &str,
     edges: Vec<(usize, usize, f64)>,
     exogenous_fields_json: &str,
     smoothing: f64,
     coordinate_scale: f64,
+    backend: Option<&str>,
 ) -> PyResult<String> {
     let field_values: Vec<Vec<f64>> =
         serde_json::from_str(field_values_json).map_err(to_py_json_error)?;
@@ -11527,15 +11947,19 @@ fn deep_graph_neural_operator_predict_value(
             weight,
         })
         .collect::<Vec<_>>();
-    core_graph_neural_operator_predict_json(
-        &field_values,
-        &coordinates,
-        &edges,
-        &exogenous_fields,
-        smoothing,
-        coordinate_scale,
-    )
-    .map_err(to_py_neural_error)
+    let backend = backend.map(str::to_owned);
+    py.detach(move || {
+        core_graph_neural_operator_predict_json(
+            &field_values,
+            &coordinates,
+            &edges,
+            &exogenous_fields,
+            smoothing,
+            coordinate_scale,
+            backend.as_deref(),
+        )
+        .map_err(to_py_neural_error)
+    })
 }
 
 #[pyfunction]
@@ -11623,7 +12047,8 @@ fn neural_panel_config_from_parts(
         learning_rate,
         weight_decay,
         newer_sample_weight,
-        backend: neural_select_backend(backend).map_err(to_py_neural_error)?,
+        backend: neural_select_backend_for(backend, BackendOperation::Dense)
+            .map_err(to_py_neural_error)?,
     })
 }
 
@@ -11660,83 +12085,128 @@ fn parse_neural_panel_component_mode(value: &str) -> PyResult<CoreNeuralPanelCom
 }
 
 #[pyfunction]
+#[pyo3(signature = (rows, spatial_weights, intervention_time, seed, placebo_n, backend=None))]
 fn geo_causal_synthetic_did_summary(
+    py: Python<'_>,
     rows: Vec<PyGeoCausalRow>,
     spatial_weights: Vec<(String, String, f64)>,
     intervention_time: String,
     seed: u64,
     placebo_n: usize,
+    backend: Option<&str>,
 ) -> PyResult<String> {
     let panel = build_geo_causal_panel(rows, spatial_weights)?;
-    let mut estimator = CoreSyntheticDIDEstimator::new(SyntheticDIDConfig {
-        intervention_time,
-        seed,
-    });
-    estimator.fit(panel).map_err(to_py_geo_causal_error)?;
-    if placebo_n > 0 {
-        estimator
-            .placebo_test(placebo_n)
-            .map_err(to_py_geo_causal_error)?;
-    }
-    estimator.summary_json().map_err(to_py_geo_causal_error)
+    let backend = backend.map(str::to_owned);
+    py.detach(move || {
+        let mut estimator = CoreSyntheticDIDEstimator::new_with_backend(
+            SyntheticDIDConfig {
+                intervention_time,
+                seed,
+            },
+            backend.as_deref(),
+        )
+        .map_err(to_py_geo_causal_error)?;
+        estimator.fit(panel).map_err(to_py_geo_causal_error)?;
+        if placebo_n > 0 {
+            estimator
+                .placebo_test(placebo_n)
+                .map_err(to_py_geo_causal_error)?;
+        }
+        let mut summary: serde_json::Value =
+            serde_json::from_str(&estimator.summary_json().map_err(to_py_geo_causal_error)?)
+                .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+        summary["backend_requested"] = serde_json::json!(estimator.backend().requested);
+        summary["backend_selected"] = serde_json::json!(estimator.backend().selected);
+        serde_json::to_string_pretty(&summary)
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))
+    })
 }
 
 #[pyfunction]
+#[pyo3(signature = (rows, spatial_weights, intervention_time, seed, candidate_count, placebo_n, backend=None))]
+#[allow(clippy::too_many_arguments)]
 fn geo_causal_design_summary(
+    py: Python<'_>,
     rows: Vec<PyGeoCausalRow>,
     spatial_weights: Vec<(String, String, f64)>,
     intervention_time: String,
     seed: u64,
     candidate_count: usize,
     placebo_n: usize,
+    backend: Option<&str>,
 ) -> PyResult<String> {
     let panel = build_geo_causal_panel(rows, spatial_weights)?;
+    let backend = backend.map(str::to_owned);
     let designer = CoreGeoExperimentDesigner {
         intervention_time,
         seed,
     };
-    let design = designer
-        .design(&panel, candidate_count, placebo_n)
-        .map_err(to_py_geo_causal_error)?;
-    serde_json::to_string_pretty(&design).map_err(|err| PyRuntimeError::new_err(err.to_string()))
+    py.detach(move || {
+        let design = designer
+            .design_with_backend(&panel, candidate_count, placebo_n, backend.as_deref())
+            .map_err(to_py_geo_causal_error)?;
+        serde_json::to_string_pretty(&design)
+            .map_err(|err| PyRuntimeError::new_err(err.to_string()))
+    })
 }
 
 #[pyfunction]
+#[pyo3(signature = (rows, spatial_weights, intervention_time, seed, n, backend=None))]
 fn geo_causal_spatial_placebos(
+    py: Python<'_>,
     rows: Vec<PyGeoCausalRow>,
     spatial_weights: Vec<(String, String, f64)>,
     intervention_time: String,
     seed: u64,
     n: usize,
+    backend: Option<&str>,
 ) -> PyResult<Vec<f64>> {
     let panel = build_geo_causal_panel(rows, spatial_weights)?;
-    SpatialPlaceboTester {
-        intervention_time,
-        seed,
-    }
-    .placebo_estimates(panel, n)
-    .map_err(to_py_geo_causal_error)
+    let backend = backend.map(str::to_owned);
+    py.detach(move || {
+        SpatialPlaceboTester {
+            intervention_time,
+            seed,
+        }
+        .placebo_estimates_with_backend(panel, n, backend.as_deref())
+        .map_err(to_py_geo_causal_error)
+    })
 }
 
 #[pyfunction]
+#[pyo3(signature = (rows, spatial_weights, backend=None))]
 fn geo_causal_spillover_diagnostics(
     rows: Vec<PyGeoCausalRow>,
     spatial_weights: Vec<(String, String, f64)>,
+    backend: Option<&str>,
 ) -> PyResult<String> {
     let panel = build_geo_causal_panel(rows, spatial_weights)?;
-    serde_json::to_string_pretty(&core_geo_causal_spillover_diagnostics(&panel))
+    let diagnostics =
+        core_geo_causal_spillover_diagnostics(&panel, backend).map_err(to_py_geo_causal_error)?;
+    serde_json::to_string_pretty(&diagnostics)
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))
 }
 
 #[pyfunction]
+#[pyo3(signature = (features, outcomes, regions, heldout_region, backend=None))]
 fn geo_causal_representation_report_value(
+    py: Python<'_>,
     features: Vec<Vec<f64>>,
     outcomes: Vec<f64>,
     regions: Vec<String>,
     heldout_region: String,
+    backend: Option<&str>,
 ) -> PyResult<String> {
-    core_geo_causal_representation_report_json(&features, &outcomes, &regions, &heldout_region)
-        .map_err(to_py_geo_causal_error)
+    py.detach(|| {
+        core_geo_causal_representation_report_json(
+            &features,
+            &outcomes,
+            &regions,
+            &heldout_region,
+            backend,
+        )
+    })
+    .map_err(to_py_geo_causal_error)
 }
 
 fn build_geo_causal_panel(
@@ -12049,6 +12519,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(geo_route_feature_vector_value, m)?)?;
     m.add_function(wrap_pyfunction!(geo_radial_anchor_distances_value, m)?)?;
     m.add_function(wrap_pyfunction!(geo_rbf_anchor_features_value, m)?)?;
+    m.add_function(wrap_pyfunction!(geo_radial_anchor_distance_rows_value, m)?)?;
+    m.add_function(wrap_pyfunction!(geo_rbf_anchor_feature_rows_value, m)?)?;
     m.add_function(wrap_pyfunction!(geo_local_frame_features_value, m)?)?;
     m.add_function(wrap_pyfunction!(h3_validate_parent_resolutions_value, m)?)?;
     m.add_function(wrap_pyfunction!(s2_validate_parent_levels_value, m)?)?;
@@ -12082,6 +12554,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(deep_service_residual_fit_value, m)?)?;
     m.add_function(wrap_pyfunction!(deep_service_residual_predict_value, m)?)?;
     m.add_function(wrap_pyfunction!(deep_available_backends_value, m)?)?;
+    m.add_function(wrap_pyfunction!(accelerator_capabilities_value, m)?)?;
     m.add_function(wrap_pyfunction!(deep_backend_dispatch_report_value, m)?)?;
     m.add_function(wrap_pyfunction!(deep_constrained_decision_select_value, m)?)?;
     m.add_function(wrap_pyfunction!(

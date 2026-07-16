@@ -18,6 +18,7 @@ from cartoboost._artifacts import (
 )
 
 from .._artifacts import ArtifactPersistenceMixin
+from ..config import Backend
 
 
 @dataclass(frozen=True)
@@ -565,6 +566,7 @@ def nearest_conformal_residual_quantiles(
     *,
     neighbor_count: int,
     alpha: float,
+    backend: Backend | str = Backend.CPU,
 ) -> np.ndarray:
     _validate_quantile(alpha, "alpha")
     if int(neighbor_count) <= 0:
@@ -588,6 +590,7 @@ def nearest_conformal_residual_quantiles(
         1,
         int(truth.shape[0] + 1),
         int(truth.shape[0] + 1),
+        str(backend),
     )
     if native is not None:
         return np.asarray(native, dtype=float)

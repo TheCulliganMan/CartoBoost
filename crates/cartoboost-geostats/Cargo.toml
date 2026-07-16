@@ -6,8 +6,20 @@ license.workspace = true
 
 [dependencies]
 cartoboost-geo-core = { path = "../cartoboost-geo-core" }
+cartoboost-neural = { path = "../cartoboost-neural" }
 serde.workspace = true
 thiserror.workspace = true
+rayon = "1.11"
+
+[features]
+default = []
+cuda = ["cartoboost-geo-core/cuda", "cartoboost-neural/cuda"]
+cuda-oxide = ["cartoboost-neural/cuda-oxide"]
+rocm = ["cartoboost-geo-core/rocm", "cartoboost-neural/rocm"]
+hip = ["rocm", "cartoboost-geo-core/hip", "cartoboost-neural/hip"]
+metal = ["cartoboost-geo-core/metal", "cartoboost-neural/metal"]
+directml = ["cartoboost-geo-core/directml", "cartoboost-neural/directml"]
+webgpu = ["cartoboost-geo-core/webgpu", "cartoboost-neural/webgpu"]
 
 [dev-dependencies]
 criterion.workspace = true

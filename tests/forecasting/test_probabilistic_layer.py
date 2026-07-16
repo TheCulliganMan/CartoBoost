@@ -300,6 +300,23 @@ def test_spatial_calibration_helpers_cover_groups_weights_and_nearest_residuals(
     assert nearest.tolist() == [1.0, 10.0]
 
 
+def test_nearest_calibration_runs_on_every_available_backend():
+    from cartoboost.accelerators import available_backends
+
+    kwargs = {
+        "y_true": [10.0, 20.0, 30.0, 100.0],
+        "y_pred": [9.0, 18.0, 27.0, 90.0],
+        "calibration_coordinates": [[0.0, 0.0], [1.0, 1.0], [2.0, 2.0], [100.0, 100.0]],
+        "query_coordinates": [[0.1, 0.1], [1.8, 1.8], [99.0, 99.0]],
+        "neighbor_count": 2,
+        "alpha": 0.1,
+    }
+    expected = nearest_conformal_residual_quantiles(**kwargs, backend="cpu")
+    for backend in available_backends("pairwise_distance"):
+        actual = nearest_conformal_residual_quantiles(**kwargs, backend=backend)
+        np.testing.assert_allclose(actual, expected)
+
+
 def test_benchmark_calibration_report_fields_emit_required_breakdowns():
     fields = benchmark_calibration_report_fields(
         y_true=[10.0, 12.0, 20.0, 25.0],

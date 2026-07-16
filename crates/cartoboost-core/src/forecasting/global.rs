@@ -8,6 +8,7 @@ use crate::forecasting::{
 };
 use crate::tree::Model;
 use crate::{CartoBoostError, Result};
+use cartoboost_accelerator::backend::{select_backend_for, BackendOperation, BackendSelection};
 use rayon::prelude::*;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -31,6 +32,7 @@ pub struct CartoBoostLagForecaster {
     booster_config: BoosterConfig,
     target_mode: GlobalForecastTargetMode,
     sample_weight_mode: GlobalForecastSampleWeightMode,
+    backend: BackendSelection,
     fitted: Option<FittedGlobalState>,
 }
 
@@ -66,13 +68,32 @@ impl CartoBoostLagForecaster {
         target_mode: GlobalForecastTargetMode,
         sample_weight_mode: GlobalForecastSampleWeightMode,
     ) -> Result<Self> {
+        Self::new_with_backend(
+            lag_config,
+            booster_config,
+            target_mode,
+            sample_weight_mode,
+            Some("cpu"),
+        )
+    }
+
+    pub fn new_with_backend(
+        lag_config: LagFeatureConfig,
+        booster_config: BoosterConfig,
+        target_mode: GlobalForecastTargetMode,
+        sample_weight_mode: GlobalForecastSampleWeightMode,
+        backend: Option<&str>,
+    ) -> Result<Self> {
         validate_target_mode(target_mode)?;
         validate_sample_weight_mode(sample_weight_mode)?;
+        let backend = select_backend_for(backend, BackendOperation::Dense)
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
         Ok(Self {
             lag_builder: LagFeatureBuilder::new(lag_config)?,
             booster_config,
             target_mode,
             sample_weight_mode,
+            backend,
             fitted: None,
         })
     }
@@ -99,6 +120,10 @@ impl CartoBoostLagForecaster {
 
     pub fn training_rows(&self) -> Option<usize> {
         self.fitted.as_ref().map(|state| state.training_rows)
+    }
+
+    pub fn backend(&self) -> &BackendSelection {
+        &self.backend
     }
 
     pub fn predict_with_known_future_covariates(
@@ -235,7 +260,8 @@ impl Forecaster for CartoBoostLagForecaster {
             self.sample_weight_mode,
         )?;
         let model =
-            Booster::new(self.booster_config.clone()).fit(&x, &y, sample_weights.as_deref())?;
+            Booster::new_with_backend(self.booster_config.clone(), Some(&self.backend.selected))?
+                .fit(&x, &y, sample_weights.as_deref())?;
         self.fitted = Some(FittedGlobalState {
             frame: frame.clone(),
             history_by_series,
@@ -248,6 +274,9 @@ impl Forecaster for CartoBoostLagForecaster {
     fn predict(&self, horizon: usize) -> Result<ForecastResult> {
         validate_horizon(horizon)?;
         let fitted = self.fitted.as_ref().ok_or_else(not_fitted)?;
+        if self.backend.selected != "cpu" {
+            return self.predict_accelerated(horizon);
+        }
         let predictions = fitted
             .history_by_series
             .iter()
@@ -328,6 +357,7 @@ impl Forecaster for CartoBoostLagForecaster {
             "booster_config": self.booster_config,
             "target_mode": target_mode_name(self.target_mode),
             "sample_weight_mode": sample_weight_mode_name(self.sample_weight_mode),
+            "backend": self.backend,
         });
         if let Some(fitted) = &self.fitted {
             payload["training_rows"] = json!(fitted.training_rows);
@@ -335,6 +365,88 @@ impl Forecaster for CartoBoostLagForecaster {
             payload["native_model_metadata"] = json!(fitted.model.metadata);
         }
         payload
+    }
+}
+
+impl CartoBoostLagForecaster {
+    fn predict_accelerated(&self, horizon: usize) -> Result<ForecastResult> {
+        let fitted = self.fitted.as_ref().ok_or_else(not_fitted)?;
+        let mut series = fitted
+            .history_by_series
+            .iter()
+            .map(|(series_id, history)| (series_id.clone(), history.clone()))
+            .collect::<Vec<_>>();
+        let base_timestamps = series
+            .iter()
+            .map(|(series_id, history)| {
+                history.last().map(|row| row.timestamp).ok_or_else(|| {
+                    CartoBoostError::InvalidInput(format!("series {series_id} has no history"))
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut predictions = vec![Vec::with_capacity(horizon); series.len()];
+        for step in 1..=horizon {
+            let mut feature_rows = Vec::with_capacity(series.len());
+            let mut timestamps = Vec::with_capacity(series.len());
+            for (index, (series_id, history)) in series.iter().enumerate() {
+                let timestamp = fitted
+                    .frame
+                    .frequency()
+                    .advance(base_timestamps[index], step)?;
+                feature_rows.push(
+                    self.lag_builder
+                        .transform_next_sorted_prior(series_id, history, timestamp)?,
+                );
+                timestamps.push(timestamp);
+            }
+            let raw = fitted
+                .model
+                .try_predict(&Dataset::from_rows(feature_rows)?)?;
+            for index in 0..series.len() {
+                let (series_id, history) = &mut series[index];
+                let timestamp = timestamps[index];
+                let mean = match self.target_mode {
+                    GlobalForecastTargetMode::Level => raw[index],
+                    GlobalForecastTargetMode::DeltaFromLast => {
+                        history
+                            .last()
+                            .ok_or_else(|| {
+                                CartoBoostError::InvalidInput(format!(
+                                    "series {series_id} has no previous target for delta forecast"
+                                ))
+                            })?
+                            .target
+                            + raw[index]
+                    }
+                    GlobalForecastTargetMode::SeasonalDelta { season_length } => {
+                        seasonal_target_before(history, season_length).ok_or_else(|| {
+                            CartoBoostError::InvalidInput(format!(
+                                "series {series_id} does not have enough seasonal history"
+                            ))
+                        })? + raw[index]
+                    }
+                };
+                let mean = validate_forecast_value(mean, series_id, timestamp)?;
+                predictions[index].push(ForecastPrediction {
+                    series_id: series_id.clone(),
+                    timestamp,
+                    horizon: step,
+                    model: self.model_name().to_string(),
+                    mean,
+                });
+                let covariates = history
+                    .last()
+                    .map(|row| row.covariates.clone())
+                    .unwrap_or_default();
+                history.push(ForecastRow::with_covariates(
+                    series_id.clone(),
+                    timestamp,
+                    mean,
+                    covariates,
+                ));
+            }
+        }
+        ForecastResult::new(predictions.into_iter().flatten().collect())
     }
 }
 
@@ -540,6 +652,67 @@ mod tests {
         let error = validate_forecast_value(f64::INFINITY, "series", ts(2))
             .expect_err("non-finite forecasts must fail");
         assert!(error.to_string().contains("non-finite forecast"));
+    }
+
+    #[test]
+    fn available_accelerators_batch_recursive_panel_inference() {
+        let frame = ForecastFrame::new(
+            ["lane-a", "lane-b"]
+                .into_iter()
+                .flat_map(|series_id| {
+                    (1..=14).map(move |day| {
+                        ForecastRow::new(
+                            series_id,
+                            ts(day),
+                            f64::from(day) + if series_id == "lane-a" { 2.0 } else { 7.0 },
+                        )
+                    })
+                })
+                .collect(),
+            crate::forecasting::ForecastFrequency::Daily,
+        )
+        .unwrap();
+        let lag = LagFeatureConfig {
+            lags: vec![1, 2],
+            rolling_mean_windows: vec![2],
+            ..LagFeatureConfig::default()
+        };
+        let booster = BoosterConfig {
+            n_estimators: 4,
+            max_depth: 2,
+            min_samples_leaf: 1,
+            ..BoosterConfig::default()
+        };
+        let mut cpu = CartoBoostLagForecaster::new_with_backend(
+            lag.clone(),
+            booster.clone(),
+            GlobalForecastTargetMode::Level,
+            GlobalForecastSampleWeightMode::Uniform,
+            Some("cpu"),
+        )
+        .unwrap();
+        cpu.fit(&frame).unwrap();
+        let expected = cpu.predict(3).unwrap();
+        for backend in cartoboost_accelerator::available_backends()
+            .into_iter()
+            .filter(|backend| backend != "cpu")
+        {
+            let mut accelerated = CartoBoostLagForecaster::new_with_backend(
+                lag.clone(),
+                booster.clone(),
+                GlobalForecastTargetMode::Level,
+                GlobalForecastSampleWeightMode::Uniform,
+                Some(&backend),
+            )
+            .unwrap();
+            accelerated.fit(&frame).unwrap();
+            let actual = accelerated.predict(3).unwrap();
+            for (expected, actual) in expected.predictions().iter().zip(actual.predictions()) {
+                assert_eq!(expected.series_id, actual.series_id);
+                assert_eq!(expected.timestamp, actual.timestamp);
+                assert!((expected.mean - actual.mean).abs() < 1.0e-4, "{backend}");
+            }
+        }
     }
 
     #[test]

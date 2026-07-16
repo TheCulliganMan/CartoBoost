@@ -170,7 +170,7 @@ def _load_s2sphere() -> Any:
     except ImportError as exc:
         raise ImportError(
             "S2 auto-encoding requires the optional 's2sphere' package. "
-            "Install with `pip install cartoboost[s2]` or `pip install s2sphere`."
+            "Install it with `pip install s2sphere`."
         ) from exc
 
 

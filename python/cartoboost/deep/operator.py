@@ -5,6 +5,7 @@ from typing import Any
 
 import numpy as np
 
+from ..config import Backend
 from ._native import require_native
 
 
@@ -13,9 +14,16 @@ class GraphNeuralOperator:
 
     capability_tier = "advanced_experimental"
 
-    def __init__(self, *, smoothing: float = 0.35, coordinate_scale: float = 0.08) -> None:
+    def __init__(
+        self,
+        *,
+        smoothing: float = 0.35,
+        coordinate_scale: float = 0.08,
+        backend: Backend | str = Backend.CPU,
+    ) -> None:
         self.smoothing = float(smoothing)
         self.coordinate_scale = float(coordinate_scale)
+        self.backend = str(backend)
         self.metadata_ = {"capability_tier": self.capability_tier}
 
     def predict(
@@ -42,9 +50,11 @@ class GraphNeuralOperator:
                 json.dumps(exogenous.tolist()),
                 self.smoothing,
                 self.coordinate_scale,
+                self.backend,
             )
         )
         self.metadata_ = dict(output["metadata"])
+        self.backend_ = str(self.metadata_["backend_selected"])
         return {
             "future_field": np.asarray(output["future_field"], dtype=float),
             "residual_field": np.asarray(output["residual_field"], dtype=float),

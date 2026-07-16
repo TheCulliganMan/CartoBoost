@@ -36,9 +36,9 @@ tabular, temporal, spatial, and sparse-set regression.
 | Monotonic and interaction constraints | `monotonic_constraints=[-1, 0, 1, ...]` | Enforce known directional effects and allowed branch-level feature families in supported fits. |
 | Additive values | `predict_additive_values(...)` | Per-tree additive contributions whose row sum matches prediction. |
 | sklearn compatibility | `get_params`, `set_params`, `clone`, `Pipeline`, `GridSearchCV` | Standard estimator workflows. |
-| TensorBoard logging | `tensorboard_log_dir=...` | Optional scalar training curves; install `cartoboost[tensorboard]`. |
+| TensorBoard logging | `tensorboard_log_dir=...` | Optional scalar training curves; install `tensorboardX`. |
 | Artifacts | `save`, `load`, `save_weights`, `load_weights` | Versioned model and weights artifacts. |
-| ONNX export subset | `save_weights(path, format="onnx")` | Requires `cartoboost[onnx]`; dense axis-tree subset only. |
+| ONNX export subset | `save_weights(path, format="onnx")` | Requires `onnx`; dense axis-tree subset only. |
 
 See [Python API Reference](reference/python-api.md),
 [Parameters](user-guide/parameters.md), [Objectives](objectives.md),
@@ -102,22 +102,22 @@ prediction inputs can be validated.
 See [Feature Schema](feature_schema.md), [Sparse Features](sparse_features.md),
 and [Spatial Modeling](spatial_modeling.md).
 
-## Data Inputs And Optional Extras
+## Data Inputs And Optional Dependencies
 
 Optional integrations stay optional. Helpers that require an optional package
-raise a clear install error when the extra is missing.
+raise a clear install error when the dependency is missing.
 
-| Capability | Public surface | Extra |
+| Capability | Public surface | Dependency |
 | --- | --- | --- |
 | NumPy-style dense arrays | `fit(X, y)`, `predict(X)` | Core package. |
-| pandas/dataframe-style inputs | Dataframe columns in estimator and forecasting helpers | Core package. |
-| DuckDB relation inputs | Dense relation/query-result support | `cartoboost[duckdb]`. |
-| Polars inputs | Dataframe support where documented | `cartoboost[polars]`. |
-| H3 encoding | `latlng_to_h3_id`, `encode_h3_cells`, `build_h3_sparse_sets`, `encode_h3_route_cells`, `build_h3_route_sparse_sets`, `h3_parent_id`, `normalize_h3_id` | `cartoboost[h3]`; point and decoded-route encoding, validation, ID normalization, scaffold expansion, and row assembly. |
-| S2 encoding | `latlng_to_s2_id`, `encode_s2_cells`, `build_s2_sparse_sets`, `encode_s2_route_cells`, `build_s2_route_sparse_sets`, `s2_parent_id`, `normalize_s2_id` | `cartoboost[s2]`; point and decoded-route encoding, validation, ID normalization, and row assembly. |
+| pandas/dataframe-style inputs | Dataframe columns in estimator and forecasting helpers | Install `pandas`. |
+| DuckDB relation inputs | Dense relation/query-result support | Install `duckdb`. |
+| Polars inputs | Dataframe support where documented | Install `polars`. |
+| H3 encoding | `latlng_to_h3_id`, `encode_h3_cells`, `build_h3_sparse_sets`, `encode_h3_route_cells`, `build_h3_route_sparse_sets`, `h3_parent_id`, `normalize_h3_id` | Install `h3`; point and decoded-route encoding, validation, ID normalization, scaffold expansion, and row assembly. |
+| S2 encoding | `latlng_to_s2_id`, `encode_s2_cells`, `build_s2_sparse_sets`, `encode_s2_route_cells`, `build_s2_route_sparse_sets`, `s2_parent_id`, `normalize_s2_id` | Install `s2sphere`; point and decoded-route encoding, validation, ID normalization, and row assembly. |
 | Geographic sparse helpers | `build_geo_sparse_sets`, `build_zip_sparse_sets`, `coerce_geo_to_feature_id`, `coerce_zip_to_feature_id` | Core package. |
-| SHAP explanations | `make_shap_explainer`, `explain_shap` | `cartoboost[explain]`. |
-| Optuna workflows | Tuning examples/workflows | `cartoboost[optuna]`. |
+| SHAP explanations | `make_shap_explainer`, `explain_shap` | Install `shap`. |
+| Optuna workflows | Tuning examples/workflows | Install `optuna`. |
 
 See [Installation](installation.md), [Sparse Features](sparse_features.md), and
 [SHAP Support](shap.md).

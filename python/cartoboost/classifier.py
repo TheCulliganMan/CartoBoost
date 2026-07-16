@@ -10,7 +10,7 @@ from typing import Any
 
 import numpy as np
 
-try:  # pragma: no cover - exercised when the optional sklearn extra is installed.
+try:  # pragma: no cover - exercised when the sklearn dependency is installed.
     from sklearn.base import BaseEstimator, ClassifierMixin
 except ImportError:  # pragma: no cover - lightweight fallback for core installs.
 
@@ -23,7 +23,7 @@ except ImportError:  # pragma: no cover - lightweight fallback for core installs
 
 from ._artifacts import decode_stable_model_artifact, library_version, stable_model_artifact_payload
 from ._native import CartoBoostClassifier as _NativeClassifierModel
-from .config import FuzzyKernel, LeafPredictor, Objective, SplitPolicy
+from .config import Backend, FuzzyKernel, LeafPredictor, Objective, SplitPolicy
 from .regressor import (
     _as_sample_weight_array,
     _encode_sparse_columns,
@@ -81,6 +81,7 @@ class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
         n_threads: int | None = None,
         tensorboard_log_dir: str | Path | None = None,
         tensorboard_run_name: str | None = None,
+        backend: Backend | str = Backend.CPU,
     ) -> None:
         self.n_estimators = n_estimators
         self.learning_rate = learning_rate
@@ -101,6 +102,7 @@ class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
         self.n_threads = n_threads
         self.tensorboard_log_dir = tensorboard_log_dir
         self.tensorboard_run_name = tensorboard_run_name
+        self.backend = str(backend)
         self._model: Any | None = None
 
     def get_params(self, deep: bool = True) -> dict[str, Any]:
@@ -130,6 +132,7 @@ class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
             "n_threads": self.n_threads,
             "tensorboard_log_dir": self.tensorboard_log_dir,
             "tensorboard_run_name": self.tensorboard_run_name,
+            "backend": self.backend,
         }
 
     def set_params(self, **params: Any) -> CartoBoostClassifier:
@@ -233,6 +236,7 @@ class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
             fuzzy_bandwidth=float(self.fuzzy_bandwidth),
             fuzzy_kernel=str(self.fuzzy_kernel),
             n_threads=None if self.n_threads is None else int(self.n_threads),
+            backend=self.backend,
         )
         model.fit_arrays(
             dense_array,
@@ -478,6 +482,7 @@ class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
             objective=str(native_model.objective),
             split_policy=_split_policy_from_native(native_model.splitters),
             class_weight=None,
+            backend=str(getattr(native_model, "backend", "cpu")),
         )
         estimator._model = native_model
         estimator.n_features_in_ = native_model.feature_count

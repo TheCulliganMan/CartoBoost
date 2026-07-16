@@ -79,10 +79,10 @@ CartoBoostRegressor(
 | `set_params(**params)` | `self` | Validates known parameter names. |
 
 `X`, `y`, `sample_weight`, and sparse-set tables may be NumPy arrays or
-dataframe-style objects. Install `cartoboost[duckdb]` to pass DuckDB relations
-directly, or `cartoboost[polars]` for Polars inputs.
+dataframe-style objects. Install `duckdb` to pass DuckDB relations directly,
+or `polars` for Polars inputs.
 Set `tensorboard_log_dir` to write native per-iteration training scalars to
-TensorBoard event files; install `cartoboost[tensorboard]` for the optional
+TensorBoard event files; install `tensorboardX` for the optional
 writer dependency.
 
 Numeric model inputs must be finite. CartoBoost does not impute `NaN`, `None`,
@@ -169,7 +169,7 @@ SpatialPlaceboTester(intervention_time="2026-03-08", seed=13)
 | `SyntheticDIDEstimator.estimate_effect()` | `float` | Returns the average treatment effect estimate. |
 | `SyntheticDIDEstimator.placebo_test(n=100)` | `list[float]` | Runs deterministic pseudo-treated placebo assignments. |
 | `SyntheticDIDEstimator.summary()` | `dict` | Includes effect, weights, placebos, warnings, and assumptions. |
-| `SyntheticDIDEstimator.plot(kind="placebo")` | matplotlib axes | Python-only helper; requires `cartoboost[visualization]`. |
+| `SyntheticDIDEstimator.plot(kind="placebo")` | matplotlib axes | Python-only helper; requires `matplotlib`. |
 | `GeoExperimentDesigner.fit(panel).summary(candidate_count, placebo_n)` | `dict` | Chooses balanced candidate test geos and estimates detectable lift. |
 | `SpatialPlaceboTester.fit(panel).summary()` | `dict` | Reports neighbor contamination, distances, and spatial exposure. |
 | `InvariantRiskEncoder.fit_report(features, outcomes, regions, heldout_region=...)` | `dict` | Native-backed domain-shift representation diagnostic with supervised, domain-adversarial, invariant-risk, treatment-balance, and smoothness losses. It supplements, but does not replace, `SyntheticDIDEstimator` and `GeoExperimentDesigner`. |
@@ -195,7 +195,7 @@ build_s2_route_sparse_sets(valhalla_routes, name="route_s2", level=12)
 encode_s2_route_cells(route, level=12)
 ```
 
-H3 helpers require `cartoboost[h3]`; S2 helpers require `cartoboost[s2]`.
+H3 helpers require `h3`; S2 helpers require `s2sphere`.
 Route encoders accept decoded route coordinate sequences, OSRM GeoJSON-style
 route mappings, or Valhalla-style decoded shape mappings. Encoded polyline
 strings raise `ValueError`; request decoded geometry from the routing engine
@@ -438,7 +438,7 @@ Forecasters:
 changepoint controls including `n_changepoints`, `changepoint_prior_scale`,
 and explicit `changepoints` date lists, yearly/weekly/daily Fourier orders,
 custom conditional seasonalities, event windows, `holidays`
-tables, optional `add_country_holidays()` calendars via `cartoboost[holidays]`,
+tables, optional `add_country_holidays()` calendars via `holidays`,
 additive or multiplicative regressor modes,
 dynamic cap/floor regressors, prediction interval levels, quantile levels,
 trend/coefficient uncertainty controls, `trend_adjustments`,
@@ -506,7 +506,7 @@ Delay-aware graph transformer:
 
 | Entry point | Notes |
 | --- | --- |
-| `cartoboost.deep.DelayAwareGraphTransformer` / `PropagationDelayGraphForecaster` | Directed graph propagation forecaster with explicit per-edge delay priors, edge-delay sensitivity, save/load parity, and a future CUDA/ROCm/MLX backend contract that hard-fails until native kernels exist. |
+| `cartoboost.deep.DelayAwareGraphTransformer` / `PropagationDelayGraphForecaster` | Directed graph propagation forecaster with explicit per-edge delay priors, edge-delay sensitivity, save/load parity, and CPU/CUDA/ROCm/Metal/DirectML/WebGPU backend selection through the native accelerator contract. |
 | `cartoboost.deep.DynamicAdjacencyTransformer` | Alias for the delay-aware graph transformer surface. |
 | `cartoboost.deep.SpatioTemporalGraphForecaster(backbone="delay_aware_graph_transformer")` | Routes the generic graph sequence facade to the delay-aware graph implementation. |
 
@@ -598,7 +598,7 @@ Plotting:
 | `cartoboost.plotting.write_plot_report` | Writes a named bundle of provided diagnostics and returns output paths. |
 
 See [Plotting](../plotting.md) for full examples. Install
-`cartoboost[visualization]` when visualization dependencies are not already
+`geopandas`, `matplotlib`, `pydeck`, and `shapely` when they are not already
 available.
 
 Sequence primitives:

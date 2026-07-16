@@ -242,4 +242,4 @@ Representation, foundation, geo, causal, and probabilistic model surfaces:
 - Keep benchmark claims tied to maintained artifacts, exact commands, and
   comparable baselines.
 - TensorBoard scalar logging is optional on the boosting estimators via
-  `tensorboard_log_dir`; install `cartoboost[tensorboard]` for event writing.
+  `tensorboard_log_dir`; install `tensorboardX` for event writing.

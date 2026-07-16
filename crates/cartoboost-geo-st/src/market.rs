@@ -5,7 +5,7 @@
 //! smoothing, prediction, and explanation.
 
 use crate::{GeoStError, Result};
-use cartoboost_neural::{GraphSageConfig, GraphSageEncoder, HomogeneousGraph};
+use cartoboost_neural::{select_backend, GraphSageConfig, GraphSageEncoder, HomogeneousGraph};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::cmp::Ordering;
@@ -245,6 +245,9 @@ impl MarketPanelFrame {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct MarketStructureConfig {
+    /// Accelerator used by the trainable graph kernel and persisted artifact.
+    #[serde(default = "default_market_backend")]
+    pub backend: String,
     pub top_k: usize,
     /// Width of the trainable graph kernel used to score candidate relationships.
     pub neural_hidden_dim: usize,
@@ -264,9 +267,14 @@ pub struct MarketStructureConfig {
     pub calibrate_intervals: bool,
 }
 
+fn default_market_backend() -> String {
+    "cpu".to_string()
+}
+
 impl Default for MarketStructureConfig {
     fn default() -> Self {
         Self {
+            backend: default_market_backend(),
             top_k: 8,
             neural_hidden_dim: 16,
             neural_epochs: 20,
@@ -285,6 +293,9 @@ impl Default for MarketStructureConfig {
 
 impl MarketStructureConfig {
     fn validate(&self) -> Result<()> {
+        select_backend(Some(&self.backend)).map_err(|error| {
+            GeoStError::InvalidFrame(format!("invalid market accelerator backend: {error}"))
+        })?;
         if self.top_k == 0
             || self.top_k > 8
             || self.neural_hidden_dim == 0
@@ -537,6 +548,7 @@ impl MarketStructureForecaster {
                 &provisional,
                 self.config.neural_hidden_dim,
                 self.config.neural_epochs,
+                &self.config.backend,
             )?
         };
         self.relationships = learn_relationships(
@@ -1131,6 +1143,7 @@ fn fit_graph_kernel(
     relationships: &[Vec<MarketRelationship>],
     hidden_dim: usize,
     epochs: usize,
+    backend: &str,
 ) -> Result<Vec<Vec<f32>>> {
     let features = lane_kernel_features(frame, primary_means, secondary_means);
     let lane_index = frame
@@ -1156,6 +1169,9 @@ fn fit_graph_kernel(
     let config = GraphSageConfig {
         hidden_dims: vec![hidden_dim],
         epochs,
+        backend: select_backend(Some(backend)).map_err(|err| {
+            GeoStError::InvalidFrame(format!("invalid market graph backend: {err}"))
+        })?,
         ..GraphSageConfig::default()
     };
     GraphSageEncoder::new(config, features[0].len())
@@ -2203,6 +2219,27 @@ mod tests {
         assert!(edges
             .iter()
             .any(|edge| edge.kinds.contains(&RelationshipKind::ReverseLane)));
+    }
+
+    #[test]
+    fn market_graph_kernel_runs_on_every_available_backend() {
+        for backend in cartoboost_neural::available_backends() {
+            let mut model = MarketStructureForecaster::new(MarketStructureConfig {
+                backend: backend.clone(),
+                neural_hidden_dim: 4,
+                neural_epochs: 1,
+                head_epochs: 1,
+                calibrate_intervals: false,
+                ..MarketStructureConfig::default()
+            })
+            .unwrap_or_else(|error| panic!("{backend} market construction failed: {error}"));
+            model
+                .fit(&frame())
+                .unwrap_or_else(|error| panic!("{backend} market fit failed: {error}"));
+            assert_eq!(model.config.backend, backend);
+            assert_eq!(model.neural_embeddings.len(), 3);
+            assert_eq!(model.neural_embeddings[0].len(), 4);
+        }
     }
 
     #[test]

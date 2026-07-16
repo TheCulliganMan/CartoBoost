@@ -7,7 +7,7 @@ from typing import Any
 
 import numpy as np
 
-from .config import Kernel
+from .config import Backend, Kernel
 
 try:  # pragma: no cover - exercised when sklearn is installed.
     from sklearn.base import BaseEstimator, RegressorMixin, clone
@@ -49,6 +49,7 @@ class NearestNeighborGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseE
         anisotropy_scaling: float = 1.0,
         brute_force_threshold: int = 2048,
         duplicate_tolerance: float = 0.0,
+        backend: Backend | str = Backend.CPU,
     ) -> None:
         self.kernel = kernel
         self.range = range
@@ -59,6 +60,7 @@ class NearestNeighborGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseE
         self.anisotropy_scaling = anisotropy_scaling
         self.brute_force_threshold = brute_force_threshold
         self.duplicate_tolerance = duplicate_tolerance
+        self.backend = str(backend)
         self._model: Any | None = None
         self._fit_coords: np.ndarray | None = None
         self._fit_y: np.ndarray | None = None
@@ -83,8 +85,10 @@ class NearestNeighborGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseE
             anisotropy_scaling=float(self.anisotropy_scaling),
             brute_force_threshold=int(self.brute_force_threshold),
             duplicate_tolerance=float(self.duplicate_tolerance),
+            backend=self.backend,
         )
         self._model.fit(coords_array, y_array)
+        self.backend_ = str(self._model.backend())
         self.n_features_in_ = n_features
         self._fit_coords = coords_array
         self._fit_y = y_array
@@ -145,6 +149,7 @@ class NearestNeighborGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseE
             "anisotropy_scaling": self.anisotropy_scaling,
             "brute_force_threshold": self.brute_force_threshold,
             "duplicate_tolerance": self.duplicate_tolerance,
+            "backend": self.backend,
         }
 
     def set_params(self, **params: Any) -> NearestNeighborGPRegressor:
@@ -206,9 +211,11 @@ class ResidualNNGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseEstima
         base_estimator: Any,
         *,
         gp: NearestNeighborGPRegressor | None = None,
+        backend: Backend | str = Backend.CPU,
     ) -> None:
         self.base_estimator = base_estimator
         self.gp = gp
+        self.backend = str(backend)
 
     def fit(
         self,
@@ -226,7 +233,7 @@ class ResidualNNGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseEstima
         self.base_estimator_.fit(x_array, y_array)
         base_pred = np.asarray(self.base_estimator_.predict(x_array), dtype=float)
         residuals = y_array - base_pred
-        self.gp_ = self.gp or NearestNeighborGPRegressor()
+        self.gp_ = self.gp or NearestNeighborGPRegressor(backend=self.backend)
         self.gp_.fit(None, residuals, coords=coords)
         self.n_features_in_ = x_array.shape[1]
         return self
@@ -278,7 +285,11 @@ class ResidualNNGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseEstima
 
     def get_params(self, deep: bool = True) -> dict[str, Any]:
         del deep
-        return {"base_estimator": self.base_estimator, "gp": self.gp}
+        return {
+            "base_estimator": self.base_estimator,
+            "gp": self.gp,
+            "backend": self.backend,
+        }
 
     def set_params(self, **params: Any) -> ResidualNNGPRegressor:
         valid = self.get_params()
@@ -328,6 +339,7 @@ def empirical_semivariogram(
     max_distance: float | None = None,
     anisotropy_angle_degrees: float = 0.0,
     anisotropy_scaling: float = 1.0,
+    backend: Backend | str = Backend.CPU,
 ) -> list[dict[str, Any]]:
     return list(
         json.loads(
@@ -338,6 +350,7 @@ def empirical_semivariogram(
                 max_distance,
                 float(anisotropy_angle_degrees),
                 float(anisotropy_scaling),
+                str(backend),
             )
         )
     )
@@ -351,6 +364,7 @@ def binned_variogram(
     max_distance: float | None = None,
     anisotropy_angle_degrees: float = 0.0,
     anisotropy_scaling: float = 1.0,
+    backend: Backend | str = Backend.CPU,
 ) -> list[dict[str, Any]]:
     return empirical_semivariogram(
         coords,
@@ -359,6 +373,7 @@ def binned_variogram(
         max_distance=max_distance,
         anisotropy_angle_degrees=anisotropy_angle_degrees,
         anisotropy_scaling=anisotropy_scaling,
+        backend=backend,
     )
 
 

@@ -117,11 +117,11 @@ schema = {
 
 ## H3 Sparse Helpers
 
-Install the optional H3 extra to encode H3 cells from latitude/longitude inside
+Install the optional `h3` package to encode H3 cells from latitude/longitude inside
 CartoBoost:
 
 ```sh
-uv add "cartoboost[h3]"
+uv add h3
 ```
 
 Use H3 when the scientific feature should be a spatial cell hierarchy rather
@@ -198,10 +198,10 @@ H3 rules:
 
 ## S2 Sparse Helpers
 
-Install the optional S2 extra for S2 cell encoding:
+Install the optional `s2sphere` package for S2 cell encoding:
 
 ```sh
-uv add "cartoboost[s2]"
+uv add s2sphere
 ```
 
 Use S2 for spatial cell features when your data pipeline or scientific
@@ -261,5 +261,5 @@ S2 rules:
   prediction.
 
 Keep optional dependency boundaries explicit. Core geographic sparse helpers are
-available in the core package. H3 auto-encoding requires `cartoboost[h3]`; S2
-auto-encoding requires `cartoboost[s2]`.
+available in the core package. H3 auto-encoding requires the `h3` package; S2
+auto-encoding requires the `s2sphere` package.

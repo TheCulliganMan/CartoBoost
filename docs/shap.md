@@ -13,13 +13,13 @@ the model being explained.
 Install the optional dependency before using SHAP:
 
 ```sh
-uv add "cartoboost[explain]"
+uv add shap
 ```
 
 For a source checkout:
 
 ```sh
-uv sync --extra explain
+uv sync --group dev
 ```
 
 ## When To Use It

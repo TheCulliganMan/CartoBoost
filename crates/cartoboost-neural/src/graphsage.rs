@@ -1,4 +1,6 @@
-use crate::backend::{backend_dense_layer_f32, BackendSelection};
+use crate::backend::{
+    backend_dense_layer_f32, backend_supports_operation, BackendOperation, BackendSelection,
+};
 use crate::error::{NeuralError, Result};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -420,6 +422,7 @@ impl GraphSageEncoder {
     pub fn new(config: GraphSageConfig, input_dim: usize) -> Result<Self> {
         validate_input_dim(input_dim)?;
         validate_dimensions(&config.hidden_dims)?;
+        validate_dense_backend(&config.backend)?;
 
         let mut dims = Vec::with_capacity(config.hidden_dims.len() + 1);
         dims.push(input_dim);
@@ -668,6 +671,7 @@ impl HeteroGraphSageEncoder {
         validate_input_dim(input_dim)?;
         validate_relation_count(relation_count)?;
         validate_dimensions(&config.hidden_dims)?;
+        validate_dense_backend(&config.backend)?;
 
         let mut dims = Vec::with_capacity(config.hidden_dims.len() + 1);
         dims.push(input_dim);
@@ -1786,6 +1790,17 @@ fn validate_input_dim(input_dim: usize) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+fn validate_dense_backend(backend: &BackendSelection) -> Result<()> {
+    if backend_supports_operation(&backend.selected, BackendOperation::Dense) {
+        Ok(())
+    } else {
+        Err(NeuralError::InvalidArgument(format!(
+            "backend {:?} does not implement GraphSAGE dense propagation",
+            backend.selected
+        )))
+    }
 }
 
 fn validate_dimensions(hidden_dims: &[usize]) -> Result<()> {

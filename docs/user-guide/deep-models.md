@@ -92,14 +92,36 @@ only when the environment has been provisioned for it and the run needs that
 hardware contract.
 
 `backend="webgpu"` is available in native builds that include the WebGPU
-feature and expose a compatible adapter. It runs the verified vector-add,
-affine-head, dense-layer, and pair-scoring kernels; an explicit request fails
-when the feature or adapter is unavailable.
+feature and expose a compatible adapter. It implements the complete shared
+operation contract: dense and affine work, pair scoring and distance, sparse
+CSR forward/backward kernels, row softmax, AdamW, layer normalization, scalar
+graphs, and tanh-MLP training. An explicit request fails when the feature or
+adapter is unavailable.
 
 The browser bundle exposes the same adapter through the asynchronous
-`webgpuDispatchReport` export. It resolves only after a real WebGPU compute
-pass and readback complete, so browser applications can verify availability
-without blocking the JavaScript event loop.
+`webgpuCapabilities` and operation-specific asynchronous exports. Capability
+probing resolves only after a real WebGPU compute pass and readback complete,
+so browser applications can verify availability without blocking the
+JavaScript event loop. The browser exports cover all operations in the native
+contract and return updated optimizer/training state where mutation cannot be
+represented directly across the JavaScript boundary.
+
+Browser N-BEATS and N-HiTS can use `runNeuralForecastWebgpu`. The asynchronous
+route performs window training with the WebGPU tanh-MLP kernel and dispatches
+every recursive hidden layer through WebGPU dense inference; its response uses
+the same forecast and backend-metadata shape as `runForecast`.
+
+`runGraphDiffusionWebgpu` accepts the standard browser graph-temporal frame,
+normalizes its CSR edge weights, and keeps every configured diffusion and
+horizon step on browser WebGPU. It returns the normal graph forecast response,
+including optional graph-aware metrics and explicit accelerated-operation
+metadata.
+
+Browser nearest-neighbor Gaussian-process prediction accepts a backend in its
+geostatistics options. `runGeostatisticsWebgpu` computes the full transformed
+query-by-observation distance matrix on WebGPU, then performs only the small
+per-neighborhood covariance solves on CPU. Metadata distinguishes the GPU
+distance operation from the retained CPU solve.
 
 `InvertedTemporalTransformer` models synchronized wide panels with entities as
 tokens. It reports horizon-wise metrics, cross-entity ablation, and metadata
@@ -111,9 +133,10 @@ upstream node can affect a downstream node after an explicit lag. It is also
 available through
 `SpatioTemporalGraphForecaster(backbone="delay_aware_graph_transformer")`.
 Artifacts include edge-delay sensitivity, save/load parity metadata, and a
-backend contract reserving CUDA, ROCm, and MLX accelerator targets. The current
-verified implementation selects CPU and raises clearly if an accelerator is
-requested before native kernels are available.
+shared backend contract supporting CPU, CUDA, ROCm/HIP, Metal, DirectML, and
+WebGPU. Explicit unavailable devices raise clearly; `auto` resolves to a
+compatible available backend during model construction and stores that concrete
+selection with the fitted artifact.
 
 `ConditionalFlowDistributionHead` reports
 `architecture="conditional_residual_sampler"` because the current native math is
@@ -151,9 +174,8 @@ counterfactual best candidates by decision, and Brier/ECE calibration when
 binary `chosen` labels are supplied.
 
 Foundation model adapters are optional comparators and feature generators. Use
-the adapter-specific extras such as `cartoboost[chronos]`,
-`cartoboost[timesfm]`, `cartoboost[moirai]`, `cartoboost[timegpt]`, or
-`cartoboost[tabpfn]`, or provide an explicit backend. Missing dependencies
+the adapter-specific packages such as `chronos-forecasting`, `timesfm`,
+`uni2ts`, `nixtla`, or `tabpfn`, or provide an explicit backend. Missing dependencies
 raise a clear skip reason. Cached outputs include external version metadata,
 model hash, input hash, output shape, and whether the adapter was explicitly
 enabled for orchestration.

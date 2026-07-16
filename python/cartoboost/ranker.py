@@ -9,9 +9,9 @@ from typing import Any
 
 import numpy as np
 
-from .config import FuzzyKernel, LeafPredictor, Objective, SplitPolicy
+from .config import Backend, FuzzyKernel, LeafPredictor, Objective, SplitPolicy
 
-try:  # pragma: no cover - exercised when the optional sklearn extra is installed.
+try:  # pragma: no cover - exercised when the sklearn dependency is installed.
     from sklearn.base import BaseEstimator
 except ImportError:  # pragma: no cover - lightweight fallback for core installs.
 
@@ -81,6 +81,7 @@ class CartoBoostRanker(BaseEstimator):
         n_threads: int | None = None,
         tensorboard_log_dir: str | Path | None = None,
         tensorboard_run_name: str | None = None,
+        backend: Backend | str = Backend.CPU,
     ) -> None:
         self.n_estimators = n_estimators
         self.learning_rate = learning_rate
@@ -101,6 +102,7 @@ class CartoBoostRanker(BaseEstimator):
         self.n_threads = n_threads
         self.tensorboard_log_dir = tensorboard_log_dir
         self.tensorboard_run_name = tensorboard_run_name
+        self.backend = str(backend)
         self._model: Any | None = None
 
     def get_params(self, deep: bool = True) -> dict[str, Any]:
@@ -130,6 +132,7 @@ class CartoBoostRanker(BaseEstimator):
             "n_threads": self.n_threads,
             "tensorboard_log_dir": self.tensorboard_log_dir,
             "tensorboard_run_name": self.tensorboard_run_name,
+            "backend": self.backend,
         }
 
     def set_params(self, **params: Any) -> CartoBoostRanker:
@@ -239,6 +242,7 @@ class CartoBoostRanker(BaseEstimator):
             fuzzy_bandwidth=float(self.fuzzy_bandwidth),
             fuzzy_kernel=str(self.fuzzy_kernel),
             n_threads=None if self.n_threads is None else int(self.n_threads),
+            backend=self.backend,
         )
         model.fit_arrays(
             dense_array,
@@ -484,6 +488,7 @@ class CartoBoostRanker(BaseEstimator):
             min_gain=native_model.min_gain,
             objective=str(native_model.objective),
             split_policy=_split_policy_from_native(native_model.splitters),
+            backend=str(getattr(native_model, "backend", "cpu")),
         )
         estimator._model = native_model
         estimator.n_features_in_ = native_model.feature_count

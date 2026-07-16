@@ -41,4 +41,14 @@ impl From<serde_json::Error> for NeuralError {
     }
 }
 
+impl From<cartoboost_accelerator::AcceleratorError> for NeuralError {
+    fn from(err: cartoboost_accelerator::AcceleratorError) -> Self {
+        match err {
+            cartoboost_accelerator::AcceleratorError::InvalidArgument(message) => {
+                Self::InvalidArgument(message)
+            }
+        }
+    }
+}
+
 pub type Result<T> = std::result::Result<T, NeuralError>;

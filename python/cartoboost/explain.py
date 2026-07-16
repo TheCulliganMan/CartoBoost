@@ -22,8 +22,8 @@ def make_shap_explainer(
 ) -> Any:
     """Build a SHAP explainer for CartoBoost predictions.
 
-    SHAP is an optional dependency. Install it with ``cartoboost[explain]`` or
-    install ``shap`` directly before using this helper.
+    SHAP is an optional dependency. Install ``shap`` directly before using
+    this helper.
     """
     shap = _import_shap()
     _validate_shap_model(model)
@@ -125,8 +125,7 @@ def _import_shap() -> Any:
         import shap
     except ImportError as exc:  # pragma: no cover - depends on optional dependency
         raise ImportError(
-            "SHAP support requires the optional 'shap' package. "
-            "Install it with `pip install cartoboost[explain]` or `pip install shap`."
+            "SHAP support requires the optional 'shap' package. Install it with `pip install shap`."
         ) from exc
     return shap
 

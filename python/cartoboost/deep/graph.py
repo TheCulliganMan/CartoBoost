@@ -175,17 +175,10 @@ class DelayAwareGraphTransformer(ArtifactPersistenceMixin):
                 "provide graph structure through the native frame instead"
             )
         self.multi_view_views = None
-        if self.backend not in {"auto", "cpu", "cuda", "rocm", "mlx"}:
-            raise ValueError("backend must be one of 'auto', 'cpu', 'cuda', 'rocm', or 'mlx'")
         self._native_model = None
         self.is_fitted_ = False
 
     def fit(self, frame: GraphTemporalFrame) -> DelayAwareGraphTransformer:
-        if self.backend not in {"auto", "cpu"}:
-            raise RuntimeError(
-                "delay-aware graph transformer accelerator kernels are not available yet; "
-                f"requested backend {self.backend!r}"
-            )
         y = np.asarray(frame.y, dtype=float)
         if y.ndim != 2 or y.shape[0] < 3:
             raise ValueError("GraphTemporalFrame.y must have at least three time rows")
@@ -231,9 +224,10 @@ class DelayAwareGraphTransformer(ArtifactPersistenceMixin):
             self.horizon,
             native_delays if self.edge_delay_prior is not None else None,
             self.ridge,
-            "cpu",
+            self.backend,
         )
         self._native_model.fit(native_frame._native_frame)
+        self.selected_backend_ = str(self._native_model.backend())
         self.edges_ = native_edges
         self.edge_weights_ = np.asarray(native_weights, dtype=float)
         self.edge_delays_ = native_delays
@@ -335,7 +329,7 @@ class DelayAwareGraphTransformer(ArtifactPersistenceMixin):
             horizon=int(config["horizon"]),
             edge_delay_prior=config["edge_delay_prior"],
             ridge=float(config["ridge"]),
-            backend="cpu",
+            backend=str(native.backend()),
             multi_view_views=None,
         )
         obj._native_model = native
@@ -428,12 +422,15 @@ class DelayAwareGraphTransformer(ArtifactPersistenceMixin):
         return self
 
     def _backend_metadata(self) -> dict[str, Any]:
+        selected = getattr(self, "selected_backend_", self.backend)
         return {
             "requested": self.backend,
-            "selected": "cpu",
-            "supported": ["cpu", "cuda", "rocm", "mlx"],
-            "accelerator_ready": {"cuda": True, "rocm": True, "mlx": True},
-            "accelerated": False,
+            "selected": selected,
+            "supported": ["cpu", "cuda", "rocm", "metal", "directml", "webgpu"],
+            "accelerator_ready": {
+                name: True for name in ("cuda", "rocm", "metal", "directml", "webgpu")
+            },
+            "accelerated": selected != "cpu",
         }
 
     def _save_load_parity(self) -> bool:
@@ -642,7 +639,15 @@ def _native_model_class() -> Any:
 def _backend_value(value: Backend | str) -> str:
     if isinstance(value, Backend):
         return value.value
-    return str(value).lower()
+    # Keep Python validation derived from the shared public Backend enum. This
+    # prevents individual model families from growing stale accelerator
+    # allowlists as new native backends or aliases are added.
+    normalized = str(value).strip().lower()
+    try:
+        return Backend(normalized).value
+    except ValueError as exc:
+        allowed = ", ".join(repr(backend.value) for backend in Backend)
+        raise ValueError(f"backend must be one of {allowed}") from exc
 
 
 _DCRNN_PARAMS = {

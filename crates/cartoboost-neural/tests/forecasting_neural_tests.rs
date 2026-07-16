@@ -4,11 +4,37 @@ use cartoboost_core::forecasting::{
 };
 use cartoboost_core::BoosterConfig;
 use cartoboost_neural::{
-    ComponentMode, LaneNeuralPanelConfig, LaneNeuralPanelForecaster, NBeatsConfig,
-    NBeatsForecaster, NHiTSConfig, NHiTSForecaster, NeuralPanelConfig, NeuralPanelForecaster,
-    NeuralPanelMode, StandardScaler, TrendMode,
+    available_backends, fit_dense_regressor_with_backend, ComponentMode, DenseRegressorConfig,
+    LaneNeuralPanelConfig, LaneNeuralPanelForecaster, NBeatsConfig, NBeatsForecaster, NHiTSConfig,
+    NHiTSForecaster, NeuralPanelConfig, NeuralPanelForecaster, NeuralPanelMode, StandardScaler,
+    TrendMode,
 };
 use std::collections::BTreeMap;
+
+#[test]
+fn reusable_dense_regressor_trains_on_every_available_backend() {
+    let config = DenseRegressorConfig {
+        input_width: 2,
+        output_width: 1,
+        hidden_layers: vec![3],
+        epochs: 2,
+        learning_rate: 0.01,
+        weight_decay: 1.0e-5,
+        seed: 19,
+    };
+    let examples = vec![
+        (vec![0.0, 1.0], vec![1.0]),
+        (vec![1.0, 0.0], vec![2.0]),
+        (vec![1.0, 1.0], vec![3.0]),
+    ];
+    for backend in available_backends() {
+        let state = fit_dense_regressor_with_backend(&config, examples.clone(), Some(&backend))
+            .unwrap_or_else(|error| panic!("{backend} dense training failed: {error}"));
+        let serialized = serde_json::to_value(state).expect("serializable MLP state");
+        assert_eq!(serialized["input_width"].as_u64(), Some(2));
+        assert_eq!(serialized["output_width"].as_u64(), Some(1));
+    }
+}
 
 #[test]
 fn nbeats_forecaster_is_deterministic_on_cpu() {
@@ -187,6 +213,37 @@ fn metal_neural_panel_predictions_match_cpu_backend() {
         cpu_predictions.predictions(),
         1.0e-4,
     );
+}
+
+#[test]
+fn neural_panel_fit_and_predict_run_on_every_available_backend() {
+    let frame = taxi_colon_frame();
+    let mut cpu_config = NeuralPanelConfig {
+        n_lags: 3,
+        n_forecasts: 1,
+        quantiles: vec![0.5],
+        ar_layers: vec![3],
+        epochs: 2,
+        learning_rate: 0.01,
+        ..NeuralPanelConfig::default()
+    };
+    cpu_config.backend = cartoboost_neural::select_backend(Some("cpu")).unwrap();
+    let mut cpu = NeuralPanelForecaster::new(cpu_config.clone()).unwrap();
+    cpu.fit(&frame).unwrap();
+    let expected = cpu.predict(1).unwrap();
+
+    for backend in available_backends() {
+        let mut config = cpu_config.clone();
+        config.backend = cartoboost_neural::select_backend(Some(&backend)).unwrap();
+        let mut model = NeuralPanelForecaster::new(config).unwrap();
+        model
+            .fit(&frame)
+            .unwrap_or_else(|error| panic!("{backend} neural-panel fit failed: {error}"));
+        let actual = model
+            .predict(1)
+            .unwrap_or_else(|error| panic!("{backend} neural-panel predict failed: {error}"));
+        assert_forecasts_close(actual.predictions(), expected.predictions(), 2.0e-3);
+    }
 }
 
 #[test]

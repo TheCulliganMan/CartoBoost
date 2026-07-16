@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 
 from .._artifacts import ArtifactPersistenceMixin
+from ..config import Backend
 from ._native import dumps, loads, require_native
 from .flow import flow_uncertainty_report
 from .frames import DirectionalPairFrame, EntityPanelFrame
@@ -29,6 +30,7 @@ class DirectionalPairForecaster:
         early_stopping_rounds: int = 80,
         seed: int = 0,
         loss: str = "squared_error",
+        backend: Backend | str = Backend.CPU,
         shared_pair_embedding: Any | None = None,
         multi_view_views: dict[str, Any] | None = None,
         **params: Any,
@@ -45,6 +47,7 @@ class DirectionalPairForecaster:
         self.early_stopping_rounds = int(early_stopping_rounds)
         self.seed = int(seed)
         self.loss = loss
+        self.backend = str(backend)
         if shared_pair_embedding is not None or multi_view_views is not None:
             raise RuntimeError(
                 "NumPy representation primitives are not shipped in CartoBoost 0.3; "
@@ -80,8 +83,9 @@ class DirectionalPairForecaster:
             "seed": self.seed,
             "loss": self.loss,
         }
-        self._artifact_json = fit(dumps(rows), dumps(options))
+        self._artifact_json = fit(dumps(rows), dumps(options), self.backend)
         self.metadata_ = loads(self._artifact_json)
+        self.backend_ = str(self.metadata_["backend"]["selected"])
         self.metadata_["preserve_direction"] = self.preserve_direction
         self.metadata_["shared_representation"] = None
         self.metadata_["shared_representation_consumed"] = False
@@ -133,6 +137,7 @@ class DirectionalPairForecaster:
             "early_stopping_rounds": self.early_stopping_rounds,
             "seed": self.seed,
             "loss": self.loss,
+            "backend": self.backend,
             "shared_pair_embedding": None,
             "multi_view_views": None,
             **self._params,
@@ -154,11 +159,13 @@ class TemporalEntityTransformer:
         lookback: int = 56,
         horizon: int = 14,
         architecture: str = "temporal_attention",
+        backend: Backend | str = Backend.CPU,
         **params: Any,
     ) -> None:
         self.lookback = int(lookback)
         self.horizon = int(horizon)
         self.architecture = str(architecture)
+        self.backend = str(backend)
         self._params = dict(params)
         self.is_fitted_ = False
 
@@ -177,8 +184,10 @@ class TemporalEntityTransformer:
             dumps(np.asarray(frame.y, dtype=float).tolist()),
             self.lookback,
             self.horizon,
+            self.backend,
         )
         self.metadata_ = loads(self._artifact_json)
+        self.backend_ = str(self.metadata_["backend"]["selected"])
         self.metadata_["cutoff"] = str(frame.timestamps[-1])
         self.metadata_["architecture"] = self.architecture
         self.metadata_["regime_moe"] = _temporal_regime_report(frame)

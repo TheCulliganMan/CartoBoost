@@ -6,7 +6,7 @@ import json
 from collections.abc import Sequence
 from typing import Any
 
-from .config import Drift, Kernel
+from .config import Backend, Drift, Kernel
 
 
 def series_forecast(
@@ -308,6 +308,7 @@ def ordinary_kriging_predict(
     min_neighbors: int = 1,
     max_distance: float | None = None,
     detailed: bool = False,
+    backend: Backend | str = Backend.CPU,
 ) -> list[dict[str, Any]]:
     """Predict target coordinates with Rust ordinary kriging.
 
@@ -342,6 +343,7 @@ def ordinary_kriging_predict(
             None if max_neighbors is None else int(max_neighbors),
             int(min_neighbors),
             None if max_distance is None else float(max_distance),
+            str(backend),
         )
         detailed_rows = [
             {
@@ -365,6 +367,7 @@ def ordinary_kriging_predict(
         target_rows,
         float(range),
         float(nugget),
+        str(backend),
     )
     return [
         {"x": x, "y": y, "mean": mean, "weights": list(weights)} for x, y, mean, weights in rows
@@ -384,6 +387,7 @@ def ordinary_kriging_leave_one_out(
     max_neighbors: int | None = None,
     min_neighbors: int = 1,
     max_distance: float | None = None,
+    backend: Backend | str = Backend.CPU,
 ) -> list[dict[str, Any]]:
     """Run Rust leave-one-out kriging diagnostics for observed coordinates."""
 
@@ -400,6 +404,7 @@ def ordinary_kriging_leave_one_out(
         None if max_neighbors is None else int(max_neighbors),
         int(min_neighbors),
         None if max_distance is None else float(max_distance),
+        str(backend),
     )
     return [
         {
@@ -421,6 +426,7 @@ def empirical_variogram(
     max_distance: float | None = None,
     anisotropy_angle_degrees: float = 0.0,
     anisotropy_scaling: float = 1.0,
+    backend: Backend | str = Backend.CPU,
 ) -> list[dict[str, Any]]:
     """Compute a Rust binned empirical semivariogram."""
 
@@ -431,6 +437,7 @@ def empirical_variogram(
         None if max_distance is None else float(max_distance),
         float(anisotropy_angle_degrees),
         float(anisotropy_scaling),
+        str(backend),
     )
     return list(json.loads(payload)["bins"])
 
@@ -445,6 +452,7 @@ def fit_ordinary_kriging_variogram(
     bin_count: int = 10,
     anisotropy_angle_degrees: float = 0.0,
     anisotropy_scaling: float = 1.0,
+    backend: Backend | str = Backend.CPU,
 ) -> dict[str, Any]:
     """Fit a kriging variogram by weighted least squares over candidate grids."""
 
@@ -458,6 +466,7 @@ def fit_ordinary_kriging_variogram(
         int(bin_count),
         float(anisotropy_angle_degrees),
         float(anisotropy_scaling),
+        str(backend),
     )
     return dict(json.loads(payload))
 
@@ -475,6 +484,7 @@ def ordinary_kriging_leave_one_out_diagnostics(
     max_neighbors: int | None = None,
     min_neighbors: int = 1,
     max_distance: float | None = None,
+    backend: Backend | str = Backend.CPU,
 ) -> dict[str, Any]:
     """Run leave-one-out kriging and return predictions plus residual diagnostics."""
 
@@ -491,6 +501,7 @@ def ordinary_kriging_leave_one_out_diagnostics(
         None if max_neighbors is None else int(max_neighbors),
         int(min_neighbors),
         None if max_distance is None else float(max_distance),
+        str(backend),
     )
     return dict(json.loads(payload))
 

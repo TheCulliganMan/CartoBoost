@@ -377,7 +377,7 @@ def _forecast_frame_from_artifact(payload: Any) -> Any:
         import pandas as pd
     except ImportError as exc:  # pragma: no cover - pandas is an explicit forecast dependency.
         raise ImportError(
-            "loading a forecasting artifact requires pandas; install cartoboost[pandas]"
+            "loading a forecasting artifact requires pandas; install it with `pip install pandas`"
         ) from exc
     data = pd.DataFrame.from_records(records, columns=[str(column) for column in columns])
     return ForecastFrame.from_pandas(

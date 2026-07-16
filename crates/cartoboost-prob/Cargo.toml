@@ -7,6 +7,17 @@ description = "Probabilistic prediction, calibration, and distributional metrics
 
 [dependencies]
 cartoboost-core = { path = "../cartoboost-core" }
+cartoboost-neural = { path = "../cartoboost-neural" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+rayon = "1.11"
+
+[features]
+default = []
+cuda = ["cartoboost-neural/cuda"]
+rocm = ["cartoboost-neural/rocm"]
+hip = ["cartoboost-neural/hip"]
+metal = ["cartoboost-neural/metal"]
+webgpu = ["cartoboost-neural/webgpu"]
+directml = ["cartoboost-neural/directml"]

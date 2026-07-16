@@ -8,9 +8,9 @@ use cartoboost_core::forecasting::{
     CalendarFeature, CartoBoostDirectForecaster, CartoBoostLagForecaster, ClassicalExpertBank,
     CrostonForecaster, CusumConfig, ETSForecaster, EwmaVolatility, EwmaVolatilityConfig,
     ForecastFrame, ForecastFrameMetadata, ForecastFrequency, ForecastResult, Forecaster,
-    IntermittentDemandConfig, IntermittentDemandForecaster, KalmanForecaster,
-    KalmanResidualCorrector, KrigingForecaster, LagFeatureConfig, LagPlusConfig, LagPlusForecaster,
-    LocalLevelKalmanForecaster, LocalStandardScaledForecaster, Log1pForecaster,
+    GlobalForecastTargetMode, IntermittentDemandConfig, IntermittentDemandForecaster,
+    KalmanForecaster, KalmanResidualCorrector, KrigingForecaster, LagFeatureConfig, LagPlusConfig,
+    LagPlusForecaster, LocalLevelKalmanForecaster, LocalStandardScaledForecaster, Log1pForecaster,
     MSTLCartoBoostForecaster, NaiveForecaster, OptimizedThetaForecaster, PageHinkley,
     PageHinkleyConfig, PiecewiseLinearComponentMode, PiecewiseLinearEvent, PiecewiseLinearFitLoss,
     PiecewiseLinearGrowth, PiecewiseLinearSeasonalConfig, PiecewiseLinearSeasonalForecaster,
@@ -43,6 +43,7 @@ use cartoboost_geo_core::{
 };
 use cartoboost_geo_st::{
     graph_metrics as graph_st_metrics, select_compute_backend as graph_st_select_backend,
+    select_compute_backend_for_operations as graph_st_select_backend_for_operations,
     CsrAdjacency as GraphStCsrAdjacency, DcrnnConfig as GraphStDcrnnConfig,
     DcrnnForecaster as GraphStDcrnnForecaster, GraphTemporalFrame as GraphStTemporalFrame,
     GraphTransformerProfile as BrowserGraphTransformerProfile,
@@ -66,26 +67,35 @@ use cartoboost_neural::{
     graph_neural_operator_predict_json as deep_graph_neural_operator_predict_json,
     neural_operator_synthetic_benchmark_json as deep_neural_operator_synthetic_benchmark_json,
     response_curve_fit_with_backend as deep_response_curve_fit,
-    response_curve_predict as deep_response_curve_predict,
+    response_curve_predict as deep_response_curve_predict, select_backend, select_backend_for,
     service_residual_fit_with_backend as deep_service_residual_fit,
     service_residual_predict as deep_service_residual_predict,
     temporal_entity_fit as deep_temporal_entity_fit,
     temporal_entity_predict as deep_temporal_entity_predict, ArtifactFallbackKind,
-    BackendSelection, ComponentMode as NeuralComponentMode, DeepDirectionalPairRow,
-    DeepEventArtifact, DeepResponseArtifact, DeepResponseRow, DeepServiceResidualArtifact,
-    DeepServiceResidualRow, DeepTemporalEntityArtifact, GraphSageConfig, GraphSageRegressor,
-    HeteroGraphSageConfig, HeteroGraphSageRegressor, HinSageConfig, HinSageRegressor, NBeatsConfig,
-    NBeatsForecaster, NHiTSConfig, NHiTSForecaster, NeuralEmbeddingRegressor, NeuralPanelConfig,
-    NeuralPanelForecaster, NeuralPanelLoss, NeuralPanelMode, Node2VecConfig, Node2VecRegressor,
+    BackendOperation, BackendSelection, ComponentMode as NeuralComponentMode,
+    DeepDirectionalPairRow, DeepEventArtifact, DeepResponseArtifact, DeepResponseRow,
+    DeepServiceResidualArtifact, DeepServiceResidualRow, DeepTemporalEntityArtifact,
+    GraphSageConfig, GraphSageRegressor, HeteroGraphSageConfig, HeteroGraphSageRegressor,
+    HinSageConfig, HinSageRegressor, NBeatsConfig, NBeatsForecaster, NHiTSConfig, NHiTSForecaster,
+    NeuralEmbeddingRegressor, NeuralPanelConfig, NeuralPanelForecaster, NeuralPanelLoss,
+    NeuralPanelMode, Node2VecConfig, Node2VecRegressor,
     SpatialOperatorEdge as DeepSpatialOperatorEdge, StandaloneBoosterConfig,
     TrendMode as NeuralTrendMode,
 };
 #[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
-use cartoboost_neural::{webgpu_dense_layer_f32_async, webgpu_dispatch_report_async};
+use cartoboost_neural::{
+    webgpu_adamw_f32_async, webgpu_affine_scores_f32_async,
+    webgpu_csr_diffusion_backward_f32_async, webgpu_csr_diffusion_f32_async,
+    webgpu_csr_row_softmax_backward_f32_async, webgpu_csr_row_softmax_f32_async,
+    webgpu_dense_layer_f32_async, webgpu_dispatch_report_async, webgpu_layer_norm_f32_async,
+    webgpu_pair_sigmoid_scores_f32_async, webgpu_pairwise_squared_distances_f32_async,
+    webgpu_scalar_graph_f32_async, webgpu_scalar_graph_train_step_f32_async,
+    webgpu_train_tanh_mlp_f32_async,
+};
 use cartoboost_prob::{
-    conditional_flow_fit_json as deep_conditional_flow_fit_json,
+    conditional_flow_fit_with_backend_json as deep_conditional_flow_fit_json,
     conditional_flow_predict_json as deep_conditional_flow_predict_json,
-    diffusion_scenario_generate_json as deep_diffusion_scenario_generate_json,
+    diffusion_scenario_generate_with_backend_json as deep_diffusion_scenario_generate_json,
     ConditionalFlowDistributionHead as DeepConditionalFlowDistributionHead,
     DiffusionEdge as DeepDiffusionEdge,
 };
@@ -125,6 +135,7 @@ struct BrowserForecastRow {
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct BrowserForecastOptions {
+    backend: Option<String>,
     input_size: Option<usize>,
     hidden_size: Option<usize>,
     epochs: Option<usize>,
@@ -485,6 +496,7 @@ struct BrowserRegressionOptions {
     min_samples_leaf: Option<usize>,
     monotonic_constraints: Option<Vec<i8>>,
     include_model_visualization: Option<bool>,
+    backend: Option<String>,
 }
 
 impl Default for BrowserRegressionOptions {
@@ -506,6 +518,7 @@ impl Default for BrowserRegressionOptions {
             min_samples_leaf: None,
             monotonic_constraints: None,
             include_model_visualization: None,
+            backend: None,
         }
     }
 }
@@ -581,6 +594,7 @@ struct BrowserNeuralOptions {
     graph_sage_negative_samples: Option<usize>,
     graph_sage_seed: Option<u64>,
     include_model_visualization: Option<bool>,
+    backend: Option<String>,
 }
 
 impl Default for BrowserNeuralOptions {
@@ -607,6 +621,7 @@ impl Default for BrowserNeuralOptions {
             graph_sage_negative_samples: None,
             graph_sage_seed: None,
             include_model_visualization: None,
+            backend: None,
         }
     }
 }
@@ -813,6 +828,8 @@ struct BrowserGeostatsOptions {
     anisotropy_angle_degrees: f64,
     #[serde(default = "default_geostats_anisotropy_scaling")]
     anisotropy_scaling: f64,
+    #[serde(default = "default_backend")]
+    backend: String,
 }
 
 impl Default for BrowserGeostatsOptions {
@@ -825,6 +842,7 @@ impl Default for BrowserGeostatsOptions {
             n_neighbors: default_geostats_neighbors(),
             anisotropy_angle_degrees: 0.0,
             anisotropy_scaling: default_geostats_anisotropy_scaling(),
+            backend: default_backend(),
         }
     }
 }
@@ -1048,6 +1066,8 @@ struct BrowserGraphForecastResponse {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct BrowserMarketStructureRequest {
+    #[serde(default = "default_backend")]
+    backend: String,
     lane_ids: Vec<String>,
     timestamps: Vec<i64>,
     target_names: Vec<String>,
@@ -1080,6 +1100,21 @@ pub fn run_forecast(request: JsValue) -> std::result::Result<JsValue, JsValue> {
     serialize_json_response(&response, "forecast response")
 }
 
+/// Fits and recursively predicts N-BEATS/N-HiTS with browser WebGPU training
+/// and dense hidden-layer inference. Kept separate from the synchronous
+/// dispatcher because browser GPU promises cannot be synchronously blocked.
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+#[wasm_bindgen(js_name = runNeuralForecastWebgpu)]
+pub async fn run_neural_forecast_webgpu(request: JsValue) -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    let request: BrowserForecastRequest = serde_wasm_bindgen::from_value(request)
+        .map_err(|error| JsValue::from_str(&format!("invalid forecast request: {error}")))?;
+    let response = run_neural_forecast_webgpu_request(request)
+        .await
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    serialize_json_response(&response, "WebGPU neural forecast response")
+}
+
 #[wasm_bindgen(js_name = runGraphForecast)]
 pub fn run_graph_forecast(request: JsValue) -> std::result::Result<JsValue, JsValue> {
     console_error_panic_hook::set_once();
@@ -1088,6 +1123,20 @@ pub fn run_graph_forecast(request: JsValue) -> std::result::Result<JsValue, JsVa
     let response = run_graph_forecast_request(request)
         .map_err(|error| JsValue::from_str(&error.to_string()))?;
     serialize_json_response(&response, "graph forecast response")
+}
+
+/// Runs a graph-diffusion forecaster whose sparse propagation remains on
+/// browser WebGPU for every diffusion and horizon step.
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+#[wasm_bindgen(js_name = runGraphDiffusionWebgpu)]
+pub async fn run_graph_diffusion_webgpu(request: JsValue) -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    let request: BrowserGraphForecastRequest = serde_wasm_bindgen::from_value(request)
+        .map_err(|error| JsValue::from_str(&format!("invalid graph forecast request: {error}")))?;
+    let response = run_graph_diffusion_webgpu_request(request)
+        .await
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    serialize_json_response(&response, "WebGPU graph diffusion forecast response")
 }
 
 /// Fits the generic market structure model in-browser and returns the full
@@ -1142,7 +1191,11 @@ pub fn run_market_structure_explorer(request: JsValue) -> std::result::Result<Js
         request.frequency,
     )
     .map_err(|error| JsValue::from_str(&error.to_string()))?;
-    let mut model = BrowserMarketStructureForecaster::new(BrowserMarketStructureConfig::default())
+    let config = BrowserMarketStructureConfig {
+        backend: request.backend,
+        ..BrowserMarketStructureConfig::default()
+    };
+    let mut model = BrowserMarketStructureForecaster::new(config)
         .map_err(|error| JsValue::from_str(&error.to_string()))?;
     model
         .fit(&frame)
@@ -1259,6 +1312,30 @@ pub async fn webgpu_dispatch_report_wasm(len: usize) -> std::result::Result<JsVa
     serialize_json_response(&report, "WebGPU dispatch report")
 }
 
+/// Probes the browser adapter and reports the same complete operation contract
+/// used by native backends. This is async because browser adapter discovery is
+/// promise-driven and must never be guessed from compile-time features alone.
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+#[wasm_bindgen(js_name = webgpuCapabilities)]
+pub async fn webgpu_capabilities_wasm() -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    webgpu_dispatch_report_async(1)
+        .await
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    serialize_json_response(
+        &json!({
+            "backend": "webgpu",
+            "available": true,
+            "asynchronous": true,
+            "operations": BackendOperation::ALL
+                .iter()
+                .map(|operation| operation.as_str())
+                .collect::<Vec<_>>(),
+        }),
+        "browser WebGPU capabilities",
+    )
+}
+
 #[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
 #[wasm_bindgen(js_name = webgpuDenseLayer)]
 pub async fn webgpu_dense_layer_wasm(
@@ -1273,6 +1350,254 @@ pub async fn webgpu_dense_layer_wasm(
         .await
         .map_err(|error| JsValue::from_str(&error.to_string()))?;
     serialize_json_response(&scores, "WebGPU dense layer scores")
+}
+
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+#[wasm_bindgen(js_name = webgpuAffineScores)]
+pub async fn webgpu_affine_scores_wasm(
+    features: JsValue,
+    means: Vec<f64>,
+    weights: Vec<f64>,
+    intercepts: Vec<f64>,
+) -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    let features: Vec<Vec<f64>> = serde_wasm_bindgen::from_value(features)
+        .map_err(|error| JsValue::from_str(&format!("invalid affine features: {error}")))?;
+    let scores = webgpu_affine_scores_f32_async(&features, &means, &weights, &intercepts)
+        .await
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    serialize_json_response(&scores, "WebGPU affine scores")
+}
+
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+#[wasm_bindgen(js_name = webgpuPairwiseSquaredDistances)]
+pub async fn webgpu_pairwise_squared_distances_wasm(
+    left: JsValue,
+    right: JsValue,
+) -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    let left: Vec<Vec<f32>> = serde_wasm_bindgen::from_value(left)
+        .map_err(|error| JsValue::from_str(&format!("invalid left points: {error}")))?;
+    let right: Vec<Vec<f32>> = serde_wasm_bindgen::from_value(right)
+        .map_err(|error| JsValue::from_str(&format!("invalid right points: {error}")))?;
+    let distances = webgpu_pairwise_squared_distances_f32_async(&left, &right)
+        .await
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    serialize_json_response(&distances, "WebGPU pairwise squared distances")
+}
+
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+#[wasm_bindgen(js_name = webgpuPairSigmoidScores)]
+pub async fn webgpu_pair_sigmoid_scores_wasm(
+    embeddings: JsValue,
+    pairs: JsValue,
+) -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    let embeddings: Vec<Vec<f32>> = serde_wasm_bindgen::from_value(embeddings)
+        .map_err(|error| JsValue::from_str(&format!("invalid embeddings: {error}")))?;
+    let pairs: Vec<(usize, usize)> = serde_wasm_bindgen::from_value(pairs)
+        .map_err(|error| JsValue::from_str(&format!("invalid pairs: {error}")))?;
+    let scores = webgpu_pair_sigmoid_scores_f32_async(&embeddings, &pairs)
+        .await
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    serialize_json_response(&scores, "WebGPU pair sigmoid scores")
+}
+
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+#[wasm_bindgen(js_name = webgpuCsrDiffusion)]
+pub async fn webgpu_csr_diffusion_wasm(
+    indptr: Vec<u32>,
+    indices: Vec<u32>,
+    weights: Vec<f32>,
+    channels: usize,
+    values: Vec<f32>,
+) -> std::result::Result<Vec<f32>, JsValue> {
+    console_error_panic_hook::set_once();
+    webgpu_csr_diffusion_f32_async(&indptr, &indices, &weights, channels, &values)
+        .await
+        .map_err(|error| JsValue::from_str(&error.to_string()))
+}
+
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+#[wasm_bindgen(js_name = webgpuCsrDiffusionBackward)]
+pub async fn webgpu_csr_diffusion_backward_wasm(
+    indptr: Vec<u32>,
+    indices: Vec<u32>,
+    weights: Vec<f32>,
+    channels: usize,
+    values: Vec<f32>,
+    output_grad: Vec<f32>,
+) -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    let result = webgpu_csr_diffusion_backward_f32_async(
+        &indptr,
+        &indices,
+        &weights,
+        channels,
+        &values,
+        &output_grad,
+    )
+    .await
+    .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    serialize_json_response(
+        &json!({"inputGrad": result.input_grad, "edgeGrad": result.edge_grad}),
+        "WebGPU CSR diffusion backward",
+    )
+}
+
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+#[wasm_bindgen(js_name = webgpuCsrRowSoftmax)]
+pub async fn webgpu_csr_row_softmax_wasm(
+    indptr: Vec<u32>,
+    logits: Vec<f32>,
+) -> std::result::Result<Vec<f32>, JsValue> {
+    console_error_panic_hook::set_once();
+    webgpu_csr_row_softmax_f32_async(&indptr, &logits)
+        .await
+        .map_err(|error| JsValue::from_str(&error.to_string()))
+}
+
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+#[wasm_bindgen(js_name = webgpuCsrRowSoftmaxBackward)]
+pub async fn webgpu_csr_row_softmax_backward_wasm(
+    indptr: Vec<u32>,
+    weights: Vec<f32>,
+    output_grad: Vec<f32>,
+) -> std::result::Result<Vec<f32>, JsValue> {
+    console_error_panic_hook::set_once();
+    webgpu_csr_row_softmax_backward_f32_async(&indptr, &weights, &output_grad)
+        .await
+        .map_err(|error| JsValue::from_str(&error.to_string()))
+}
+
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+#[wasm_bindgen(js_name = webgpuAdamwStep)]
+pub async fn webgpu_adamw_step_wasm(
+    parameters: Vec<f32>,
+    first_moment: Vec<f32>,
+    second_moment: Vec<f32>,
+    gradient: Vec<f32>,
+    step: u64,
+    learning_rate: f32,
+    weight_decay: f32,
+) -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    let (parameters, first_moment, second_moment) = webgpu_adamw_f32_async(
+        &parameters,
+        &first_moment,
+        &second_moment,
+        &gradient,
+        step,
+        learning_rate,
+        weight_decay,
+    )
+    .await
+    .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    serialize_json_response(
+        &json!({
+            "parameters": parameters,
+            "firstMoment": first_moment,
+            "secondMoment": second_moment,
+        }),
+        "WebGPU AdamW state",
+    )
+}
+
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+#[wasm_bindgen(js_name = webgpuLayerNorm)]
+pub async fn webgpu_layer_norm_wasm(
+    values: Vec<f32>,
+    rows: usize,
+    width: usize,
+    gamma: Vec<f32>,
+    beta: Vec<f32>,
+) -> std::result::Result<Vec<f32>, JsValue> {
+    console_error_panic_hook::set_once();
+    webgpu_layer_norm_f32_async(&values, rows, width, &gamma, &beta)
+        .await
+        .map_err(|error| JsValue::from_str(&error.to_string()))
+}
+
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+#[wasm_bindgen(js_name = webgpuScalarGraph)]
+pub async fn webgpu_scalar_graph_wasm(
+    initial_values: Vec<f32>,
+    opcodes: Vec<u8>,
+    left: Vec<u32>,
+    right: Vec<u32>,
+) -> std::result::Result<Vec<f32>, JsValue> {
+    console_error_panic_hook::set_once();
+    webgpu_scalar_graph_f32_async(&initial_values, &opcodes, &left, &right)
+        .await
+        .map_err(|error| JsValue::from_str(&error.to_string()))
+}
+
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+#[wasm_bindgen(js_name = webgpuTrainTanhMlp)]
+pub async fn webgpu_train_tanh_mlp_wasm(
+    inputs: JsValue,
+    targets: Vec<f32>,
+    hidden_size: usize,
+    epochs: usize,
+    learning_rate: f32,
+    parameters: Vec<f32>,
+) -> std::result::Result<Vec<f32>, JsValue> {
+    console_error_panic_hook::set_once();
+    let inputs: Vec<Vec<f32>> = serde_wasm_bindgen::from_value(inputs)
+        .map_err(|error| JsValue::from_str(&format!("invalid MLP inputs: {error}")))?;
+    webgpu_train_tanh_mlp_f32_async(
+        &inputs,
+        &targets,
+        hidden_size,
+        epochs,
+        learning_rate,
+        &parameters,
+    )
+    .await
+    .map_err(|error| JsValue::from_str(&error.to_string()))
+}
+
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+#[wasm_bindgen(js_name = webgpuScalarGraphTrainStep)]
+#[allow(clippy::too_many_arguments)]
+pub async fn webgpu_scalar_graph_train_step_wasm(
+    initial_values: Vec<f32>,
+    opcodes: Vec<u8>,
+    left: Vec<u32>,
+    right: Vec<u32>,
+    parameter_ids: Vec<u32>,
+    loss: usize,
+    parameters: Vec<f32>,
+    first_moment: Vec<f32>,
+    second_moment: Vec<f32>,
+    step: u64,
+    learning_rate: f32,
+    weight_decay: f32,
+) -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    let (loss, parameters, first_moment, second_moment) = webgpu_scalar_graph_train_step_f32_async(
+        &initial_values,
+        &opcodes,
+        &left,
+        &right,
+        &parameter_ids,
+        loss,
+        &parameters,
+        &first_moment,
+        &second_moment,
+        step,
+        learning_rate,
+        weight_decay,
+    )
+    .await
+    .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    serialize_json_response(
+        &json!({
+            "loss": loss, "parameters": parameters,
+            "firstMoment": first_moment, "secondMoment": second_moment,
+        }),
+        "WebGPU scalar graph training state",
+    )
 }
 
 /// Predicts event probabilities with the artifact's hidden layer dispatched on
@@ -1523,13 +1848,19 @@ pub fn deep_conditional_flow_fit_wasm(
     residuals: Vec<f64>,
     quantiles: Vec<f64>,
     sample_count: usize,
+    backend: Option<String>,
 ) -> std::result::Result<JsValue, JsValue> {
     console_error_panic_hook::set_once();
     let hidden: Vec<Vec<f64>> = serde_wasm_bindgen::from_value(hidden)
         .map_err(|error| JsValue::from_str(&format!("invalid hidden state: {error}")))?;
-    let artifact_json =
-        deep_conditional_flow_fit_json(&hidden, &residuals, &quantiles, sample_count)
-            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    let artifact_json = deep_conditional_flow_fit_json(
+        &hidden,
+        &residuals,
+        &quantiles,
+        sample_count,
+        backend.as_deref(),
+    )
+    .map_err(|error| JsValue::from_str(&error.to_string()))?;
     let artifact: DeepConditionalFlowDistributionHead = serde_json::from_str(&artifact_json)
         .map_err(|error| JsValue::from_str(&format!("invalid flow artifact JSON: {error}")))?;
     serialize_json_response(&artifact, "deep conditional flow artifact")
@@ -1556,6 +1887,43 @@ pub fn deep_conditional_flow_predict_wasm(
     serialize_json_response(&prediction, "deep conditional flow prediction")
 }
 
+/// Conditional-flow inference with both learned affine projections executed
+/// by browser WebGPU. Sampling and metrics reuse the native probability
+/// contract so this export remains numerically aligned with native backends.
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+#[wasm_bindgen(js_name = deepConditionalFlowPredictWebgpu)]
+pub async fn deep_conditional_flow_predict_webgpu_wasm(
+    artifact: JsValue,
+    hidden: JsValue,
+    actual: Option<Vec<f64>>,
+) -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    let artifact: DeepConditionalFlowDistributionHead = serde_wasm_bindgen::from_value(artifact)
+        .map_err(|error| JsValue::from_str(&format!("invalid flow artifact: {error}")))?;
+    let hidden: Vec<Vec<f64>> = serde_wasm_bindgen::from_value(hidden)
+        .map_err(|error| JsValue::from_str(&format!("invalid hidden state: {error}")))?;
+    if artifact.location_weights.is_empty() || artifact.scale_weights.is_empty() {
+        return Err(JsValue::from_str("flow artifact weights must be non-empty"));
+    }
+    let location_weights = &artifact.location_weights[1..];
+    let scale_weights = &artifact.scale_weights[1..];
+    let means = vec![0.0; hidden.first().map_or(0, Vec::len)];
+    let location_intercepts = vec![artifact.location_weights[0]; hidden.len()];
+    let scale_intercepts = vec![artifact.scale_weights[0]; hidden.len()];
+    let location =
+        webgpu_affine_scores_f32_async(&hidden, &means, location_weights, &location_intercepts)
+            .await
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    let raw_scale =
+        webgpu_affine_scores_f32_async(&hidden, &means, scale_weights, &scale_intercepts)
+            .await
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    let prediction = artifact
+        .predict_from_linear_outputs(&location, &raw_scale, actual.as_deref())
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    serialize_json_response(&prediction, "WebGPU conditional flow prediction")
+}
+
 #[wasm_bindgen(js_name = deepDiffusionScenarioGenerate)]
 pub fn deep_diffusion_scenario_generate_wasm(
     point_forecast: JsValue,
@@ -1563,6 +1931,7 @@ pub fn deep_diffusion_scenario_generate_wasm(
     scenario_count: usize,
     diffusion_steps: usize,
     shock_scale: f64,
+    backend: Option<String>,
 ) -> std::result::Result<JsValue, JsValue> {
     console_error_panic_hook::set_once();
     let point_forecast: Vec<Vec<f64>> = serde_wasm_bindgen::from_value(point_forecast)
@@ -1575,11 +1944,40 @@ pub fn deep_diffusion_scenario_generate_wasm(
         scenario_count,
         diffusion_steps,
         shock_scale,
+        backend.as_deref(),
     )
     .map_err(|error| JsValue::from_str(&error.to_string()))?;
     let prediction: Value = serde_json::from_str(&prediction_json)
         .map_err(|error| JsValue::from_str(&format!("invalid diffusion scenario JSON: {error}")))?;
     serialize_json_response(&prediction, "deep diffusion scenario prediction")
+}
+
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+#[wasm_bindgen(js_name = deepDiffusionScenarioGenerateWebgpu)]
+pub async fn deep_diffusion_scenario_generate_webgpu_wasm(
+    point_forecast: JsValue,
+    edges: JsValue,
+    scenario_count: usize,
+    diffusion_steps: usize,
+    shock_scale: f64,
+) -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    let point_forecast: Vec<Vec<f64>> = serde_wasm_bindgen::from_value(point_forecast)
+        .map_err(|error| JsValue::from_str(&format!("invalid point forecast: {error}")))?;
+    let edges: Vec<DeepDiffusionEdge> = serde_wasm_bindgen::from_value(edges)
+        .map_err(|error| JsValue::from_str(&format!("invalid diffusion edges: {error}")))?;
+    let model = cartoboost_prob::GeoTemporalDiffusionScenarioModel::new_with_backend(
+        scenario_count,
+        diffusion_steps,
+        shock_scale,
+        Some("webgpu"),
+    )
+    .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    let prediction = model
+        .generate_webgpu(&point_forecast, &edges)
+        .await
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    serialize_json_response(&prediction, "WebGPU diffusion scenario prediction")
 }
 
 #[wasm_bindgen(js_name = deepGraphNeuralOperatorPredict)]
@@ -1590,6 +1988,7 @@ pub fn deep_graph_neural_operator_predict_wasm(
     exogenous_fields: JsValue,
     smoothing: f64,
     coordinate_scale: f64,
+    backend: Option<String>,
 ) -> std::result::Result<JsValue, JsValue> {
     console_error_panic_hook::set_once();
     let field_values: Vec<Vec<f64>> = serde_wasm_bindgen::from_value(field_values)
@@ -1607,11 +2006,47 @@ pub fn deep_graph_neural_operator_predict_wasm(
         &exogenous_fields,
         smoothing,
         coordinate_scale,
+        backend.as_deref(),
     )
     .map_err(|error| JsValue::from_str(&error.to_string()))?;
     let prediction: Value = serde_json::from_str(&prediction_json)
         .map_err(|error| JsValue::from_str(&format!("invalid operator JSON: {error}")))?;
     serialize_json_response(&prediction, "deep graph neural operator prediction")
+}
+
+/// Graph-neural-operator inference with graph aggregation executed by browser
+/// WebGPU. This is async because browsers do not expose synchronous adapter
+/// discovery or command completion.
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+#[wasm_bindgen(js_name = deepGraphNeuralOperatorPredictWebgpu)]
+pub async fn deep_graph_neural_operator_predict_webgpu_wasm(
+    field_values: JsValue,
+    coordinates: JsValue,
+    edges: JsValue,
+    exogenous_fields: JsValue,
+    smoothing: f64,
+    coordinate_scale: f64,
+) -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    let field_values: Vec<Vec<f64>> = serde_wasm_bindgen::from_value(field_values)
+        .map_err(|error| JsValue::from_str(&format!("invalid field values: {error}")))?;
+    let coordinates: Vec<Vec<f64>> = serde_wasm_bindgen::from_value(coordinates)
+        .map_err(|error| JsValue::from_str(&format!("invalid coordinates: {error}")))?;
+    let edges: Vec<DeepSpatialOperatorEdge> = serde_wasm_bindgen::from_value(edges)
+        .map_err(|error| JsValue::from_str(&format!("invalid operator edges: {error}")))?;
+    let exogenous_fields: Vec<Vec<f64>> = serde_wasm_bindgen::from_value(exogenous_fields)
+        .map_err(|error| JsValue::from_str(&format!("invalid exogenous fields: {error}")))?;
+    let operator = cartoboost_neural::operator::GraphNeuralOperator::new_with_backend(
+        smoothing,
+        coordinate_scale,
+        Some("webgpu"),
+    )
+    .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    let prediction = operator
+        .predict_webgpu(&field_values, &coordinates, &edges, &exogenous_fields)
+        .await
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    serialize_json_response(&prediction, "WebGPU graph neural operator prediction")
 }
 
 #[wasm_bindgen(js_name = deepNeuralOperatorSyntheticBenchmark)]
@@ -1866,6 +2301,18 @@ pub fn run_geostatistics_model(request: JsValue) -> std::result::Result<JsValue,
     })
 }
 
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+#[wasm_bindgen(js_name = runGeostatisticsWebgpu)]
+pub async fn run_geostatistics_webgpu(request: JsValue) -> std::result::Result<JsValue, JsValue> {
+    console_error_panic_hook::set_once();
+    let request: BrowserGeostatsRequest = serde_wasm_bindgen::from_value(request)
+        .map_err(|error| JsValue::from_str(&format!("invalid geostatistics request: {error}")))?;
+    let response = run_geostatistics_webgpu_request(request)
+        .await
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    serialize_json_response(&response, "WebGPU geostatistics response")
+}
+
 #[wasm_bindgen(js_name = runGeoFeatureExamples)]
 pub fn run_geo_feature_examples(request: JsValue) -> std::result::Result<JsValue, JsValue> {
     console_error_panic_hook::set_once();
@@ -2108,8 +2555,9 @@ fn run_geostatistics_request(request: BrowserGeostatsRequest) -> Result<BrowserG
         brute_force_threshold: 2048,
         duplicate_tolerance: 0.0,
     };
-    let mut model = WasmNearestNeighborGPRegressor::new(config)
-        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    let mut model =
+        WasmNearestNeighborGPRegressor::new_with_backend(config, Some(&options.backend))
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
     model
         .fit(&coords, &values)
         .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
@@ -2137,6 +2585,91 @@ fn run_geostatistics_request(request: BrowserGeostatsRequest) -> Result<BrowserG
             "nugget": config.nugget,
             "n_neighbors": config.n_neighbors,
             "works_without_gpu": true,
+            "backend": model.backend(),
+        }),
+    })
+}
+
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+async fn run_geostatistics_webgpu_request(
+    request: BrowserGeostatsRequest,
+) -> Result<BrowserGeostatsResponse> {
+    if request.observations.is_empty() || request.targets.is_empty() {
+        return Err(CartoBoostError::InvalidInput(
+            "geostatistics requires observations and target coordinates".to_string(),
+        ));
+    }
+    let requested = request.options.backend.to_ascii_lowercase();
+    if !matches!(requested.as_str(), "auto" | "webgpu") {
+        return Err(CartoBoostError::InvalidInput(format!(
+            "runGeostatisticsWebgpu requires backend='webgpu' or 'auto', got {requested:?}"
+        )));
+    }
+    let coords = request
+        .observations
+        .iter()
+        .map(|row| [row.x, row.y])
+        .collect::<Vec<_>>();
+    let values = request
+        .observations
+        .iter()
+        .map(|row| row.value)
+        .collect::<Vec<_>>();
+    let targets = request
+        .targets
+        .iter()
+        .map(|row| [row.x, row.y])
+        .collect::<Vec<_>>();
+    let config = NngpConfig {
+        kernel: CovarianceKernel::parse(&request.options.kernel)
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?,
+        range: request.options.range,
+        sill: request.options.sill,
+        nugget: request.options.nugget,
+        anisotropy: GeostatsAnisotropy {
+            angle_degrees: request.options.anisotropy_angle_degrees,
+            scaling: request.options.anisotropy_scaling,
+        },
+        n_neighbors: request.options.n_neighbors,
+        brute_force_threshold: usize::MAX,
+        duplicate_tolerance: 0.0,
+    };
+    let mut model = WasmNearestNeighborGPRegressor::new_with_backend(config, Some("cpu"))
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    model
+        .fit(&coords, &values)
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    let queries = model
+        .transformed_points(&targets)
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    let observations = model
+        .transformed_observations()
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    let distances = webgpu_pairwise_squared_distances_f32_async(&queries, &observations)
+        .await
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    let values = model
+        .predict_from_squared_distances(&targets, &distances)
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    let predictions = values
+        .into_iter()
+        .zip(request.targets)
+        .map(|(prediction, target)| BrowserGeostatsPrediction {
+            x: target.x,
+            y: target.y,
+            mean: prediction.mean,
+            variance: prediction.variance,
+            std: prediction.variance.max(0.0).sqrt(),
+            neighbor_indices: prediction.neighbor_indices,
+        })
+        .collect();
+    Ok(BrowserGeostatsResponse {
+        predictions,
+        metadata: json!({
+            "model":"nearest_neighbor_gp","kernel":config.kernel.as_str(),"range":config.range,
+            "sill":config.sill,"nugget":config.nugget,"n_neighbors":config.n_neighbors,
+            "backend":{"requested":requested,"selected":"webgpu"},
+            "acceleratedOperations":["pairwise_distance"],"cpuOperations":["neighbor_covariance_solve"],
         }),
     })
 }
@@ -2802,6 +3335,181 @@ fn sequence_reference_arg(request: &BrowserSequenceRequest) -> Result<ReferenceS
     })
 }
 
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+async fn run_neural_forecast_webgpu_request(
+    request: BrowserForecastRequest,
+) -> Result<BrowserForecastResponse> {
+    if request.horizon == 0 {
+        return Err(CartoBoostError::InvalidInput(
+            "forecast horizon must be positive".to_string(),
+        ));
+    }
+    let model = request.model.to_ascii_lowercase();
+    if !matches!(model.as_str(), "nbeats" | "n-beats" | "nhits" | "n-hits") {
+        return Err(CartoBoostError::InvalidInput(
+            "runNeuralForecastWebgpu supports nbeats and nhits".to_string(),
+        ));
+    }
+    let requested = request
+        .options
+        .backend
+        .as_deref()
+        .unwrap_or("webgpu")
+        .to_ascii_lowercase();
+    if !matches!(requested.as_str(), "auto" | "webgpu") {
+        return Err(CartoBoostError::InvalidInput(format!(
+            "runNeuralForecastWebgpu requires backend='webgpu' or 'auto', got {requested:?}"
+        )));
+    }
+    let frame =
+        forecast_frame_from_browser_request(request.rows, request.frequency, request.metadata)?;
+    let is_nhits = matches!(model.as_str(), "nhits" | "n-hits");
+    let input_size = request
+        .options
+        .input_size
+        .unwrap_or(if is_nhits { 12 } else { 8 });
+    let hidden_size = request.options.hidden_size.unwrap_or(16);
+    let epochs = request.options.epochs.unwrap_or(80);
+    let pooling_size = if is_nhits {
+        request.options.pooling_size.unwrap_or(2)
+    } else {
+        1
+    };
+    let learning_rate = request.options.learning_rate.unwrap_or(0.01);
+    if input_size == 0
+        || hidden_size == 0
+        || epochs == 0
+        || pooling_size == 0
+        || pooling_size > input_size
+        || !learning_rate.is_finite()
+        || learning_rate <= 0.0
+    {
+        return Err(CartoBoostError::InvalidInput(
+            "invalid neural forecast configuration".to_string(),
+        ));
+    }
+    let targets = frame
+        .rows()
+        .iter()
+        .map(|row| row.target)
+        .collect::<Vec<_>>();
+    let mean = targets.iter().sum::<f64>() / targets.len() as f64;
+    let scale = (targets
+        .iter()
+        .map(|value| (value - mean).powi(2))
+        .sum::<f64>()
+        / targets.len() as f64)
+        .sqrt()
+        .max(1.0e-12);
+    let pooled_size = input_size.div_ceil(pooling_size);
+    let mut train_inputs = Vec::new();
+    let mut train_targets = Vec::new();
+    let mut tails = BTreeMap::new();
+    let mut last_rows = BTreeMap::new();
+    for series_id in frame.series_ids() {
+        let rows = frame.rows_for_series(&series_id);
+        if rows.len() <= input_size {
+            return Err(CartoBoostError::InvalidInput(format!(
+                "series {series_id:?} needs more than {input_size} rows"
+            )));
+        }
+        let values = rows.iter().map(|row| row.target).collect::<Vec<_>>();
+        for end in input_size..values.len() {
+            let scaled = values[end - input_size..end]
+                .iter()
+                .map(|value| ((value - mean) / scale) as f32)
+                .collect::<Vec<_>>();
+            let pooled = scaled
+                .chunks(pooling_size)
+                .map(|chunk| chunk.iter().sum::<f32>() / chunk.len() as f32)
+                .collect();
+            train_inputs.push(pooled);
+            train_targets.push(((values[end] - mean) / scale) as f32);
+        }
+        tails.insert(
+            series_id.clone(),
+            values[values.len() - input_size..].to_vec(),
+        );
+        last_rows.insert(series_id, (*rows.last().expect("non-empty series")).clone());
+    }
+    let phase = if is_nhits { 0.031 } else { 0.017 };
+    let mut parameters = vec![0.0_f32; hidden_size * pooled_size + hidden_size + hidden_size + 1];
+    for hidden in 0..hidden_size {
+        for input in 0..pooled_size {
+            let index = hidden * pooled_size + input;
+            parameters[index] = (((index + 1) as f64 * phase).sin() / pooled_size as f64) as f32;
+        }
+    }
+    let w2_offset = hidden_size * pooled_size + hidden_size;
+    for hidden in 0..hidden_size {
+        parameters[w2_offset + hidden] =
+            (((hidden + 3) as f64 * phase).cos() / hidden_size as f64) as f32;
+    }
+    parameters = webgpu_train_tanh_mlp_f32_async(
+        &train_inputs,
+        &train_targets,
+        hidden_size,
+        epochs,
+        learning_rate as f32,
+        &parameters,
+    )
+    .await
+    .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    let b1_offset = hidden_size * pooled_size;
+    let b2_offset = w2_offset + hidden_size;
+    let mut dense_weights = Vec::with_capacity(pooled_size * hidden_size);
+    for input in 0..pooled_size {
+        for hidden in 0..hidden_size {
+            dense_weights.push(parameters[hidden * pooled_size + input]);
+        }
+    }
+    let biases = parameters[b1_offset..w2_offset].to_vec();
+    let mut predictions = Vec::new();
+    for (series_id, tail) in &tails {
+        let mut history = tail.clone();
+        let last = last_rows.get(series_id).expect("tail and last row align");
+        for step in 1..=request.horizon {
+            let scaled = history
+                .iter()
+                .map(|value| ((value - mean) / scale) as f32)
+                .collect::<Vec<_>>();
+            let pooled = scaled
+                .chunks(pooling_size)
+                .map(|chunk| chunk.iter().sum::<f32>() / chunk.len() as f32)
+                .collect::<Vec<_>>();
+            let linear = webgpu_dense_layer_f32_async(&[pooled], &dense_weights, &biases)
+                .await
+                .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+            let scaled_prediction = parameters[b2_offset] as f64
+                + linear[0]
+                    .iter()
+                    .enumerate()
+                    .map(|(hidden, value)| f64::from(value.tanh() * parameters[w2_offset + hidden]))
+                    .sum::<f64>();
+            let prediction = scaled_prediction * scale + mean;
+            predictions.push(cartoboost_core::forecasting::ForecastPrediction {
+                series_id: series_id.clone(),
+                timestamp: frame.frequency().advance(last.timestamp, step)?,
+                horizon: step,
+                model: if is_nhits { "nhits" } else { "nbeats" }.to_string(),
+                mean: prediction,
+            });
+            history.remove(0);
+            history.push(prediction);
+        }
+    }
+    let forecast = ForecastResult::new(predictions)?;
+    Ok(forecast_response(
+        if is_nhits { "nhits" } else { "nbeats" },
+        &frame,
+        json!({"backend":{"requested":requested,"selected":"webgpu"},"input_size":input_size,
+            "hidden_size":hidden_size,"epochs":epochs,"learning_rate":learning_rate,
+            "pooling_size":pooling_size,"accelerated_operations":["tanh_mlp_training","dense"]}),
+        forecast,
+        None,
+    ))
+}
+
 fn run_forecast_request(request: BrowserForecastRequest) -> Result<BrowserForecastResponse> {
     if request.horizon == 0 {
         return Err(CartoBoostError::InvalidInput(
@@ -3226,6 +3934,106 @@ fn serialize_json_response<T: Serialize>(
         .map_err(|error| JsValue::from_str(&format!("could not parse {context}: {error:?}")))
 }
 
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+async fn run_graph_diffusion_webgpu_request(
+    request: BrowserGraphForecastRequest,
+) -> Result<BrowserGraphForecastResponse> {
+    let requested = request.options.backend.to_ascii_lowercase();
+    if !matches!(requested.as_str(), "auto" | "webgpu") {
+        return Err(CartoBoostError::InvalidInput(format!(
+            "runGraphDiffusionWebgpu requires backend='webgpu' or 'auto', got {requested:?}"
+        )));
+    }
+    if request.options.diffusion_steps == 0 {
+        return Err(CartoBoostError::InvalidInput(
+            "diffusionSteps must be positive".to_string(),
+        ));
+    }
+    let raw_indptr = request.frame.adjacency.indptr.clone();
+    let raw_indices = request.frame.adjacency.indices.clone();
+    let raw_data = request.frame.adjacency.data.clone();
+    let adjacency = GraphStCsrAdjacency::new(
+        request.frame.adjacency.indptr,
+        request.frame.adjacency.indices,
+        request.frame.adjacency.data,
+        request.frame.node_ids.len(),
+    )
+    .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    let frame = GraphStTemporalFrame::new(
+        request.frame.node_ids.clone(),
+        request.frame.timestamps,
+        request.frame.target,
+        request.frame.covariates,
+        adjacency.clone(),
+        request.frame.horizon,
+        request.frame.frequency,
+    )
+    .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    let indptr = raw_indptr
+        .iter()
+        .map(|value| {
+            u32::try_from(*value)
+                .map_err(|_| CartoBoostError::InvalidInput("CSR pointer exceeds u32".to_string()))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let indices = raw_indices
+        .iter()
+        .map(|value| {
+            u32::try_from(*value)
+                .map_err(|_| CartoBoostError::InvalidInput("CSR index exceeds u32".to_string()))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut weights = raw_data
+        .iter()
+        .map(|value| *value as f32)
+        .collect::<Vec<_>>();
+    for row in 0..frame.node_ids.len() {
+        let start = raw_indptr[row];
+        let end = raw_indptr[row + 1];
+        let sum = weights[start..end].iter().sum::<f32>();
+        if sum.abs() > 1.0e-12 {
+            for weight in &mut weights[start..end] {
+                *weight /= sum;
+            }
+        }
+    }
+    let last = frame.target.last().ok_or_else(|| {
+        CartoBoostError::InvalidInput("graph target history must be non-empty".to_string())
+    })?;
+    let mut state = last.iter().map(|value| *value as f32).collect::<Vec<_>>();
+    let mut predictions = Vec::with_capacity(frame.horizon);
+    for _ in 0..frame.horizon {
+        for _ in 0..request.options.diffusion_steps {
+            state = webgpu_csr_diffusion_f32_async(&indptr, &indices, &weights, 1, &state)
+                .await
+                .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+        }
+        predictions.push(state.iter().map(|value| f64::from(*value)).collect());
+    }
+    let metrics = request.actual.map(|actual| {
+        serde_json::to_value(graph_st_metrics(
+            &predictions,
+            &actual,
+            &frame.node_ids,
+            &adjacency,
+        ))
+        .unwrap_or_else(|error| json!({"error":error.to_string()}))
+    });
+    Ok(BrowserGraphForecastResponse {
+        predictions,
+        node_ids: frame.node_ids,
+        horizon: frame.horizon,
+        metrics,
+        metadata: json!({
+            "model":"webgpu_graph_diffusion",
+            "frequency":frame.frequency,
+            "backend":{"requested":requested,"selected":"webgpu"},
+            "diffusionSteps":request.options.diffusion_steps,
+            "acceleratedOperations":["csr_diffusion"],
+        }),
+    })
+}
+
 fn run_graph_forecast_request(
     request: BrowserGraphForecastRequest,
 ) -> Result<BrowserGraphForecastResponse> {
@@ -3270,8 +4078,14 @@ fn run_graph_forecast_request(
             epochs: request.options.epochs,
             learning_rate: request.options.learning_rate,
             weight_decay: request.options.weight_decay.unwrap_or(1e-5),
-            backend: graph_st_select_backend(Some(&request.options.backend))
-                .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?,
+            backend: graph_st_select_backend_for_operations(
+                Some(&request.options.backend),
+                &[
+                    BackendOperation::ScalarGraph,
+                    BackendOperation::ScalarGraphTraining,
+                ],
+            )
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?,
         };
         let mut model = BrowserPaperGraphTransformerForecaster::new(config)
             .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
@@ -3423,9 +4237,13 @@ fn run_regression_request(request: BrowserRegressionRequest) -> Result<BrowserRe
     let train_y = &targets[..train_rows];
     let holdout_y = &targets[train_rows..];
 
-    let model =
-        Booster::new(regression_booster_config(&request.options)?).fit(&train_x, train_y, None)?;
-    let predictions = model.try_predict(&holdout_x)?;
+    let model = Booster::new_with_backend(
+        regression_booster_config(&request.options)?,
+        request.options.backend.as_deref(),
+    )?
+    .fit(&train_x, train_y, None)?;
+    let predictions =
+        model.try_predict_with_backend(&holdout_x, request.options.backend.as_deref())?;
     let interval_predictions =
         regression_interval_predictions(&request.options, &train_x, train_y, &holdout_x)?;
     let metrics = regression_metrics(holdout_y, &predictions, train_rows, holdout_rows)?;
@@ -3521,6 +4339,7 @@ fn run_neural_request(request: BrowserNeuralRequest) -> Result<BrowserNeuralResp
         ((dense.len() as f64) * request.options.holdout_fraction).round() as usize;
     let holdout_rows = requested_holdout.clamp(1, dense.len().saturating_sub(2));
     let train_rows = dense.len() - holdout_rows;
+    let backend = browser_neural_backend(&request.options)?;
     let pipeline = request.pipeline.trim().to_ascii_lowercase();
     let (predictions, feature_names, trees, metadata) = match pipeline.as_str() {
         "" | "embedding" | "embedding_table" | "neural_embedding" => {
@@ -3568,6 +4387,11 @@ fn run_neural_request(request: BrowserNeuralRequest) -> Result<BrowserNeuralResp
         metadata: json!({
             "model": metadata["model"].as_str().unwrap_or("cartoboost_neural"),
             "pipeline": pipeline,
+            "backend": {
+                "requested": backend.requested,
+                "selected": backend.selected,
+                "available": backend.available,
+            },
             "denseFeatureNames": request.dense_feature_names,
             "treeCount": trees.len(),
             "details": metadata,
@@ -3734,7 +4558,7 @@ fn run_graphsage_neural_pipeline(
     train_rows: usize,
 ) -> Result<BrowserNeuralPipelineOutput> {
     let graph = browser_graph_inputs(request, "GraphSAGE")?;
-    let config = graph_sage_config(&request.options);
+    let config = graph_sage_config(&request.options)?;
     let embedding_dim = graph_sage_dim(&config.hidden_dims);
     let mut model = GraphSageRegressor::new(
         config,
@@ -3790,7 +4614,7 @@ fn run_hetero_graphsage_neural_pipeline(
     train_rows: usize,
 ) -> Result<BrowserNeuralPipelineOutput> {
     let graph = browser_graph_inputs(request, "HeteroGraphSAGE")?;
-    let config = hetero_graph_sage_config(&request.options);
+    let config = hetero_graph_sage_config(&request.options)?;
     let embedding_dim = graph_sage_dim(&config.hidden_dims);
     let relation_count = graph
         .typed_edges
@@ -3855,7 +4679,7 @@ fn run_hinsage_neural_pipeline(
     train_rows: usize,
 ) -> Result<BrowserNeuralPipelineOutput> {
     let graph = browser_graph_inputs(request, "HinSAGE")?;
-    let config = hin_sage_config(&request.options);
+    let config = hin_sage_config(&request.options)?;
     let embedding_dim = graph_sage_dim(&config.hidden_dims);
     let node_type_count = graph
         .node_types
@@ -4038,6 +4862,7 @@ fn standalone_booster_config(options: &BrowserNeuralOptions) -> StandaloneBooste
         max_depth: options.max_depth.unwrap_or(4),
         min_samples_leaf: options.min_samples_leaf.unwrap_or(2),
         min_gain: 0.0,
+        backend: options.backend.clone().unwrap_or_else(default_backend),
     }
 }
 
@@ -4073,9 +4898,15 @@ fn node2vec_config(options: &BrowserNeuralOptions) -> Node2VecConfig {
     config
 }
 
-fn graph_sage_config(options: &BrowserNeuralOptions) -> GraphSageConfig {
+fn browser_neural_backend(options: &BrowserNeuralOptions) -> Result<BackendSelection> {
+    select_backend(options.backend.as_deref())
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))
+}
+
+fn graph_sage_config(options: &BrowserNeuralOptions) -> Result<GraphSageConfig> {
     let mut config = GraphSageConfig {
         hidden_dims: vec![options.embedding_dim.unwrap_or(8)],
+        backend: browser_neural_backend(options)?,
         ..GraphSageConfig::default()
     };
     if let Some(epochs) = options.graph_sage_epochs {
@@ -4090,12 +4921,13 @@ fn graph_sage_config(options: &BrowserNeuralOptions) -> GraphSageConfig {
     if let Some(seed) = options.graph_sage_seed.or(options.random_state) {
         config.seed = seed;
     }
-    config
+    Ok(config)
 }
 
-fn hetero_graph_sage_config(options: &BrowserNeuralOptions) -> HeteroGraphSageConfig {
+fn hetero_graph_sage_config(options: &BrowserNeuralOptions) -> Result<HeteroGraphSageConfig> {
     let mut config = HeteroGraphSageConfig {
         hidden_dims: vec![options.embedding_dim.unwrap_or(8)],
+        backend: browser_neural_backend(options)?,
         ..HeteroGraphSageConfig::default()
     };
     if let Some(epochs) = options.graph_sage_epochs {
@@ -4110,12 +4942,13 @@ fn hetero_graph_sage_config(options: &BrowserNeuralOptions) -> HeteroGraphSageCo
     if let Some(seed) = options.graph_sage_seed.or(options.random_state) {
         config.seed = seed;
     }
-    config
+    Ok(config)
 }
 
-fn hin_sage_config(options: &BrowserNeuralOptions) -> HinSageConfig {
+fn hin_sage_config(options: &BrowserNeuralOptions) -> Result<HinSageConfig> {
     let mut config = HinSageConfig {
         hidden_dims: vec![options.embedding_dim.unwrap_or(8)],
+        backend: browser_neural_backend(options)?,
         ..HinSageConfig::default()
     };
     if let Some(epochs) = options.graph_sage_epochs {
@@ -4130,7 +4963,7 @@ fn hin_sage_config(options: &BrowserNeuralOptions) -> HinSageConfig {
     if let Some(seed) = options.graph_sage_seed.or(options.random_state) {
         config.seed = seed;
     }
-    config
+    Ok(config)
 }
 
 fn graph_sage_dim(hidden_dims: &[usize]) -> usize {
@@ -4192,18 +5025,24 @@ fn regression_interval_predictions(
             "interval alphas must be finite with 0 < lower < upper < 1".to_string(),
         ));
     }
-    let lower_model = Booster::new(regression_booster_config_with_loss(
-        options,
-        LossConfig::Quantile(QuantileLossConfig { alpha: lower_alpha }),
-    ))
+    let lower_model = Booster::new_with_backend(
+        regression_booster_config_with_loss(
+            options,
+            LossConfig::Quantile(QuantileLossConfig { alpha: lower_alpha }),
+        ),
+        options.backend.as_deref(),
+    )?
     .fit(train_x, train_y, None)?;
-    let upper_model = Booster::new(regression_booster_config_with_loss(
-        options,
-        LossConfig::Quantile(QuantileLossConfig { alpha: upper_alpha }),
-    ))
+    let upper_model = Booster::new_with_backend(
+        regression_booster_config_with_loss(
+            options,
+            LossConfig::Quantile(QuantileLossConfig { alpha: upper_alpha }),
+        ),
+        options.backend.as_deref(),
+    )?
     .fit(train_x, train_y, None)?;
-    let lower = lower_model.try_predict(holdout_x)?;
-    let upper = upper_model.try_predict(holdout_x)?;
+    let lower = lower_model.try_predict_with_backend(holdout_x, options.backend.as_deref())?;
+    let upper = upper_model.try_predict_with_backend(holdout_x, options.backend.as_deref())?;
     let (lower, upper): (Vec<_>, Vec<_>) = lower
         .into_iter()
         .zip(upper)
@@ -5105,11 +5944,11 @@ fn build_forecaster(
                 .map_err(|err| CartoBoostError::InvalidInput(err.to_string()))?,
         )),
         "nbeats" => Ok(Box::new(
-            NBeatsForecaster::new(nbeats_config(options))
+            NBeatsForecaster::new(nbeats_config(options)?)
                 .map_err(|err| CartoBoostError::InvalidInput(err.to_string()))?,
         )),
         "nhits" => Ok(Box::new(
-            NHiTSForecaster::new(nhits_config(options))
+            NHiTSForecaster::new(nhits_config(options)?)
                 .map_err(|err| CartoBoostError::InvalidInput(err.to_string()))?,
         )),
         "intermittent_demand" => {
@@ -5145,24 +5984,30 @@ fn build_forecaster(
                 .clone()
                 .unwrap_or_else(|| vec![options.season_length.unwrap_or(7)]),
         )?)),
-        "cartoboost_lag" => Ok(Box::new(CartoBoostLagForecaster::new(
+        "cartoboost_lag" => Ok(Box::new(CartoBoostLagForecaster::new_with_backend(
             lag_config(options),
             booster_config(options),
+            GlobalForecastTargetMode::Level,
+            cartoboost_core::forecasting::GlobalForecastSampleWeightMode::Uniform,
+            options.backend.as_deref(),
         )?)),
         "cartoboost_direct" => Ok(Box::new(BrowserDirectForecaster::new(
             lag_config(options),
             booster_config(options),
             horizon,
+            options.backend.as_deref(),
         )?)),
         "rectified_recursive" => Ok(Box::new(BrowserRectifiedRecursiveForecaster::new(
             lag_config(options),
             booster_config(options),
             horizon,
+            options.backend.as_deref(),
         )?)),
-        "lag_plus" => Ok(Box::new(LagPlusForecaster::new(LagPlusConfig::new(
-            lag_config(options),
-            booster_config(options),
-        ))?)),
+        "lag_plus" => {
+            let mut config = LagPlusConfig::new(lag_config(options), booster_config(options));
+            config.backend = options.backend.clone().unwrap_or_else(default_backend);
+            Ok(Box::new(LagPlusForecaster::new(config)?))
+        }
         "auto_forecast" => {
             let mut config = AutoForecastConfig {
                 lag_config: lag_config(options),
@@ -5177,20 +6022,27 @@ fn build_forecaster(
             }
             config.max_candidate_count = options.max_auto_candidate_count;
             config.max_direct_horizon = options.max_direct_horizon.unwrap_or(horizon);
+            config.backend = options.backend.clone().unwrap_or_else(default_backend);
             Ok(Box::new(AutoForecastModel::new(config)?))
         }
         "scaled_cartoboost_lag" => Ok(Box::new(LocalStandardScaledForecaster::new(
-            Box::new(CartoBoostLagForecaster::new(
+            Box::new(CartoBoostLagForecaster::new_with_backend(
                 lag_config(options),
                 booster_config(options),
+                GlobalForecastTargetMode::Level,
+                cartoboost_core::forecasting::GlobalForecastSampleWeightMode::Uniform,
+                options.backend.as_deref(),
             )?),
             1e-6,
             "scaled_cartoboost_lag",
         )?)),
         "log1p_cartoboost_lag" => Ok(Box::new(Log1pForecaster::new(
-            Box::new(CartoBoostLagForecaster::new(
+            Box::new(CartoBoostLagForecaster::new_with_backend(
                 lag_config(options),
                 booster_config(options),
+                GlobalForecastTargetMode::Level,
+                cartoboost_core::forecasting::GlobalForecastSampleWeightMode::Uniform,
+                options.backend.as_deref(),
             )?),
             "log1p_cartoboost_lag",
         ))),
@@ -5210,9 +6062,14 @@ impl BrowserDirectForecaster {
         lag_config: LagFeatureConfig,
         booster_config: BoosterConfig,
         fit_horizon: usize,
+        backend: Option<&str>,
     ) -> Result<Self> {
         Ok(Self {
-            inner: CartoBoostDirectForecaster::new(lag_config, booster_config)?,
+            inner: CartoBoostDirectForecaster::new_with_backend(
+                lag_config,
+                booster_config,
+                backend,
+            )?,
             fit_horizon,
         })
     }
@@ -5246,9 +6103,14 @@ impl BrowserRectifiedRecursiveForecaster {
         lag_config: LagFeatureConfig,
         booster_config: BoosterConfig,
         fit_horizon: usize,
+        backend: Option<&str>,
     ) -> Result<Self> {
         Ok(Self {
-            inner: RectifiedRecursiveForecaster::new(lag_config, booster_config)?,
+            inner: RectifiedRecursiveForecaster::new_with_backend(
+                lag_config,
+                booster_config,
+                backend,
+            )?,
             fit_horizon,
         })
     }
@@ -5626,7 +6488,8 @@ fn neural_panel_config(
         learning_rate: 0.01,
         weight_decay: 0.0,
         newer_sample_weight: false,
-        backend: BackendSelection::default(),
+        backend: select_backend(options.backend.as_deref())
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?,
     };
     if let Some(seasonalities) = &options.custom_seasonalities {
         config.custom_seasonalities = seasonalities
@@ -5683,25 +6546,42 @@ fn neural_panel_config(
     Ok(config)
 }
 
-fn nbeats_config(options: &BrowserForecastOptions) -> NBeatsConfig {
-    NBeatsConfig {
+fn browser_tanh_training_backend(options: &BrowserForecastOptions) -> Result<BackendSelection> {
+    let requested = options.backend.as_deref().unwrap_or("cpu");
+    if requested.eq_ignore_ascii_case("cpu") {
+        return select_backend(Some("cpu"))
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()));
+    }
+    select_backend_for(Some(requested), BackendOperation::TanhMlpTraining)
+        .or_else(|error| {
+            if requested.eq_ignore_ascii_case("auto") {
+                select_backend(Some("cpu"))
+            } else {
+                Err(error)
+            }
+        })
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))
+}
+
+fn nbeats_config(options: &BrowserForecastOptions) -> Result<NBeatsConfig> {
+    Ok(NBeatsConfig {
         input_size: options.input_size.unwrap_or(8),
         hidden_size: options.hidden_size.unwrap_or(16),
         epochs: options.epochs.unwrap_or(80),
         learning_rate: options.learning_rate.unwrap_or(0.01),
-        ..NBeatsConfig::default()
-    }
+        backend: browser_tanh_training_backend(options)?,
+    })
 }
 
-fn nhits_config(options: &BrowserForecastOptions) -> NHiTSConfig {
-    NHiTSConfig {
+fn nhits_config(options: &BrowserForecastOptions) -> Result<NHiTSConfig> {
+    Ok(NHiTSConfig {
         input_size: options.input_size.unwrap_or(12),
         hidden_size: options.hidden_size.unwrap_or(16),
         epochs: options.epochs.unwrap_or(80),
         learning_rate: options.learning_rate.unwrap_or(0.01),
         pooling_size: options.pooling_size.unwrap_or(2),
-        ..NHiTSConfig::default()
-    }
+        backend: browser_tanh_training_backend(options)?,
+    })
 }
 
 fn neural_panel_trend_mode(value: &str) -> Result<NeuralTrendMode> {
@@ -7188,6 +8068,7 @@ mod tests {
                 }]),
                 include_components: Some(true),
                 include_history_components: Some(true),
+                backend: Some("cpu".to_string()),
                 ..BrowserForecastOptions::default()
             },
             metadata: BrowserForecastMetadata::default(),
@@ -7204,6 +8085,10 @@ mod tests {
             ["custom_seasonality_conditions"]
             .as_object()
             .expect("custom seasonality conditions");
+        assert_eq!(
+            response.metadata["modelMetadata"]["config"]["backend"]["selected"].as_str(),
+            Some("cpu")
+        );
 
         assert!(feature_schema
             .iter()
@@ -8118,6 +9003,7 @@ mod tests {
                 min_samples_leaf: Some(2),
                 monotonic_constraints: None,
                 include_model_visualization: None,
+                backend: None,
             },
         };
         let response = run_regression_request(request).expect("regression run");
@@ -8307,6 +9193,7 @@ mod tests {
                     learning_rate: Some(0.08),
                     max_depth: Some(3),
                     min_samples_leaf: Some(2),
+                    backend: Some("cpu".to_string()),
                     ..BrowserNeuralOptions::default()
                 },
             };
@@ -8319,6 +9206,10 @@ mod tests {
                 Some(expected_model)
             );
             assert_eq!(response.metadata["details"]["nodeCount"].as_u64(), Some(8));
+            assert_eq!(
+                response.metadata["backend"]["selected"].as_str(),
+                Some("cpu")
+            );
             assert!(response.metrics.rmse.is_finite());
             assert!(response
                 .feature_importance

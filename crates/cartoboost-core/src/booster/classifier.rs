@@ -7,6 +7,9 @@ use crate::tree::{
     FuzzyKernel, LeafPredictorKind, ModelMetadata, SplitterKind, TrainingMetric, Tree, TreeBuilder,
 };
 use crate::{CartoBoostError, Result};
+use cartoboost_accelerator::{
+    backend_dense_layer_f32, select_backend_for, BackendOperation, BackendSelection,
+};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -43,10 +46,13 @@ pub struct ClassifierConfig {
 #[derive(Debug, Clone)]
 pub struct Classifier {
     pub config: ClassifierConfig,
+    backend: BackendSelection,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClassifierTrainingConfigMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<BackendSelection>,
     pub n_estimators: usize,
     pub learning_rate: f64,
     pub max_depth: usize,
@@ -112,7 +118,21 @@ impl Default for ClassifierConfig {
 
 impl Classifier {
     pub fn new(config: ClassifierConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            backend: select_backend_for(Some("cpu"), BackendOperation::Dense)
+                .expect("CPU dense backend"),
+        }
+    }
+
+    pub fn new_with_backend(config: ClassifierConfig, backend: Option<&str>) -> Result<Self> {
+        let backend = select_backend_for(backend, BackendOperation::Dense)
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+        Ok(Self { config, backend })
+    }
+
+    pub fn backend(&self) -> &BackendSelection {
+        &self.backend
     }
 
     pub fn fit(
@@ -184,13 +204,23 @@ impl Classifier {
                         *hessian_weight = hessian;
                     });
                 let tree = builder.fit_in_context(x, &targets, &hessian_weights, &fit_context);
-                raw_predictions
-                    .par_chunks_mut(output_dimension)
-                    .enumerate()
-                    .for_each(|(row, margins)| {
-                        margins[output] +=
-                            self.config.learning_rate * tree.predict_dataset_row(x, row);
-                    });
+                let mut margins = raw_predictions
+                    .chunks(output_dimension)
+                    .map(|row| row[output])
+                    .collect::<Vec<_>>();
+                let updates = (0..x.n_rows())
+                    .into_par_iter()
+                    .map(|row| tree.predict_dataset_row(x, row))
+                    .collect::<Vec<_>>();
+                super::fit::accelerated_prediction_update(
+                    &mut margins,
+                    &updates,
+                    self.config.learning_rate,
+                    &self.backend,
+                )?;
+                for (row, value) in margins.into_iter().enumerate() {
+                    raw_predictions[row * output_dimension + output] = value;
+                }
                 iteration_trees.push(tree);
             }
             trees.push(iteration_trees);
@@ -212,6 +242,7 @@ impl Classifier {
             feature_schema: Some(x.feature_schema_or_default()),
             class_values,
             training_config: Some(ClassifierTrainingConfigMetadata {
+                backend: Some(self.backend.clone()),
                 n_estimators: self.config.n_estimators,
                 learning_rate: self.config.learning_rate,
                 max_depth: self.config.max_depth,
@@ -268,10 +299,60 @@ impl ClassifierModel {
             .collect())
     }
 
+    pub fn decision_function_with_backend(
+        &self,
+        x: &Dataset,
+        backend: Option<&str>,
+    ) -> Result<Vec<Vec<f64>>> {
+        self.validate_dataset(x)?;
+        let selection = select_backend_for(backend, BackendOperation::Dense)
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+        if selection.selected == "cpu" || self.trees.is_empty() {
+            return self.decision_function(x);
+        }
+        let outputs = self.output_dimension();
+        let width = outputs * (self.trees.len() + 1);
+        let input = (0..x.n_rows())
+            .into_par_iter()
+            .map(|row| {
+                self.init_margins
+                    .iter()
+                    .copied()
+                    .chain(self.trees.iter().flat_map(move |group| {
+                        group
+                            .iter()
+                            .map(move |tree| self.learning_rate * tree.predict_dataset_row(x, row))
+                    }))
+                    .map(|value| value as f32)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let mut weights = vec![0.0_f32; width * outputs];
+        for round in 0..=self.trees.len() {
+            for output in 0..outputs {
+                weights[(round * outputs + output) * outputs + output] = 1.0;
+            }
+        }
+        let flat = backend_dense_layer_f32(&selection, &input, &weights, &vec![0.0; outputs])
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+        Ok(flat
+            .into_iter()
+            .map(|row| row.into_iter().map(f64::from).collect())
+            .collect())
+    }
+
     pub fn predict_proba(&self, x: &Dataset) -> Result<Vec<Vec<f64>>> {
+        self.predict_proba_with_backend(x, self.artifact_backend())
+    }
+
+    pub fn predict_proba_with_backend(
+        &self,
+        x: &Dataset,
+        backend: Option<&str>,
+    ) -> Result<Vec<Vec<f64>>> {
         let objective = make_objective(self.objective, self.class_values.len())?;
         let transform = objective.prediction_transform();
-        let margins = self.decision_function(x)?;
+        let margins = self.decision_function_with_backend(x, backend)?;
         Ok(margins
             .into_par_iter()
             .map(|row| transform_margin_row(transform, &row))
@@ -279,8 +360,19 @@ impl ClassifierModel {
     }
 
     pub fn predict(&self, x: &Dataset) -> Result<Vec<f64>> {
+        self.predict_with_backend(x, self.artifact_backend())
+    }
+
+    fn artifact_backend(&self) -> Option<&str> {
+        self.training_config
+            .as_ref()
+            .and_then(|config| config.backend.as_ref())
+            .map(|backend| backend.selected.as_str())
+    }
+
+    pub fn predict_with_backend(&self, x: &Dataset, backend: Option<&str>) -> Result<Vec<f64>> {
         Ok(self
-            .predict_proba(x)?
+            .predict_proba_with_backend(x, backend)?
             .into_iter()
             .map(|probabilities| {
                 let class = probabilities
@@ -508,6 +600,7 @@ fn sigmoid(raw_prediction: f64) -> f64 {
 impl From<&ClassifierConfig> for ClassifierTrainingConfigMetadata {
     fn from(config: &ClassifierConfig) -> Self {
         Self {
+            backend: None,
             n_estimators: config.n_estimators,
             learning_rate: config.learning_rate,
             max_depth: config.max_depth,
@@ -555,6 +648,21 @@ mod tests {
 
         assert_eq!(predictions, y);
         assert!(probabilities[0][1] < probabilities[3][1]);
+        for backend in cartoboost_accelerator::available_backends()
+            .into_iter()
+            .filter(|name| name != "cpu")
+        {
+            let accelerated = model
+                .predict_proba_with_backend(&x, Some(&backend))
+                .unwrap_or_else(|error| panic!("{backend} classifier inference failed: {error}"));
+            for (actual, expected) in accelerated
+                .iter()
+                .flatten()
+                .zip(probabilities.iter().flatten())
+            {
+                assert!((actual - expected).abs() <= 1.0e-4);
+            }
+        }
 
         let temp_dir = tempfile::tempdir().unwrap();
         let path = temp_dir.path().join("classifier.json");

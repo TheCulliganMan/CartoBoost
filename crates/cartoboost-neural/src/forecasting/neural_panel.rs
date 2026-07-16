@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::scaler::StandardScaler;
-use crate::{backend_dense_layer_f32, BackendSelection, NeuralError, Result};
+use crate::{backend_dense_layer_f32, select_backend, BackendSelection, NeuralError, Result};
 
 type KnownFutureCovariates = BTreeMap<(String, NaiveDateTime), BTreeMap<String, f64>>;
 type KnownFutureCovariateIndex<'a> =
@@ -1303,7 +1303,9 @@ impl Forecaster for NeuralPanelForecaster {
             &self.series_lengths,
             &self.trend_changepoints,
             &self.config,
-        );
+            &self.config.backend,
+        )
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
         self.global_trend_coefficients = global_trend_coefficients;
         self.local_trend_coefficients = local_trend_coefficients;
         self.global_level = self
@@ -2289,13 +2291,16 @@ fn collect_static_future_covariates(
     by_series
 }
 
+type PiecewiseTrendFit = (Vec<f64>, BTreeMap<String, Vec<f64>>);
+
 fn fit_piecewise_trend(
     frame: &ForecastFrame,
     scaler: &StandardScaler,
     series_lengths: &BTreeMap<String, usize>,
     changepoints: &[f64],
     config: &NeuralPanelConfig,
-) -> (Vec<f64>, BTreeMap<String, Vec<f64>>) {
+    backend: &BackendSelection,
+) -> Result<PiecewiseTrendFit> {
     let basis_width = 2 + changepoints.len();
     let mut global_features = Vec::new();
     let mut global_targets = Vec::new();
@@ -2314,8 +2319,13 @@ fn fit_piecewise_trend(
             global_weights.push(recency_weight(idx, rows.len(), config));
         }
     }
-    let mut global_trend_coefficients =
-        ridge_fit(&global_features, &global_targets, &global_weights, 1.0e-6);
+    let mut global_trend_coefficients = ridge_fit_with_backend(
+        &global_features,
+        &global_targets,
+        &global_weights,
+        1.0e-6,
+        backend,
+    )?;
     if global_trend_coefficients.len() != basis_width {
         global_trend_coefficients.resize(basis_width, 0.0);
     }
@@ -2339,18 +2349,19 @@ fn fit_piecewise_trend(
                     .push(scaler.transform(row.target) - dot(&global_trend_coefficients, &basis));
                 local_weights.push(recency_weight(idx, rows.len(), config));
             }
-            let coefficients = ridge_fit(
+            let coefficients = ridge_fit_with_backend(
                 &local_features,
                 &local_targets,
                 &local_weights,
                 config.local_l2.max(1.0e-6),
-            );
+                backend,
+            )?;
             if coefficients.iter().any(|value| value.abs() > 0.0) {
                 local_trend_coefficients.insert(series_id, coefficients);
             }
         }
     }
-    (global_trend_coefficients, local_trend_coefficients)
+    Ok((global_trend_coefficients, local_trend_coefficients))
 }
 
 fn trend_changepoints(n_changepoints: usize, changepoints_range: f64) -> Vec<f64> {
@@ -2667,6 +2678,61 @@ pub fn fit_dense_regressor(
     config: &DenseRegressorConfig,
     examples: Vec<(Vec<f64>, Vec<f64>)>,
 ) -> Result<MlpState> {
+    fit_dense_regressor_with_backend(config, examples, Some("cpu"))
+}
+
+fn ridge_fit_with_backend(
+    features: &[Vec<f64>],
+    targets: &[f64],
+    weights: &[f64],
+    ridge: f64,
+    backend: &BackendSelection,
+) -> Result<Vec<f64>> {
+    if features.is_empty() || backend.selected == "cpu" {
+        return Ok(ridge_fit(features, targets, weights, ridge));
+    }
+    let width = features[0].len();
+    let weighted = features
+        .iter()
+        .zip(weights)
+        .map(|(row, &weight)| {
+            let scale = weight.max(0.0).sqrt() as f32;
+            row.iter()
+                .map(|&value| value as f32 * scale)
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let transposed = (0..width)
+        .map(|col| weighted.iter().map(|row| row[col]).collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    let flattened = weighted.iter().flatten().copied().collect::<Vec<_>>();
+    let mut xtwx = backend_dense_layer_f32(backend, &transposed, &flattened, &vec![0.0; width])?
+        .into_iter()
+        .map(|row| row.into_iter().map(f64::from).collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    let weighted_targets = targets
+        .iter()
+        .zip(weights)
+        .map(|(&target, &weight)| (target * weight.max(0.0).sqrt()) as f32)
+        .collect::<Vec<_>>();
+    let xtwy = backend_dense_layer_f32(backend, &transposed, &weighted_targets, &[0.0])?
+        .into_iter()
+        .map(|row| f64::from(row[0]))
+        .collect::<Vec<_>>();
+    for (idx, row) in xtwx.iter_mut().enumerate() {
+        row[idx] += ridge;
+    }
+    Ok(solve_linear_system(xtwx, xtwy).unwrap_or_else(|| vec![0.0; width]))
+}
+
+/// Fit the reusable dense regressor on an explicitly selected accelerator.
+/// Selection happens once before training; inference reuses the concrete
+/// backend persisted by the owning model rather than probing per call.
+pub fn fit_dense_regressor_with_backend(
+    config: &DenseRegressorConfig,
+    examples: Vec<(Vec<f64>, Vec<f64>)>,
+    backend: Option<&str>,
+) -> Result<MlpState> {
     if config.input_width == 0 || config.output_width == 0 || config.hidden_layers.contains(&0) {
         return Err(NeuralError::InvalidArgument(
             "dense regressor widths must be positive".to_string(),
@@ -2682,11 +2748,13 @@ pub fn fit_dense_regressor(
             "dense regressor weight_decay must be finite and non-negative".to_string(),
         ));
     }
+    let backend = select_backend(backend)?;
     let panel_config = NeuralPanelConfig {
         epochs: config.epochs,
         learning_rate: config.learning_rate,
         weight_decay: config.weight_decay,
         loss: NeuralPanelLoss::Mse,
+        backend: backend.clone(),
         ..NeuralPanelConfig::default()
     };
     train_mlp(
@@ -2703,7 +2771,7 @@ pub fn fit_dense_regressor(
             .collect(),
         &panel_config,
         config.seed,
-        &BackendSelection::default(),
+        &backend,
     )
 }
 

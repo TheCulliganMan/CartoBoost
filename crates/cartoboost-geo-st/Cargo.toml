@@ -18,5 +18,7 @@ tempfile = "3"
 default = []
 cuda = ["cartoboost-neural/cuda"]
 rocm = ["cartoboost-neural/rocm"]
+hip = ["cartoboost-neural/hip"]
 metal = ["cartoboost-neural/metal"]
 webgpu = ["cartoboost-neural/webgpu"]
+directml = ["cartoboost-neural/directml"]

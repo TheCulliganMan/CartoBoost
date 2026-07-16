@@ -88,8 +88,8 @@ predictions = model.predict(X_test)
 column names. Install optional table integrations as needed:
 
 ```sh
-uv add "cartoboost[duckdb]"
-uv add "cartoboost[polars]"
+uv add duckdb
+uv add polars
 ```
 
 DuckDB relations can be passed directly; CartoBoost materializes them at the
@@ -184,7 +184,7 @@ missing-category token during fit and reused from the saved artifact.
 ## Optuna Tuning
 
 Optuna tuning works through the same estimator contract. Install the optional
-dependencies with `uv add "cartoboost[optuna,sklearn]"`, then optimize an
+dependencies with `uv add optuna scikit-learn`, then optimize an
 objective that constructs a fresh `CartoBoostRegressor` for each trial.
 
 ```python
@@ -239,7 +239,7 @@ without SHAP permutation sampling. This is a component audit rather than
 original-column attribution; see [SHAP Support](../shap.md) for the choice and
 `TreeExplainer` compatibility details.
 
-Run `uv add "cartoboost[explain]"` or add the optional SHAP dependency in
+Run `uv add shap` or add the optional SHAP dependency in
 your local environment. Sparse-list models can be explained through the helper
 by supplying matching foreground and background sparse sets.
 

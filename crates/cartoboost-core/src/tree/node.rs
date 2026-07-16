@@ -4,6 +4,9 @@ use crate::data::FeatureSchema;
 use crate::graph_regularization::{GraphLeafSmoothing, GraphSplitRegularization};
 use crate::predictors::LinearLeafModel;
 use crate::{CartoBoostError, Result};
+use cartoboost_accelerator::backend::{
+    backend_dense_layer_f32, select_backend_for, BackendOperation,
+};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -49,6 +52,8 @@ pub struct ModelMetadata {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TrainingConfigMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<cartoboost_accelerator::BackendSelection>,
     pub n_estimators: usize,
     pub learning_rate: f64,
     pub max_depth: usize,
@@ -313,10 +318,46 @@ impl Model {
     }
 
     pub fn try_predict(&self, x: &Dataset) -> Result<Vec<f64>> {
+        if let Some(backend) = self
+            .training_config
+            .as_ref()
+            .and_then(|config| config.backend.as_ref())
+        {
+            return self.try_predict_with_backend(x, Some(&backend.selected));
+        }
+        self.try_predict_cpu(x)
+    }
+
+    fn try_predict_cpu(&self, x: &Dataset) -> Result<Vec<f64>> {
         (0..x.n_rows())
             .into_par_iter()
             .map(|row| self.try_predict_dataset_row(x, row))
             .collect()
+    }
+
+    pub fn try_predict_with_backend(&self, x: &Dataset, backend: Option<&str>) -> Result<Vec<f64>> {
+        let selection = select_backend_for(backend, BackendOperation::Dense)
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+        if selection.selected == "cpu" || self.trees.is_empty() {
+            return self.try_predict_cpu(x);
+        }
+        let additive = self.try_predict_additive(x)?;
+        let width = self.trees.len() + 1;
+        let input = additive
+            .into_iter()
+            .map(|row| {
+                row.into_iter()
+                    .map(|value| value as f32)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let weights = vec![1.0_f32; width];
+        let raw = backend_dense_layer_f32(&selection, &input, &weights, &[0.0])
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+        Ok(raw
+            .into_iter()
+            .map(|row| self.transform_prediction(f64::from(row[0])))
+            .collect())
     }
 
     pub fn try_predict_additive(&self, x: &Dataset) -> Result<Vec<Vec<f64>>> {

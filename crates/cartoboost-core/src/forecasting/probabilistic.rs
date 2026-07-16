@@ -73,6 +73,16 @@ impl QuantileRegressorSet {
         sample_weight: Option<&[f64]>,
         config: QuantileRegressorSetConfig,
     ) -> Result<Self> {
+        Self::fit_with_backend(x, y, sample_weight, config, Some("cpu"))
+    }
+
+    pub fn fit_with_backend(
+        x: &Dataset,
+        y: &[f64],
+        sample_weight: Option<&[f64]>,
+        config: QuantileRegressorSetConfig,
+        backend: Option<&str>,
+    ) -> Result<Self> {
         validate_quantile_grid(&config.quantiles)?;
         if x.n_rows() != y.len() {
             return Err(CartoBoostError::InvalidInput(
@@ -88,7 +98,8 @@ impl QuantileRegressorSet {
         for &quantile in &config.quantiles {
             let mut booster_config = config.booster_config.clone();
             booster_config.loss = LossConfig::Quantile(QuantileLossConfig { alpha: quantile });
-            let mut model = Booster::new(booster_config).fit(x, y, sample_weight)?;
+            let mut model =
+                Booster::new_with_backend(booster_config, backend)?.fit(x, y, sample_weight)?;
             model.target_name = Some(format!("quantile_{quantile:.3}"));
             models.push(model);
         }

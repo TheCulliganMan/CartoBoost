@@ -197,8 +197,8 @@ Prophet-shaped `holidays` rows with `holiday`, `ds`, `lowerWindow`,
 Built-in country holiday calendars are available before fitting through
 `model.add_country_holidays("US")` or the constructor argument
 `country_holidays="US"`. This path requires the optional `holidays` package:
-install `cartoboost[holidays]` when country calendars are needed. Explicit
-`holidays` dataframes do not require that extra.
+install `holidays` when country calendars are needed. Explicit `holidays`
+dataframes do not require the third-party package.
 
 ## Prophet-Style Plotting
 

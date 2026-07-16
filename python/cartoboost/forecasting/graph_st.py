@@ -227,6 +227,7 @@ class MarketStructureForecaster(ArtifactPersistenceMixin):
         correlation_floor: float = 0.10,
         shift_zscore: float = 2.0,
         calibrate_intervals: bool = True,
+        backend: Backend | str = Backend.CPU,
     ) -> None:
         native_class = _native_class("MarketStructureForecaster")
         if native_class is None:
@@ -246,6 +247,7 @@ class MarketStructureForecaster(ArtifactPersistenceMixin):
             "correlation_floor": float(correlation_floor),
             "shift_zscore": float(shift_zscore),
             "calibrate_intervals": bool(calibrate_intervals),
+            "backend": _choice_value(backend),
         }
         self._native_model = native_class(**self._params)
         self.is_fitted_ = False

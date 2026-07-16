@@ -1,7 +1,8 @@
-#[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
+#[cfg(all(feature = "cuda", target_os = "linux"))]
 use cartoboost_neural::CudaTensorArena;
 use cartoboost_neural::{
-    backend_affine_scores, backend_scalar_graph_f32, backend_scalar_graph_train_step_f32,
+    backend_affine_scores, backend_csr_diffusion_f32, backend_scalar_graph_f32,
+    backend_scalar_graph_train_step_f32, select_backend_for_operations, BackendOperation,
     BackendSelection,
 };
 use rayon::prelude::*;
@@ -51,30 +52,38 @@ pub fn available_compute_backends() -> Vec<String> {
 }
 
 pub fn select_compute_backend(requested: Option<&str>) -> Result<ComputeBackendSelection> {
-    let requested = requested.unwrap_or("auto").to_ascii_lowercase();
-    if !matches!(
-        requested.as_str(),
-        "auto" | "cpu" | "cuda" | "rocm" | "metal"
-    ) {
-        return Err(GeoStError::InvalidBackend(format!(
-            "unknown backend {requested:?}; expected auto, cpu, cuda, rocm, or metal"
-        )));
-    }
-    let available = available_compute_backends();
-    let selected = if requested == "auto" {
-        "cpu".to_string()
-    } else if available.iter().any(|name| name == &requested) {
-        requested.clone()
-    } else {
-        return Err(GeoStError::InvalidBackend(format!(
-            "requested backend {requested:?} is not available in this build; available backends: {}",
-            available.join(", ")
-        )));
-    };
+    // Keep graph/spatiotemporal models on the same parser, aliases, runtime
+    // probes, and auto-selection policy as every other accelerated model.
+    let neural = cartoboost_neural::select_backend(requested)
+        .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
     Ok(ComputeBackendSelection {
-        requested,
-        selected,
-        available,
+        requested: neural.requested,
+        selected: neural.selected,
+        available: neural.available,
+    })
+}
+
+pub fn select_compute_backend_for_operations(
+    requested: Option<&str>,
+    operations: &[BackendOperation],
+) -> Result<ComputeBackendSelection> {
+    let requested_name = requested.unwrap_or("cpu");
+    let neural = if requested_name.eq_ignore_ascii_case("cpu") {
+        cartoboost_neural::select_backend(Some("cpu"))
+    } else {
+        select_backend_for_operations(Some(requested_name), operations).or_else(|error| {
+            if requested_name.eq_ignore_ascii_case("auto") {
+                cartoboost_neural::select_backend(Some("cpu"))
+            } else {
+                Err(error)
+            }
+        })
+    }
+    .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+    Ok(ComputeBackendSelection {
+        requested: neural.requested,
+        selected: neural.selected,
+        available: neural.available,
     })
 }
 
@@ -101,11 +110,7 @@ pub struct ComputeBackendSelection {
 
 impl Default for ComputeBackendSelection {
     fn default() -> Self {
-        Self {
-            requested: "auto".to_string(),
-            selected: "cpu".to_string(),
-            available: available_compute_backends(),
-        }
+        select_compute_backend(None).expect("CPU backend is always available")
     }
 }
 
@@ -926,7 +931,7 @@ struct TrainableGraphTransformerState {
 /// `TrainableGraphTransformerState` on construction and copied back only at a
 /// checkpoint boundary.  CSR topology and structural weights remain resident
 /// for every pretraining/supervised batch.
-#[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
+#[cfg(all(feature = "cuda", target_os = "linux"))]
 #[allow(dead_code)]
 struct CudaLsttnTensorExecutor {
     arena: CudaTensorArena,
@@ -937,7 +942,7 @@ struct CudaLsttnTensorExecutor {
     adaptive_edges: usize,
 }
 
-#[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
+#[cfg(all(feature = "cuda", target_os = "linux"))]
 #[allow(dead_code)]
 impl CudaLsttnTensorExecutor {
     const PARAMETERS: usize = 0;
@@ -8159,13 +8164,14 @@ impl DelayAwareGraphTransformer {
         let mut xtx = vec![vec![0.0; 3]; 3];
         let mut xty = vec![0.0; 3];
         for time_idx in max_delay - 1..normalized_target.len() - 1 {
-            let signal = delayed_graph_signal(
+            let signal = delayed_graph_signal_backend(
                 &normalized_target,
                 &edges,
                 &frame.adjacency.data,
                 &delays,
                 time_idx,
-            );
+                &self.config.backend,
+            )?;
             for (node, signal_value) in signal.iter().enumerate().take(nodes) {
                 let x = [1.0, normalized_target[time_idx][node], *signal_value];
                 let actual = normalized_target[time_idx + 1][node];
@@ -8207,8 +8213,14 @@ impl DelayAwareGraphTransformer {
         let mut predictions = Vec::with_capacity(horizon);
         for _ in 0..horizon {
             let time_idx = history.len() - 1;
-            let signal =
-                delayed_graph_signal(&history, &self.edges, &self.edge_weights, &delays, time_idx);
+            let signal = delayed_graph_signal_backend(
+                &history,
+                &self.edges,
+                &self.edge_weights,
+                &delays,
+                time_idx,
+                &self.config.backend,
+            )?;
             let mut next = vec![0.0; self.node_ids.len()];
             for node in 0..self.node_ids.len() {
                 next[node] = self.coefficients[0]
@@ -8906,7 +8918,7 @@ impl PaperGraphTransformerForecaster {
             } else {
                 None
             };
-        #[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
+        #[cfg(all(feature = "cuda", target_os = "linux"))]
         let mut cuda_executor = if self.config.profile == GraphTransformerProfile::LongShortFusion
             && backend.selected == "cuda"
         {
@@ -8939,7 +8951,7 @@ impl PaperGraphTransformerForecaster {
                     if task_index < pretraining_completed {
                         continue;
                     }
-                    #[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
+                    #[cfg(all(feature = "cuda", target_os = "linux"))]
                     if let Some(executor) = cuda_executor.as_mut() {
                         executor.cuda_train_masked_subseries_reconstruction(
                             &mut state,
@@ -8955,10 +8967,7 @@ impl PaperGraphTransformerForecaster {
                             Some(&backend),
                         )?;
                     }
-                    #[cfg(not(all(
-                        feature = "cuda",
-                        any(target_os = "linux", target_os = "windows")
-                    )))]
+                    #[cfg(not(all(feature = "cuda", target_os = "linux")))]
                     state.train_masked_subseries_reconstruction(
                         &normalized[*start..*start + self.config.lookback],
                         self.config.learning_rate,
@@ -9055,7 +9064,7 @@ impl PaperGraphTransformerForecaster {
                         .count();
                     let epoch_learning_rate =
                         self.config.learning_rate * 0.5_f64.powi(scheduler_steps as i32);
-                    #[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
+                    #[cfg(all(feature = "cuda", target_os = "linux"))]
                     let cuda_batch_loss = if let Some(executor) = cuda_executor.as_mut() {
                         let windows = starts
                             .iter()
@@ -9087,10 +9096,7 @@ impl PaperGraphTransformerForecaster {
                     } else {
                         None
                     };
-                    #[cfg(not(all(
-                        feature = "cuda",
-                        any(target_os = "linux", target_os = "windows")
-                    )))]
+                    #[cfg(not(all(feature = "cuda", target_os = "linux")))]
                     let cuda_batch_loss: Option<f64> = None;
                     let mean_batch_loss = if let Some(loss) = cuda_batch_loss {
                         loss
@@ -9468,17 +9474,12 @@ impl PaperGraphTransformerForecaster {
         .map(str::to_string)
         .collect::<Vec<_>>();
         if self.config.profile == GraphTransformerProfile::LongShortFusion
-            && self.config.backend.selected == "metal"
+            && self.config.backend.selected != "cpu"
         {
             components.push(format!(
-                "{}_full_graph_training_and_inference",
+                "{}_accelerated_graph_training_and_inference",
                 self.config.backend.selected
             ));
-        }
-        if self.config.profile == GraphTransformerProfile::LongShortFusion
-            && self.config.backend.selected == "cuda"
-        {
-            components.push("cuda_tensor_training_pending".to_string());
         }
         PaperGraphTransformerArchitectureReport {
             profile: self.config.profile.clone(),
@@ -9867,6 +9868,69 @@ fn delayed_graph_signal(
     signal
 }
 
+fn delayed_graph_signal_backend(
+    target: &[Vec<f64>],
+    edges: &[(usize, usize)],
+    weights: &[f64],
+    delays: &[usize],
+    time_idx: usize,
+    backend: &ComputeBackendSelection,
+) -> Result<Vec<f64>> {
+    if backend.selected == "cpu" {
+        return Ok(delayed_graph_signal(
+            target, edges, weights, delays, time_idx,
+        ));
+    }
+    let nodes = target.first().map_or(0, Vec::len);
+    let mut normalization = vec![0.0_f64; nodes];
+    for (edge_idx, &(_, target_node)) in edges.iter().enumerate() {
+        normalization[target_node] += weights[edge_idx].abs();
+    }
+    let mut unique_delays = delays.to_vec();
+    unique_delays.sort_unstable();
+    unique_delays.dedup();
+    let selection = BackendSelection {
+        requested: backend.requested.clone(),
+        selected: backend.selected.clone(),
+        available: backend.available.clone(),
+    };
+    let mut signal = vec![0.0_f32; nodes];
+    for delay in unique_delays {
+        let mut rows = vec![Vec::<(u32, f32)>::new(); nodes];
+        for (edge_idx, &(source, target_node)) in edges.iter().enumerate() {
+            if delays[edge_idx] == delay && normalization[target_node] > 1.0e-12 {
+                rows[target_node].push((
+                    source as u32,
+                    (weights[edge_idx] / normalization[target_node]) as f32,
+                ));
+            }
+        }
+        let mut indptr = Vec::with_capacity(nodes + 1);
+        let mut indices = Vec::new();
+        let mut edge_weights = Vec::new();
+        indptr.push(0_u32);
+        for row in rows {
+            for (source, weight) in row {
+                indices.push(source);
+                edge_weights.push(weight);
+            }
+            indptr.push(indices.len() as u32);
+        }
+        let lag_idx = (time_idx + 1).saturating_sub(delay);
+        let values = target[lag_idx]
+            .iter()
+            .map(|value| *value as f32)
+            .collect::<Vec<_>>();
+        let contribution =
+            backend_csr_diffusion_f32(&selection, &indptr, &indices, &edge_weights, 1, &values)
+                .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        for (value, contribution) in signal.iter_mut().zip(contribution) {
+            *value += contribution;
+        }
+    }
+    Ok(signal.into_iter().map(f64::from).collect())
+}
+
 fn quantize_prediction(value: f64) -> f64 {
     if value.is_finite() {
         (value * 1.0e12).round() / 1.0e12
@@ -10015,17 +10079,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn auto_compute_backend_selects_cpu() {
+    fn auto_compute_backend_selects_an_available_backend() {
         let selection = select_compute_backend(Some("auto")).unwrap();
         assert_eq!(selection.requested, "auto");
-        assert_eq!(selection.selected, "cpu");
+        assert!(selection.available.contains(&selection.selected));
 
         let default_selection = select_compute_backend(None).unwrap();
         assert_eq!(default_selection.requested, "auto");
-        assert_eq!(default_selection.selected, "cpu");
+        assert!(default_selection
+            .available
+            .contains(&default_selection.selected));
     }
 
-    #[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
+    #[cfg(all(feature = "cuda", target_os = "linux"))]
     #[test]
     fn cuda_lsttn_fit_uses_tensor_executor_without_scalar_fallback() {
         let backend = match select_compute_backend(Some("cuda")) {
@@ -10054,7 +10120,7 @@ mod tests {
             .is_some_and(|state| state.steps > 0));
     }
 
-    #[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
+    #[cfg(all(feature = "cuda", target_os = "linux"))]
     #[test]
     fn cuda_lsttn_pretraining_updates_mst_parameters_on_device() {
         if select_compute_backend(Some("cuda")).is_err() {
@@ -10081,7 +10147,7 @@ mod tests {
         );
     }
 
-    #[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
+    #[cfg(all(feature = "cuda", target_os = "linux"))]
     #[test]
     fn cuda_lsttn_executor_keeps_model_and_all_three_graphs_resident() {
         if select_compute_backend(Some("cuda")).is_err() {
@@ -10428,11 +10494,14 @@ mod tests {
     }
 
     #[test]
-    fn webgpu_compute_backend_is_not_selectable() {
-        let err = select_compute_backend(Some("webgpu")).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("expected auto, cpu, cuda, rocm, or metal"));
+    fn hip_alias_uses_the_shared_rocm_backend_contract() {
+        match select_compute_backend(Some("hip")) {
+            Ok(selection) => {
+                assert_eq!(selection.requested, "rocm");
+                assert_eq!(selection.selected, "rocm");
+            }
+            Err(error) => assert!(error.to_string().contains("not available")),
+        }
     }
 
     #[test]

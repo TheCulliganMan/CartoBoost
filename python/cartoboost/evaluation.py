@@ -157,10 +157,10 @@ def environmental_blocked_cv(
     if use_sklearn:
         try:
             from sklearn.cluster import KMeans
-        except ImportError as exc:  # pragma: no cover - depends on optional extra
+        except ImportError as exc:  # pragma: no cover - depends on optional dependency
             raise ImportError(
                 "environmental_blocked_cv requires scikit-learn; install cartoboost with "
-                "the sklearn extra or pass use_sklearn=False"
+                "scikit-learn or pass use_sklearn=False"
             ) from exc
         labels = KMeans(
             n_clusters=int(n_splits),

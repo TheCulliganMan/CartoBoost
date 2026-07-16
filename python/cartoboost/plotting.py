@@ -458,7 +458,7 @@ def plot_spatial_points(
     cmap: str = "viridis",
     point_size: float = 34.0,
 ) -> Any:
-    """Render static latitude/longitude points with the visualization extra."""
+    """Render static latitude/longitude points with optional visualization packages."""
 
     pyplot = _require_pyplot()
     geopandas, point_cls, _ = _require_static_map_stack()
@@ -512,7 +512,7 @@ def plot_route_segments(
     cmap: str = "viridis",
     linewidth: float = 1.4,
 ) -> Any:
-    """Render static pickup/dropoff route segments with the visualization extra."""
+    """Render static pickup/dropoff route segments with optional visualization packages."""
 
     pyplot = _require_pyplot()
     geopandas, point_cls, line_cls = _require_static_map_stack()
@@ -1598,7 +1598,7 @@ def _require_pyplot() -> Any:
     except ImportError as exc:  # pragma: no cover - depends on optional dependency
         raise ImportError(
             "CartoBoost visualization requires matplotlib. Install it with "
-            "`pip install 'cartoboost[visualization]'` or include the dev dependency group."
+            "`pip install matplotlib`."
         ) from exc
     return pyplot
 
@@ -1634,7 +1634,7 @@ def _require_static_map_stack() -> tuple[Any, Any, Any]:
     except ImportError as exc:  # pragma: no cover - depends on optional dependency
         raise ImportError(
             "CartoBoost map visualization requires geopandas and shapely. "
-            "Install them with `pip install 'cartoboost[visualization]'`."
+            "Install them with `pip install geopandas shapely`."
         ) from exc
     return geopandas, Point, LineString
 
@@ -1645,7 +1645,7 @@ def _require_pydeck_stack() -> Any:
     except ImportError as exc:  # pragma: no cover - depends on optional dependency
         raise ImportError(
             "CartoBoost interactive map visualization requires pydeck. "
-            "Install it with `pip install 'cartoboost[visualization]'`."
+            "Install it with `pip install pydeck`."
         ) from exc
     return pydeck
 

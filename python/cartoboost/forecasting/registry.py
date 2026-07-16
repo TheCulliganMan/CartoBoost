@@ -38,7 +38,8 @@ class ForecastModelSpec:
             deps = ", ".join(missing)
             raise ImportError(
                 f"Forecast model '{self.name}' requires optional package(s): {deps}. "
-                "Install the matching CartoBoost forecasting extra or register a custom factory."
+                f"Install the missing package(s) directly (`pip install {' '.join(missing)}`) "
+                "or register a custom factory."
             )
 
     def create(self, **overrides: Any) -> Any:
