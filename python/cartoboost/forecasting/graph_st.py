@@ -768,6 +768,7 @@ class _PaperGraphTransformerForecaster(ArtifactPersistenceMixin):
         epochs: int = 80,
         learning_rate: float = 0.01,
         weight_decay: float = 0.00001,
+        batch_size: int = 32,
         backend: Backend | str = Backend.CPU,
         horizon: int = 1,
     ) -> None:
@@ -786,11 +787,14 @@ class _PaperGraphTransformerForecaster(ArtifactPersistenceMixin):
             "epochs": int(epochs),
             "learning_rate": float(learning_rate),
             "weight_decay": float(weight_decay),
+            "batch_size": int(batch_size),
             "backend": _choice_value(backend),
             "horizon": int(horizon),
         }
         if self._params["horizon"] <= 0:
             raise ValueError("horizon must be positive")
+        if not 1 <= self._params["batch_size"] <= 32:
+            raise ValueError("batch_size must be between 1 and 32")
         self._native_model = native_class(
             **{key: value for key, value in self._params.items() if key != "horizon"}
         )

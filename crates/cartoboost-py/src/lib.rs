@@ -4102,7 +4102,7 @@ impl NativePropagationDelayGraphForecaster {
 #[pymethods]
 impl NativePaperGraphTransformerForecaster {
     #[new]
-    #[pyo3(signature = (profile, lookback=12, hidden_size=16, attention_heads=4, graph_order=2, experts=4, periodicity=24, recent_window=12, epochs=80, learning_rate=0.01, weight_decay=0.00001, backend=None))]
+    #[pyo3(signature = (profile, lookback=12, hidden_size=16, attention_heads=4, graph_order=2, experts=4, periodicity=24, recent_window=12, epochs=80, learning_rate=0.01, weight_decay=0.00001, batch_size=32, backend=None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         profile: &str,
@@ -4116,6 +4116,7 @@ impl NativePaperGraphTransformerForecaster {
         epochs: usize,
         learning_rate: f64,
         weight_decay: f64,
+        batch_size: usize,
         backend: Option<&str>,
     ) -> PyResult<Self> {
         Ok(Self {
@@ -4131,6 +4132,7 @@ impl NativePaperGraphTransformerForecaster {
                 epochs,
                 learning_rate,
                 weight_decay,
+                batch_size,
                 backend: graph_st_select_compute_backend_for_operations(
                     backend,
                     &[

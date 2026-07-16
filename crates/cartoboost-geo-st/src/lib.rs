@@ -849,6 +849,10 @@ pub enum GraphTransformerProfile {
     SpatialShiftGraphonMoE,
 }
 
+const fn default_lsttn_batch_size() -> usize {
+    32
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PaperGraphTransformerConfig {
     pub profile: GraphTransformerProfile,
@@ -862,6 +866,8 @@ pub struct PaperGraphTransformerConfig {
     pub epochs: usize,
     pub learning_rate: f64,
     pub weight_decay: f64,
+    #[serde(default = "default_lsttn_batch_size")]
+    pub batch_size: usize,
     #[serde(default)]
     pub backend: ComputeBackendSelection,
 }
@@ -880,6 +886,7 @@ impl Default for PaperGraphTransformerConfig {
             epochs: 80,
             learning_rate: 0.01,
             weight_decay: 1e-5,
+            batch_size: 32,
             backend: select_compute_backend(None).expect("default CPU backend is always available"),
         }
     }
@@ -8820,6 +8827,8 @@ impl PaperGraphTransformerForecaster {
             || config.learning_rate <= 0.0
             || !config.weight_decay.is_finite()
             || config.weight_decay < 0.0
+            || config.batch_size == 0
+            || config.batch_size > 32
         {
             return Err(GeoStError::InvalidFrame(
                 "invalid paper graph transformer configuration".to_string(),
@@ -9093,11 +9102,11 @@ impl PaperGraphTransformerForecaster {
             // example is independent up to Adam's update, so evaluate all
             // scalar tapes on Rayon workers, average their gradients in
             // stable start-order, and take one serialized Adam step.
-            const LSTTN_BATCH_SIZE: usize = 32;
-            let batches_per_epoch = supervised_starts.len().div_ceil(LSTTN_BATCH_SIZE);
+            let lsttn_batch_size = self.config.batch_size;
+            let batches_per_epoch = supervised_starts.len().div_ceil(lsttn_batch_size);
             let total_batches = batches_per_epoch * self.config.epochs;
             for epoch in 0..self.config.epochs {
-                for (batch_index, starts) in supervised_starts.chunks(LSTTN_BATCH_SIZE).enumerate()
+                for (batch_index, starts) in supervised_starts.chunks(lsttn_batch_size).enumerate()
                 {
                     let task_index = epoch * batches_per_epoch + batch_index;
                     if task_index < supervised_batches_completed {
@@ -10598,6 +10607,7 @@ mod tests {
                 epochs: 8,
                 learning_rate: 0.01,
                 weight_decay: 0.0,
+                batch_size: 32,
                 backend: select_compute_backend(Some("cpu")).unwrap(),
             })
             .unwrap();
@@ -10662,6 +10672,7 @@ mod tests {
             epochs: 2,
             learning_rate: 0.01,
             weight_decay: 0.0,
+            batch_size: 32,
             backend: select_compute_backend(Some("cpu")).unwrap(),
         };
         let directory = tempfile::tempdir().unwrap();
@@ -10733,6 +10744,7 @@ mod tests {
             epochs: 1,
             learning_rate: 0.01,
             weight_decay: 0.0,
+            batch_size: 32,
             backend: select_compute_backend(Some("cpu")).unwrap(),
             ..PaperGraphTransformerConfig::default()
         };
@@ -10827,6 +10839,7 @@ mod tests {
             epochs: 1,
             learning_rate: 0.01,
             weight_decay: 0.0,
+            batch_size: 32,
             backend: select_compute_backend(Some("cpu")).unwrap(),
         };
         let initial = TrainableGraphTransformerState::initialized(
@@ -10977,6 +10990,7 @@ mod tests {
             epochs: 1,
             learning_rate: 0.01,
             weight_decay: 0.0,
+            batch_size: 32,
             backend: select_compute_backend(Some("cpu")).unwrap(),
         };
         let initial = TrainableGraphTransformerState::initialized(
@@ -11030,6 +11044,7 @@ mod tests {
             epochs: 1,
             learning_rate: 0.01,
             weight_decay: 0.0,
+            batch_size: 32,
             backend: select_compute_backend(Some("cpu")).unwrap(),
         };
         let initial = TrainableGraphTransformerState::initialized(
@@ -11236,6 +11251,7 @@ mod tests {
             epochs: 1,
             learning_rate: 0.01,
             weight_decay: 0.0,
+            batch_size: 32,
             backend: select_compute_backend(Some("cpu")).unwrap(),
         };
         let mut state = TrainableGraphTransformerState::initialized(1, 1, 1, 1, 2, 2, 3, 1, 1, 31);
@@ -11290,6 +11306,7 @@ mod tests {
             epochs: 1,
             learning_rate: 0.01,
             weight_decay: 0.0,
+            batch_size: 32,
             backend: select_compute_backend(Some("cpu")).unwrap(),
         })
         .unwrap();
@@ -11330,6 +11347,7 @@ mod tests {
             epochs: 1,
             learning_rate: 0.01,
             weight_decay: 0.0,
+            batch_size: 32,
             backend: select_compute_backend(Some(backend)).unwrap(),
         };
         let mut cpu = PaperGraphTransformerForecaster::new(config("cpu")).unwrap();
@@ -11369,6 +11387,7 @@ mod tests {
             epochs: 2,
             learning_rate: 0.01,
             weight_decay: 0.0,
+            batch_size: 32,
             backend: select_compute_backend(Some("cpu")).unwrap(),
         };
         let initial = TrainableGraphTransformerState::initialized(
@@ -11411,6 +11430,7 @@ mod tests {
             epochs: 1,
             learning_rate: 0.01,
             weight_decay: 0.0,
+            batch_size: 32,
             backend: select_compute_backend(Some("cpu")).unwrap(),
         };
         let mut model = PaperGraphTransformerForecaster::new(config).unwrap();
@@ -11446,6 +11466,7 @@ mod tests {
             epochs: 1,
             learning_rate: 0.01,
             weight_decay: 0.0,
+            batch_size: 32,
             backend: select_compute_backend(Some("cpu")).unwrap(),
         };
         let initial = TrainableGraphTransformerState::initialized(
