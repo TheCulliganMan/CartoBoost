@@ -452,10 +452,25 @@ def local_frame_feature_rows(
     points: Sequence[tuple[Any, Any]],
     origin: tuple[Any, Any],
     axis: tuple[Any, Any],
-) -> list[tuple[float, float] | None]:
+    *,
+    backend: Backend | str = Backend.CPU,
+) -> list[tuple[float, float]]:
     """Vectorized local-frame projection features."""
 
-    return [local_frame_features(point, origin, axis) for point in points]
+    normalized_points = [
+        _coordinate_pair(point, f"points[{idx}]") for idx, point in enumerate(points)
+    ]
+    normalized_origin = _coordinate_pair(origin, "origin")
+    normalized_axis = _coordinate_pair(axis, "axis")
+    return [
+        (float(row[0]), float(row[1]))
+        for row in _native_geo_feature("geo_local_frame_feature_rows_value")(
+            normalized_points,
+            normalized_origin,
+            normalized_axis,
+            str(backend),
+        )
+    ]
 
 
 def build_zip_sparse_sets(

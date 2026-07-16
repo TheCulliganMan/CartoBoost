@@ -1,5 +1,6 @@
 use cartoboost_accelerator::{
-    backend_pairwise_squared_distances_f32, select_backend_for, BackendOperation, BackendSelection,
+    backend_dense_layer_f32, backend_pairwise_squared_distances_f32, select_backend_for,
+    BackendOperation, BackendSelection,
 };
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use rayon::prelude::*;
@@ -7,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 const GEO_PAIRWISE_DISPATCH_MIN_PAIRS: usize = 16_384;
+const GEO_DENSE_DISPATCH_MIN_OPS: usize = 16_384;
 
 pub const EARTH_RADIUS_KM: f64 = 6_371.0;
 pub const EARTH_RADIUS_METERS: f64 = EARTH_RADIUS_KM * 1_000.0;
@@ -974,6 +976,61 @@ pub fn local_frame_features(point: [f64; 2], origin: [f64; 2], axis: [f64; 2]) -
     Some([along, cross])
 }
 
+pub fn local_frame_feature_rows_with_backend(
+    points: &[[f64; 2]],
+    origin: [f64; 2],
+    axis: [f64; 2],
+    backend: Option<&str>,
+) -> Result<Vec<[f64; 2]>> {
+    let norm = (axis[0] * axis[0] + axis[1] * axis[1]).sqrt();
+    if norm == 0.0 || !norm.is_finite() {
+        return Err(GeoCoreError::InvalidInput(
+            "axis must have finite nonzero length".to_string(),
+        ));
+    }
+    if points
+        .iter()
+        .flatten()
+        .chain(origin.iter())
+        .chain(axis.iter())
+        .any(|value| !value.is_finite())
+    {
+        return Err(GeoCoreError::InvalidInput(
+            "points, origin, and axis must be finite".to_string(),
+        ));
+    }
+    let selection = select_backend_for(backend.or(Some("cpu")), BackendOperation::Dense)
+        .map_err(|error| GeoCoreError::InvalidInput(error.to_string()))?;
+    if selection.selected == "cpu" || points.len().saturating_mul(4) < GEO_DENSE_DISPATCH_MIN_OPS {
+        return points
+            .par_iter()
+            .map(|point| {
+                local_frame_features(*point, origin, axis).ok_or_else(|| {
+                    GeoCoreError::InvalidInput("axis must have finite nonzero length".to_string())
+                })
+            })
+            .collect();
+    }
+    let east = axis[0] / norm;
+    let north = axis[1] / norm;
+    let input = points
+        .iter()
+        .map(|point| vec![point[0] as f32, point[1] as f32])
+        .collect::<Vec<_>>();
+    let weights = vec![east as f32, -north as f32, north as f32, east as f32];
+    let biases = vec![
+        (-(origin[0] * east + origin[1] * north)) as f32,
+        (origin[0] * north - origin[1] * east) as f32,
+    ];
+    backend_dense_layer_f32(&selection, &input, &weights, &biases)
+        .map_err(|error| GeoCoreError::InvalidInput(error.to_string()))
+        .map(|rows| {
+            rows.into_iter()
+                .map(|row| [f64::from(row[0]), f64::from(row[1])])
+                .collect()
+        })
+}
+
 pub fn initial_bearing_unit_vector_latlng(
     origin_latitude: f64,
     origin_longitude: f64,
@@ -1166,6 +1223,32 @@ mod tests {
                 .abs()
                 < 1.0e-6
         );
+    }
+
+    #[test]
+    fn local_frame_rows_support_every_dense_backend() {
+        let points = (0..4_096)
+            .map(|index| [index as f64 * 0.01, (index % 17) as f64 * 0.2])
+            .collect::<Vec<_>>();
+        let origin = [2.5, -1.25];
+        let axis = [3.0, 4.0];
+        let expected =
+            local_frame_feature_rows_with_backend(&points, origin, axis, Some("cpu")).unwrap();
+        for backend in cartoboost_accelerator::available_backends() {
+            if !cartoboost_accelerator::backend_supports_operation(
+                &backend,
+                BackendOperation::Dense,
+            ) {
+                continue;
+            }
+            let actual =
+                local_frame_feature_rows_with_backend(&points, origin, axis, Some(&backend))
+                    .unwrap();
+            for (expected, actual) in expected.iter().zip(actual) {
+                assert!((expected[0] - actual[0]).abs() < 1.0e-4, "{backend}");
+                assert!((expected[1] - actual[1]).abs() < 1.0e-4, "{backend}");
+            }
+        }
     }
 
     #[test]

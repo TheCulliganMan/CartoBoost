@@ -10738,6 +10738,27 @@ fn geo_local_frame_features_value(
     .map(|vector| (vector[0], vector[1]))
 }
 
+#[pyfunction(signature = (points, origin, axis, backend="cpu"))]
+fn geo_local_frame_feature_rows_value(
+    py: Python<'_>,
+    points: Vec<(f64, f64)>,
+    origin: (f64, f64),
+    axis: (f64, f64),
+    backend: &str,
+) -> PyResult<Vec<(f64, f64)>> {
+    let points = points.into_iter().map(|(x, y)| [x, y]).collect::<Vec<_>>();
+    py.detach(|| {
+        cartoboost_geo_core::local_frame_feature_rows_with_backend(
+            &points,
+            [origin.0, origin.1],
+            [axis.0, axis.1],
+            Some(backend),
+        )
+    })
+    .map_err(to_py_geo_core_error)
+    .map(|rows| rows.into_iter().map(|row| (row[0], row[1])).collect())
+}
+
 #[pyfunction]
 fn h3_validate_parent_resolutions_value(
     py: Python<'_>,
@@ -12988,6 +13009,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(geo_radial_anchor_distance_rows_value, m)?)?;
     m.add_function(wrap_pyfunction!(geo_rbf_anchor_feature_rows_value, m)?)?;
     m.add_function(wrap_pyfunction!(geo_local_frame_features_value, m)?)?;
+    m.add_function(wrap_pyfunction!(geo_local_frame_feature_rows_value, m)?)?;
     m.add_function(wrap_pyfunction!(h3_validate_parent_resolutions_value, m)?)?;
     m.add_function(wrap_pyfunction!(s2_validate_parent_levels_value, m)?)?;
     m.add_function(wrap_pyfunction!(h3_scaffold_parent_id_value, m)?)?;
