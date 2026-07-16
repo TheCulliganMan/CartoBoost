@@ -53,7 +53,7 @@ fn create_runtime() -> windows::core::Result<DirectMlRuntime> {
 }
 
 pub(crate) fn is_available() -> bool {
-    RUNTIME.get_or_init(|| create_runtime().ok()).is_some()
+    RUNTIME.get_or_init(|| create_runtime().ok()).is_some() && crate::webgpu_backend::is_available()
 }
 
 fn as_neural(context: &str, error: windows::core::Error) -> AcceleratorError {
