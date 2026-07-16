@@ -2,9 +2,9 @@
 use cartoboost_neural::CudaTensorArena;
 use cartoboost_neural::{
     backend_adamw_step_f32, backend_affine_scores, backend_csr_diffusion_f32,
-    backend_csr_row_softmax_f32, backend_dense_layer_f32, backend_scalar_graph_f32,
-    backend_scalar_graph_train_step_f32, select_backend_for_operations, BackendOperation,
-    BackendSelection,
+    backend_csr_row_softmax_f32, backend_dense_layer_f32, backend_layer_norm_f32,
+    backend_scalar_graph_f32, backend_scalar_graph_train_step_f32, select_backend_for_operations,
+    BackendOperation, BackendSelection,
 };
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -7336,6 +7336,45 @@ fn numeric_layer_norm(parameters: &[f64], offset: usize, values: &[f64]) -> Vec<
         .collect()
 }
 
+fn numeric_layer_norm_batch(
+    parameters: &[f64],
+    offset: usize,
+    values: &[Vec<f64>],
+    backend: Option<&BackendSelection>,
+) -> Result<Vec<Vec<f64>>> {
+    let rows = values.len();
+    let width = values.first().map_or(0, Vec::len);
+    let operations = rows.saturating_mul(width);
+    if let Some(selection) = backend.filter(|selection| {
+        selection.selected != "cpu" && operations >= GEO_ST_DENSE_DISPATCH_MIN_OPS
+    }) {
+        let flat_values = values
+            .iter()
+            .flatten()
+            .map(|value| *value as f32)
+            .collect::<Vec<_>>();
+        let gamma = parameters[offset..offset + width]
+            .iter()
+            .map(|value| *value as f32)
+            .collect::<Vec<_>>();
+        let beta = parameters[offset + width..offset + 2 * width]
+            .iter()
+            .map(|value| *value as f32)
+            .collect::<Vec<_>>();
+        let normalized =
+            backend_layer_norm_f32(selection, &flat_values, rows, width, &gamma, &beta)
+                .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        return Ok(normalized
+            .chunks(width)
+            .map(|row| row.iter().copied().map(f64::from).collect())
+            .collect());
+    }
+    Ok(values
+        .iter()
+        .map(|row| numeric_layer_norm(parameters, offset, row))
+        .collect())
+}
+
 fn attention_row_softmax(
     logits: &mut [Vec<f64>],
     scale: f64,
@@ -7436,18 +7475,18 @@ fn numeric_transformer_encoder_layer(
     }
     let projected =
         numeric_linear_batch(parameters, out_offset, &attended, hidden, hidden, backend)?;
-    let normalized = sequence
+    let first_residual = sequence
         .iter()
         .zip(projected)
         .map(|(residual, projected)| {
-            let first = residual
+            residual
                 .iter()
                 .zip(projected)
                 .map(|(left, right)| left + right)
-                .collect::<Vec<_>>();
-            numeric_layer_norm(parameters, norm_offset, &first)
+                .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
+    let normalized = numeric_layer_norm_batch(parameters, norm_offset, &first_residual, backend)?;
     let mut expanded = numeric_linear_batch(
         parameters,
         ffn_offset,
@@ -7468,21 +7507,23 @@ fn numeric_transformer_encoder_layer(
         hidden,
         backend,
     )?;
-    Ok(normalized
+    let second_residual = normalized
         .iter()
         .zip(contracted)
         .map(|(normalized, contracted)| {
-            numeric_layer_norm(
-                parameters,
-                norm_offset + 2 * hidden,
-                &normalized
-                    .iter()
-                    .zip(contracted)
-                    .map(|(left, right)| left + right)
-                    .collect::<Vec<_>>(),
-            )
+            normalized
+                .iter()
+                .zip(contracted)
+                .map(|(left, right)| left + right)
+                .collect::<Vec<_>>()
         })
-        .collect())
+        .collect::<Vec<_>>();
+    numeric_layer_norm_batch(
+        parameters,
+        norm_offset + 2 * hidden,
+        &second_residual,
+        backend,
+    )
 }
 
 fn tape_layer_norm(
@@ -11583,6 +11624,42 @@ mod tests {
             }
             for (actual, expected) in actual.second_moment.iter().zip(&expected.second_moment) {
                 assert!((actual - expected).abs() < 1.0e-7);
+            }
+        }
+    }
+
+    #[test]
+    fn lsttn_layer_norm_matches_cpu_across_available_backends() {
+        let rows = 128;
+        let width = 128;
+        let mut parameters = vec![0.0; 2 * width];
+        for channel in 0..width {
+            parameters[channel] = 0.75 + channel as f64 * 0.001;
+            parameters[width + channel] = (channel as f64 * 0.023).sin() * 0.01;
+        }
+        let values = (0..rows)
+            .map(|row| {
+                (0..width)
+                    .map(|column| ((row * width + column) as f64 * 0.007).cos())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let expected = numeric_layer_norm_batch(&parameters, 0, &values, None).unwrap();
+
+        for backend in available_compute_backends()
+            .into_iter()
+            .filter(|backend| backend != "cpu")
+        {
+            let selection =
+                cartoboost_neural::select_backend_for(Some(&backend), BackendOperation::LayerNorm)
+                    .unwrap();
+            let actual = numeric_layer_norm_batch(&parameters, 0, &values, Some(&selection))
+                .unwrap_or_else(|error| panic!("{backend} LSTTN layer norm failed: {error}"));
+            for (actual, expected) in actual.iter().flatten().zip(expected.iter().flatten()) {
+                assert!(
+                    (actual - expected).abs() < 2.0e-4,
+                    "{backend}: {actual} != {expected}"
+                );
             }
         }
     }

@@ -4141,6 +4141,7 @@ impl NativePaperGraphTransformerForecaster {
                     &[
                         BackendOperation::AdamW,
                         BackendOperation::Dense,
+                        BackendOperation::LayerNorm,
                         BackendOperation::CsrRowSoftmax,
                         BackendOperation::ScalarGraph,
                         BackendOperation::ScalarGraphTraining,

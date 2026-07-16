@@ -4357,6 +4357,7 @@ fn run_graph_forecast_request(
                 &[
                     BackendOperation::AdamW,
                     BackendOperation::Dense,
+                    BackendOperation::LayerNorm,
                     BackendOperation::CsrRowSoftmax,
                     BackendOperation::ScalarGraph,
                     BackendOperation::ScalarGraphTraining,
