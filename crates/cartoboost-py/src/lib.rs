@@ -46,8 +46,10 @@ use cartoboost_core::forecasting::{
     PiecewiseLinearSeasonalConfig as CorePiecewiseLinearSeasonalConfig,
     PiecewiseLinearSeasonalForecaster as CorePiecewiseLinearSeasonalForecaster,
     PiecewiseLinearSeasonality, PiecewiseLinearTrendUncertaintyPolicy,
-    Reconciler as CoreReconciler, ReconciliationMethod as CoreReconciliationMethod,
-    ReferencePathConfig, ReferenceSignal, RollingOriginBacktester as CoreRollingOriginBacktester,
+    QuantileRegressorSet as CoreQuantileRegressorSet,
+    QuantileRegressorSetConfig as CoreQuantileRegressorSetConfig, Reconciler as CoreReconciler,
+    ReconciliationMethod as CoreReconciliationMethod, ReferencePathConfig, ReferenceSignal,
+    RollingOriginBacktester as CoreRollingOriginBacktester,
     RollingOriginSplitter as CoreRollingOriginSplitter, SbaForecaster as CoreSbaForecaster,
     SeasonalNaiveForecaster as CoreSeasonalNaiveForecaster, SequenceCandidate,
     SequenceCandidateEnsemble, SequenceCandidatePrediction, SequenceFrame, SequenceGroupPrediction,
@@ -6237,6 +6239,176 @@ impl NativeCartoBoostRegressor {
 
     fn refresh_prediction_cache(&mut self) {
         self.flat_axis_predictor = self.model.as_ref().and_then(Model::flat_axis_predictor);
+    }
+}
+
+#[pyclass(name = "QuantileRegressorSet")]
+#[derive(Clone, Debug)]
+struct NativeQuantileRegressorSet {
+    quantiles: Vec<f64>,
+    backend: String,
+    booster_config: BoosterConfig,
+    n_threads: Option<usize>,
+    model: Option<CoreQuantileRegressorSet>,
+}
+
+#[pymethods]
+impl NativeQuantileRegressorSet {
+    #[new]
+    #[pyo3(signature = (quantiles, n_estimators=100, learning_rate=0.05, max_depth=4, min_samples_leaf=20, min_gain=1e-8, splitters=None, leaf_predictor="constant", linear_leaf_features=None, l2_regularization=1.0, constant_l2_regularization=0.0, fuzzy=false, fuzzy_bandwidth=0.0, fuzzy_kernel="linear", n_threads=None, monotonic_constraints=None, backend="cpu"))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        quantiles: Vec<f64>,
+        n_estimators: usize,
+        learning_rate: f64,
+        max_depth: usize,
+        min_samples_leaf: usize,
+        min_gain: f64,
+        splitters: Option<Vec<String>>,
+        leaf_predictor: &str,
+        linear_leaf_features: Option<Vec<usize>>,
+        l2_regularization: f64,
+        constant_l2_regularization: f64,
+        fuzzy: bool,
+        fuzzy_bandwidth: f64,
+        fuzzy_kernel: &str,
+        n_threads: Option<usize>,
+        monotonic_constraints: Option<Vec<i8>>,
+        backend: &str,
+    ) -> PyResult<Self> {
+        validate_n_threads(n_threads)?;
+        validate_params(
+            n_estimators,
+            learning_rate,
+            max_depth,
+            min_samples_leaf,
+            min_gain,
+            l2_regularization,
+            constant_l2_regularization,
+            fuzzy_bandwidth,
+            0.5,
+            1.0,
+            1.0,
+        )?;
+        let splitter_names = splitters.unwrap_or_else(|| vec!["auto".to_string()]);
+        let booster_config = BoosterConfig {
+            n_estimators,
+            learning_rate,
+            max_depth,
+            min_samples_leaf,
+            min_gain,
+            loss: LossConfig::Quantile(QuantileLossConfig { alpha: 0.5 }),
+            splitters: parse_splitters(&splitter_names)?,
+            leaf_predictor: parse_leaf_predictor(leaf_predictor)?,
+            linear_leaf_features: linear_leaf_features.unwrap_or_default(),
+            linear_lambda_l2: l2_regularization,
+            constant_lambda_l2: constant_l2_regularization,
+            fuzzy,
+            fuzzy_bandwidth,
+            fuzzy_kernel: parse_fuzzy_kernel(fuzzy_kernel)?,
+            monotonic_constraints: monotonic_constraints.unwrap_or_default(),
+            interaction_constraints: Vec::new(),
+            graph_split_regularization: None,
+            graph_leaf_smoothing: None,
+        };
+        Ok(Self {
+            quantiles,
+            backend: backend.to_string(),
+            booster_config,
+            n_threads,
+            model: None,
+        })
+    }
+
+    #[pyo3(signature = (x, y, sample_weight=None))]
+    fn fit(
+        &mut self,
+        py: Python<'_>,
+        x: PyReadonlyArray2<'_, f64>,
+        y: PyReadonlyArray1<'_, f64>,
+        sample_weight: Option<PyReadonlyArray1<'_, f64>>,
+    ) -> PyResult<()> {
+        let dataset = dataset_from_arrays(x, None, None, None)?;
+        let targets = y.as_slice()?.to_vec();
+        let weights = sample_weight
+            .map(|array| array.as_slice().map(|slice| slice.to_vec()))
+            .transpose()?;
+        let config = CoreQuantileRegressorSetConfig {
+            quantiles: self.quantiles.clone(),
+            booster_config: self.booster_config.clone(),
+        };
+        let backend = self.backend.clone();
+        let n_threads = self.n_threads;
+        self.model = Some(
+            py.detach(move || {
+                run_with_optional_threads(n_threads, || {
+                    CoreQuantileRegressorSet::fit_with_backend(
+                        &dataset,
+                        &targets,
+                        weights.as_deref(),
+                        config,
+                        Some(&backend),
+                    )
+                })
+            })
+            .map_err(to_py_value_error)?,
+        );
+        Ok(())
+    }
+
+    fn predict_quantiles<'py>(
+        &self,
+        py: Python<'py>,
+        x: PyReadonlyArray2<'_, f64>,
+    ) -> PyResult<Bound<'py, numpy::PyArray2<f64>>> {
+        let model = self
+            .model
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("QuantileRegressorSet is not fitted"))?;
+        let dataset = dataset_from_arrays(x, None, None, None)?;
+        let rows = py
+            .detach(|| model.predict(&dataset))
+            .map_err(to_py_value_error)?
+            .into_iter()
+            .map(|forecast| forecast.values)
+            .collect::<Vec<_>>();
+        numpy::PyArray2::from_vec2(py, &rows)
+            .map_err(|error| PyValueError::new_err(error.to_string()))
+    }
+
+    fn dumps(&self) -> PyResult<String> {
+        let model = self
+            .model
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("QuantileRegressorSet is not fitted"))?;
+        serde_json::to_string(model).map_err(to_py_json_error)
+    }
+
+    #[staticmethod]
+    fn loads(payload: &str) -> PyResult<Self> {
+        let model: CoreQuantileRegressorSet =
+            serde_json::from_str(payload).map_err(to_py_json_error)?;
+        let backend = model
+            .backend()
+            .map(|selection| selection.selected.clone())
+            .unwrap_or_else(|| "cpu".to_string());
+        Ok(Self {
+            quantiles: model.quantiles().to_vec(),
+            backend,
+            booster_config: BoosterConfig::default(),
+            n_threads: None,
+            model: Some(model),
+        })
+    }
+
+    #[getter]
+    fn backend(&self) -> &str {
+        &self.backend
+    }
+
+    #[getter]
+    fn is_fitted(&self) -> bool {
+        self.model.is_some()
     }
 }
 
@@ -12852,6 +13024,7 @@ fn parse_graph_transformer_profile(value: &str) -> PyResult<CoreGraphTransformer
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(model_manifest_json, m)?)?;
     m.add_class::<NativeCartoBoostRegressor>()?;
+    m.add_class::<NativeQuantileRegressorSet>()?;
     m.add_class::<NativeNearestNeighborGPRegressor>()?;
     m.add_class::<NativeCartoBoostClassifier>()?;
     m.add_class::<NativeCartoBoostRanker>()?;

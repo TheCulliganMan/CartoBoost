@@ -291,12 +291,23 @@ class QuantileCartoBoostRegressor(ArtifactPersistenceMixin):
         backend: Backend | str = Backend.CPU,
         **kwargs: Any,
     ) -> None:
-        from cartoboost import CartoBoostRegressor
-
         self.quantiles = tuple(float(q) for q in quantiles)
         _validate_quantile_grid(self.quantiles)
         self.backend = str(backend)
         self.kwargs = dict(kwargs)
+        self.models_: dict[float, Any] = {}
+        self._native_model: Any | None = None
+        from cartoboost import CartoBoostRegressor
+
+        if (
+            CartoBoostRegressor.__module__ != "cartoboost.regressor"
+            or _native_quantile_regressor_class() is None
+        ):
+            self._build_models()
+
+    def _build_models(self) -> None:
+        from cartoboost import CartoBoostRegressor
+
         self.models_ = {
             q: CartoBoostRegressor(
                 loss="quantile",
@@ -308,6 +319,31 @@ class QuantileCartoBoostRegressor(ArtifactPersistenceMixin):
         }
 
     def fit(self, x: Any, y: Any) -> QuantileCartoBoostRegressor:
+        native_class = _native_quantile_regressor_class()
+        native_params = _native_quantile_params(self.kwargs)
+        if not self.models_ and native_class is not None and native_params is not None:
+            try:
+                dense = np.ascontiguousarray(np.asarray(x, dtype=np.float64))
+                targets = np.ascontiguousarray(_vector(y, "y"), dtype=np.float64)
+                if dense.ndim != 2:
+                    raise ValueError("X must be a two-dimensional numeric matrix")
+                if dense.shape[0] != targets.shape[0]:
+                    raise ValueError("X and y must contain the same number of rows")
+                native = native_class(
+                    quantiles=list(self.quantiles),
+                    backend=self.backend,
+                    **native_params,
+                )
+                native.fit(dense, targets)
+                self._native_model = native
+                self.models_ = {}
+                return self
+            except (TypeError, ValueError):
+                # Categorical/mixed inputs and options outside the native set's
+                # contract retain the full per-estimator compatibility path.
+                self._native_model = None
+        if not self.models_:
+            self._build_models()
         for model in self.models_.values():
             model.fit(x, y)
         return self
@@ -319,6 +355,11 @@ class QuantileCartoBoostRegressor(ArtifactPersistenceMixin):
         return columns[:, len(self.quantiles) // 2]
 
     def predict_quantiles(self, x: Any) -> np.ndarray:
+        if self._native_model is not None:
+            dense = np.ascontiguousarray(np.asarray(x, dtype=np.float64))
+            if dense.ndim != 2:
+                raise ValueError("X must be a two-dimensional numeric matrix")
+            return np.asarray(self._native_model.predict_quantiles(dense), dtype=float)
         columns = [_vector(self.models_[q].predict(x), "prediction") for q in self.quantiles]
         return np.maximum.accumulate(np.column_stack(columns), axis=1)
 
@@ -363,16 +404,23 @@ class QuantileCartoBoostRegressor(ArtifactPersistenceMixin):
             "quantiles": list(self.quantiles),
             "backend": {
                 "requested": self.backend,
-                "selected": {
-                    str(q): str(
-                        getattr(
-                            getattr(model, "_model", None),
-                            "backend",
-                            getattr(model, "backend", self.backend),
+                "selected": (
+                    {
+                        str(q): str(getattr(self._native_model, "backend", self.backend))
+                        for q in self.quantiles
+                    }
+                    if self._native_model is not None
+                    else {
+                        str(q): str(
+                            getattr(
+                                getattr(model, "_model", None),
+                                "backend",
+                                getattr(model, "backend", self.backend),
+                            )
                         )
-                    )
-                    for q, model in self.models_.items()
-                },
+                        for q, model in self.models_.items()
+                    }
+                ),
             },
             "params": dict(self.kwargs),
         }
@@ -383,10 +431,17 @@ class QuantileCartoBoostRegressor(ArtifactPersistenceMixin):
             quantiles=list(self.quantiles),
             backend=self.backend,
             kwargs=dict(self.kwargs),
-            models={
-                str(q): dump_model_artifact(model, purpose="quantile artifacts")
-                for q, model in self.models_.items()
-            },
+            native_model=(
+                None if self._native_model is None else str(self._native_model.dumps())
+            ),
+            models=(
+                {
+                    str(q): dump_model_artifact(model, purpose="quantile artifacts")
+                    for q, model in self.models_.items()
+                }
+                if self._native_model is None
+                else {}
+            ),
         )
         Path(path).write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
 
@@ -399,10 +454,17 @@ class QuantileCartoBoostRegressor(ArtifactPersistenceMixin):
             backend=str(payload.get("backend", Backend.CPU.value)),
             **dict(payload["kwargs"]),
         )
-        obj.models_ = {
-            float(level): load_model_artifact(model_payload)
-            for level, model_payload in payload["models"].items()
-        }
+        native_payload = payload.get("native_model")
+        native_class = _native_quantile_regressor_class()
+        if native_payload is not None and native_class is not None:
+            obj._native_model = native_class.loads(str(native_payload))
+            obj.models_ = {}
+        else:
+            obj._native_model = None
+            obj.models_ = {
+                float(level): load_model_artifact(model_payload)
+                for level, model_payload in payload["models"].items()
+            }
         return obj
 
 
@@ -1044,3 +1106,65 @@ def _native_prob_call(name: str, *args: Any) -> Any | None:
     except (AttributeError, ImportError, ModuleNotFoundError):
         return None
     return function(*args)
+
+
+def _native_quantile_regressor_class() -> Any | None:
+    try:
+        native = importlib.import_module("cartoboost._native")
+        return native.QuantileRegressorSet
+    except (AttributeError, ImportError, ModuleNotFoundError):
+        return None
+
+
+def _native_quantile_params(kwargs: dict[str, Any]) -> dict[str, Any] | None:
+    unsupported = {
+        "random_state",
+        "tensorboard_log_dir",
+        "tensorboard_run_name",
+        "loss",
+        "quantile_alpha",
+        "loss_params",
+        "huber_delta",
+        "log_offset",
+    }
+    if any(key in kwargs and kwargs[key] is not None for key in unsupported):
+        return None
+    supported = {
+        "n_estimators",
+        "learning_rate",
+        "max_depth",
+        "min_samples_leaf",
+        "min_gain",
+        "leaf_predictor",
+        "linear_leaf_features",
+        "l2_regularization",
+        "constant_l2_regularization",
+        "fuzzy",
+        "fuzzy_bandwidth",
+        "fuzzy_kernel",
+        "n_threads",
+        "monotonic_constraints",
+    }
+    if any(key not in supported | {"split_policy", "splitters"} for key in kwargs):
+        return None
+    params = {key: value for key, value in kwargs.items() if key in supported}
+    linear_features = params.get("linear_leaf_features")
+    if linear_features is not None and any(
+        not isinstance(value, (int, np.integer)) for value in linear_features
+    ):
+        return None
+    if linear_features is not None:
+        params["linear_leaf_features"] = [int(value) for value in linear_features]
+    for enum_name in ("leaf_predictor", "fuzzy_kernel"):
+        value = params.get(enum_name)
+        if value is not None:
+            params[enum_name] = getattr(value, "value", str(value))
+    splitters = kwargs.get("splitters")
+    if splitters is None and "split_policy" in kwargs:
+        policy = getattr(kwargs["split_policy"], "value", str(kwargs["split_policy"]))
+        splitters = [str(policy)]
+    if splitters is not None:
+        params["splitters"] = [
+            str(getattr(value, "value", value)) for value in splitters
+        ]
+    return params
