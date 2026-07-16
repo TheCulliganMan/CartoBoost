@@ -8033,7 +8033,7 @@ struct NativeNode2VecEncoder {
 #[pymethods]
 impl NativeNode2VecEncoder {
     #[new]
-    #[pyo3(signature = (dim=16, walk_length=16, walks_per_node=8, window_size=5, epochs=3, learning_rate=0.025, min_learning_rate=0.0001, negative_samples=5, p=1.0, q=1.0, seed=0xA2B2_C2D2_E2F2_1234, l2_regularization=0.0, normalize=true))]
+    #[pyo3(signature = (dim=16, walk_length=16, walks_per_node=8, window_size=5, epochs=3, learning_rate=0.025, min_learning_rate=0.0001, negative_samples=5, p=1.0, q=1.0, seed=0xA2B2_C2D2_E2F2_1234, l2_regularization=0.0, normalize=true, backend="cpu"))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         dim: usize,
@@ -8049,6 +8049,7 @@ impl NativeNode2VecEncoder {
         seed: u64,
         l2_regularization: f32,
         normalize: bool,
+        backend: &str,
     ) -> PyResult<Self> {
         let config = Node2VecConfig {
             dim,
@@ -8065,7 +8066,8 @@ impl NativeNode2VecEncoder {
             l2_regularization,
             normalize,
         };
-        let encoder = Node2VecEncoder::new(config.clone()).map_err(to_py_neural_error)?;
+        let encoder = Node2VecEncoder::new_with_backend(config.clone(), Some(backend))
+            .map_err(to_py_neural_error)?;
         Ok(Self { config, encoder })
     }
 
@@ -8077,7 +8079,9 @@ impl NativeNode2VecEncoder {
         edges: Vec<(usize, usize)>,
         edge_weights: Option<Vec<f32>>,
     ) -> PyResult<Vec<Vec<f32>>> {
-        let mut model = Node2VecEncoder::new(self.config.clone()).map_err(to_py_neural_error)?;
+        let backend = self.encoder.backend().selected.clone();
+        let mut model = Node2VecEncoder::new_with_backend(self.config.clone(), Some(&backend))
+            .map_err(to_py_neural_error)?;
         let embedding = py
             .detach(|| model.fit(node_count, &edges, edge_weights.as_deref()))
             .map_err(to_py_neural_error)?;
@@ -8147,6 +8151,11 @@ impl NativeNode2VecEncoder {
     #[getter]
     fn config_learning_rate(&self) -> f32 {
         self.config.learning_rate
+    }
+
+    #[getter]
+    fn backend(&self) -> String {
+        self.encoder.backend().selected.clone()
     }
 
     #[getter]

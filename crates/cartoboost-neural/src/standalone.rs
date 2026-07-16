@@ -9,8 +9,9 @@ use crate::graphsage::{
 use crate::node2vec::{Node2VecConfig, Node2VecEncoder};
 use crate::{
     backend_pair_sigmoid_scores_f32, backend_supports_operation,
-    fit_embedding_table_with_options_and_backend, select_backend_for, BackendOperation,
-    BackendSelection, GraphSageEncoderArtifact, Node2VecEncoderArtifact,
+    fit_embedding_table_with_options_and_backend, select_backend_for,
+    select_backend_for_operations, BackendOperation, BackendSelection, GraphSageEncoderArtifact,
+    Node2VecEncoderArtifact,
 };
 use cartoboost_core::loss::LossConfig;
 use cartoboost_core::tree::{FuzzyKernel, LeafPredictorKind, SplitterKind};
@@ -273,7 +274,8 @@ pub struct Node2VecRegressor {
 impl Node2VecRegressor {
     pub fn new(config: Node2VecConfig, booster_config: StandaloneBoosterConfig) -> Result<Self> {
         validate_booster_config(&booster_config)?;
-        let encoder = Node2VecEncoder::new(config.clone())?;
+        let encoder =
+            Node2VecEncoder::new_with_backend(config.clone(), Some(&booster_config.backend))?;
         Ok(Self {
             config,
             booster_config,
@@ -304,7 +306,10 @@ impl Node2VecRegressor {
         if let Some(row_targets) = row_targets {
             validate_row_count(row_targets.len(), target.len(), "row_targets", "target")?;
         }
-        self.encoder = Node2VecEncoder::new(self.config.clone())?;
+        self.encoder = Node2VecEncoder::new_with_backend(
+            self.config.clone(),
+            Some(&self.booster_config.backend),
+        )?;
         let embeddings = self
             .encoder
             .fit(node_count, edges, edge_weights)?
@@ -966,9 +971,18 @@ impl Node2VecLinkPredictor {
     }
 
     pub fn new_with_backend(config: Node2VecConfig, backend: Option<&str>) -> Result<Self> {
-        let backend = select_backend_for(backend, BackendOperation::PairScoring)?;
+        let backend = select_backend_for_operations(
+            backend,
+            &[
+                BackendOperation::PairScoring,
+                BackendOperation::ScalarGraphTraining,
+            ],
+        )?;
         Ok(Self {
-            encoder: Node2VecEncoder::new(config.clone())?,
+            encoder: Node2VecEncoder::new_with_backend(
+                config.clone(),
+                Some(backend.selected.as_str()),
+            )?,
             config,
             backend,
         })
@@ -980,7 +994,10 @@ impl Node2VecLinkPredictor {
         edges: &[(usize, usize)],
         edge_weights: Option<&[f32]>,
     ) -> Result<()> {
-        self.encoder = Node2VecEncoder::new(self.config.clone())?;
+        self.encoder = Node2VecEncoder::new_with_backend(
+            self.config.clone(),
+            Some(self.backend.selected.as_str()),
+        )?;
         self.encoder.fit(node_count, edges, edge_weights)?;
         Ok(())
     }

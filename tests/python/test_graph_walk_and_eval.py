@@ -4,7 +4,6 @@ import json
 import tempfile
 
 import numpy as np
-import pytest
 from cartoboost.graph import (
     DirectedMetaPath,
     DirectionalFeature,
@@ -929,16 +928,18 @@ def test_top_level_graph_backend_propagates_to_accelerated_encoder() -> None:
     assert native_transformer.sage_kwargs["backend"] == "cpu"
 
 
-def test_node2vec_rejects_non_cpu_top_level_backend_until_fused_kernel_exists() -> None:
-    with pytest.raises(ValueError, match="fused accelerator kernel"):
-        GraphFeatureTransformer.from_config(
-            {
-                "graph_embeddings": {
-                    "backend": "cuda",
-                    "encoder": {"family": "node2vec"},
-                }
+def test_node2vec_propagates_non_cpu_top_level_backend_to_fused_training() -> None:
+    transformer = GraphFeatureTransformer.from_config(
+        {
+            "graph_embeddings": {
+                "backend": "cuda",
+                "encoder": {"family": "node2vec"},
             }
-        )
+        }
+    )
+
+    assert transformer.node2vec_kwargs["backend"] == "cuda"
+    assert transformer.backend == "cuda"
 
 
 def test_graph_feature_config_preserves_node2vec_settings_and_root_directionality() -> None:

@@ -340,6 +340,7 @@ class Node2VecConfig:
     seed: int = DEFAULT_NODE2VEC_SEED
     l2_regularization: float = 0.0
     normalize: bool = True
+    backend: Backend | str = Backend.CPU
 
 
 class Node2VecFeatureEncoder:
@@ -347,7 +348,7 @@ class Node2VecFeatureEncoder:
 
     def __init__(self, config: Node2VecConfig) -> None:
         self.config = config
-        self._encoder = _NativeNode2VecEncoder(
+        kwargs = dict(
             dim=config.dim,
             walk_length=config.walk_length,
             walks_per_node=config.walks_per_node,
@@ -361,7 +362,18 @@ class Node2VecFeatureEncoder:
             seed=int(config.seed),
             l2_regularization=float(config.l2_regularization),
             normalize=bool(config.normalize),
+            backend=_backend_value(config.backend),
         )
+        try:
+            self._encoder = _NativeNode2VecEncoder(**kwargs)
+        except TypeError as error:
+            if _backend_value(config.backend) != Backend.CPU.value:
+                raise RuntimeError(
+                    "the installed CartoBoost native extension predates accelerated "
+                    "Node2Vec training; rebuild or upgrade the extension"
+                ) from error
+            kwargs.pop("backend")
+            self._encoder = _NativeNode2VecEncoder(**kwargs)
         self.graph: HomogeneousGraph | None = None
 
     def fit(
@@ -401,6 +413,7 @@ class Node2VecFeatureEncoder:
                 "window_size": int(self.config.window_size),
                 "epochs": int(self.config.epochs),
                 "native": "rust",
+                "backend": _backend_value(self.config.backend),
             },
         )
 
@@ -438,6 +451,7 @@ class Node2VecFeatureEncoder:
                 seed=int(config.get("seed", DEFAULT_NODE2VEC_SEED)),
                 l2_regularization=float(config.get("l2_regularization", 0.0)),
                 normalize=bool(config.get("normalize", True)),
+                backend=Backend(str(config.get("backend", "cpu"))),
             )
         )
 
@@ -730,13 +744,6 @@ class GraphFeatureTransformer:
             "edge_type_triples",
         }.issubset(encoder_cfg)
         if family == "node2vec":
-            if accelerator_backend not in {"cpu", "auto"}:
-                raise ValueError(
-                    "node2vec skip-gram training does not yet have a fused accelerator "
-                    f"kernel for backend {accelerator_backend!r}; use 'cpu'/'native' or "
-                    "the accelerated Node2VecLinkPredictor for batched pair scoring"
-                )
-            encoder_options.pop("backend", None)
             return cls(
                 use_node2vec=True,
                 node2vec_kwargs=encoder_options,
