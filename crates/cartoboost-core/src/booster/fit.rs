@@ -10,7 +10,7 @@ use crate::tree::{
     TrainingConfigMetadata, TrainingMetric, TreeBuilder, MODEL_ARTIFACT_VERSION,
 };
 use crate::{CartoBoostError, Result};
-use cartoboost_accelerator::{select_backend_for, BackendOperation, BackendSelection};
+use cartoboost_accelerator::{select_backend_for_operations, BackendOperation, BackendSelection};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -69,15 +69,17 @@ impl Default for BoosterConfig {
 
 impl Booster {
     pub fn new(config: BoosterConfig) -> Self {
+        let operations = required_backend_operations(&config);
         Self {
             config,
-            backend: select_backend_for(Some("cpu"), BackendOperation::Dense)
-                .expect("CPU dense backend is always available"),
+            backend: select_backend_for_operations(Some("cpu"), &operations)
+                .expect("CPU booster operations are always available"),
         }
     }
 
     pub fn new_with_backend(config: BoosterConfig, backend: Option<&str>) -> Result<Self> {
-        let backend = select_backend_for(backend, BackendOperation::Dense)
+        let operations = required_backend_operations(&config);
+        let backend = select_backend_for_operations(backend, &operations)
             .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
         Ok(Self { config, backend })
     }
@@ -253,6 +255,14 @@ impl Booster {
         profile::report("booster_fit", profile_started.elapsed());
         Ok(model)
     }
+}
+
+fn required_backend_operations(config: &BoosterConfig) -> Vec<BackendOperation> {
+    let mut operations = vec![BackendOperation::Dense];
+    if config.graph_leaf_smoothing.is_some() {
+        operations.push(BackendOperation::CsrDiffusion);
+    }
+    operations
 }
 
 fn parallel_pseudo_residuals(

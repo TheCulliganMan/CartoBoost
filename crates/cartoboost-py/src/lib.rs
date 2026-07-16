@@ -67,7 +67,9 @@ use cartoboost_core::geo::{
     normalize_h3_resolution, normalize_s2_id_text, normalize_s2_level, scaffold_h3_parent_id,
     validate_equal_row_count, validate_parent_levels, GeoGridKind,
 };
-use cartoboost_core::graph_regularization::{CsrGraph, GraphLaplacian, GraphSmoother};
+use cartoboost_core::graph_regularization::{
+    CsrGraph, GraphLaplacian, GraphLeafSmoothing, GraphSmoother,
+};
 use cartoboost_core::loss::{HuberLossConfig, LogL2LossConfig, LossConfig, QuantileLossConfig};
 use cartoboost_core::manifest::model_manifest_json as core_model_manifest_json;
 use cartoboost_core::metrics::{
@@ -5628,6 +5630,11 @@ struct NativeCartoBoostRegressor {
     fuzzy_kernel: String,
     n_threads: Option<usize>,
     monotonic_constraints: Vec<i8>,
+    graph_indptr: Option<Vec<usize>>,
+    graph_indices: Option<Vec<usize>>,
+    graph_weights: Option<Vec<f64>>,
+    graph_smoothing: f64,
+    graph_smoothing_iterations: usize,
     model: Option<Model>,
     flat_axis_predictor: Option<FlatAxisPredictor>,
 }
@@ -5635,7 +5642,7 @@ struct NativeCartoBoostRegressor {
 #[pymethods]
 impl NativeCartoBoostRegressor {
     #[new]
-    #[pyo3(signature = (n_estimators=100, learning_rate=0.05, max_depth=4, min_samples_leaf=20, min_gain=1e-8, loss="l2", quantile_alpha=0.5, huber_delta=1.0, log_offset=1.0, splitters=None, leaf_predictor="constant", linear_leaf_features=None, l2_regularization=1.0, constant_l2_regularization=0.0, fuzzy=false, fuzzy_bandwidth=0.0, fuzzy_kernel="linear", n_threads=None, monotonic_constraints=None, backend="cpu"))]
+    #[pyo3(signature = (n_estimators=100, learning_rate=0.05, max_depth=4, min_samples_leaf=20, min_gain=1e-8, loss="l2", quantile_alpha=0.5, huber_delta=1.0, log_offset=1.0, splitters=None, leaf_predictor="constant", linear_leaf_features=None, l2_regularization=1.0, constant_l2_regularization=0.0, fuzzy=false, fuzzy_bandwidth=0.0, fuzzy_kernel="linear", n_threads=None, monotonic_constraints=None, graph_indptr=None, graph_indices=None, graph_weights=None, graph_smoothing=0.0, graph_smoothing_iterations=4, backend="cpu"))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         n_estimators: usize,
@@ -5657,6 +5664,11 @@ impl NativeCartoBoostRegressor {
         fuzzy_kernel: &str,
         n_threads: Option<usize>,
         monotonic_constraints: Option<Vec<i8>>,
+        graph_indptr: Option<Vec<usize>>,
+        graph_indices: Option<Vec<usize>>,
+        graph_weights: Option<Vec<f64>>,
+        graph_smoothing: f64,
+        graph_smoothing_iterations: usize,
         backend: &str,
     ) -> PyResult<Self> {
         validate_n_threads(n_threads)?;
@@ -5678,6 +5690,13 @@ impl NativeCartoBoostRegressor {
         parse_splitters(&splitters)?;
         parse_leaf_predictor(leaf_predictor)?;
         parse_fuzzy_kernel(fuzzy_kernel)?;
+        validate_graph_leaf_smoothing(
+            graph_indptr.as_deref(),
+            graph_indices.as_deref(),
+            graph_weights.as_deref(),
+            graph_smoothing,
+            graph_smoothing_iterations,
+        )?;
 
         Ok(Self {
             backend: backend.to_string(),
@@ -5700,6 +5719,11 @@ impl NativeCartoBoostRegressor {
             fuzzy_kernel: fuzzy_kernel.to_string(),
             n_threads,
             monotonic_constraints: monotonic_constraints.unwrap_or_default(),
+            graph_indptr,
+            graph_indices,
+            graph_weights,
+            graph_smoothing,
+            graph_smoothing_iterations,
             model: None,
             flat_axis_predictor: None,
         })
@@ -6047,6 +6071,31 @@ impl NativeCartoBoostRegressor {
     }
 
     #[getter]
+    fn graph_indptr(&self) -> Option<Vec<usize>> {
+        self.graph_indptr.clone()
+    }
+
+    #[getter]
+    fn graph_indices(&self) -> Option<Vec<usize>> {
+        self.graph_indices.clone()
+    }
+
+    #[getter]
+    fn graph_weights(&self) -> Option<Vec<f64>> {
+        self.graph_weights.clone()
+    }
+
+    #[getter]
+    fn graph_smoothing(&self) -> f64 {
+        self.graph_smoothing
+    }
+
+    #[getter]
+    fn graph_smoothing_iterations(&self) -> usize {
+        self.graph_smoothing_iterations
+    }
+
+    #[getter]
     fn is_fitted(&self) -> bool {
         self.model.is_some()
     }
@@ -6128,7 +6177,26 @@ impl NativeCartoBoostRegressor {
             fuzzy_bandwidth,
             fuzzy_kernel,
             monotonic_constraints,
+            graph_indptr,
+            graph_indices,
+            graph_weights,
+            graph_smoothing,
+            graph_smoothing_iterations,
         ) = if let Some(config) = training_config {
+            let (graph_indptr, graph_indices, graph_weights, graph_smoothing, graph_iterations) =
+                config
+                    .graph_leaf_smoothing
+                    .as_ref()
+                    .map(|smoothing| {
+                        (
+                            Some(smoothing.graph.indptr.clone()),
+                            Some(smoothing.graph.indices.clone()),
+                            Some(smoothing.graph.weights.clone()),
+                            smoothing.lambda,
+                            smoothing.iterations,
+                        )
+                    })
+                    .unwrap_or((None, None, None, 0.0, 4));
             (
                 config.max_depth,
                 config.min_samples_leaf,
@@ -6146,6 +6214,11 @@ impl NativeCartoBoostRegressor {
                 config.fuzzy_bandwidth,
                 fuzzy_kernel_name(config.fuzzy_kernel).to_string(),
                 config.monotonic_constraints,
+                graph_indptr,
+                graph_indices,
+                graph_weights,
+                graph_smoothing,
+                graph_iterations,
             )
         } else {
             (
@@ -6165,6 +6238,11 @@ impl NativeCartoBoostRegressor {
                 0.0,
                 "linear".to_string(),
                 Vec::new(),
+                None,
+                None,
+                None,
+                0.0,
+                4,
             )
         };
         let backend = model
@@ -6194,6 +6272,11 @@ impl NativeCartoBoostRegressor {
             fuzzy_kernel,
             n_threads: None,
             monotonic_constraints,
+            graph_indptr,
+            graph_indices,
+            graph_weights,
+            graph_smoothing,
+            graph_smoothing_iterations,
             model: Some(model),
             flat_axis_predictor: None,
         })
@@ -6208,6 +6291,31 @@ impl NativeCartoBoostRegressor {
         splitters: Vec<SplitterKind>,
         leaf_predictor: LeafPredictorKind,
     ) -> PyResult<BoosterConfig> {
+        let graph_leaf_smoothing =
+            match (&self.graph_indptr, &self.graph_indices, &self.graph_weights) {
+                (Some(indptr), Some(indices), Some(weights)) => {
+                    let node_count = indptr.len().checked_sub(1).ok_or_else(|| {
+                        PyValueError::new_err("graph_indptr must contain at least two offsets")
+                    })?;
+                    let graph =
+                        CsrGraph::new(node_count, indptr.clone(), indices.clone(), weights.clone())
+                            .map_err(to_py_value_error)?;
+                    Some(
+                        GraphLeafSmoothing::new(
+                            graph,
+                            self.graph_smoothing,
+                            self.graph_smoothing_iterations,
+                        )
+                        .map_err(to_py_value_error)?,
+                    )
+                }
+                (None, None, None) => None,
+                _ => {
+                    return Err(PyValueError::new_err(
+                        "graph_indptr, graph_indices, and graph_weights must be provided together",
+                    ));
+                }
+            };
         Ok(BoosterConfig {
             n_estimators: self.n_estimators,
             learning_rate: self.learning_rate,
@@ -6231,7 +6339,7 @@ impl NativeCartoBoostRegressor {
             monotonic_constraints: self.monotonic_constraints.clone(),
             interaction_constraints: Vec::new(),
             graph_split_regularization: None,
-            graph_leaf_smoothing: None,
+            graph_leaf_smoothing,
         })
     }
 
@@ -11305,6 +11413,44 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
+fn validate_graph_leaf_smoothing(
+    indptr: Option<&[usize]>,
+    indices: Option<&[usize]>,
+    weights: Option<&[f64]>,
+    lambda: f64,
+    iterations: usize,
+) -> PyResult<()> {
+    if !lambda.is_finite() || lambda < 0.0 {
+        return Err(PyValueError::new_err(
+            "graph_smoothing must be finite and non-negative",
+        ));
+    }
+    match (indptr, indices, weights) {
+        (None, None, None) => Ok(()),
+        (Some(indptr), Some(indices), Some(weights)) => {
+            if iterations == 0 {
+                return Err(PyValueError::new_err(
+                    "graph_smoothing_iterations must be positive when a graph is provided",
+                ));
+            }
+            let node_count = indptr.len().checked_sub(1).ok_or_else(|| {
+                PyValueError::new_err("graph_indptr must contain at least two offsets")
+            })?;
+            CsrGraph::new(
+                node_count,
+                indptr.to_vec(),
+                indices.to_vec(),
+                weights.to_vec(),
+            )
+            .map(|_| ())
+            .map_err(to_py_value_error)
+        }
+        _ => Err(PyValueError::new_err(
+            "graph_indptr, graph_indices, and graph_weights must be provided together",
+        )),
+    }
+}
+
 fn validate_params(
     n_estimators: usize,
     learning_rate: f64,

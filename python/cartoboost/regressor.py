@@ -85,6 +85,11 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
         random_state: int | None = None,
         n_threads: int | None = None,
         monotonic_constraints: list[int] | None = None,
+        graph_indptr: list[int] | None = None,
+        graph_indices: list[int] | None = None,
+        graph_weights: list[float] | None = None,
+        graph_smoothing: float = 0.0,
+        graph_smoothing_iterations: int = 4,
         tensorboard_log_dir: str | Path | None = None,
         tensorboard_run_name: str | None = None,
         backend: Backend | str = Backend.CPU,
@@ -110,6 +115,11 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
         self.random_state = random_state
         self.n_threads = n_threads
         self.monotonic_constraints = monotonic_constraints
+        self.graph_indptr = graph_indptr
+        self.graph_indices = graph_indices
+        self.graph_weights = graph_weights
+        self.graph_smoothing = graph_smoothing
+        self.graph_smoothing_iterations = graph_smoothing_iterations
         self.tensorboard_log_dir = tensorboard_log_dir
         self.tensorboard_run_name = tensorboard_run_name
         self.backend = str(backend)
@@ -139,6 +149,11 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
             "random_state": self.random_state,
             "n_threads": self.n_threads,
             "monotonic_constraints": self.monotonic_constraints,
+            "graph_indptr": self.graph_indptr,
+            "graph_indices": self.graph_indices,
+            "graph_weights": self.graph_weights,
+            "graph_smoothing": self.graph_smoothing,
+            "graph_smoothing_iterations": self.graph_smoothing_iterations,
             "tensorboard_log_dir": self.tensorboard_log_dir,
             "tensorboard_run_name": self.tensorboard_run_name,
             "backend": self.backend,
@@ -250,6 +265,17 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
                 if self.monotonic_constraints is None
                 else [int(value) for value in self.monotonic_constraints]
             ),
+            graph_indptr=(
+                None if self.graph_indptr is None else [int(value) for value in self.graph_indptr]
+            ),
+            graph_indices=(
+                None if self.graph_indices is None else [int(value) for value in self.graph_indices]
+            ),
+            graph_weights=(
+                None if self.graph_weights is None else [float(value) for value in self.graph_weights]
+            ),
+            graph_smoothing=float(self.graph_smoothing),
+            graph_smoothing_iterations=int(self.graph_smoothing_iterations),
             backend=self.backend,
         )
         _fit_native(
@@ -660,6 +686,13 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
                 getattr(native_model, "constant_l2_regularization", 0.0)
             ),
             monotonic_constraints=list(getattr(native_model, "monotonic_constraints", [])) or None,
+            graph_indptr=getattr(native_model, "graph_indptr", None),
+            graph_indices=getattr(native_model, "graph_indices", None),
+            graph_weights=getattr(native_model, "graph_weights", None),
+            graph_smoothing=float(getattr(native_model, "graph_smoothing", 0.0)),
+            graph_smoothing_iterations=int(
+                getattr(native_model, "graph_smoothing_iterations", 4)
+            ),
             backend=str(getattr(native_model, "backend", "cpu")),
         )
         estimator._model = native_model
@@ -686,6 +719,18 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
         raise NotImplementedError("native model does not support save_weights")
 
     def _validate_params(self) -> None:
+        graph_parts = (self.graph_indptr, self.graph_indices, self.graph_weights)
+        if any(part is not None for part in graph_parts) and not all(
+            part is not None for part in graph_parts
+        ):
+            raise ValueError(
+                "graph_indptr, graph_indices, and graph_weights must be provided together"
+            )
+        graph_smoothing = float(self.graph_smoothing)
+        if not math.isfinite(graph_smoothing) or graph_smoothing < 0.0:
+            raise ValueError("graph_smoothing must be finite and non-negative")
+        if self.graph_indptr is not None and int(self.graph_smoothing_iterations) <= 0:
+            raise ValueError("graph_smoothing_iterations must be positive when a graph is provided")
         if int(self.n_estimators) <= 0:
             raise ValueError("n_estimators must be positive")
         learning_rate = float(self.learning_rate)
