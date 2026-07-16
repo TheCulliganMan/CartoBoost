@@ -67,12 +67,13 @@ def _compute_homogeneous_directional_features(
     feature_prefix: str = "graph",
     edge_weights: Sequence[float] | None = None,
     edge_timestamps: Sequence[float] | None = None,
+    backend: str = "cpu",
 ) -> tuple[np.ndarray, list[str]]:
     directionality_cfg = DirectionalityConfig.from_config(directionality)
     if not directionality_cfg.compute_asymmetry_features:
         return np.empty((node_count, 0), dtype=np.float32), []
 
-    values, names = _native_compute_directional_features(
+    args = (
         int(node_count),
         [(int(source), int(target)) for source, target in edges],
         np.asarray(embeddings, dtype=np.float32).tolist(),
@@ -81,6 +82,15 @@ def _compute_homogeneous_directional_features(
         str(feature_prefix),
         list(directionality_cfg.directional_features),
     )
+    try:
+        values, names = _native_compute_directional_features(*args, backend)
+    except TypeError as error:
+        if backend != "cpu":
+            raise RuntimeError(
+                "the installed CartoBoost native extension predates accelerated "
+                "directional graph features; rebuild or upgrade the extension"
+            ) from error
+        values, names = _native_compute_directional_features(*args)
     return np.asarray(values, dtype=np.float32), list(names)
 
 
@@ -92,6 +102,7 @@ def _compute_hetero_directional_features(
     feature_prefix: str = "graph",
     edge_weights: Sequence[float] | None = None,
     edge_timestamps: Sequence[float] | None = None,
+    backend: str = "cpu",
 ) -> tuple[np.ndarray, list[str]]:
     return _compute_homogeneous_directional_features(
         directionality,
@@ -101,6 +112,7 @@ def _compute_hetero_directional_features(
         feature_prefix=feature_prefix,
         edge_weights=edge_weights,
         edge_timestamps=edge_timestamps,
+        backend=backend,
     )
 
 
@@ -668,6 +680,7 @@ class GraphFeatureTransformer:
         hinsage_kwargs: Mapping[str, Any] | None = None,
         node2vec_kwargs: Mapping[str, Any] | None = None,
         directionality: Mapping[str, Any] | None = None,
+        backend: str = "cpu",
     ) -> None:
         self.use_hetero = bool(use_hetero)
         self.use_hinsage = bool(use_hinsage)
@@ -677,6 +690,7 @@ class GraphFeatureTransformer:
         self.hinsage_kwargs = dict(hinsage_kwargs or {})
         self.node2vec_kwargs = dict(node2vec_kwargs or {})
         self.directionality = DirectionalityConfig.from_config(directionality)
+        self.backend = str(backend)
         self.encoder: (
             GraphSageFeatureEncoder
             | HeteroGraphSageFeatureEncoder
@@ -723,6 +737,7 @@ class GraphFeatureTransformer:
                 use_node2vec=True,
                 node2vec_kwargs=encoder_options,
                 directionality=directionality,
+                backend=accelerator_backend,
             )
         if use_hinsage:
             return cls(
@@ -730,17 +745,20 @@ class GraphFeatureTransformer:
                 use_hinsage=True,
                 hinsage_kwargs=encoder_options,
                 directionality=directionality,
+                backend=accelerator_backend,
             )
         if use_hetero:
             return cls(
                 use_hetero=True,
                 hetero_kwargs=encoder_options,
                 directionality=directionality,
+                backend=accelerator_backend,
             )
         return cls(
             use_hetero=False,
             sage_kwargs=encoder_options,
             directionality=directionality,
+            backend=accelerator_backend,
         )
 
     def fit_transform(
@@ -903,6 +921,7 @@ class GraphFeatureTransformer:
             feature_prefix=directionality.directional_feature_prefix,
             edge_weights=_align_edge_values(edge_weights, len(edges), len(graph.edges)),
             edge_timestamps=_align_edge_values(edge_timestamps, len(edges), len(graph.edges)),
+            backend=self.backend,
         )
         if directional_features.size == 0:
             return bundle
@@ -947,6 +966,7 @@ class GraphFeatureTransformer:
             feature_prefix=directional_feature_prefix,
             edge_weights=_align_edge_values(edge_weights, len(edges), len(graph.edges)),
             edge_timestamps=_align_edge_values(edge_timestamps, len(edges), len(graph.edges)),
+            backend=self.backend,
         )
         if directional_features.size == 0:
             return bundle
@@ -981,6 +1001,7 @@ class GraphFeatureTransformer:
             feature_prefix=directionality.directional_feature_prefix,
             edge_weights=edge_weights,
             edge_timestamps=edge_timestamps,
+            backend=self.backend,
         )
         if directional_features.size == 0:
             return bundle
@@ -1068,6 +1089,7 @@ class GraphFeatureTransformer:
                 len(resolved_edges),
                 len(graph.edges),
             ),
+            backend=self.backend,
         )
         if directional_features.size == 0:
             return bundle

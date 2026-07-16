@@ -71,8 +71,9 @@ pub use forecasting::{
     TrendMode, WindowDataset,
 };
 pub use graph_features::{
-    compute_directional_features, materialize_source_target_pair_nodes, validate_directed_metapath,
-    DirectionalFeatureBlock, SourceTargetPairExpansion,
+    compute_directional_features, compute_directional_features_with_backend,
+    materialize_source_target_pair_nodes, validate_directed_metapath, DirectionalFeatureBlock,
+    SourceTargetPairExpansion,
 };
 pub use graphsage::{
     GraphSageConfig, GraphSageEncoder, GraphSageEncoderArtifact, GraphSageLoss,

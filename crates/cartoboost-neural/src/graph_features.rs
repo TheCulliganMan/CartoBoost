@@ -1,7 +1,10 @@
 use crate::error::{NeuralError, Result};
+use crate::{backend_csr_diffusion_f32, select_backend_for, BackendOperation, BackendSelection};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+
+const MIN_ACCELERATED_DIRECTIONAL_AGGREGATION_VALUES: usize = 16_384;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DirectionalFeatureBlock {
@@ -13,6 +16,11 @@ pub struct DirectionalFeatureBlock {
 pub struct SourceTargetPairExpansion {
     pub edges: Vec<(String, String, String)>,
     pub pair_node_ids: Vec<String>,
+}
+
+struct NeighborMeans {
+    outgoing: Vec<Vec<f32>>,
+    incoming: Vec<Vec<f32>>,
 }
 
 pub fn validate_directed_metapath(
@@ -116,6 +124,29 @@ pub fn compute_directional_features(
     feature_prefix: &str,
     requested_features: &[String],
 ) -> Result<DirectionalFeatureBlock> {
+    compute_directional_features_with_backend(
+        node_count,
+        edges,
+        embeddings,
+        edge_weights,
+        edge_timestamps,
+        feature_prefix,
+        requested_features,
+        Some("cpu"),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn compute_directional_features_with_backend(
+    node_count: usize,
+    edges: &[(usize, usize)],
+    embeddings: &[Vec<f32>],
+    edge_weights: Option<&[f32]>,
+    edge_timestamps: Option<&[f32]>,
+    feature_prefix: &str,
+    requested_features: &[String],
+    backend: Option<&str>,
+) -> Result<DirectionalFeatureBlock> {
     if feature_prefix.is_empty() {
         return Err(NeuralError::InvalidArgument(
             "directional feature prefix must be non-empty".to_string(),
@@ -126,6 +157,16 @@ pub fn compute_directional_features(
             expected: node_count,
             actual: embeddings.len(),
         });
+    }
+    let embedding_width = embeddings.first().map_or(0, Vec::len);
+    if embedding_width == 0
+        || embeddings
+            .iter()
+            .any(|row| row.len() != embedding_width || row.iter().any(|value| !value.is_finite()))
+    {
+        return Err(NeuralError::InvalidArgument(
+            "embedding rows must be finite with a consistent positive width".to_string(),
+        ));
     }
     let weights = edge_values(edge_weights, edges.len(), 1.0, "edge_weights")?;
     let timestamps = edge_values(edge_timestamps, edges.len(), 0.0, "edge_timestamps")?;
@@ -148,6 +189,22 @@ pub fn compute_directional_features(
         out_time_weighted[source] += weight * timestamp;
         in_time_weighted[target] += weight * timestamp;
     }
+    let requested_backend = select_backend_for(backend, BackendOperation::CsrDiffusion)?;
+    let aggregation_work = edges.len().saturating_mul(embedding_width);
+    let selected_backend = if requested_backend.selected != "cpu"
+        && aggregation_work < MIN_ACCELERATED_DIRECTIONAL_AGGREGATION_VALUES
+    {
+        select_backend_for(Some("cpu"), BackendOperation::CsrDiffusion)?
+    } else {
+        requested_backend
+    };
+    let neighbor_means = neighbor_means_with_backend(
+        node_count,
+        edges,
+        embeddings,
+        embedding_width,
+        &selected_backend,
+    )?;
 
     let names = directional_feature_names(feature_prefix);
     let selected = selected_indices(&names, requested_features)?;
@@ -168,9 +225,9 @@ pub fn compute_directional_features(
                 (out_degree[node] - in_degree[node]) / total
             };
             let source_target_embedding =
-                neighbor_similarity(node, true, edges, embeddings, node_count)?;
+                cosine_similarity(&embeddings[node], &neighbor_means.outgoing[node]);
             let target_source_embedding =
-                neighbor_similarity(node, false, edges, embeddings, node_count)?;
+                cosine_similarity(&embeddings[node], &neighbor_means.incoming[node]);
             let forward_reverse_similarity_delta =
                 source_target_embedding - target_source_embedding;
             let directed_temporal_drift = if out_degree[node] == 0.0 || in_degree[node] == 0.0 {
@@ -212,6 +269,86 @@ pub fn compute_directional_features(
         values,
         feature_names,
     })
+}
+
+fn neighbor_means_with_backend(
+    node_count: usize,
+    edges: &[(usize, usize)],
+    embeddings: &[Vec<f32>],
+    embedding_width: usize,
+    backend: &BackendSelection,
+) -> Result<NeighborMeans> {
+    let outgoing = mean_neighbor_csr(node_count, edges, false)?;
+    let incoming = mean_neighbor_csr(node_count, edges, true)?;
+    let values = embeddings
+        .iter()
+        .flat_map(|row| row.iter().copied())
+        .collect::<Vec<_>>();
+    let outgoing_values = backend_csr_diffusion_f32(
+        backend,
+        &outgoing.0,
+        &outgoing.1,
+        &outgoing.2,
+        embedding_width,
+        &values,
+    )?;
+    let incoming_values = backend_csr_diffusion_f32(
+        backend,
+        &incoming.0,
+        &incoming.1,
+        &incoming.2,
+        embedding_width,
+        &values,
+    )?;
+    Ok(NeighborMeans {
+        outgoing: rows_from_flat(outgoing_values, embedding_width),
+        incoming: rows_from_flat(incoming_values, embedding_width),
+    })
+}
+
+fn mean_neighbor_csr(
+    node_count: usize,
+    edges: &[(usize, usize)],
+    reverse: bool,
+) -> Result<(Vec<u32>, Vec<u32>, Vec<f32>)> {
+    let mut rows = vec![Vec::new(); node_count];
+    for &(source, target) in edges {
+        if source >= node_count || target >= node_count {
+            return Err(NeuralError::InvalidArgument(
+                "edge endpoint must be in [0, node_count)".to_string(),
+            ));
+        }
+        if reverse {
+            rows[target].push(source);
+        } else {
+            rows[source].push(target);
+        }
+    }
+    let mut indptr = Vec::with_capacity(node_count + 1);
+    let mut indices = Vec::with_capacity(edges.len());
+    let mut weights = Vec::with_capacity(edges.len());
+    indptr.push(0);
+    for row in rows {
+        let weight = if row.is_empty() {
+            0.0
+        } else {
+            1.0 / row.len() as f32
+        };
+        for index in row {
+            indices.push(u32::try_from(index).map_err(|_| {
+                NeuralError::InvalidArgument("graph node index exceeds u32".to_string())
+            })?);
+            weights.push(weight);
+        }
+        indptr.push(u32::try_from(indices.len()).map_err(|_| {
+            NeuralError::InvalidArgument("graph edge count exceeds u32".to_string())
+        })?);
+    }
+    Ok((indptr, indices, weights))
+}
+
+fn rows_from_flat(values: Vec<f32>, width: usize) -> Vec<Vec<f32>> {
+    values.chunks_exact(width).map(<[f32]>::to_vec).collect()
 }
 
 fn directional_feature_names(prefix: &str) -> Vec<String> {
@@ -278,56 +415,16 @@ fn edge_values(
     }
 }
 
-fn neighbor_similarity(
-    node: usize,
-    outgoing: bool,
-    edges: &[(usize, usize)],
-    embeddings: &[Vec<f32>],
-    node_count: usize,
-) -> Result<f32> {
-    let mut neighbors = Vec::new();
-    for &(source, target) in edges {
-        if source >= node_count || target >= node_count {
-            return Err(NeuralError::InvalidArgument(
-                "edge endpoint must be in [0, node_count)".to_string(),
-            ));
-        }
-        if outgoing && source == node {
-            neighbors.push(target);
-        } else if !outgoing && target == node {
-            neighbors.push(source);
-        }
-    }
-    if neighbors.is_empty() {
-        return Ok(0.0);
-    }
-    let own = &embeddings[node];
-    let own_norm = l2_norm(own);
+fn cosine_similarity(left: &[f32], right: &[f32]) -> f32 {
+    let own_norm = l2_norm(left);
     if own_norm == 0.0 {
-        return Ok(0.0);
+        return 0.0;
     }
-    let width = own.len();
-    let mut mean = vec![0.0_f32; width];
-    for neighbor in &neighbors {
-        let row = &embeddings[*neighbor];
-        if row.len() != width {
-            return Err(NeuralError::InvalidArgument(
-                "embedding rows must have consistent width".to_string(),
-            ));
-        }
-        for (index, value) in row.iter().enumerate() {
-            mean[index] += *value;
-        }
-    }
-    let denom = neighbors.len() as f32;
-    for value in &mut mean {
-        *value /= denom;
-    }
-    let mean_norm = l2_norm(&mean);
+    let mean_norm = l2_norm(right);
     if mean_norm == 0.0 {
-        return Ok(0.0);
+        return 0.0;
     }
-    Ok(dot(own, &mean) / (own_norm * mean_norm))
+    dot(left, right) / (own_norm * mean_norm)
 }
 
 fn safe_divide(numerator: f32, denominator: f32) -> f32 {
@@ -374,6 +471,64 @@ mod tests {
         assert_eq!(block.values[0][0], 5.0);
         assert_eq!(block.values[0][1], 5.0);
         assert_eq!(block.values[0][2], 8.0);
+    }
+
+    #[test]
+    fn directional_features_match_cpu_across_available_accelerators() {
+        let node_count = 1_024;
+        let width = 16;
+        let edges = (0..node_count)
+            .flat_map(|node| {
+                [
+                    (node, (node + 1) % node_count),
+                    (node, (node + 17) % node_count),
+                ]
+            })
+            .collect::<Vec<_>>();
+        let embeddings = (0..node_count)
+            .map(|node| {
+                (0..width)
+                    .map(|feature| ((node * 31 + feature * 7) % 101) as f32 / 101.0)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let requested = vec![
+            "graph_source_target_embedding".to_string(),
+            "graph_target_source_embedding".to_string(),
+        ];
+        let expected = compute_directional_features_with_backend(
+            node_count,
+            &edges,
+            &embeddings,
+            None,
+            None,
+            "graph",
+            &requested,
+            Some("cpu"),
+        )
+        .unwrap();
+
+        for backend in crate::available_backends() {
+            let actual = compute_directional_features_with_backend(
+                node_count,
+                &edges,
+                &embeddings,
+                None,
+                None,
+                "graph",
+                &requested,
+                Some(&backend),
+            )
+            .unwrap_or_else(|error| panic!("{backend} directional aggregation failed: {error}"));
+            for (actual_row, expected_row) in actual.values.iter().zip(&expected.values) {
+                for (actual_value, expected_value) in actual_row.iter().zip(expected_row) {
+                    assert!(
+                        (actual_value - expected_value).abs() <= 2.0e-4,
+                        "{backend}: expected {expected_value}, got {actual_value}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

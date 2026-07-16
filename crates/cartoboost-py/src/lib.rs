@@ -137,7 +137,7 @@ use cartoboost_neural::{
     backend_supports_operation as neural_backend_supports_operation,
     backend_workload_decision as neural_backend_workload_decision, build_embedding_table_artifact,
     choice_set_transformer_report_json as core_choice_set_transformer_report_json,
-    compute_directional_features,
+    compute_directional_features_with_backend,
     constrained_decision_select_with_options as core_deep_constrained_decision_select,
     directional_pair_predict as core_deep_directional_pair_predict,
     directional_pair_predictions as core_deep_directional_pair_predictions,
@@ -9234,7 +9234,7 @@ impl NativeHinSageEncoder {
 }
 
 #[pyfunction]
-#[pyo3(signature = (node_count, edges, embeddings, edge_weights=None, edge_timestamps=None, feature_prefix="graph", requested_features=None))]
+#[pyo3(signature = (node_count, edges, embeddings, edge_weights=None, edge_timestamps=None, feature_prefix="graph", requested_features=None, backend=None))]
 #[allow(clippy::too_many_arguments)]
 fn graph_compute_directional_features(
     py: Python<'_>,
@@ -9245,11 +9245,12 @@ fn graph_compute_directional_features(
     edge_timestamps: Option<Vec<f32>>,
     feature_prefix: &str,
     requested_features: Option<Vec<String>>,
+    backend: Option<&str>,
 ) -> PyResult<(Vec<Vec<f32>>, Vec<String>)> {
     let requested_features = requested_features.unwrap_or_default();
     let block = py
         .detach(|| {
-            compute_directional_features(
+            compute_directional_features_with_backend(
                 node_count,
                 &edges,
                 &embeddings,
@@ -9257,6 +9258,7 @@ fn graph_compute_directional_features(
                 edge_timestamps.as_deref(),
                 feature_prefix,
                 &requested_features,
+                backend,
             )
         })
         .map_err(to_py_neural_error)?;
