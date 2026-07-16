@@ -701,6 +701,10 @@ class GraphFeatureTransformer:
         if family not in {"graphsage", "hinsage", "sage", "node2vec"}:
             raise ValueError(f"unsupported graph family {family!r}")
 
+        requested_backend = str(graph_cfg.get("backend", "native")).lower()
+        accelerator_backend = "cpu" if requested_backend == "native" else requested_backend
+        encoder_options = dict(encoder_cfg)
+        encoder_options.setdefault("backend", accelerator_backend)
         use_hetero = bool(encoder_cfg.get("hetero", graph_cfg.get("hetero", False)))
         directionality = _directionality_from_graph_config(graph_cfg, encoder_cfg)
         use_hinsage = family == "hinsage" and {
@@ -708,27 +712,34 @@ class GraphFeatureTransformer:
             "edge_type_triples",
         }.issubset(encoder_cfg)
         if family == "node2vec":
+            if accelerator_backend not in {"cpu", "auto"}:
+                raise ValueError(
+                    "node2vec skip-gram training does not yet have a fused accelerator "
+                    f"kernel for backend {accelerator_backend!r}; use 'cpu'/'native' or "
+                    "the accelerated Node2VecLinkPredictor for batched pair scoring"
+                )
+            encoder_options.pop("backend", None)
             return cls(
                 use_node2vec=True,
-                node2vec_kwargs=dict(encoder_cfg),
+                node2vec_kwargs=encoder_options,
                 directionality=directionality,
             )
         if use_hinsage:
             return cls(
                 use_hetero=True,
                 use_hinsage=True,
-                hinsage_kwargs=dict(encoder_cfg),
+                hinsage_kwargs=encoder_options,
                 directionality=directionality,
             )
         if use_hetero:
             return cls(
                 use_hetero=True,
-                hetero_kwargs=dict(encoder_cfg),
+                hetero_kwargs=encoder_options,
                 directionality=directionality,
             )
         return cls(
             use_hetero=False,
-            sage_kwargs=dict(encoder_cfg),
+            sage_kwargs=encoder_options,
             directionality=directionality,
         )
 

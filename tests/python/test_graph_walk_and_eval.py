@@ -4,6 +4,7 @@ import json
 import tempfile
 
 import numpy as np
+import pytest
 from cartoboost.graph import (
     DirectedMetaPath,
     DirectionalFeature,
@@ -880,6 +881,64 @@ def test_graph_feature_config_accepts_dataclass_config() -> None:
     transformer_config = config.transformer_config()["graph_embeddings"]
     assert transformer_config["encoder"]["input_dim"] == 2
     assert transformer_config["outputs"]["directional_features"] == ["source_target_embedding"]
+
+
+def test_graph_backend_accepts_all_accelerator_names() -> None:
+    for backend in (
+        "auto",
+        "cpu",
+        "cuda",
+        "rocm",
+        "hip",
+        "metal",
+        "directml",
+        "dml",
+        "webgpu",
+        "native",
+    ):
+        config = GraphEmbeddingsConfig.from_config(
+            {
+                "graph_embeddings": {
+                    "backend": backend,
+                    "encoder": {"family": "graphsage", "input_dim": 2},
+                }
+            }
+        )
+        assert config.backend.value == backend
+
+
+def test_top_level_graph_backend_propagates_to_accelerated_encoder() -> None:
+    transformer = GraphFeatureTransformer.from_config(
+        {
+            "graph_embeddings": {
+                "backend": "webgpu",
+                "encoder": {"family": "graphsage", "input_dim": 2},
+            }
+        }
+    )
+    assert transformer.sage_kwargs["backend"] == "webgpu"
+
+    native_transformer = GraphFeatureTransformer.from_config(
+        {
+            "graph_embeddings": {
+                "backend": "native",
+                "encoder": {"family": "graphsage", "input_dim": 2},
+            }
+        }
+    )
+    assert native_transformer.sage_kwargs["backend"] == "cpu"
+
+
+def test_node2vec_rejects_non_cpu_top_level_backend_until_fused_kernel_exists() -> None:
+    with pytest.raises(ValueError, match="fused accelerator kernel"):
+        GraphFeatureTransformer.from_config(
+            {
+                "graph_embeddings": {
+                    "backend": "cuda",
+                    "encoder": {"family": "node2vec"},
+                }
+            }
+        )
 
 
 def test_graph_feature_config_preserves_node2vec_settings_and_root_directionality() -> None:

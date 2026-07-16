@@ -23,6 +23,16 @@ class GraphEncoderFamily(str, Enum):
 
 
 class GraphBackend(str, Enum):
+    AUTO = "auto"
+    CPU = "cpu"
+    CUDA = "cuda"
+    ROCM = "rocm"
+    HIP = "hip"
+    METAL = "metal"
+    DIRECTML = "directml"
+    DML = "dml"
+    WEBGPU = "webgpu"
+    # Backward-compatible name for the original Rust/CPU implementation.
     NATIVE = "native"
 
 
