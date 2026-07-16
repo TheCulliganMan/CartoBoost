@@ -909,6 +909,41 @@ def test_diffusion_scenario_generator_reports_experimental_summaries():
     assert ConditionalResidualDiffusion is GeoTemporalDiffusionScenarioModel
 
 
+def test_large_diffusion_scenario_mean_runs_on_every_backend():
+    nodes = 33
+    point_forecast = np.asarray(
+        [
+            [10.0 + time * 0.2 + node * 0.03 for node in range(nodes)]
+            for time in range(8)
+        ]
+    )
+    edges = [
+        {"source": source, "target": source + 1, "weight": 0.8}
+        for source in range(nodes - 1)
+    ]
+    expected = GeoTemporalDiffusionScenarioModel(
+        scenario_count=128,
+        diffusion_steps=2,
+        shock_scale=0.3,
+        backend="cpu",
+    ).generate(point_forecast, edges)
+
+    for backend in available_deep_backends():
+        actual = GeoTemporalDiffusionScenarioModel(
+            scenario_count=128,
+            diffusion_steps=2,
+            shock_scale=0.3,
+            backend=backend,
+        ).generate(point_forecast, edges)
+        np.testing.assert_allclose(
+            actual["scenario_mean"],
+            expected["scenario_mean"],
+            rtol=2.0e-4,
+            atol=2.0e-4,
+        )
+        assert actual["metadata"]["scenario_mean_backend"] == backend
+
+
 def test_graph_neural_operator_outputs_fields_and_benchmark_lift():
     fields = np.array([[1.0, 2.0, 3.0], [1.2, 2.1, 3.4]])
     coords = np.array([[0.0, 0.0], [0.5, 0.0], [1.0, 0.0]])

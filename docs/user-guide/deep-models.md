@@ -96,6 +96,12 @@ large empirical variograms: transformed coordinate distances and squared value
 differences. Pair filtering and bin reduction remain on CPU because they are
 branch-heavy; the response reports the split explicitly.
 
+Large geo-temporal diffusion scenario ensembles now keep both graph diffusion
+and the scenario-axis mean reduction on the selected accelerator. Small
+ensembles retain the lower-overhead CPU reduction, and
+`scenario_mean_backend` records which path executed. Browser WebGPU uses the
+same thresholded model-level contract asynchronously.
+
 `InvertedTemporalTransformer` models synchronized wide panels with entities as
 tokens. It reports horizon-wise metrics, cross-entity ablation, and metadata
 showing that it avoids quadratic time-token attention. The same path is exposed
