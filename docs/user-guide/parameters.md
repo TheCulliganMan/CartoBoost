@@ -1,10 +1,10 @@
 # Parameters
 
-This page summarizes the public training controls exposed by
-`CartoBoostRegressor`, with emphasis on choosing controls that match the
-scientific structure of temporal-spatial regression.
+This page explains the training controls on `CartoBoostRegressor` and how they
+change fitting behavior. Start with defaults, establish a validation split,
+and tune only parameters that correspond to the structure in your data.
 
-## Choose Parameters From The Question
+## Choose Parameters From The Data
 
 Before tuning ranges, decide what claim the model needs to support. In
 structured regression work, parameters should usually map to a modeling

@@ -22,13 +22,9 @@ Each benchmark report should name:
 - artifact paths for JSON, JSONL, markdown, and plots;
 - limitations that affect interpretation.
 
-The manifest validator in `benchmarks/runners/manifest.py` also defines the
-official geographic benchmark families. A family is claim-ready only when its
-tasks declare leakage-safe split manifests, required external competitors,
-diagnostic outputs, leaderboard JSON/markdown, fit/predict timing, and peak
-memory. CI runs `scripts/check_release_gates.py` to block drift between these
-manifests, benchmark dependencies, workflow gates, and release artifact
-attestation. The maintained family roster is:
+The maintained benchmark families use leakage-safe splits, serious external
+comparators, task-specific diagnostics, fit and prediction timing, and recorded
+artifacts. The current family roster is:
 
 | Family | Required evidence |
 | --- | --- |
@@ -40,24 +36,7 @@ attestation. The maintained family roster is:
 | Synthetic graph diffusion | Generator manifest hash, rolling graph splits, graph neural baselines, horizon and graph-distance diagnostics. |
 | Synthetic geo-causal lift panels | Generator manifest hash, rolling panel splits, placebo summaries, and known-effect error metrics. |
 
-## v0.3 Acceptance Gates
-
-The maintained beta evidence uses native validation and real comparable
-baselines. Stable structured regression claims require duration and fare
-out-of-time and spatial-holdout comparisons; lane-demand forecasting requires
-at least three leakage-safe rolling origins and an explicit comparison with the
-strongest completed external learned baseline. The forecasting artifact gate is
-run with:
-
-```sh
-PYTHONPATH=python uv run python scripts/check_forecasting_quality_gate.py \
-  --artifact docs/assets/nyc_taxi_benchmarks/forecasting_library_benchmark_real.json
-```
-
-The release firewall also checks wheel installation, artifact round trips,
-import and scale budgets, synchronized versions, benchmark provenance, and
-protected publishing. Synthetic smoke runs remain diagnostics for execution
-coverage only and cannot replace the maintained real-data artifacts.
+## Metrics By Task
 
 Classification reports should include logloss, ROC-AUC or PR-AUC, Brier score,
 ECE, fit time, prediction time, and save/load probability drift. Ranking
@@ -68,7 +47,7 @@ round-tripped predictions within tolerance. Unsupported export checks should
 assert loud `NotImplementedError` failures for categorical regressor export and
 classifier/ranker portable-weight or ONNX export.
 
-## Interpretation Rules
+## Interpreting A Comparison
 
 Do not use stale artifacts after changing benchmark-affecting code. If feature
 generation, fitting, prediction, metric computation, or split construction
@@ -78,84 +57,18 @@ Do not frame benchmark pages around process labels such as cleanup or
 provenance. Lead with the current-code result, then show command, data, split,
 model roster, metrics, timing, artifact paths, and limits.
 
-## Release Gates
+## Reproducing Results
 
-Run the release audit locally before packaging:
+Run the exact command printed in the report from a source checkout with the
+documented optional dependencies installed. Keep the dataset identity, sample
+size, split boundaries, feature access, model roster, estimator settings, and
+seed unchanged when comparing against the published table.
 
-```sh
-uv run --group dev python scripts/check_release_gates.py
-```
+Generated outputs belong under `target/` unless the run is intentionally being
+recorded as maintained evidence. A reproduced result should include the JSON
+artifact, environment versions, wall-clock timing, and any skipped model with
+its explicit failure reason.
 
-The audit validates the official geo benchmark manifest contract, required
-benchmark dependency coverage, external install metadata for PyTorch Geometric
-baselines, CI commands for public API/serialization/performance coverage, and
-distribution provenance attestation in the PyPI workflow.
-
-The stable root estimators are audited separately:
-
-```sh
-uv run --group dev python scripts/check_public_api_contract.py
-```
-
-That audit requires each stable root estimator to expose `fit`, `predict`,
-`score`, `save`, `load`, `get_params`, `set_params`, and typed metadata. It also
-runs save/load prediction-drift checks for representative registry entries
-covering the native booster, classifier, and ranker contracts.
-
-Model artifact compatibility is audited separately:
-
-```sh
-uv run --group dev python scripts/check_artifact_compatibility.py
-```
-
-That audit saves representative stable estimator artifacts, checks explicit
-schema/version markers including nested artifacts, verifies save/load prediction
-drift, and mutates artifact versions to prove unsupported versions fail loudly.
-
-The maintained docs examples are audited separately:
-
-```sh
-uv run --group dev python scripts/check_docs_examples.py
-```
-
-That audit executes the model-choice, leakage-safe geo split, and conformal
-interval examples that public docs use as stable contracts.
-
-Official geo evidence is classified separately:
-
-```sh
-uv run --group dev python scripts/check_official_geo_evidence.py
-```
-
-That audit distinguishes deferred automatic-selector evidence from synthetic gates,
-incomplete manifests, and real non-selector benchmark artifacts. The current
-audit passes while the final selector evidence requirement remains explicitly
-deferred.
-
-The NYC TLC quality harness does not run an automatic geo selector in v0.3.
-The selector is not shipped in v0.3, so no selector benchmark is executed by
-the release gate.
-
-Low-level Rust performance thresholds are audited separately:
-
-```sh
-uv run --group dev python scripts/check_performance_thresholds.py
-```
-
-That audit reads `benches/benchmark_summary.json` and fails when a maintained
-training, prediction, serialization, or data-loading benchmark exceeds its
-recorded `max_mean_ns` threshold.
-
-The deferred selector gate reports its status and is not part of the v0.3
-stable release gate:
-
-```sh
-PYTHONPATH=python uv run --group dev python scripts/run_autogeo_benchmark_gate.py \
-  --output-dir target/autogeo-gate \
-  --sample-size 90 \
-  --n-splits 5
-```
-
-The command writes a small JSON status artifact and exits successfully to make
-the deferral explicit. Real public quality claims still require the maintained
-real-data artifacts and a future native selector.
+Synthetic runs are useful for verifying execution and controlled mechanisms.
+They do not substitute for real-data comparisons when the conclusion concerns
+forecast accuracy, spatial transfer, or deployment performance.

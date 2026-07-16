@@ -1,8 +1,8 @@
-# Geo Evaluation Standard
+# Evaluating Geographic Models
 
-CartoBoost geographic claims must use a split that withholds place, time, group,
-or a documented combination of those axes. A random row split is acceptable only
-as a diagnostic comparison because nearby taxi trips can share pickup/dropoff
+Evaluate geographic models with a split that withholds place, time, groups, or
+a documented combination of those axes. Treat a random row split as a
+diagnostic because nearby taxi trips can share pickup/dropoff
 zone effects, road geometry, traffic shocks, weather, and calendar pressure.
 
 ## Required Metadata

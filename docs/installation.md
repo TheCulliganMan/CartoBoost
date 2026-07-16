@@ -104,6 +104,49 @@ CUDA_OXIDE_DEBUG=off RUSTUP_TOOLCHAIN=nightly-2026-04-03 \
 The CUDA target must not exceed the installed GPU's capability. For example, a
 Turing GPU uses `sm_75`; an `sm_80` artifact cannot run there.
 
+## HIP/ROCm Development Build
+
+CartoBoost's HIP backend supports AMD GPUs on Linux and Windows. It dynamically
+loads HIP and HIPRTC, so ordinary builds remain independent of ROCm. Install the
+AMD ROCm SDK and enable the `rocm` feature:
+
+```sh
+cargo test -p cartoboost-neural --features rocm rocm_ -- --nocapture
+```
+
+On machines with multiple AMD adapters, select the device in the order reported
+by `hipInfo`:
+
+```sh
+# Linux
+CARTOBOOST_HIP_DEVICE=1 cargo test -p cartoboost-neural --features rocm rocm_ -- --nocapture
+```
+
+```powershell
+# Windows PowerShell
+$env:CARTOBOOST_HIP_DEVICE = "1"
+cargo test -p cartoboost-neural --features rocm rocm_ -- --nocapture
+```
+
+The runtime searches `HIP_PATH` and `ROCM_PATH`, standard Linux shared-library
+names, and versioned Windows SDKs under `Program Files\\AMD\\ROCm`. Model
+configuration accepts both `hip` and `rocm` for this backend.
+
+## DirectML Development Build
+
+On Windows 10 or later, build the native neural crate with `directml` to use a
+DirectX 12 adapter through the system DirectML runtime. No CUDA or ROCm toolkit
+is required:
+
+```powershell
+cargo test -p cartoboost-neural --features directml
+```
+
+Request this backend as `directml` (or `dml`). It is advertised only after a
+Direct3D 12 adapter and DirectML device are created successfully; an explicit
+request fails instead of falling back to CPU when the feature or device is
+unavailable.
+
 ## Troubleshooting
 
 | Symptom | Fix |

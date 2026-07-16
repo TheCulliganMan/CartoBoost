@@ -17,7 +17,7 @@ homogeneous GraphSAGE and schema-heavy HinSAGE.
 
 <NeuralModelExample title="HeteroGraphSAGE browser model" pipeline="hetero_graphsage" />
 
-## Public Contract
+## Python Example
 
 ### Regressor
 
@@ -98,3 +98,9 @@ aggregation and training backpropagation remain CPU work.
 Hold relation IDs fixed across model comparisons. If a relation type appears
 only in validation, report it as a cold-relation case instead of mixing it into
 the ordinary holdout score.
+
+## Limitations
+
+- Relation IDs add parameters and require enough examples per relation.
+- The model does not enforce the strict node-type schema provided by HinSAGE.
+- Cold relations and cold nodes need separate reporting.

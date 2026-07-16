@@ -18,7 +18,7 @@ validated.
 
 <NeuralModelExample title="HinSAGE browser model" pipeline="hinsage" />
 
-## Public Contract
+## Python Example
 
 ### Regressor
 
@@ -108,3 +108,9 @@ typed neighbor sampling, and training backpropagation remain CPU work.
 Schema failures should fail clearly. Do not coerce unknown node types or
 relation triples into a default type for a benchmark. Report cold-node,
 cold-type, and cold-relation cases separately when they occur.
+
+## Limitations
+
+- Typed schemas require more data preparation and fail on invalid triples.
+- Rare node or relation types may not support stable estimates.
+- Cold types cannot inherit a learned type-specific representation automatically.

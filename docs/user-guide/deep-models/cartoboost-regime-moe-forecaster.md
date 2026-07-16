@@ -7,7 +7,7 @@ geo-temporal regimes. The public surface exposes six named experts: stable
 recurring pattern, sparse cold-start, high-volume hub, volatile shock,
 long-distance pair, and low-signal fallback.
 
-## Public Contract
+## Python Example
 
 ```python
 from cartoboost.deep import RegimeMoEForecaster
@@ -33,8 +33,19 @@ are aliases for this first-cut MoE surface.
 
 <DeepModelWasmExample model="RegimeMoEForecaster" />
 
+## Use When
+
+Use this model when distinct, repeatable regimes are plausible and expert
+usage can be inspected. Prefer one model when the router collapses.
+
 ## Validation
 
 Report router entropy, expert usage, combined RMSE, and a single-expert
 comparison under the same split. Treat degenerate expert usage as a failed MoE
 claim even if the aggregate error is acceptable.
+
+## Limitations
+
+- Mixtures add router instability and expert-identifiability risk.
+- Aggregate error can hide unused or redundant experts.
+- Regime interpretation requires stability across seeds and cutoffs.

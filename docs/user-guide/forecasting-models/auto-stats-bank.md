@@ -18,7 +18,7 @@ selector.
 Use `AutoStatsBank` as a selection layer, not as proof that a complex model is
 needed. Keep naive and seasonal naive in the comparison table.
 
-## Public Contract
+## Python Example
 
 ```python
 from cartoboost.forecasting import AutoStatsBank, ForecastFrame
@@ -65,3 +65,10 @@ Evaluate the selected bank under the same rolling-origin split as the
 individual local forecasters. Report the selected candidate, internal
 validation window, external test horizon, RMSE, MAE, WAPE, train time,
 prediction time, and the simple baselines it had to beat.
+
+## Limitations
+
+- The bank only chooses among its configured statistical experts.
+- Local experts need enough history for their seasonal and lag requirements.
+- Internal validation reduces the history available for fitting on short series.
+- Revalidate when panel frequency or demand regime changes.

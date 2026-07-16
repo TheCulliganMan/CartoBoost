@@ -6,7 +6,7 @@ Use `CartoBoostRegressor` for numeric row-level targets when the effect of
 time, location, route membership, or other structure is part of the question.
 Typical uses include duration, fare, demand, or residual modeling.
 
-## Public Contract
+## Python Example
 
 ```python
 from cartoboost import CartoBoostRegressor
@@ -58,3 +58,10 @@ for the contract details.
 Report RMSE, MAE, and task-specific business metrics on the same split as the
 baselines. Use spatial, temporal, group, or cold-entity splits when those are
 the claim being tested.
+
+## Limitations
+
+- Structured splits help only when schema roles and units are correct.
+- Tree predictions do not extrapolate smooth trends beyond the observed feature range reliably.
+- High-cardinality identifiers need leakage-safe encoding or dedicated graph/neural handling.
+- Compare training and inference cost with strong tabular baselines on the same data.

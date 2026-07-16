@@ -7,7 +7,7 @@ local neighborhoods drive the target. Examples include demand by hour and zone,
 adjustments by location, and operational metrics grouped by source/target
 pairs.
 
-## When It Is A Good Scientific Choice
+## When To Use Structured Spatial Features
 
 Use `CartoBoostRegressor` when the modeling question depends on structured
 place/time effects that should remain visible in the fitted workflow:

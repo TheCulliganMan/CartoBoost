@@ -38,7 +38,7 @@ recent observation backward, so an incomplete leading fragment is excluded
 instead of being treated as a shorter, incomparable bucket. A history shorter
 than one configured bucket fails explicitly.
 
-## Public Contract
+## Python Example
 
 ```python
 from cartoboost.forecasting import CrostonForecaster, SbaForecaster, TsbForecaster

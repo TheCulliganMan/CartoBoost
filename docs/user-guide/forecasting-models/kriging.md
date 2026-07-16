@@ -59,7 +59,7 @@ distance pattern, and zones whose demand is driven more by calendar or route
 mix than by geometric proximity. Use leave-one-out diagnostics and
 time-ordered validation before treating a spatial surface as forecast evidence.
 
-## Example With Panel Dict
+## Python Example
 
 ```python
 from cartoboost.forecasting import KrigingForecaster
@@ -354,7 +354,7 @@ consistent coordinate system and keep the centroid source fixed across reruns.
 Do not silently invent coordinates for missing zones; fail the pipeline and fix
 the input table.
 
-## Validation Notes
+## Validation
 
 Kriging uses spatial proximity, not future observations. Validate with
 rolling-origin folds and consider a spatial holdout if the claim is about
@@ -365,3 +365,10 @@ prediction time, sample size, split boundaries, and the exact variogram and
 neighbor settings. Compare against serious temporal baselines on the same
 train/test split. If the kriging model is only used as a residual smoother or an
 interpolation utility, state that narrower role explicitly.
+
+## Limitations
+
+- Quality depends on meaningful coordinates, distance units, and variogram assumptions.
+- Nearby observations are not independent evidence under random row splits.
+- Large panels may require neighbor limits or scalable GP alternatives.
+- Spatial interpolation does not replace temporal baselines for forecasting claims.

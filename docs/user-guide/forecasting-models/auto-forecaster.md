@@ -15,7 +15,7 @@ you still want to inspect which candidate models earned forecast weight.
 
 <ForecastModelExample title="AutoForecaster panel forecast" model="auto_forecast" sample="spatial" />
 
-## Public Contract
+## Python Example
 
 ```python
 from cartoboost.forecasting import AutoForecaster, ForecastFrame
@@ -338,7 +338,7 @@ eligible candidate run begins, its fitting, prediction, or index failure is
 reported and the selector stops; it is not reinterpreted as evidence for the
 remaining roster.
 
-## When Not To Use It
+## Use When
 
 Use a simpler model when the scientific question requires a single interpretable
 assumption:
@@ -353,3 +353,17 @@ assumption:
 
 AutoForecaster is the right default when the study needs a reproducible,
 guarded hybrid and the metadata will be inspected as part of the evidence.
+
+## Validation
+
+Evaluate the final selector on rolling origins that were not used for candidate
+weighting or gating. Report selected candidates, the validation objective,
+holdout RMSE/MAE/WAPE, per-horizon errors, fit and prediction time, and seasonal
+naive on the identical rows.
+
+## Limitations
+
+- Selection cannot rescue a roster that omits the relevant mechanism.
+- Short histories may not support internal selection plus an honest external holdout.
+- Selection metadata is part of the result; one aggregate score is insufficient for diagnosis.
+- Do not use automatic selection where a prespecified model policy must remain fixed.

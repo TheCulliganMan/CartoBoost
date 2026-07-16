@@ -17,7 +17,7 @@ each node.
 
 <NeuralModelExample title="GraphSAGE browser model" pipeline="graphsage" />
 
-## Public Contract
+## Python Example
 
 ### Regressor
 
@@ -92,3 +92,9 @@ remain CPU work.
 GraphSAGE can overstate quality when node attributes are computed with
 validation labels or future rows. Keep node features train-side for deployment
 claims, and report whether cold nodes appear in the holdout.
+
+## Limitations
+
+- Neighbor sampling and feature construction can leak future graph state.
+- Cold-node quality depends on usable node attributes and observed neighbors.
+- Accelerator support covers documented kernels only; aggregation and training may remain on CPU.

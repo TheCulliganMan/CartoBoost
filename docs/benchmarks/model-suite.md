@@ -85,7 +85,7 @@ comparability audit, and output artifact sizes for this run: `results.json`
 - The public CartoBoost comparison uses one validation-selected `cartoboost`
   row retrained on the full outer training split; graph, neural, and
   link-prediction rows are diagnostics.
-- Neural and graph feature gates use deterministic inner train/validation rows
+- Neural and graph feature selection uses deterministic inner train/validation rows
   inside the training split only.
 - The best external baseline is selected only for reporting after every model
   has already been scored on the same held-out split.

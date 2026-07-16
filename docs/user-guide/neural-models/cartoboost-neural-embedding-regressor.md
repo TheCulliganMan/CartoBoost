@@ -18,7 +18,7 @@ regressor.
 
 <NeuralModelExample title="Neural embedding regressor browser model" pipeline="embedding" />
 
-## Public Contract
+## Python Example
 
 ```python
 from cartoboost.neural import NeuralEmbeddingRegressor
@@ -53,3 +53,9 @@ pred = model.predict(X_valid, ids=valid_ids)
 Compare against a non-neural `CartoBoostRegressor` on the same dense features.
 If the gain disappears under cold-ID validation, describe the model as
 capturing repeated-ID signal rather than unseen-entity structure.
+
+## Limitations
+
+- The wrapper adds training cost and tuning choices beyond the base regressor.
+- Unseen IDs use documented fallback behavior rather than a learned identity effect.
+- Any comparison must give the non-neural baseline the same dense features and split.

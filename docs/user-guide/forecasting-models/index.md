@@ -1,20 +1,21 @@
 import {ForecastModelRosterExample} from '@site/src/components/ModelingLabClient';
 
-# CartoBoost Forecasting Model Guides
+# Forecasting Models
 
 These guides explain the forecasting model classes. Use this section when you
 need to pick, configure, or compare a model. Use
 [Forecasting](../../forecasting.md) when you need `ForecastFrame`,
 rolling-origin backtesting, artifacts, CLI workflows, or shared evidence rules.
 
-Start with the model whose assumptions match the forecast question, then prove
-it on the same rolling-origin split as the simpler baselines.
+Start with seasonal naive. Add the simplest model that represents a pattern you
+actually see—trend, autocorrelation, intermittent demand, shared panel lags,
+spatial proximity, or graph flow—and compare it on the same rolling origins.
 
-## Browser WASM Example
+## Try Models In The Browser
 
 <ForecastModelRosterExample />
 
-## Pick A Guide
+## Choose A Model
 
 | Model guide | Best first use | Notes |
 | --- | --- | --- |
@@ -28,7 +29,6 @@ it on the same rolling-origin split as the simpler baselines.
 | [Spatial Piecewise Kriging](spatial-piecewise-kriging.md) | Combine interpretable temporal components with spatial borrowing. | Includes an interactive coordinate-panel example for `spatial_piecewise_kriging`. |
 | [CartoBoost Lag](cartoboost-lag.md) | Learn one supervised lag model across many related series. | Use when many aligned panels should share lag structure. |
 | [Graph Spatiotemporal Forecasting](graph-spatiotemporal.md) | Forecast sensor, route, road, or zone-flow panels on a directed graph. | Use when upstream/downstream graph structure should improve forecasts beyond panel-only baselines. |
-| [Paper Graph Transformers](graph-spatiotemporal.md#paper-graph-transformer-profiles) | `STGormerForecaster`, `STGformerForecaster`, `LSTTNForecaster`, gated graph Transformer, and spatial-shift graphon MoE; LSTTN includes a native WASM H3 volume, rate, error, and sensitivity debugger. | Use when the architecture's heterogeneity, high-order, long-short, gated, or shift mechanism is the hypothesis being tested. |
 | [Market Structure Forecasting](graph-spatiotemporal.md) | Learn sparse directional relationships with hierarchy-aware smoothing and analyst-visible kernels. | Use when distance alone misses connected market structure and reviewers need shift explanations. |
 | [Probabilistic And Conformal](probabilistic-conformal.md) | Add calibrated uncertainty to regressors, spatial models, residual hybrids, and forecasts. | Use when interval coverage and width matter alongside point accuracy. |
 | [N-BEATS And N-HiTS](beats-hits.md) | Fit deterministic neural window experts for regular forecast windows. | Use as neural baselines against seasonal naive, local statistical models, and `CartoBoostLagForecaster`. |
@@ -41,11 +41,11 @@ it on the same rolling-origin split as the simpler baselines.
 | [AutoForecaster](auto-forecaster.md) | Use the guarded default selector over lag, direct, residual-corrected, intermittent, and classical candidates. | Includes diagrams for validation, gating, prediction, and metadata inspection. |
 | [Weighted Ensembles](ensembles.md) | Combine fitted forecasters with explicit weights. | Components and weights must be named explicitly. |
 
-## Scientific Choice Criteria
+## Match The Model To The Pattern
 
 Choose the model whose assumptions match the signal you can defend:
 
-| Signal in the series | First model to try | Scientific reason |
+| Signal in the series | First model to try | Why |
 | --- | --- | --- |
 | The latest observed level is the best short-horizon summary. | Naive | Tests whether any model adds information beyond persistence. |
 | The same hour yesterday or same weekday last week dominates. | Seasonal naive | Tests repeatable seasonality without estimated parameters. |
@@ -66,9 +66,9 @@ Choose the model whose assumptions match the signal you can defend:
 | A production panel needs a deterministic guarded default with auditable candidate weights. | AutoForecaster | Validates a fixed roster, protects the lag baseline, and stores global, horizon, and series weights. |
 | Validated models capture complementary errors. | Weighted ensemble | Averages explicit components after each member proves useful. |
 
-Do not choose a richer model only because it is available. A scientist should
-be able to say which mechanism the model represents, what it ignores, and which
-baseline threshold it must clear on a time-ordered holdout.
+Do not choose a richer model only because it is available. Be explicit about
+the pattern it is meant to capture, what it ignores, and whether it improves a
+time-ordered holdout enough to justify extra complexity.
 
 ## Shared Input Patterns
 
@@ -111,7 +111,7 @@ Use `allow_missing_covariates=True` when declared covariate columns contain
 uses. Infinite covariates are always rejected. Models that consume a missing
 covariate still fail clearly at fit or predict time.
 
-## Advanced Candidates
+## Additional Models
 
 `AutoStatsBank` is a public wrapper for the reusable statistical expert bank.
 `AutoForecaster` also considers direct, rectified-recursive, intermittent,

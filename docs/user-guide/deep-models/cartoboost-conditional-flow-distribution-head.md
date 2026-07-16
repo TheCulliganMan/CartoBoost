@@ -6,7 +6,7 @@ Use `ConditionalFlowDistributionHead` when a deep model needs joint residual
 uncertainty rather than independent quantile bands. Fit it on hidden-state
 features and residuals from the upstream model.
 
-## Public Contract
+## Python Example
 
 ```python
 from cartoboost.deep import ConditionalFlowDistributionHead
@@ -27,6 +27,12 @@ prediction = head.predict(model_hidden_state=hidden_holdout, actual=residuals_ho
 
 `JointHorizonFlowHead` and `ResidualFlowCalibrator` are aliases.
 
+## Use When
+
+Use this head when an upstream model exposes hidden-state context and the
+decision needs joint residual scenarios or tail summaries. Prefer conformal
+intervals when distribution-free marginal coverage is the main requirement.
+
 ## Browser WASM Example
 
 <DeepModelWasmExample model="ConditionalFlowDistributionHead" />
@@ -35,3 +41,9 @@ prediction = head.predict(model_hidden_state=hidden_holdout, actual=residuals_ho
 
 Compare coverage, interval width, pinball loss, and tail calibration against
 independent quantile, Gaussian residual, and conformal interval baselines.
+
+## Limitations
+
+- Calibration depends on residuals representative of deployment.
+- The current architecture is a conditional residual sampler, not an invertible flow.
+- Joint scenarios add value only when cross-horizon dependence is validated.

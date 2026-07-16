@@ -32,13 +32,13 @@
   family. If the page should not exist, remove the listing instead of leaving a
   dangling or aggregate-only mention.
 - Every model guide page linked from a user-guide index or sidebar must exist
-  in the current tree and have a `## Public Contract`, `## Use When`, and
-  `## Validation` section unless the page is explicitly a router/index page.
+  in the current tree and have a clear Python example, model-selection guidance,
+  validation guidance, and limitations unless the page is explicitly a router/index page.
 - Use `## Interactive Example` for embedded browser examples. Explain the
   browser run as a quick shape and behavior check, not as benchmark evidence.
   Do not document raw Wasm or JavaScript payloads in user model guides unless
   the page is specifically about the browser API.
-- Use `## Public Contract` for the primary Python example. Examples should be
+- Use `## Python Example` for the primary Python example. Examples should be
   complete enough to show required inputs and output shape, but should not
   expose internal Rust, PyO3, artifact, or benchmark-harness details.
 - Keep "Use When" sections. They should help users decide between adjacent

@@ -7,7 +7,7 @@ are the attention tokens. This avoids treating every time step as an attention
 token and reports cross-entity ablations so the graph-free entity interaction
 claim can be checked.
 
-## Public Contract
+## Python Example
 
 ```python
 from cartoboost.deep import EntityPanelFrame, InvertedTemporalTransformer
@@ -39,7 +39,18 @@ through `TemporalEntityTransformer(architecture="inverted_transformer")`.
 
 <DeepModelWasmExample model="InvertedTemporalTransformer" />
 
+## Use When
+
+Use this model for synchronized panels where cross-entity dependence matters
+and entities are more useful as attention tokens than individual timestamps.
+
 ## Validation
 
 Report horizon-wise error and an ablation that removes cross-entity attention.
 Use this only when synchronized entities are the modeling unit.
+
+## Limitations
+
+- Requires aligned histories and enough repeated time windows.
+- Cross-entity attention can overfit stable identity effects.
+- Report seed sensitivity and cold-entity behavior.

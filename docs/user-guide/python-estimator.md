@@ -1,10 +1,10 @@
-# Python Estimator
+# Using The Python Estimator
 
 `CartoBoostRegressor` is the public Python estimator for row-level regression.
 It follows sklearn conventions for parameter inspection, cloning, pipelines,
 and grid search over the supported API surface.
 
-## Model The Scientific Structure First
+## Start With The Row Definition
 
 Start by deciding what structure the rows carry. A row may represent one
 observation, one time-bucket aggregate, one route aggregate, or a residual from

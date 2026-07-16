@@ -1,4 +1,4 @@
-# Taxi Zone Acceptance Benchmark
+# Taxi Zone Feature Checks
 
 ## Bottom Line
 
@@ -22,9 +22,9 @@ Artifacts:
 - `docs/assets/lane_level_tests/hour_profile.png`
 - `docs/assets/lane_level_tests/route_midpoint_geometry.png`
 
-## Acceptance Breakdown
+## Results
 
-| Check | Main result | Gate |
+| Feature check | Main result | Outcome |
 | --- | ---: | --- |
 | Sparse lane membership | Sparse lane RMSE `0.0`; axis lane-ID RMSE `51.96` | Passed: exact sparse lane fit. |
 | Hot lane isolation | Hot lane margin `240.0` | Passed: margin > 200. |
@@ -42,9 +42,9 @@ Artifacts:
 
 ## Interpretation
 
-Passing this benchmark means the implementation can represent the targeted
-feature family on a controlled taxi-lane fixture. If this fails, do not refresh
-real NYC taxi claims that rely on the affected feature family.
+These results show that the implementation can represent each targeted feature
+family on a controlled taxi-lane fixture. They are useful for diagnosing model
+behavior before running a real-data benchmark.
 
 Passing does not mean CartoBoost is more accurate than LightGBM, XGBoost, or a
 forecasting library on real data.
