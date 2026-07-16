@@ -139,34 +139,42 @@ impl Forecaster for NHiTSForecaster {
         let frequency = self.frequency.ok_or_else(|| {
             CartoBoostError::InvalidInput("NHiTSForecaster must be fit before predict".to_string())
         })?;
-        let mut predictions = Vec::new();
-        for (series_id, tail) in &self.tails {
-            let last_row = self.last_rows.get(series_id).ok_or_else(|| {
-                CartoBoostError::InvalidInput(format!(
-                    "missing fitted timestamp tail for series '{series_id}'"
-                ))
-            })?;
-            let mut history = tail.clone();
-            for step in 1..=horizon {
-                let scaled_input = scaler.transform_slice(&history);
-                let pooled = pool(&scaled_input, self.config.pooling_size);
-                let scaled_prediction = self
-                    .model
-                    .predict_with_backend(&pooled)
-                    .map_err(|err| CartoBoostError::InvalidInput(err.to_string()))?;
+        let series = self.tails.iter().collect::<Vec<_>>();
+        let mut histories = series
+            .iter()
+            .map(|(_, tail)| (*tail).clone())
+            .collect::<Vec<_>>();
+        let mut predictions = vec![Vec::with_capacity(horizon); series.len()];
+        for step in 1..=horizon {
+            let inputs = histories
+                .iter()
+                .map(|history| pool(&scaler.transform_slice(history), self.config.pooling_size))
+                .collect::<Vec<_>>();
+            let scaled_predictions = self
+                .model
+                .predict_batch_with_backend(&inputs)
+                .map_err(|err| CartoBoostError::InvalidInput(err.to_string()))?;
+            for (series_index, ((series_id, _), scaled_prediction)) in
+                series.iter().zip(scaled_predictions).enumerate()
+            {
+                let last_row = self.last_rows.get(*series_id).ok_or_else(|| {
+                    CartoBoostError::InvalidInput(format!(
+                        "missing fitted timestamp tail for series '{series_id}'"
+                    ))
+                })?;
                 let mean = scaler.inverse_transform(scaled_prediction);
-                predictions.push(ForecastPrediction {
-                    series_id: series_id.clone(),
+                predictions[series_index].push(ForecastPrediction {
+                    series_id: (*series_id).clone(),
                     timestamp: frequency.advance(last_row.timestamp, step)?,
                     horizon: step,
                     model: self.model_name().to_string(),
                     mean,
                 });
-                history.remove(0);
-                history.push(mean);
+                histories[series_index].remove(0);
+                histories[series_index].push(mean);
             }
         }
-        ForecastResult::new(predictions)
+        ForecastResult::new(predictions.into_iter().flatten().collect())
     }
 
     fn model_name(&self) -> &'static str {

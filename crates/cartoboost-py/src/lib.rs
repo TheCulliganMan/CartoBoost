@@ -4237,8 +4237,11 @@ impl NativeNBeatsForecaster {
                 hidden_size,
                 epochs,
                 learning_rate,
-                backend: neural_select_backend_for(backend, BackendOperation::TanhMlpTraining)
-                    .map_err(to_py_neural_error)?,
+                backend: neural_select_backend_for_operations(
+                    backend,
+                    &[BackendOperation::TanhMlpTraining, BackendOperation::Dense],
+                )
+                .map_err(to_py_neural_error)?,
             })
             .map_err(to_py_neural_error)?,
         })
@@ -4282,8 +4285,11 @@ impl NativeNHiTSForecaster {
                 epochs,
                 learning_rate,
                 pooling_size,
-                backend: neural_select_backend_for(backend, BackendOperation::TanhMlpTraining)
-                    .map_err(to_py_neural_error)?,
+                backend: neural_select_backend_for_operations(
+                    backend,
+                    &[BackendOperation::TanhMlpTraining, BackendOperation::Dense],
+                )
+                .map_err(to_py_neural_error)?,
             })
             .map_err(to_py_neural_error)?,
         })

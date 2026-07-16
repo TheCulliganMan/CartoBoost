@@ -71,7 +71,7 @@ use cartoboost_neural::{
     neural_operator_synthetic_benchmark_json as deep_neural_operator_synthetic_benchmark_json,
     response_curve_fit_with_backend as deep_response_curve_fit,
     response_curve_predict as deep_response_curve_predict, select_backend, select_backend_for,
-    service_residual_fit_with_backend as deep_service_residual_fit,
+    select_backend_for_operations, service_residual_fit_with_backend as deep_service_residual_fit,
     service_residual_predict as deep_service_residual_predict,
     temporal_entity_fit_with_backend as deep_temporal_entity_fit,
     temporal_entity_predict as deep_temporal_entity_predict, ArtifactFallbackKind,
@@ -6996,15 +6996,18 @@ fn browser_tanh_training_backend(options: &BrowserForecastOptions) -> Result<Bac
         return select_backend(Some("cpu"))
             .map_err(|error| CartoBoostError::InvalidInput(error.to_string()));
     }
-    select_backend_for(Some(requested), BackendOperation::TanhMlpTraining)
-        .or_else(|error| {
-            if requested.eq_ignore_ascii_case("auto") {
-                select_backend(Some("cpu"))
-            } else {
-                Err(error)
-            }
-        })
-        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))
+    select_backend_for_operations(
+        Some(requested),
+        &[BackendOperation::TanhMlpTraining, BackendOperation::Dense],
+    )
+    .or_else(|error| {
+        if requested.eq_ignore_ascii_case("auto") {
+            select_backend(Some("cpu"))
+        } else {
+            Err(error)
+        }
+    })
+    .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))
 }
 
 fn nbeats_config(options: &BrowserForecastOptions) -> Result<NBeatsConfig> {
