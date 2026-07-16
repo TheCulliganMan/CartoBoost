@@ -59,7 +59,7 @@ use cartoboost_geostats::{
 };
 use cartoboost_neural::{
     available_backends as deep_available_backends,
-    choice_set_transformer_report_json as deep_choice_set_transformer_report_json,
+    choice_set_transformer_report_json_with_backend as deep_choice_set_transformer_report_json,
     constrained_decision_select as deep_constrained_decision_select,
     directional_pair_fit_with_options_and_backend as deep_directional_pair_fit,
     directional_pair_predict as deep_directional_pair_predict,
@@ -2075,6 +2075,7 @@ pub fn deep_choice_set_transformer_report_wasm(
     candidates: JsValue,
     temperature: f64,
     monotone_candidate_value: Option<String>,
+    backend: Option<String>,
 ) -> std::result::Result<JsValue, JsValue> {
     console_error_panic_hook::set_once();
     let candidates: Vec<BTreeMap<String, Value>> = serde_wasm_bindgen::from_value(candidates)
@@ -2083,6 +2084,7 @@ pub fn deep_choice_set_transformer_report_wasm(
         &candidates,
         temperature,
         monotone_candidate_value.as_deref(),
+        backend.as_deref(),
     )
     .map_err(|error| JsValue::from_str(&error.to_string()))?;
     let report: Value = serde_json::from_str(&report_json)

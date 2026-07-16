@@ -1,6 +1,7 @@
 use crate::{
-    backend_affine_scores, backend_dense_layer_f32, backend_train_tanh_mlp_f32, select_backend_for,
-    select_backend_for_operations, BackendOperation, BackendSelection, NeuralError, Result,
+    backend_affine_scores, backend_csr_row_softmax_f32, backend_dense_layer_f32,
+    backend_train_tanh_mlp_f32, select_backend_for, select_backend_for_operations,
+    BackendOperation, BackendSelection, NeuralError, Result,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -1437,10 +1438,39 @@ pub fn choice_set_transformer_report_json(
     serde_json::to_string(&report).map_err(NeuralError::from)
 }
 
+pub fn choice_set_transformer_report_json_with_backend(
+    candidates: &[BTreeMap<String, serde_json::Value>],
+    temperature: f64,
+    monotone_candidate_value: Option<&str>,
+    backend: Option<&str>,
+) -> Result<String> {
+    let report = choice_set_transformer_report_with_backend(
+        candidates,
+        temperature,
+        monotone_candidate_value,
+        backend,
+    )?;
+    serde_json::to_string(&report).map_err(NeuralError::from)
+}
+
 pub fn choice_set_transformer_report(
     candidates: &[BTreeMap<String, serde_json::Value>],
     temperature: f64,
     monotone_candidate_value: Option<&str>,
+) -> Result<DeepChoiceSetReport> {
+    choice_set_transformer_report_with_backend(
+        candidates,
+        temperature,
+        monotone_candidate_value,
+        Some("cpu"),
+    )
+}
+
+pub fn choice_set_transformer_report_with_backend(
+    candidates: &[BTreeMap<String, serde_json::Value>],
+    temperature: f64,
+    monotone_candidate_value: Option<&str>,
+    backend: Option<&str>,
 ) -> Result<DeepChoiceSetReport> {
     if candidates.is_empty() {
         return invalid("choice-set candidates cannot be empty");
@@ -1457,12 +1487,11 @@ pub fn choice_set_transformer_report(
         })?;
         groups.entry(decision_id).or_default().push(row);
     }
-    let mut predictions = Vec::new();
-    let mut counterfactual_best = Vec::new();
-    let mut chosen_probabilities = Vec::new();
-    let mut chosen_labels = Vec::new();
-    let mut operator_loss = 0.0;
-    let mut independent_loss = 0.0;
+    let backend = select_backend_for(backend, BackendOperation::CsrRowSoftmax)?;
+    let mut prepared_groups = Vec::with_capacity(groups.len());
+    let mut indptr = Vec::with_capacity(groups.len() + 1);
+    let mut logits = Vec::with_capacity(candidates.len());
+    indptr.push(0_u32);
     for (decision_id, rows) in groups {
         let mut utilities = rows
             .iter()
@@ -1471,17 +1500,34 @@ pub fn choice_set_transformer_report(
         let mean_utility = utilities.iter().sum::<f64>() / utilities.len() as f64;
         for utility in &mut utilities {
             *utility += 0.15 * (*utility - mean_utility);
+            logits.push((*utility / temperature) as f32);
         }
-        let probabilities = softmax(&utilities, temperature);
+        indptr.push(logits.len() as u32);
+        prepared_groups.push((decision_id, rows, utilities));
+    }
+    let probabilities = backend_csr_row_softmax_f32(&backend, &indptr, &logits)?;
+    let mut probability_offset = 0usize;
+    let mut predictions = Vec::new();
+    let mut counterfactual_best = Vec::new();
+    let mut chosen_probabilities = Vec::new();
+    let mut chosen_labels = Vec::new();
+    let mut operator_loss = 0.0;
+    let mut independent_loss = 0.0;
+    for (decision_id, rows, utilities) in prepared_groups {
+        let group_probabilities =
+            &probabilities[probability_offset..probability_offset + utilities.len()];
+        probability_offset += utilities.len();
         let group_chosen = rows
             .iter()
             .position(|row| json_bool(row, "chosen").unwrap_or(false));
         if let Some(chosen_idx) = group_chosen {
-            operator_loss += -probabilities[chosen_idx].max(1.0e-12).ln();
+            operator_loss += -f64::from(group_probabilities[chosen_idx]).max(1.0e-12).ln();
             independent_loss += -(1.0 / rows.len() as f64).ln();
         }
         let mut best_idx = 0usize;
-        for (idx, (&utility, &probability)) in utilities.iter().zip(&probabilities).enumerate() {
+        for (idx, (&utility, &probability)) in utilities.iter().zip(group_probabilities).enumerate()
+        {
+            let probability = f64::from(probability);
             let nested_probability = nested_choice_probability(rows[idx], &rows, utility)?;
             if utility > utilities[best_idx]
                 || (utility == utilities[best_idx]
@@ -1508,7 +1554,7 @@ pub fn choice_set_transformer_report(
             candidate_id: json_str(rows[best_idx], "candidate_id")?,
             candidate_value: json_f64(rows[best_idx], "candidate_value").unwrap_or(0.0),
             utility: utilities[best_idx],
-            choice_probability: probabilities[best_idx],
+            choice_probability: f64::from(group_probabilities[best_idx]),
         });
     }
     let mut calibration = BTreeMap::new();
@@ -1554,6 +1600,8 @@ pub fn choice_set_transformer_report(
         "CounterfactualCandidateScorer".to_string(),
     );
     metadata.insert("temperature".to_string(), temperature.to_string());
+    metadata.insert("backend_requested".to_string(), backend.requested);
+    metadata.insert("backend_selected".to_string(), backend.selected);
     Ok(DeepChoiceSetReport {
         predictions,
         counterfactual_best,
@@ -2522,16 +2570,6 @@ fn choice_utility(
         None => 0.0,
     };
     Ok(utility)
-}
-
-fn softmax(values: &[f64], temperature: f64) -> Vec<f64> {
-    let max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    let exp = values
-        .iter()
-        .map(|value| ((*value - max) / temperature).exp())
-        .collect::<Vec<_>>();
-    let sum = exp.iter().sum::<f64>().max(1.0e-12);
-    exp.iter().map(|value| value / sum).collect()
 }
 
 fn nested_choice_probability(

@@ -149,7 +149,7 @@ use cartoboost_neural::{
     backend_supports_operation as neural_backend_supports_operation,
     backend_train_tanh_mlp_f32 as neural_backend_train_tanh_mlp_f32,
     backend_workload_decision as neural_backend_workload_decision, build_embedding_table_artifact,
-    choice_set_transformer_report_json as core_choice_set_transformer_report_json,
+    choice_set_transformer_report_json_with_backend as core_choice_set_transformer_report_json,
     compute_directional_features_with_backend,
     constrained_decision_select_with_options as core_deep_constrained_decision_select,
     directional_pair_predict as core_deep_directional_pair_predict,
@@ -12275,16 +12275,22 @@ fn deep_constrained_decision_select_value(
 }
 
 #[pyfunction]
-#[pyo3(signature = (candidates_json, temperature=1.0, monotone_candidate_value=None))]
+#[pyo3(signature = (candidates_json, temperature=1.0, monotone_candidate_value=None, backend=None))]
 fn deep_choice_set_transformer_report_value(
     candidates_json: &str,
     temperature: f64,
     monotone_candidate_value: Option<&str>,
+    backend: Option<&str>,
 ) -> PyResult<String> {
     let candidates: Vec<BTreeMap<String, Value>> =
         serde_json::from_str(candidates_json).map_err(to_py_json_error)?;
-    core_choice_set_transformer_report_json(&candidates, temperature, monotone_candidate_value)
-        .map_err(to_py_neural_error)
+    core_choice_set_transformer_report_json(
+        &candidates,
+        temperature,
+        monotone_candidate_value,
+        backend,
+    )
+    .map_err(to_py_neural_error)
 }
 
 #[pyfunction(signature = (y_json, lookback, horizon, backend=None))]

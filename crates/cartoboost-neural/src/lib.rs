@@ -45,8 +45,9 @@ pub use cartoboost_accelerator::{
 #[cfg(all(feature = "cuda-oxide", target_os = "linux"))]
 pub use cartoboost_accelerator::{CudaCsrDiffusionWorkspace, CudaTensorArena};
 pub use deep::{
-    choice_set_transformer_report, choice_set_transformer_report_json, constrained_decision_select,
-    constrained_decision_select_with_options, directional_pair_fit,
+    choice_set_transformer_report, choice_set_transformer_report_json,
+    choice_set_transformer_report_json_with_backend, choice_set_transformer_report_with_backend,
+    constrained_decision_select, constrained_decision_select_with_options, directional_pair_fit,
     directional_pair_fit_with_options, directional_pair_fit_with_options_and_backend,
     directional_pair_predict, directional_pair_predictions, event_outcome_fit,
     event_outcome_fit_with_backend, event_outcome_predict, response_curve_fit,
