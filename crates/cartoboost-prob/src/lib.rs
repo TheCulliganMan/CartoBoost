@@ -1236,14 +1236,30 @@ fn predict_linear_with_backend(
     if features.iter().any(|row| row.len() != expected_width) {
         return invalid("feature width must match fitted flow artifact");
     }
+    let cpu_backend =
+        if should_accelerate_linear_prediction(backend, features.len(), expected_width) {
+            None
+        } else {
+            Some(default_backend_selection())
+        };
+    let execution_backend = cpu_backend.as_ref().unwrap_or(backend);
     backend_affine_scores(
-        backend,
+        execution_backend,
         features,
         &vec![0.0; expected_width],
         &weights[1..],
         &vec![weights[0]; features.len()],
     )
     .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))
+}
+
+fn should_accelerate_linear_prediction(
+    backend: &BackendSelection,
+    row_count: usize,
+    feature_count: usize,
+) -> bool {
+    backend.selected != "cpu"
+        && row_count.saturating_mul(feature_count) >= PROB_DENSE_DISPATCH_MIN_OPS
 }
 
 fn solve_linear_system(mut matrix: Vec<Vec<f64>>, mut rhs: Vec<f64>) -> Vec<f64> {
@@ -1697,6 +1713,43 @@ mod tests {
             for (left, right) in actual.scale_weights.iter().zip(&expected.scale_weights) {
                 assert!(
                     (left - right).abs() < 2.0e-3,
+                    "{backend}: {left} != {right}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn conditional_flow_affine_dispatch_requires_a_profitable_workload() {
+        for backend in cartoboost_neural::available_backends() {
+            let selection = select_backend_for(Some(&backend), BackendOperation::Affine).unwrap();
+            assert!(!should_accelerate_linear_prediction(&selection, 1, 4));
+            assert_eq!(
+                should_accelerate_linear_prediction(&selection, 4_096, 4),
+                backend != "cpu"
+            );
+        }
+    }
+
+    #[test]
+    fn conditional_flow_large_affine_prediction_matches_cpu_on_every_backend() {
+        let features = (0..4_096)
+            .map(|idx| {
+                let x = idx as f64 / 4_096.0;
+                vec![x, x.sin(), x.cos(), x * x]
+            })
+            .collect::<Vec<_>>();
+        let weights = vec![0.2, 0.3, -0.4, 0.5, -0.1];
+        let cpu = select_backend_for(Some("cpu"), BackendOperation::Affine).unwrap();
+        let expected = predict_linear_with_backend(&features, &weights, &cpu).unwrap();
+
+        for backend in cartoboost_neural::available_backends() {
+            let selection = select_backend_for(Some(&backend), BackendOperation::Affine).unwrap();
+            let actual = predict_linear_with_backend(&features, &weights, &selection)
+                .unwrap_or_else(|error| panic!("{backend} affine prediction failed: {error}"));
+            for (left, right) in actual.iter().zip(&expected) {
+                assert!(
+                    (left - right).abs() < 2.0e-4,
                     "{backend}: {left} != {right}"
                 );
             }
