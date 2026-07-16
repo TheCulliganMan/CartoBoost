@@ -100,18 +100,25 @@ impl CartoBoostDirectForecaster {
         frame.require_regular_for_model(self.model_name())?;
         validate_horizon(horizon)?;
         validate_direct_lag_history(frame, self.lag_builder.config(), horizon, self.model_name())?;
-        let mut models = Vec::with_capacity(horizon);
-        let mut training_rows_by_horizon = Vec::with_capacity(horizon);
-        for step in 1..=horizon {
+        let fit_step = |step| {
             let training = build_direct_training(frame, &self.lag_builder, step)?;
+            let training_rows = training.y.len();
             let model = Booster::new_with_backend(
                 self.booster_config.clone(),
                 Some(&self.backend.selected),
             )?
             .fit(&training.x, &training.y, None)?;
-            training_rows_by_horizon.push(training.y.len());
-            models.push(model);
-        }
+            Ok((model, training_rows))
+        };
+        let fitted_steps = if self.backend.selected == "cpu" {
+            (1..=horizon)
+                .into_par_iter()
+                .map(fit_step)
+                .collect::<Result<Vec<_>>>()?
+        } else {
+            (1..=horizon).map(fit_step).collect::<Result<Vec<_>>>()?
+        };
+        let (models, training_rows_by_horizon) = fitted_steps.into_iter().unzip();
         self.fitted = Some(FittedDirectState {
             frame: frame.clone(),
             history_by_series: history_by_series(frame.rows()),
@@ -272,23 +279,30 @@ impl RectifiedRecursiveForecaster {
             horizon,
             Some(&self.backend.selected),
         )?;
-        let mut corrections = Vec::with_capacity(horizon);
-        let mut training_rows_by_horizon = Vec::with_capacity(horizon);
-        for step in 1..=horizon {
+        let fit_step = |step| {
             let training = build_rectification_training(
                 frame,
                 &self.lag_builder,
                 step,
                 &recursive_baselines[step - 1],
             )?;
+            let training_rows = training.y.len();
             let model = Booster::new_with_backend(
                 self.booster_config.clone(),
                 Some(&self.backend.selected),
             )?
             .fit(&training.x, &training.y, None)?;
-            training_rows_by_horizon.push(training.y.len());
-            corrections.push(model);
-        }
+            Ok((model, training_rows))
+        };
+        let fitted_steps = if self.backend.selected == "cpu" {
+            (1..=horizon)
+                .into_par_iter()
+                .map(fit_step)
+                .collect::<Result<Vec<_>>>()?
+        } else {
+            (1..=horizon).map(fit_step).collect::<Result<Vec<_>>>()?
+        };
+        let (corrections, training_rows_by_horizon) = fitted_steps.into_iter().unzip();
         self.fitted = Some(FittedRectifiedState {
             history_by_series: history_by_series(frame.rows()),
             corrections,

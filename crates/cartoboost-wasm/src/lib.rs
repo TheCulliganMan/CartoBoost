@@ -4976,7 +4976,7 @@ fn node2vec_config(options: &BrowserNeuralOptions) -> Node2VecConfig {
 }
 
 fn browser_neural_backend(options: &BrowserNeuralOptions) -> Result<BackendSelection> {
-    select_backend(options.backend.as_deref())
+    select_backend_for(options.backend.as_deref(), BackendOperation::Dense)
         .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))
 }
 
@@ -6565,7 +6565,7 @@ fn neural_panel_config(
         learning_rate: 0.01,
         weight_decay: 0.0,
         newer_sample_weight: false,
-        backend: select_backend(options.backend.as_deref())
+        backend: select_backend_for(options.backend.as_deref(), BackendOperation::Dense)
             .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?,
     };
     if let Some(seasonalities) = &options.custom_seasonalities {

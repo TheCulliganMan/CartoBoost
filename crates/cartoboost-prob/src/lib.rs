@@ -1,8 +1,8 @@
 use cartoboost_core::{CartoBoostError, Result};
 use cartoboost_neural::{
     backend_affine_scores, backend_csr_diffusion_f32, backend_dense_layer_f32,
-    backend_pairwise_squared_distances_f32, select_backend, select_backend_for, BackendOperation,
-    BackendSelection,
+    backend_pairwise_squared_distances_f32, select_backend, select_backend_for,
+    select_backend_for_operations, BackendOperation, BackendSelection,
 };
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -337,8 +337,11 @@ impl ConditionalFlowDistributionHead {
         sample_count: usize,
         backend: Option<&str>,
     ) -> Result<Self> {
-        let backend = select_backend(backend)
-            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+        let backend = select_backend_for_operations(
+            backend,
+            &[BackendOperation::Dense, BackendOperation::Affine],
+        )
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
         validate_same_non_empty_matrix(hidden, residuals, "hidden", "residuals")?;
         validate_quantile_grid(quantiles)?;
         if sample_count == 0 {
