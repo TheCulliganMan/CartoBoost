@@ -11,6 +11,7 @@ cartoboost-neural = { path = "../cartoboost-neural" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+rayon = "1.11"
 
 [features]
 default = []

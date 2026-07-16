@@ -226,6 +226,7 @@ version = "0.3.10"
 dependencies = [
  "cartoboost-accelerator",
  "chrono",
+ "rayon",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
@@ -307,6 +308,7 @@ version = "0.3.10"
 dependencies = [
  "cartoboost-geo-core",
  "cartoboost-neural",
+ "rayon",
  "serde",
  "serde_json",
  "thiserror 1.0.69",

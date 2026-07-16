@@ -3,6 +3,7 @@ use cartoboost_neural::{
     backend_affine_scores, backend_csr_diffusion_f32, backend_dense_layer_f32, select_backend,
     select_backend_for_operations, BackendOperation, BackendSelection,
 };
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -584,16 +585,18 @@ fn profile_fit(
 
 fn maximize_spatial_profile<F>(bound: f64, objective: F) -> Result<ProfileFit>
 where
-    F: Fn(f64) -> Result<ProfileFit>,
+    F: Fn(f64) -> Result<ProfileFit> + Sync,
 {
     const GRID_STEPS: usize = 200;
     const GOLDEN_ITERATIONS: usize = 80;
     let search_bound = 0.999 * bound;
-    let mut scores = Vec::with_capacity(GRID_STEPS + 1);
-    for index in 0..=GRID_STEPS {
-        let parameter = -search_bound + 2.0 * search_bound * index as f64 / GRID_STEPS as f64;
-        scores.push(objective(parameter)?);
-    }
+    let scores = (0..=GRID_STEPS)
+        .into_par_iter()
+        .map(|index| {
+            let parameter = -search_bound + 2.0 * search_bound * index as f64 / GRID_STEPS as f64;
+            objective(parameter)
+        })
+        .collect::<Result<Vec<_>>>()?;
     let best_index = scores
         .iter()
         .enumerate()

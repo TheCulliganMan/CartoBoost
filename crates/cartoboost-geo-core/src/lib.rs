@@ -2,6 +2,7 @@ use cartoboost_accelerator::{
     backend_pairwise_squared_distances_f32, select_backend_for, BackendOperation, BackendSelection,
 };
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -505,7 +506,8 @@ fn pairwise_coordinate_distances(
         || coords.len().saturating_mul(coords.len()) < GEO_PAIRWISE_DISPATCH_MIN_PAIRS
     {
         return Ok((0..coords.len())
-            .flat_map(|left| (0..coords.len()).map(move |right| distance(coords, left, right)))
+            .into_par_iter()
+            .flat_map_iter(|left| (0..coords.len()).map(move |right| distance(coords, left, right)))
             .collect());
     }
     let points = coords
@@ -872,7 +874,7 @@ pub fn radial_anchor_distance_rows_with_backend(
         || points.len().saturating_mul(anchors.len()) < GEO_PAIRWISE_DISPATCH_MIN_PAIRS
     {
         return Ok(points
-            .iter()
+            .par_iter()
             .map(|&point| radial_anchor_distances(point, anchors))
             .collect());
     }
