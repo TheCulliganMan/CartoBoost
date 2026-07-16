@@ -348,7 +348,7 @@ class DCRNNForecaster(ArtifactPersistenceMixin):
         teacher_forcing_start: float = 1.0,
         teacher_forcing_end: float = 0.2,
         ridge: float = 0.0001,
-        backend: Backend = Backend.CPU,
+        backend: Backend | str = Backend.CPU,
     ) -> None:
         native_class = _native_class(self.native_class_name)
         if native_class is None:
@@ -537,7 +537,7 @@ class STAEformerForecaster(ArtifactPersistenceMixin):
         epochs: int = 120,
         learning_rate: float = 0.02,
         ridge: float = 0.0001,
-        backend: Backend = Backend.CPU,
+        backend: Backend | str = Backend.CPU,
     ) -> None:
         native_class = _native_class("STAEformerForecaster")
         if native_class is None:
@@ -653,7 +653,7 @@ class GraphWaveNetForecaster(ArtifactPersistenceMixin):
         epochs: int = 120,
         learning_rate: float = 0.02,
         ridge: float = 0.0001,
-        backend: Backend = Backend.CPU,
+        backend: Backend | str = Backend.CPU,
     ) -> None:
         native_class = _native_class("GraphWaveNetForecaster")
         if native_class is None:
@@ -768,7 +768,7 @@ class _PaperGraphTransformerForecaster(ArtifactPersistenceMixin):
         epochs: int = 80,
         learning_rate: float = 0.01,
         weight_decay: float = 0.00001,
-        backend: Backend = Backend.CPU,
+        backend: Backend | str = Backend.CPU,
         horizon: int = 1,
     ) -> None:
         native_class = _native_class("PaperGraphTransformerForecaster")

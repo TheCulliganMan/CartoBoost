@@ -248,14 +248,26 @@ class ConformalIntervalRegressor(ArtifactPersistenceMixin):
 class QuantileCartoBoostRegressor(ArtifactPersistenceMixin):
     """Train one CartoBoost quantile regressor per requested level."""
 
-    def __init__(self, *, quantiles: tuple[float, ...] = (0.1, 0.5, 0.9), **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *,
+        quantiles: tuple[float, ...] = (0.1, 0.5, 0.9),
+        backend: Backend | str = Backend.CPU,
+        **kwargs: Any,
+    ) -> None:
         from cartoboost import CartoBoostRegressor
 
         self.quantiles = tuple(float(q) for q in quantiles)
         _validate_quantile_grid(self.quantiles)
+        self.backend = str(backend)
         self.kwargs = dict(kwargs)
         self.models_ = {
-            q: CartoBoostRegressor(loss="quantile", quantile_alpha=q, **self.kwargs)
+            q: CartoBoostRegressor(
+                loss="quantile",
+                quantile_alpha=q,
+                backend=self.backend,
+                **self.kwargs,
+            )
             for q in self.quantiles
         }
 
@@ -296,11 +308,16 @@ class QuantileCartoBoostRegressor(ArtifactPersistenceMixin):
 
     def get_params(self, deep: bool = True) -> dict[str, Any]:
         del deep
-        return {"quantiles": self.quantiles, **dict(self.kwargs)}
+        return {
+            "quantiles": self.quantiles,
+            "backend": self.backend,
+            **dict(self.kwargs),
+        }
 
     def set_params(self, **params: Any) -> QuantileCartoBoostRegressor:
         quantiles = params.pop("quantiles", self.quantiles)
-        self.__init__(quantiles=quantiles, **{**self.kwargs, **params})
+        backend = params.pop("backend", self.backend)
+        self.__init__(quantiles=quantiles, backend=backend, **{**self.kwargs, **params})
         return self
 
     @property
@@ -308,6 +325,19 @@ class QuantileCartoBoostRegressor(ArtifactPersistenceMixin):
         return {
             "model": "QuantileCartoBoostRegressor",
             "quantiles": list(self.quantiles),
+            "backend": {
+                "requested": self.backend,
+                "selected": {
+                    str(q): str(
+                        getattr(
+                            getattr(model, "_model", None),
+                            "backend",
+                            getattr(model, "backend", self.backend),
+                        )
+                    )
+                    for q, model in self.models_.items()
+                },
+            },
             "params": dict(self.kwargs),
         }
 
@@ -315,6 +345,7 @@ class QuantileCartoBoostRegressor(ArtifactPersistenceMixin):
         payload = versioned_artifact_payload(
             "QuantileCartoBoostRegressor",
             quantiles=list(self.quantiles),
+            backend=self.backend,
             kwargs=dict(self.kwargs),
             models={
                 str(q): dump_model_artifact(model, purpose="quantile artifacts")
@@ -328,7 +359,9 @@ class QuantileCartoBoostRegressor(ArtifactPersistenceMixin):
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
         require_artifact_payload(payload, "QuantileCartoBoostRegressor")
         obj = cls(
-            quantiles=tuple(float(q) for q in payload["quantiles"]), **dict(payload["kwargs"])
+            quantiles=tuple(float(q) for q in payload["quantiles"]),
+            backend=str(payload.get("backend", Backend.CPU.value)),
+            **dict(payload["kwargs"]),
         )
         obj.models_ = {
             float(level): load_model_artifact(model_payload)
