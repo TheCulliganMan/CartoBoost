@@ -130,6 +130,57 @@ def test_spatial_buffered_cv_removes_nearby_training_rows():
         assert np.min(distances) > 1.1
 
 
+def test_spatial_buffered_cv_backend_matches_cpu(monkeypatch):
+    coordinates = np.column_stack(
+        (
+            np.linspace(0.0, 100.0, 256),
+            np.sin(np.linspace(0.0, 12.0, 256)),
+        )
+    )
+    expected = list(
+        spatial_buffered_cv(
+            coordinates,
+            n_splits=4,
+            buffer_radius=1.0,
+            backend="cpu",
+        )
+    )
+    calls: list[str] = []
+
+    def accelerated_distances(left, right, backend=None):
+        calls.append(str(backend))
+        left_array = np.asarray(left, dtype=float)
+        right_array = np.asarray(right, dtype=float)
+        deltas = left_array[:, None, :] - right_array[None, :, :]
+        return np.sum(deltas * deltas, axis=2).astype(np.float32)
+
+    monkeypatch.setattr(
+        "cartoboost.evaluation.workload_decision",
+        lambda backend, operation, workload_size, minimum_accelerated_size: {
+            "executed": "cuda"
+        },
+    )
+    monkeypatch.setattr(
+        "cartoboost.evaluation.pairwise_squared_distances",
+        accelerated_distances,
+    )
+    actual = list(
+        spatial_buffered_cv(
+            coordinates,
+            n_splits=4,
+            buffer_radius=1.0,
+            backend="cuda",
+        )
+    )
+
+    assert calls == ["cuda"] * 4
+    for (expected_train, expected_test), (actual_train, actual_test) in zip(
+        expected, actual, strict=True
+    ):
+        assert np.array_equal(actual_train, expected_train)
+        assert np.array_equal(actual_test, expected_test)
+
+
 def test_spatial_buffered_cv_supports_coordinate_columns_and_random_state():
     frame = {
         "pickup_x": [0.0, 1.0, 2.0, 10.0, 11.0, 12.0],
