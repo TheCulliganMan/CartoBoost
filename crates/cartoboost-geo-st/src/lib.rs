@@ -9009,13 +9009,13 @@ impl STAEformerForecaster {
         let samples = frame.target.len() - self.config.lookback - frame.horizon + 1;
         self.weights = (0..frame.horizon)
             .into_par_iter()
-            .map(|h| {
+            .map(|h| -> Result<Vec<f64>> {
                 let mut xtx = vec![vec![0.0; feature_len]; feature_len];
                 let mut xty = vec![0.0; feature_len];
                 for sample in 0..samples {
                     let cutoff = sample + self.config.lookback;
                     let features =
-                        self.attention_features(&normalized_target[sample..cutoff], &adjacency);
+                        self.attention_features(&normalized_target[sample..cutoff], &adjacency)?;
                     let actual = &normalized_target[cutoff + h];
                     for node in 0..nodes {
                         let x = &features[node * feature_len..(node + 1) * feature_len];
@@ -9030,9 +9030,9 @@ impl STAEformerForecaster {
                 for (idx, row) in xtx.iter_mut().enumerate() {
                     row[idx] += self.config.ridge.max(1.0e-8);
                 }
-                solve_linear_system(xtx, xty)
+                Ok(solve_linear_system(xtx, xty))
             })
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
         self.intercepts = vec![0.0; frame.horizon];
         self.node_ids = frame.node_ids.clone();
         self.frequency = frame.frequency.clone();
@@ -9059,7 +9059,7 @@ impl STAEformerForecaster {
         for step in 0..horizon {
             let h = step.min(self.weights.len() - 1);
             let start = history.len() - self.config.lookback;
-            let features = self.attention_features(&history[start..], adjacency);
+            let features = self.attention_features(&history[start..], adjacency)?;
             let feature_len = self.weights[h].len();
             let rows = features
                 .chunks(feature_len)
@@ -9138,26 +9138,70 @@ impl STAEformerForecaster {
         3 + self.config.attention_heads * 2
     }
 
-    fn attention_features(&self, window: &[Vec<f64>], adjacency: &CsrAdjacency) -> Vec<f64> {
+    fn attention_features(
+        &self,
+        window: &[Vec<f64>],
+        adjacency: &CsrAdjacency,
+    ) -> Result<Vec<f64>> {
         let nodes = window[0].len();
         let feature_len = self.feature_len();
         let mut out = vec![0.0; nodes * feature_len];
         let last = window.last().expect("non-empty lookback window");
-        let mut neighbor_last = vec![0.0; nodes];
-        adjacency.matvec(last, &mut neighbor_last);
+        let channels = window.len();
+        let backend = self.neural_backend_selection();
+        let accelerated = backend.selected != "cpu"
+            && nodes.saturating_mul(channels) >= GEO_ST_CSR_DISPATCH_MIN_OPS;
+        let neighbor_window = if accelerated {
+            let values = (0..nodes)
+                .flat_map(|node| window.iter().map(move |row| row[node] as f32))
+                .collect::<Vec<_>>();
+            let indptr = adjacency
+                .indptr
+                .iter()
+                .map(|value| *value as u32)
+                .collect::<Vec<_>>();
+            let indices = adjacency
+                .indices
+                .iter()
+                .map(|value| *value as u32)
+                .collect::<Vec<_>>();
+            let weights = adjacency
+                .data
+                .iter()
+                .map(|value| *value as f32)
+                .collect::<Vec<_>>();
+            let smoothed =
+                backend_csr_diffusion_f32(&backend, &indptr, &indices, &weights, channels, &values)
+                    .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+            (0..channels)
+                .map(|channel| {
+                    (0..nodes)
+                        .map(|node| f64::from(smoothed[node * channels + channel]))
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+        } else {
+            window
+                .iter()
+                .map(|row| {
+                    let mut smoothed = vec![0.0; nodes];
+                    adjacency.matvec(row, &mut smoothed);
+                    smoothed
+                })
+                .collect::<Vec<_>>()
+        };
+        let neighbor_last = neighbor_window
+            .last()
+            .expect("non-empty neighbor lookback window");
         for node in 0..nodes {
             let offset = node * feature_len;
             out[offset] = last[node];
             out[offset + 1] = neighbor_last[node];
             out[offset + 2] = 1.0;
             let series = window.iter().map(|row| row[node]).collect::<Vec<_>>();
-            let neighbor_series = window
+            let neighbor_series = neighbor_window
                 .iter()
-                .map(|row| {
-                    let mut smoothed = vec![0.0; nodes];
-                    adjacency.matvec(row, &mut smoothed);
-                    smoothed[node]
-                })
+                .map(|row| row[node])
                 .collect::<Vec<_>>();
             for head in 0..self.config.attention_heads {
                 let temporal = attention_pool(
@@ -9174,7 +9218,7 @@ impl STAEformerForecaster {
                 out[offset + 3 + head * 2 + 1] = spatial;
             }
         }
-        out
+        Ok(out)
     }
 
     fn neural_backend_selection(&self) -> BackendSelection {
@@ -10658,6 +10702,62 @@ mod tests {
                 assert!(
                     (actual - expected).abs() < 2.0e-4,
                     "{backend_name} Graph WaveNet mismatch: {actual} vs {expected}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn staeformer_spatial_attention_matches_cpu_on_available_backends() {
+        let nodes = 512;
+        let adjacency = CsrAdjacency::new(
+            (0..=nodes).collect(),
+            (0..nodes).map(|node| (node + 3) % nodes).collect(),
+            vec![1.0; nodes],
+            nodes,
+        )
+        .unwrap();
+        let window = (0..8)
+            .map(|time| {
+                (0..nodes)
+                    .map(|node| ((time * nodes + node) as f64 * 0.006).cos())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let operations = [BackendOperation::Affine, BackendOperation::CsrDiffusion];
+        let build = |backend| {
+            let mut model = STAEformerForecaster::new(STAEformerConfig {
+                lookback: 8,
+                attention_heads: 4,
+                hidden_size: 8,
+                epochs: 1,
+                backend,
+                ..STAEformerConfig::default()
+            })
+            .unwrap();
+            model.temporal_queries = deterministic_weight_matrix(4, 8, 31);
+            model.temporal_keys = deterministic_weight_matrix(4, 8, 43);
+            model.spatial_weights = vec![0.5, 0.75, 1.0, 1.25];
+            model
+        };
+        let cpu = select_compute_backend_for_operations(Some("cpu"), &operations).unwrap();
+        let expected = build(cpu).attention_features(&window, &adjacency).unwrap();
+        for backend_name in available_compute_backends() {
+            if backend_name == "cpu" {
+                continue;
+            }
+            let Ok(backend) =
+                select_compute_backend_for_operations(Some(&backend_name), &operations)
+            else {
+                continue;
+            };
+            let actual = build(backend)
+                .attention_features(&window, &adjacency)
+                .unwrap_or_else(|error| panic!("{backend_name} STAEformer CSR: {error}"));
+            for (actual, expected) in actual.iter().zip(&expected) {
+                assert!(
+                    (actual - expected).abs() < 2.0e-4,
+                    "{backend_name} STAEformer mismatch: {actual} vs {expected}"
                 );
             }
         }

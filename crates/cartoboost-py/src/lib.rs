@@ -3902,7 +3902,7 @@ impl NativeSTAEformerForecaster {
                 ridge,
                 backend: graph_st_select_compute_backend_for_operations(
                     backend,
-                    &[BackendOperation::Affine],
+                    &[BackendOperation::Affine, BackendOperation::CsrDiffusion],
                 )
                 .map_err(to_py_geo_st_error)?,
             })
