@@ -303,7 +303,7 @@ class MarketStructureForecaster(ArtifactPersistenceMixin):
             )
         obj = cls.__new__(cls)
         obj._native_model = native_class.load(str(path))
-        obj._params = {}
+        obj._params = {"backend": obj.selected_backend_}
         obj.is_fitted_ = True
         return obj
 
@@ -320,13 +320,18 @@ class MarketStructureForecaster(ArtifactPersistenceMixin):
             )
         obj = cls.__new__(cls)
         obj._native_model = native_class.from_json(value)
-        obj._params = {}
+        obj._params = {"backend": obj.selected_backend_}
         obj.is_fitted_ = True
         return obj
 
     def get_params(self, deep: bool = True) -> dict[str, Any]:
         del deep
         return dict(self._params)
+
+    @property
+    def selected_backend_(self) -> str:
+        backend = getattr(self._native_model, "backend", None)
+        return str(backend()) if callable(backend) else str(self._params.get("backend", "cpu"))
 
     def _check_is_fitted(self) -> None:
         if not self.is_fitted_:
@@ -501,6 +506,10 @@ class DCRNNForecaster(ArtifactPersistenceMixin):
     def _clone_unfit(self) -> DCRNNForecaster:
         return DCRNNForecaster(**self._params)
 
+    @property
+    def selected_backend_(self) -> str:
+        return self._backend_selected()
+
     def _backend_selected(self) -> str:
         backend = getattr(self._native_model, "backend", None)
         if backend is None:
@@ -634,6 +643,10 @@ class STAEformerForecaster(ArtifactPersistenceMixin):
         if not self.is_fitted_:
             raise RuntimeError("STAEformerForecaster must be fitted before predict")
 
+    @property
+    def selected_backend_(self) -> str:
+        return self._backend_selected()
+
     def _backend_selected(self) -> str:
         backend = getattr(self._native_model, "backend", None)
         if backend is None:
@@ -741,6 +754,10 @@ class GraphWaveNetForecaster(ArtifactPersistenceMixin):
     def _check_is_fitted(self) -> None:
         if not self.is_fitted_:
             raise RuntimeError("GraphWaveNetForecaster must be fitted before predict")
+
+    @property
+    def selected_backend_(self) -> str:
+        return self._backend_selected()
 
     def _backend_selected(self) -> str:
         backend = getattr(self._native_model, "backend", None)
@@ -872,6 +889,10 @@ class _PaperGraphTransformerForecaster(ArtifactPersistenceMixin):
     def _check_is_fitted(self) -> None:
         if not self.is_fitted_:
             raise RuntimeError(f"{type(self).__name__} must be fitted before predict")
+
+    @property
+    def selected_backend_(self) -> str:
+        return self._backend_selected()
 
     def _backend_selected(self) -> str:
         return str(self._native_model.backend())

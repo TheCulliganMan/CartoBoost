@@ -3640,6 +3640,9 @@ impl NativeMarketStructureForecaster {
         py.detach(|| self.model.fit(&frame.frame))
             .map_err(to_py_geo_st_error)
     }
+    fn backend(&self) -> &str {
+        self.model.backend()
+    }
     fn predict_json(
         &self,
         py: Python<'_>,

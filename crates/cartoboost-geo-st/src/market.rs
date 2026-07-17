@@ -457,8 +457,13 @@ struct ExpertShiftCalibration {
 }
 
 impl MarketStructureForecaster {
-    pub fn new(config: MarketStructureConfig) -> Result<Self> {
+    pub fn new(mut config: MarketStructureConfig) -> Result<Self> {
         config.validate()?;
+        config.backend = select_backend_for(Some(&config.backend), BackendOperation::Dense)
+            .map_err(|error| {
+                GeoStError::InvalidFrame(format!("invalid market accelerator backend: {error}"))
+            })?
+            .selected;
         Ok(Self {
             config,
             lane_ids: Vec::new(),
@@ -493,6 +498,10 @@ impl MarketStructureForecaster {
             expert_shift_calibration: None,
             expert_labels: Vec::new(),
         })
+    }
+
+    pub fn backend(&self) -> &str {
+        &self.config.backend
     }
 
     pub fn fit(&mut self, frame: &MarketPanelFrame) -> Result<()> {
@@ -2531,6 +2540,18 @@ mod tests {
             ..MarketStructureConfig::default()
         })
         .is_err());
+    }
+
+    #[test]
+    fn auto_backend_is_resolved_before_artifact_serialization() {
+        let model = MarketStructureForecaster::new(MarketStructureConfig {
+            backend: "auto".to_string(),
+            ..MarketStructureConfig::default()
+        })
+        .unwrap();
+        assert_ne!(model.backend(), "auto");
+        let payload = serde_json::to_value(&model).unwrap();
+        assert_eq!(payload["config"]["backend"], model.backend());
     }
 
     #[test]
