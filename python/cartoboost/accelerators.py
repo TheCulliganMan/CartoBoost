@@ -49,6 +49,23 @@ def capabilities() -> dict[str, Any]:
         }
     return dict(json.loads(function()))
 
+
+def dispatch_report(
+    backend: str | None = None,
+    *,
+    length: int = 4096,
+) -> dict[str, Any]:
+    """Run the backend's vector-dispatch probe and return its execution report."""
+
+    if length <= 0:
+        raise ValueError("length must be positive")
+    function = getattr(_native, "accelerator_dispatch_report_value", None)
+    if function is None:
+        if backend not in {None, "cpu"}:
+            raise RuntimeError("native accelerator support is unavailable")
+        raise RuntimeError("vector dispatch reporting requires the native extension")
+    return dict(json.loads(function(backend, int(length))))
+
 def affine_scores(
     features: ArrayLike,
     means: ArrayLike,
@@ -610,6 +627,7 @@ __all__ = [
     "csr_row_softmax",
     "csr_row_softmax_backward",
     "dense_layer",
+    "dispatch_report",
     "graph_smooth",
     "layer_norm",
     "pair_sigmoid_scores",

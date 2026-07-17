@@ -10,12 +10,21 @@ from cartoboost.accelerators import (
     csr_row_softmax,
     csr_row_softmax_backward,
     dense_layer,
+    dispatch_report,
     graph_smooth,
     layer_norm,
     pair_sigmoid_scores,
     pairwise_squared_distances,
     workload_decision,
 )
+
+
+def test_vector_dispatch_report_runs_on_every_available_backend() -> None:
+    for backend in available_backends("vector_dispatch"):
+        report = dispatch_report(backend, length=64)
+        assert report["selected"] == backend
+        assert report["accelerated"] is (backend != "cpu")
+        assert abs(report["checksum"] - report["expected_checksum"]) < 1.0e-4
 
 
 def test_workload_decision_reports_actual_threshold_execution() -> None:

@@ -12853,6 +12853,13 @@ fn accelerator_capabilities_value() -> PyResult<String> {
 }
 
 #[pyfunction]
+#[pyo3(signature = (backend=None, len=4096))]
+fn accelerator_dispatch_report_value(backend: Option<&str>, len: usize) -> PyResult<String> {
+    let report = neural_backend_dispatch_report(backend, len).map_err(to_py_neural_error)?;
+    serde_json::to_string(&report).map_err(to_py_json_error)
+}
+
+#[pyfunction]
 #[pyo3(signature = (features, weights, biases, backend=None))]
 fn accelerator_dense_layer_value(
     py: Python<'_>,
@@ -13955,6 +13962,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(deep_service_residual_predict_value, m)?)?;
     m.add_function(wrap_pyfunction!(deep_available_backends_value, m)?)?;
     m.add_function(wrap_pyfunction!(accelerator_capabilities_value, m)?)?;
+    m.add_function(wrap_pyfunction!(accelerator_dispatch_report_value, m)?)?;
     m.add_function(wrap_pyfunction!(accelerator_dense_layer_value, m)?)?;
     m.add_function(wrap_pyfunction!(accelerator_affine_scores_value, m)?)?;
     m.add_function(wrap_pyfunction!(accelerator_csr_diffusion_value, m)?)?;
