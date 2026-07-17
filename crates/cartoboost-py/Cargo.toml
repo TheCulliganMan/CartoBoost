@@ -28,6 +28,7 @@ serde_json.workspace = true
 # Optional accelerator backends are exposed by their backend names and are
 # enabled only when explicitly requested at build time.
 cuda = ["cartoboost-core/cuda", "cartoboost-geo-core/cuda", "cartoboost-geo-causal/cuda", "cartoboost-geo-st/cuda", "cartoboost-geostats/cuda", "cartoboost-neural/cuda", "cartoboost-prob/cuda", "cartoboost-spatial-econ/cuda"]
+cuda-oxide = ["cartoboost-core/cuda-oxide", "cartoboost-geo-core/cuda-oxide", "cartoboost-geo-causal/cuda-oxide", "cartoboost-geo-st/cuda-oxide", "cartoboost-geostats/cuda-oxide", "cartoboost-neural/cuda-oxide", "cartoboost-prob/cuda-oxide", "cartoboost-spatial-econ/cuda-oxide"]
 rocm = ["cartoboost-core/rocm", "cartoboost-geo-core/rocm", "cartoboost-geo-causal/rocm", "cartoboost-geo-st/rocm", "cartoboost-geostats/rocm", "cartoboost-neural/rocm", "cartoboost-prob/rocm", "cartoboost-spatial-econ/rocm"]
 hip = ["cartoboost-core/hip", "cartoboost-geo-core/hip", "cartoboost-geo-causal/hip", "cartoboost-geo-st/hip", "cartoboost-geostats/hip", "cartoboost-neural/hip", "cartoboost-prob/hip", "cartoboost-spatial-econ/hip"]
 metal = ["cartoboost-core/metal", "cartoboost-geo-core/metal", "cartoboost-geo-causal/metal", "cartoboost-geo-st/metal", "cartoboost-geostats/metal", "cartoboost-neural/metal", "cartoboost-prob/metal", "cartoboost-spatial-econ/metal"]

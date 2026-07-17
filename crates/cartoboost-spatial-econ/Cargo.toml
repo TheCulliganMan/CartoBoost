@@ -16,6 +16,7 @@ rayon = "1.11"
 [features]
 default = []
 cuda = ["cartoboost-geo-core/cuda", "cartoboost-neural/cuda"]
+cuda-oxide = ["cartoboost-geo-core/cuda-oxide", "cartoboost-neural/cuda-oxide"]
 rocm = ["cartoboost-geo-core/rocm", "cartoboost-neural/rocm"]
 hip = ["cartoboost-geo-core/hip", "cartoboost-neural/hip"]
 metal = ["cartoboost-geo-core/metal", "cartoboost-neural/metal"]

@@ -16,6 +16,7 @@ cartoboost-accelerator = { path = "../cartoboost-accelerator" }
 [features]
 default = []
 cuda = ["cartoboost-accelerator/cuda"]
+cuda-oxide = ["cartoboost-accelerator/cuda-oxide"]
 rocm = ["cartoboost-accelerator/rocm"]
 hip = ["rocm", "cartoboost-accelerator/hip"]
 metal = ["cartoboost-accelerator/metal"]
