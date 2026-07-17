@@ -632,7 +632,8 @@ impl GeoTemporalDiffusionScenarioModel {
             nodes,
             &self.backend,
         )?;
-        let spatial_correlation = scenario_spatial_correlation(&scenario_mean, edges);
+        let (spatial_correlation, spatial_correlation_backend) =
+            scenario_spatial_correlation_with_backend(&scenario_mean, edges, &self.backend)?;
         let mut point_forecast_comparison = BTreeMap::new();
         point_forecast_comparison.insert(
             "mean_absolute_delta".to_string(),
@@ -659,6 +660,10 @@ impl GeoTemporalDiffusionScenarioModel {
         metadata.insert(
             "scenario_variance_backend".to_string(),
             scenario_variance_backend,
+        );
+        metadata.insert(
+            "spatial_correlation_backend".to_string(),
+            spatial_correlation_backend,
         );
         Ok(DiffusionScenarioPrediction {
             scenarios,
@@ -726,7 +731,8 @@ async fn finish_diffusion_prediction_webgpu(
         scenario_panel_mean_webgpu(&scenarios, horizon, nodes).await?;
     let (scenario_variance, scenario_variance_backend) =
         scenario_panel_variance_webgpu(&scenarios, &scenario_mean, horizon, nodes).await?;
-    let spatial_correlation = scenario_spatial_correlation(&scenario_mean, edges);
+    let (spatial_correlation, spatial_correlation_backend) =
+        scenario_spatial_correlation_webgpu(&scenario_mean, edges).await?;
     let mut point_forecast_comparison = BTreeMap::new();
     point_forecast_comparison.insert(
         "mean_absolute_delta".to_string(),
@@ -754,6 +760,10 @@ async fn finish_diffusion_prediction_webgpu(
     metadata.insert(
         "scenario_variance_backend".to_string(),
         scenario_variance_backend,
+    );
+    metadata.insert(
+        "spatial_correlation_backend".to_string(),
+        spatial_correlation_backend,
     );
     Ok(DiffusionScenarioPrediction {
         scenarios,
@@ -1714,6 +1724,112 @@ fn scenario_spatial_correlation(panel: &[Vec<f64>], edges: &[DiffusionEdge]) -> 
     }
 }
 
+type SpatialCorrelationCsrInputs = (Vec<u32>, Vec<u32>, Vec<f32>, Vec<f32>, f64);
+
+fn spatial_correlation_csr_inputs(
+    panel: &[Vec<f64>],
+    edges: &[DiffusionEdge],
+) -> Result<SpatialCorrelationCsrInputs> {
+    let nodes = panel[0].len();
+    let mut rows = vec![Vec::<(u32, f32)>::new(); nodes];
+    for edge in edges {
+        rows[edge.target].push((
+            u32::try_from(edge.source)
+                .map_err(|_| CartoBoostError::InvalidInput("node index exceeds u32".into()))?,
+            edge.weight as f32,
+        ));
+    }
+    let mut indptr = Vec::with_capacity(nodes + 1);
+    let mut indices = Vec::with_capacity(edges.len());
+    let mut weights = Vec::with_capacity(edges.len());
+    indptr.push(0_u32);
+    for row in rows {
+        for (index, weight) in row {
+            indices.push(index);
+            weights.push(weight);
+        }
+        indptr.push(u32::try_from(indices.len()).map_err(|_| {
+            CartoBoostError::InvalidInput("spatial correlation edge count exceeds u32".into())
+        })?);
+    }
+    let mut denominator = 0.0;
+    let edge_weight_sum = edges.iter().map(|edge| edge.weight.abs()).sum::<f64>();
+    let centered = panel
+        .iter()
+        .flat_map(|row| {
+            let mean = row.iter().sum::<f64>() / row.len() as f64;
+            let values = row.iter().map(|value| value - mean).collect::<Vec<_>>();
+            let variance = values.iter().map(|value| value * value).sum::<f64>();
+            if variance > 1.0e-12 {
+                denominator += edge_weight_sum * variance;
+            }
+            values.into_iter().map(|value| value as f32)
+        })
+        .collect::<Vec<_>>();
+    Ok((indptr, indices, weights, centered, denominator))
+}
+
+fn scenario_spatial_correlation_with_backend(
+    panel: &[Vec<f64>],
+    edges: &[DiffusionEdge],
+    backend: &BackendSelection,
+) -> Result<(f64, String)> {
+    let workload = panel.len().saturating_mul(edges.len());
+    if backend.selected == "cpu" || workload < PROB_SPARSE_DISPATCH_MIN_OPS {
+        return Ok((
+            scenario_spatial_correlation(panel, edges),
+            "cpu".to_string(),
+        ));
+    }
+    let (indptr, indices, weights, centered, denominator) =
+        spatial_correlation_csr_inputs(panel, edges)?;
+    let propagated = backend_csr_diffusion_f32(backend, &indptr, &indices, &weights, 1, &centered)
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    let numerator = centered
+        .iter()
+        .zip(propagated)
+        .map(|(target, neighbors)| f64::from(*target) * f64::from(neighbors))
+        .sum::<f64>();
+    let correlation = if denominator <= 1.0e-12 {
+        0.0
+    } else {
+        (numerator / denominator).clamp(-1.0, 1.0)
+    };
+    Ok((correlation, backend.selected.clone()))
+}
+
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+async fn scenario_spatial_correlation_webgpu(
+    panel: &[Vec<f64>],
+    edges: &[DiffusionEdge],
+) -> Result<(f64, String)> {
+    let workload = panel.len().saturating_mul(edges.len());
+    if workload < PROB_SPARSE_DISPATCH_MIN_OPS {
+        return Ok((
+            scenario_spatial_correlation(panel, edges),
+            "cpu".to_string(),
+        ));
+    }
+    let (indptr, indices, weights, centered, denominator) =
+        spatial_correlation_csr_inputs(panel, edges)?;
+    let propagated = cartoboost_neural::webgpu_csr_diffusion_f32_async(
+        &indptr, &indices, &weights, 1, &centered,
+    )
+    .await
+    .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    let numerator = centered
+        .iter()
+        .zip(propagated)
+        .map(|(target, neighbors)| f64::from(*target) * f64::from(neighbors))
+        .sum::<f64>();
+    let correlation = if denominator <= 1.0e-12 {
+        0.0
+    } else {
+        (numerator / denominator).clamp(-1.0, 1.0)
+    };
+    Ok((correlation, "webgpu".to_string()))
+}
+
 fn normal_quantile_proxy(q: f64) -> f64 {
     // Smooth symmetric approximation sufficient for deterministic quantile surfaces.
     ((q / (1.0 - q)).ln() * 0.5513).clamp(-4.0, 4.0)
@@ -2125,6 +2241,51 @@ mod tests {
                     .get("scenario_variance_backend")
                     .map(String::as_str),
                 Some(backend.as_str())
+            );
+        }
+    }
+
+    #[test]
+    fn large_spatial_correlation_dispatches_consistently_across_backends() {
+        let nodes = 2_048;
+        let panel = (0..8)
+            .map(|time| {
+                (0..nodes)
+                    .map(|node| {
+                        (node as f64 * 0.013 + time as f64 * 0.17).sin()
+                            + (node as f64 * 0.007).cos()
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let edges = (0..nodes)
+            .map(|source| DiffusionEdge {
+                source,
+                target: (source + 1) % nodes,
+                weight: 0.25 + (source % 7) as f64 * 0.05,
+            })
+            .collect::<Vec<_>>();
+        let cpu = select_csr_backend(Some("cpu")).unwrap();
+        let expected = scenario_spatial_correlation(&panel, &edges);
+        let (actual_cpu, cpu_backend) =
+            scenario_spatial_correlation_with_backend(&panel, &edges, &cpu).unwrap();
+        assert_eq!(cpu_backend, "cpu");
+        assert!((actual_cpu - expected).abs() < 1.0e-12);
+
+        for backend_name in cartoboost_neural::available_backends() {
+            if backend_name == "cpu" {
+                continue;
+            }
+            let backend = select_csr_backend(Some(&backend_name))
+                .unwrap_or_else(|error| panic!("{backend_name} selection failed: {error}"));
+            let (actual, executed) = scenario_spatial_correlation_with_backend(
+                &panel, &edges, &backend,
+            )
+            .unwrap_or_else(|error| panic!("{backend_name} spatial correlation failed: {error}"));
+            assert_eq!(executed, backend_name);
+            assert!(
+                (actual - expected).abs() <= 2.0e-5,
+                "{backend_name}: expected {expected}, got {actual}"
             );
         }
     }
