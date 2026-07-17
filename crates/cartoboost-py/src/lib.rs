@@ -29,6 +29,7 @@ use cartoboost_core::forecasting::{
     BacktestResult as CoreBacktestResult, CalendarFeature,
     CandidateSelectionPolicy as CoreCandidateSelectionPolicy,
     CandidateValidationCutoffSchedule as CoreCandidateValidationCutoffSchedule,
+    CartoBoostDirectForecaster as CoreCartoBoostDirectForecaster,
     CartoBoostLagForecaster as CoreCartoBoostLagForecaster, ClassicalExpertValidationObjective,
     CrostonForecaster as CoreCrostonForecaster, ETSForecaster as CoreETSForecaster, ForecastActual,
     ForecastFold as CoreForecastFold, ForecastFrame as CoreForecastFrame, ForecastFrameMetadata,
@@ -48,8 +49,9 @@ use cartoboost_core::forecasting::{
     PiecewiseLinearSeasonality, PiecewiseLinearTrendUncertaintyPolicy,
     QuantileRegressorSet as CoreQuantileRegressorSet,
     QuantileRegressorSetConfig as CoreQuantileRegressorSetConfig, Reconciler as CoreReconciler,
-    ReconciliationMethod as CoreReconciliationMethod, ReferencePathConfig, ReferenceSignal,
-    RollingOriginBacktester as CoreRollingOriginBacktester,
+    ReconciliationMethod as CoreReconciliationMethod,
+    RectifiedRecursiveForecaster as CoreRectifiedRecursiveForecaster, ReferencePathConfig,
+    ReferenceSignal, RollingOriginBacktester as CoreRollingOriginBacktester,
     RollingOriginSplitter as CoreRollingOriginSplitter, SbaForecaster as CoreSbaForecaster,
     SeasonalNaiveForecaster as CoreSeasonalNaiveForecaster, SequenceCandidate,
     SequenceCandidateEnsemble, SequenceCandidatePrediction, SequenceFrame, SequenceGroupPrediction,
@@ -4718,6 +4720,172 @@ struct NativeCartoBoostLagForecaster {
     model: CoreCartoBoostLagForecaster,
 }
 
+#[pyclass(name = "CartoBoostDirectForecaster")]
+#[derive(Clone, Debug)]
+struct NativeCartoBoostDirectForecaster {
+    model: CoreCartoBoostDirectForecaster,
+    fit_horizon: usize,
+}
+
+#[pymethods]
+impl NativeCartoBoostDirectForecaster {
+    #[new]
+    #[pyo3(signature = (fit_horizon=1, lags=None, rolling_windows=None, n_estimators=None, learning_rate=None, max_depth=None, min_samples_leaf=None, backend="cpu"))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        fit_horizon: usize,
+        lags: Option<Vec<usize>>,
+        rolling_windows: Option<Vec<usize>>,
+        n_estimators: Option<usize>,
+        learning_rate: Option<f64>,
+        max_depth: Option<usize>,
+        min_samples_leaf: Option<usize>,
+        backend: &str,
+    ) -> PyResult<Self> {
+        if fit_horizon == 0 {
+            return Err(PyValueError::new_err("fit_horizon must be positive"));
+        }
+        let mut lag_config = LagFeatureConfig::default();
+        if let Some(values) = lags {
+            lag_config.lags = values;
+        }
+        if let Some(values) = rolling_windows {
+            lag_config.rolling_mean_windows = values;
+        }
+        let mut booster_config = BoosterConfig::default();
+        if let Some(value) = n_estimators {
+            booster_config.n_estimators = value;
+        }
+        if let Some(value) = learning_rate {
+            booster_config.learning_rate = value;
+        }
+        if let Some(value) = max_depth {
+            booster_config.max_depth = value;
+        }
+        if let Some(value) = min_samples_leaf {
+            booster_config.min_samples_leaf = value;
+        }
+        Ok(Self {
+            model: CoreCartoBoostDirectForecaster::new_with_backend(
+                lag_config,
+                booster_config,
+                Some(backend),
+            )
+            .map_err(to_py_value_error)?,
+            fit_horizon,
+        })
+    }
+
+    fn fit(&mut self, py: Python<'_>, frame: &NativeForecastFrame) -> PyResult<()> {
+        py.detach(|| self.model.fit_horizon(&frame.frame, self.fit_horizon))
+            .map_err(to_py_value_error)
+    }
+
+    fn refit_horizon(
+        &mut self,
+        py: Python<'_>,
+        frame: &NativeForecastFrame,
+        horizon: usize,
+    ) -> PyResult<()> {
+        py.detach(|| self.model.fit_horizon(&frame.frame, horizon))
+            .map_err(to_py_value_error)?;
+        self.fit_horizon = horizon;
+        Ok(())
+    }
+
+    fn predict(&self, py: Python<'_>, horizon: usize) -> PyResult<NativeForecastResult> {
+        predict_forecaster_py(py, &self.model, horizon)
+    }
+
+    fn metadata_json(&self) -> PyResult<String> {
+        serde_json::to_string(&self.model.metadata())
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))
+    }
+}
+
+#[pyclass(name = "RectifiedRecursiveForecaster")]
+#[derive(Clone, Debug)]
+struct NativeRectifiedRecursiveForecaster {
+    model: CoreRectifiedRecursiveForecaster,
+    fit_horizon: usize,
+}
+
+#[pymethods]
+impl NativeRectifiedRecursiveForecaster {
+    #[new]
+    #[pyo3(signature = (fit_horizon=1, lags=None, rolling_windows=None, n_estimators=None, learning_rate=None, max_depth=None, min_samples_leaf=None, backend="cpu"))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        fit_horizon: usize,
+        lags: Option<Vec<usize>>,
+        rolling_windows: Option<Vec<usize>>,
+        n_estimators: Option<usize>,
+        learning_rate: Option<f64>,
+        max_depth: Option<usize>,
+        min_samples_leaf: Option<usize>,
+        backend: &str,
+    ) -> PyResult<Self> {
+        if fit_horizon == 0 {
+            return Err(PyValueError::new_err("fit_horizon must be positive"));
+        }
+        let mut lag_config = LagFeatureConfig::default();
+        if let Some(values) = lags {
+            lag_config.lags = values;
+        }
+        if let Some(values) = rolling_windows {
+            lag_config.rolling_mean_windows = values;
+        }
+        let mut booster_config = BoosterConfig::default();
+        if let Some(value) = n_estimators {
+            booster_config.n_estimators = value;
+        }
+        if let Some(value) = learning_rate {
+            booster_config.learning_rate = value;
+        }
+        if let Some(value) = max_depth {
+            booster_config.max_depth = value;
+        }
+        if let Some(value) = min_samples_leaf {
+            booster_config.min_samples_leaf = value;
+        }
+        Ok(Self {
+            model: CoreRectifiedRecursiveForecaster::new_with_backend(
+                lag_config,
+                booster_config,
+                Some(backend),
+            )
+            .map_err(to_py_value_error)?,
+            fit_horizon,
+        })
+    }
+
+    fn fit(&mut self, py: Python<'_>, frame: &NativeForecastFrame) -> PyResult<()> {
+        py.detach(|| self.model.fit_horizon(&frame.frame, self.fit_horizon))
+            .map_err(to_py_value_error)
+    }
+
+    fn refit_horizon(
+        &mut self,
+        py: Python<'_>,
+        frame: &NativeForecastFrame,
+        horizon: usize,
+    ) -> PyResult<()> {
+        py.detach(|| self.model.fit_horizon(&frame.frame, horizon))
+            .map_err(to_py_value_error)?;
+        self.fit_horizon = horizon;
+        Ok(())
+    }
+
+    fn predict(&self, py: Python<'_>, horizon: usize) -> PyResult<NativeForecastResult> {
+        predict_forecaster_py(py, &self.model, horizon)
+    }
+
+    fn metadata_json(&self) -> PyResult<String> {
+        serde_json::to_string(&self.model.metadata())
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))
+    }
+}
+
 #[pyclass(name = "AutoForecastModel", unsendable)]
 #[derive(Clone)]
 struct NativeAutoForecastModel {
@@ -5114,6 +5282,12 @@ fn boxed_forecaster_from_py(py: Python<'_>, model: &Py<PyAny>) -> PyResult<Box<d
         return Ok(Box::new(model.model.clone()));
     }
     if let Ok(model) = model.extract::<PyRef<'_, NativeCartoBoostLagForecaster>>() {
+        return Ok(Box::new(model.model.clone()));
+    }
+    if let Ok(model) = model.extract::<PyRef<'_, NativeCartoBoostDirectForecaster>>() {
+        return Ok(Box::new(model.model.clone()));
+    }
+    if let Ok(model) = model.extract::<PyRef<'_, NativeRectifiedRecursiveForecaster>>() {
         return Ok(Box::new(model.model.clone()));
     }
     Err(PyValueError::new_err(
@@ -13489,6 +13663,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<NativeLaneNeuralPanelForecaster>()?;
     m.add_class::<NativeAutoForecastModel>()?;
     m.add_class::<NativeCartoBoostLagForecaster>()?;
+    m.add_class::<NativeCartoBoostDirectForecaster>()?;
+    m.add_class::<NativeRectifiedRecursiveForecaster>()?;
     m.add_class::<NativeWeightedEnsembleForecaster>()?;
     m.add_class::<NativeNeuralEmbeddingFeatures>()?;
     m.add_class::<NativeGraphSageEncoder>()?;

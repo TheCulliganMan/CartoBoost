@@ -17,6 +17,14 @@ _EXPORTS: dict[str, tuple[str, str]] = {
         "cartoboost.forecasting.global_models",
         "CartoBoostLagForecaster",
     ),
+    "CartoBoostDirectForecaster": (
+        "cartoboost.forecasting.direct",
+        "CartoBoostDirectForecaster",
+    ),
+    "RectifiedRecursiveForecaster": (
+        "cartoboost.forecasting.direct",
+        "RectifiedRecursiveForecaster",
+    ),
     "ForecastFrame": ("cartoboost.forecasting.schema", "ForecastFrame"),
     "ForecastResult": ("cartoboost.forecasting.schema", "ForecastResult"),
     "ForecastMetricSet": ("cartoboost.forecasting.metrics", "ForecastMetricSet"),
