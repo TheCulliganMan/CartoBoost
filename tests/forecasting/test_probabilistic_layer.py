@@ -367,6 +367,23 @@ def test_interval_metrics_accept_every_affine_backend():
         ) == pytest.approx(2.5)
 
 
+def test_pit_bins_accepts_every_affine_backend():
+    from cartoboost.accelerators import available_backends
+
+    actual = [1.0, 2.0]
+    quantiles = [0.1, 0.5, 0.9]
+    predictions = [[0.0, 1.0, 2.0], [1.0, 2.0, 3.0]]
+    expected = pit_bins(actual, quantiles, predictions, bins=5, backend="cpu")
+    for backend in available_backends("affine"):
+        assert pit_bins(
+            actual,
+            quantiles,
+            predictions,
+            bins=5,
+            backend=backend,
+        ) == expected
+
+
 def test_distributional_metric_helpers_delegate_to_native_when_available(monkeypatch):
     package = ModuleType("cartoboost")
     package.__path__ = []

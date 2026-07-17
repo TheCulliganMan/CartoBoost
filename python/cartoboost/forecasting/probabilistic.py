@@ -1014,7 +1014,14 @@ def weighted_interval_score(
     return float(np.mean(total / weight_sum))
 
 
-def pit_bins(y_true: Any, quantiles: Any, predictions: Any, *, bins: int = 10) -> dict[str, Any]:
+def pit_bins(
+    y_true: Any,
+    quantiles: Any,
+    predictions: Any,
+    *,
+    bins: int = 10,
+    backend: Backend | str = Backend.CPU,
+) -> dict[str, Any]:
     if int(bins) <= 0:
         raise ValueError("bins must be positive")
     truth, levels, matrix = _quantile_matrix(y_true, quantiles, predictions)
@@ -1024,6 +1031,7 @@ def pit_bins(y_true: Any, quantiles: Any, predictions: Any, *, bins: int = 10) -
         levels.tolist(),
         matrix.tolist(),
         int(bins),
+        str(backend),
     )
     if native is not None:
         return json.loads(str(native))

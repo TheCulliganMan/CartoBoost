@@ -207,7 +207,8 @@ use cartoboost_prob::{
     interval_coverage_with_backend as core_prob_interval_coverage,
     mean_interval_width_with_backend as core_prob_mean_interval_width,
     nearest_calibration_residual_quantiles_with_backend as core_prob_nearest_calibration_residual_quantiles,
-    pinball_loss_with_backend as core_prob_pinball_loss, pit_bins as core_prob_pit_bins,
+    pinball_loss_with_backend as core_prob_pinball_loss,
+    pit_bins_with_backend as core_prob_pit_bins,
     rolling_origin_conformal_residual_quantiles as core_prob_rolling_origin_conformal_residual_quantiles,
     split_conformal_residual_quantile as core_prob_split_conformal_residual_quantile,
     weighted_conformal_residual_quantile as core_prob_weighted_conformal_residual_quantile,
@@ -10626,14 +10627,21 @@ fn prob_weighted_interval_score_value(
 }
 
 #[pyfunction]
+#[pyo3(signature = (actual, quantiles, predictions, bins, backend=None))]
 fn prob_pit_bins_value(
+    py: Python<'_>,
     actual: Vec<f64>,
     quantiles: Vec<f64>,
     predictions: Vec<Vec<f64>>,
     bins: usize,
+    backend: Option<&str>,
 ) -> PyResult<String> {
-    let bins =
-        core_prob_pit_bins(&actual, &quantiles, &predictions, bins).map_err(to_py_value_error)?;
+    let backend = backend.map(str::to_owned);
+    let bins = py
+        .detach(move || {
+            core_prob_pit_bins(&actual, &quantiles, &predictions, bins, backend.as_deref())
+        })
+        .map_err(to_py_value_error)?;
     serde_json::to_string(&bins).map_err(|err| PyValueError::new_err(err.to_string()))
 }
 

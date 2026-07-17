@@ -556,6 +556,77 @@ pub fn pit_bins(
     Ok(PitBins { edges, counts })
 }
 
+pub fn pit_bins_with_backend(
+    actual: &[f64],
+    quantiles: &[f64],
+    predictions: &[Vec<f64>],
+    bins: usize,
+    backend: Option<&str>,
+) -> Result<PitBins> {
+    validate_quantile_rows(actual, quantiles, predictions)?;
+    if bins == 0 {
+        return invalid("bins must be positive");
+    }
+    let row_count = actual.len().saturating_mul(quantiles.len());
+    let selection = select_backend_for(backend.or(Some("cpu")), BackendOperation::Affine)
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    let decision = backend_workload_decision(
+        &selection,
+        BackendOperation::Affine,
+        row_count.saturating_mul(2),
+        PROB_METRIC_DISPATCH_MIN_OPS,
+    );
+    if decision.executed == "cpu" {
+        return pit_bins(actual, quantiles, predictions, bins);
+    }
+    let rows = actual
+        .iter()
+        .zip(predictions)
+        .flat_map(|(&actual, prediction_row)| {
+            prediction_row
+                .iter()
+                .map(move |&prediction| vec![actual, prediction])
+        })
+        .collect::<Vec<_>>();
+    let residuals = backend_affine_scores(
+        &selection,
+        &rows,
+        &[0.0, 0.0],
+        &[1.0, -1.0],
+        &vec![0.0; rows.len()],
+    )
+    .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    let counts = residuals
+        .par_chunks(quantiles.len())
+        .fold(
+            || vec![0usize; bins],
+            |mut counts, row| {
+                let mut pit = 0.0;
+                for (&level, &residual) in quantiles.iter().zip(row) {
+                    if residual >= 0.0 {
+                        pit = level;
+                    } else {
+                        break;
+                    }
+                }
+                let index = ((pit * bins as f64).floor() as usize).min(bins - 1);
+                counts[index] += 1;
+                counts
+            },
+        )
+        .reduce(
+            || vec![0usize; bins],
+            |mut left, right| {
+                for (left, right) in left.iter_mut().zip(right) {
+                    *left += right;
+                }
+                left
+            },
+        );
+    let edges = (0..=bins).map(|index| index as f64 / bins as f64).collect();
+    Ok(PitBins { edges, counts })
+}
+
 pub fn conditional_flow_fit_json(
     hidden: &[Vec<f64>],
     residuals: &[f64],
@@ -2381,6 +2452,31 @@ mod tests {
             .unwrap_or_else(|error| panic!("{backend} interval metrics failed: {error}"));
             assert!((metrics.coverage - expected_coverage).abs() < 1.0e-10);
             assert!((metrics.mean_width - expected_width).abs() < 1.0e-5);
+        }
+    }
+
+    #[test]
+    fn pit_surface_runs_on_every_available_affine_backend() {
+        let actual = (0..3_000)
+            .map(|index| (index as f64 * 0.023).sin() * 2.0)
+            .collect::<Vec<_>>();
+        let quantiles = vec![0.1, 0.25, 0.5, 0.75, 0.9];
+        let predictions = actual
+            .iter()
+            .enumerate()
+            .map(|(index, &value)| {
+                quantiles
+                    .iter()
+                    .map(|quantile| value + (*quantile - 0.5) * 1.4 + (index as f64 * 0.005).cos())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let expected = pit_bins(&actual, &quantiles, &predictions, 12).expect("cpu PIT");
+        for backend in cartoboost_neural::available_backends() {
+            let actual_bins =
+                pit_bins_with_backend(&actual, &quantiles, &predictions, 12, Some(&backend))
+                    .unwrap_or_else(|error| panic!("{backend} PIT failed: {error}"));
+            assert_eq!(actual_bins, expected, "backend={backend}");
         }
     }
 
