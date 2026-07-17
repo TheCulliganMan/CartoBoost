@@ -9010,8 +9010,11 @@ impl NativeStandaloneHeteroGraphSageRegressor {
             negative_samples,
             seed,
             l2_regularization,
-            backend: neural_select_backend_for(backend, BackendOperation::Dense)
-                .map_err(to_py_neural_error)?,
+            backend: neural_select_backend_for_operations(
+                backend,
+                &[BackendOperation::Dense, BackendOperation::CsrDiffusion],
+            )
+            .map_err(to_py_neural_error)?,
         };
         let model = HeteroGraphSageRegressor::new(
             config,
@@ -9135,8 +9138,11 @@ impl NativeStandaloneHinSageRegressor {
             seed,
             l2_regularization,
             neighbor_samples: neighbor_samples.unwrap_or_default(),
-            backend: neural_select_backend_for(backend, BackendOperation::Dense)
-                .map_err(to_py_neural_error)?,
+            backend: neural_select_backend_for_operations(
+                backend,
+                &[BackendOperation::Dense, BackendOperation::CsrDiffusion],
+            )
+            .map_err(to_py_neural_error)?,
         };
         let model = HinSageRegressor::new(
             config,
@@ -9431,7 +9437,11 @@ impl NativeStandaloneHeteroGraphSageLinkPredictor {
             l2_regularization,
             backend: neural_select_backend_for_operations(
                 backend,
-                &[BackendOperation::Dense, BackendOperation::PairScoring],
+                &[
+                    BackendOperation::Dense,
+                    BackendOperation::CsrDiffusion,
+                    BackendOperation::PairScoring,
+                ],
             )
             .map_err(to_py_neural_error)?,
         };
@@ -9517,7 +9527,11 @@ impl NativeStandaloneHinSageLinkPredictor {
             neighbor_samples: neighbor_samples.unwrap_or_default(),
             backend: neural_select_backend_for_operations(
                 backend,
-                &[BackendOperation::Dense, BackendOperation::PairScoring],
+                &[
+                    BackendOperation::Dense,
+                    BackendOperation::CsrDiffusion,
+                    BackendOperation::PairScoring,
+                ],
             )
             .map_err(to_py_neural_error)?,
         };
@@ -9602,8 +9616,11 @@ impl NativeHeteroGraphSageEncoder {
             negative_samples,
             seed,
             l2_regularization,
-            backend: neural_select_backend_for(backend, BackendOperation::Dense)
-                .map_err(to_py_neural_error)?,
+            backend: neural_select_backend_for_operations(
+                backend,
+                &[BackendOperation::Dense, BackendOperation::CsrDiffusion],
+            )
+            .map_err(to_py_neural_error)?,
         };
         let encoder = HeteroGraphSageEncoder::new(config.clone(), input_dim, relation_count)
             .map_err(to_py_neural_error)?;
@@ -9763,8 +9780,11 @@ impl NativeHinSageEncoder {
             seed,
             l2_regularization,
             neighbor_samples: neighbor_samples.unwrap_or_default(),
-            backend: neural_select_backend_for(backend, BackendOperation::Dense)
-                .map_err(to_py_neural_error)?,
+            backend: neural_select_backend_for_operations(
+                backend,
+                &[BackendOperation::Dense, BackendOperation::CsrDiffusion],
+            )
+            .map_err(to_py_neural_error)?,
         };
         let encoder = HinSageEncoder::new(
             config.clone(),
