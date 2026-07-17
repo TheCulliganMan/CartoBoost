@@ -313,6 +313,37 @@ impl GraphTemporalFrame {
         horizon: usize,
         frequency: String,
     ) -> Result<Self> {
+        Self::new_with_training_metadata(
+            node_ids,
+            timestamps,
+            target,
+            covariates,
+            adjacency,
+            horizon,
+            frequency,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_training_metadata(
+        node_ids: Vec<String>,
+        timestamps: Vec<i64>,
+        target: Vec<Vec<f64>>,
+        covariates: Option<Vec<Vec<Vec<f64>>>>,
+        adjacency: CsrAdjacency,
+        horizon: usize,
+        frequency: String,
+        owner_mask: Option<Vec<bool>>,
+        target_mask: Option<Vec<Vec<bool>>>,
+        imputed_mask: Option<Vec<Vec<bool>>>,
+        target_weights: Option<Vec<Vec<f64>>>,
+        covariate_roles: Option<Vec<String>>,
+    ) -> Result<Self> {
         let frame = Self {
             node_ids,
             timestamps,
@@ -321,11 +352,11 @@ impl GraphTemporalFrame {
             adjacency,
             horizon,
             frequency,
-            owner_mask: None,
-            target_mask: None,
-            imputed_mask: None,
-            target_weights: None,
-            covariate_roles: None,
+            owner_mask,
+            target_mask,
+            imputed_mask,
+            target_weights,
+            covariate_roles,
         };
         frame.validate()?;
         Ok(frame)
@@ -1097,6 +1128,8 @@ pub struct PaperGraphTransformerForecaster {
     history: Vec<Vec<f64>>,
     #[serde(default)]
     history_time_features: Option<Vec<Vec<f64>>>,
+    #[serde(default)]
+    covariate_roles: Option<Vec<String>>,
     target_mean: f64,
     target_scale: f64,
 }
@@ -1140,6 +1173,19 @@ struct LsttnSharedState {
     target_mean: f64,
     target_scale: f64,
     segments: Vec<LsttnSharedSegment>,
+}
+
+/// Commit record for an LSTTN shared/local checkpoint pair. The manifest is
+/// written last, so a loader can reject any pair interrupted between files.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct LsttnShardPairManifest {
+    version: u32,
+    local_hash: u64,
+    shared_hash: u64,
+    architecture_fingerprint: u64,
+    backbone_fingerprint: u64,
+    shared_steps: u64,
+    local_steps: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1194,6 +1240,44 @@ pub struct PaperGraphTransformerArchitectureReport {
     pub graphon_expert_count: usize,
     pub direct_multi_horizon: bool,
     pub trainable_forecast_head: bool,
+}
+
+/// Auditable ownership of a persisted LSTTN parameter segment. Segments are
+/// deliberately reported at serialization boundaries so shared-state size can
+/// be checked independently of the shard's node count.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct LsttnParameterInventoryEntry {
+    pub name: String,
+    pub shape: Vec<usize>,
+    pub byte_size: usize,
+    pub ownership: String,
+    pub optimizer_ownership: String,
+    pub hash: String,
+    pub node_count_dependent: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct LsttnMemoryTelemetry {
+    pub frame_storage_bytes: usize,
+    pub parameter_bytes: usize,
+    pub optimizer_moment_bytes: usize,
+    pub activation_tape_bytes: usize,
+    pub frozen_patch_cache_bytes: usize,
+    pub graph_diffusion_workspace_bytes: usize,
+    pub prediction_buffer_bytes: usize,
+    pub total_accounted_bytes: usize,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct LsttnEdgeDiagnostic {
+    pub source: usize,
+    pub target: usize,
+    pub structural_prior: f64,
+    pub forward_diffusion: f64,
+    pub backward_diffusion: f64,
+    pub learned_adaptive_contribution: f64,
+    pub normalized_attention: f64,
+    pub horizon_sensitivity: Vec<f64>,
 }
 
 /// Serializable native parameters for the graph-transformer profiles.
@@ -9726,6 +9810,7 @@ impl PaperGraphTransformerForecaster {
             trainable_state: None,
             history: Vec::new(),
             history_time_features: None,
+            covariate_roles: None,
             target_mean: 0.0,
             target_scale: 1.0,
         })
@@ -9849,12 +9934,26 @@ impl PaperGraphTransformerForecaster {
             }
             (mean, scale)
         } else {
-            target_center_scale(&frame.target)
+            target_center_scale_observed(
+                &frame.target,
+                frame.target_mask.as_deref(),
+                frame.imputed_mask.as_deref(),
+            )
         };
         let normalized = frame
             .target
             .iter()
-            .map(|row| row.iter().map(|v| (v - mean) / scale).collect::<Vec<_>>())
+            .enumerate()
+            .map(|(time, row)| {
+                row.iter()
+                    .enumerate()
+                    .map(|(node, value)| {
+                        let observed = frame.target_mask.as_ref().is_none_or(|mask| mask[time][node]);
+                        let imputed = frame.imputed_mask.as_ref().is_some_and(|mask| mask[time][node]);
+                        if observed && !imputed { (value - mean) / scale } else { -mean / scale }
+                    })
+                    .collect::<Vec<_>>()
+            })
             .collect::<Vec<_>>();
         let mut training_normalized = normalized.clone();
         if let Some(owner_mask) = &frame.owner_mask {
@@ -9884,6 +9983,7 @@ impl PaperGraphTransformerForecaster {
         } else {
             None
         };
+        self.covariate_roles = frame.covariate_roles.clone();
         let adjacency = frame.adjacency.row_normalized();
         if !matches!(training_phase, LsttnTrainingPhase::Both) && shard_identity.is_none() {
             return Err(GeoStError::InvalidFrame(
@@ -10057,6 +10157,12 @@ impl PaperGraphTransformerForecaster {
         #[cfg(all(feature = "cuda", target_os = "linux"))]
         let mut cuda_executor = if self.config.profile == GraphTransformerProfile::LongShortFusion
             && backend.selected == "cuda"
+            // The portable tape is authoritative until the CUDA loss kernel
+            // receives its aligned observation/imputation/reliability buffers.
+            // Never silently drop these supervision semantics on accelerator.
+            && frame.target_mask.is_none()
+            && frame.imputed_mask.is_none()
+            && frame.target_weights.is_none()
         {
             Some(CudaLsttnTensorExecutor::new(&state, &adjacency)?)
         } else {
@@ -10625,6 +10731,40 @@ impl PaperGraphTransformerForecaster {
         fs::write(path, serde_json::to_string_pretty(&local)?)?;
         Ok(())
     }
+
+    /// Persist local state, shared state, and a commit manifest. The manifest
+    /// is the transaction boundary: readers must use `load_shard_pair` and
+    /// will reject a kill-at-any-write-boundary partial update.
+    pub fn save_shard_pair(
+        &self,
+        local_path: impl AsRef<Path>,
+        shared_path: impl AsRef<Path>,
+        manifest_path: impl AsRef<Path>,
+    ) -> Result<()> {
+        self.validate_artifact()?;
+        let state = self.trainable_state.as_ref().ok_or(GeoStError::NotFit)?;
+        let shared = state.export_shared(self.target_mean, self.target_scale);
+        let mut local = self.clone();
+        local
+            .trainable_state
+            .as_mut()
+            .ok_or(GeoStError::NotFit)?
+            .compact_to_local_state();
+        let local_bytes = serde_json::to_vec(&local)?;
+        let shared_bytes = serde_json::to_vec(&shared)?;
+        let manifest = LsttnShardPairManifest {
+            version: 1,
+            local_hash: bytes_fingerprint(&local_bytes),
+            shared_hash: bytes_fingerprint(&shared_bytes),
+            architecture_fingerprint: state.architecture_fingerprint,
+            backbone_fingerprint: state.backbone_fingerprint,
+            shared_steps: state.shared_steps,
+            local_steps: state.local_steps,
+        };
+        atomic_write_bytes(local_path.as_ref(), &local_bytes)?;
+        atomic_write_bytes(shared_path.as_ref(), &shared_bytes)?;
+        atomic_write_bytes(manifest_path.as_ref(), &serde_json::to_vec(&manifest)?)
+    }
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         let mut model: Self = serde_json::from_str(&fs::read_to_string(path)?)?;
         if let Some(state) = &mut model.trainable_state {
@@ -10646,6 +10786,37 @@ impl PaperGraphTransformerForecaster {
         model.target_scale = shared.target_scale;
         state.target_scale = shared.target_scale;
         state.normalized_zero = -shared.target_mean / shared.target_scale;
+        Ok(model)
+    }
+
+    pub fn load_shard_pair(
+        local_path: impl AsRef<Path>,
+        shared_path: impl AsRef<Path>,
+        manifest_path: impl AsRef<Path>,
+    ) -> Result<Self> {
+        let manifest: LsttnShardPairManifest =
+            serde_json::from_slice(&fs::read(manifest_path.as_ref())?)?;
+        let local = fs::read(local_path.as_ref())?;
+        let shared = fs::read(shared_path.as_ref())?;
+        if manifest.version != 1
+            || manifest.local_hash != bytes_fingerprint(&local)
+            || manifest.shared_hash != bytes_fingerprint(&shared)
+        {
+            return Err(GeoStError::InvalidFrame(
+                "LSTTN shard pair is incomplete or does not match its commit manifest".to_string(),
+            ));
+        }
+        let model = Self::load_shard(local_path, shared_path)?;
+        let state = model.trainable_state.as_ref().ok_or(GeoStError::NotFit)?;
+        if state.architecture_fingerprint != manifest.architecture_fingerprint
+            || state.backbone_fingerprint != manifest.backbone_fingerprint
+            || state.shared_steps != manifest.shared_steps
+            || state.local_steps != manifest.local_steps
+        {
+            return Err(GeoStError::InvalidFrame(
+                "LSTTN shard pair state does not match its commit manifest".to_string(),
+            ));
+        }
         Ok(model)
     }
     pub fn to_json_string(&self) -> Result<String> {
@@ -10684,6 +10855,15 @@ impl PaperGraphTransformerForecaster {
                 features.len() == self.history.len()
                     && features.iter().all(|row| row.len() == state.nodes)
             });
+        if self.history_time_features.is_some()
+            && self.covariate_roles.as_ref().is_none_or(|roles| {
+                !roles.iter().any(|role| role == "time_of_day")
+            })
+        {
+            return Err(GeoStError::InvalidFrame(
+                "artifact contains LSTTN covariates without a declared time_of_day role; refit with this CartoBoost version".to_string(),
+            ));
+        }
         if !valid {
             return Err(GeoStError::InvalidFrame(
                 "paper graph-transformer artifact is incompatible with the current native architecture; refit and save the model with this CartoBoost version"
@@ -10764,6 +10944,143 @@ impl PaperGraphTransformerForecaster {
             trainable_forecast_head: self.trainable_state.is_some(),
         }
     }
+
+    pub fn parameter_inventory(&self) -> Result<Vec<LsttnParameterInventoryEntry>> {
+        let state = self.trainable_state.as_ref().ok_or(GeoStError::NotFit)?;
+        let mut result = Vec::new();
+        for (name, range) in state.shared_ranges() {
+            // Shared ranges are architecture-only. A node-dependent range in
+            // this state would make cross-shard sharing unsound.
+            if range.len() > state.parameters.len() {
+                return Err(GeoStError::InvalidFrame(format!(
+                    "shared LSTTN parameter segment {name} is out of bounds"
+                )));
+            }
+            result.push(parameter_inventory_entry(
+                name,
+                &state.parameters[range],
+                "shared",
+                false,
+            ));
+        }
+        for (index, range) in state.local_ranges().into_iter().enumerate() {
+            result.push(parameter_inventory_entry(
+                &format!("local_{index}"),
+                &state.parameters[range],
+                "local",
+                true,
+            ));
+        }
+        Ok(result)
+    }
+
+    /// Native persistent-memory accounting. Ephemeral tapes/caches are zero
+    /// outside a fit call; progress integrations can sample this report at
+    /// checkpoint boundaries without retaining training allocations.
+    pub fn memory_telemetry(&self) -> Result<LsttnMemoryTelemetry> {
+        let state = self.trainable_state.as_ref().ok_or(GeoStError::NotFit)?;
+        let scalar = std::mem::size_of::<f64>();
+        let frame_storage_bytes = self.history.iter().map(Vec::len).sum::<usize>() * scalar
+            + self
+                .history_time_features
+                .as_ref()
+                .map_or(0, |rows| rows.iter().map(Vec::len).sum::<usize>() * scalar)
+            + self.adjacency.as_ref().map_or(0, |adjacency| {
+                adjacency.data.len() * scalar
+                    + adjacency.indices.len() * std::mem::size_of::<usize>()
+                    + adjacency.indptr.len() * std::mem::size_of::<usize>()
+            });
+        let parameter_bytes = state.parameters.len() * scalar;
+        let optimizer_moment_bytes = (state.first_moment.len() + state.second_moment.len()) * scalar;
+        let graph_diffusion_workspace_bytes = self.adjacency.as_ref().map_or(0, |adjacency| {
+            adjacency.indices.len() * std::mem::size_of::<usize>()
+        });
+        let telemetry = LsttnMemoryTelemetry {
+            frame_storage_bytes,
+            parameter_bytes,
+            optimizer_moment_bytes,
+            activation_tape_bytes: 0,
+            frozen_patch_cache_bytes: 0,
+            graph_diffusion_workspace_bytes,
+            prediction_buffer_bytes: 0,
+            total_accounted_bytes: 0,
+        };
+        Ok(LsttnMemoryTelemetry {
+            total_accounted_bytes: telemetry.frame_storage_bytes
+                + telemetry.parameter_bytes
+                + telemetry.optimizer_moment_bytes
+                + telemetry.activation_tape_bytes
+                + telemetry.frozen_patch_cache_bytes
+                + telemetry.graph_diffusion_workspace_bytes
+                + telemetry.prediction_buffer_bytes,
+            ..telemetry
+        })
+    }
+
+    pub fn edge_diagnostics(&self) -> Result<Vec<LsttnEdgeDiagnostic>> {
+        let state = self.trainable_state.as_ref().ok_or(GeoStError::NotFit)?;
+        let adjacency = self.adjacency.as_ref().ok_or(GeoStError::NotFit)?;
+        let layout = state.layout();
+        let mut incoming_sum = vec![0.0; state.nodes];
+        for (target, value) in adjacency.indices.iter().zip(&adjacency.data) {
+            incoming_sum[*target] += value.abs();
+        }
+        let mut diagnostics = Vec::with_capacity(adjacency.indices.len());
+        for target in 0..state.nodes {
+            let range = adjacency.indptr[target]..adjacency.indptr[target + 1];
+            let row_sum = adjacency.data[range.clone()].iter().map(|v| v.abs()).sum::<f64>();
+            let logits = range.clone().map(|edge| {
+                let source = adjacency.indices[edge];
+                (0..10).map(|latent| {
+                    state.parameters[layout.lsttn_adaptive_source + target * 10 + latent]
+                        * state.parameters[layout.lsttn_adaptive_target + source * 10 + latent]
+                }).sum::<f64>().max(0.0)
+            }).collect::<Vec<_>>();
+            let max_logit = logits.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            let denominator = logits.iter().map(|value| (*value - max_logit).exp()).sum::<f64>();
+            for (offset, edge) in range.enumerate() {
+                let source = adjacency.indices[edge];
+                let attention = (logits[offset] - max_logit).exp() / denominator.max(1e-12);
+                let horizon_sensitivity = (0..state.horizons).map(|horizon| {
+                    state.parameters[layout.output + horizon * (state.hidden + 1)..layout.output + (horizon + 1) * (state.hidden + 1)]
+                        .iter().map(|value| value.abs()).sum::<f64>()
+                }).collect();
+                diagnostics.push(LsttnEdgeDiagnostic {
+                    source,
+                    target,
+                    structural_prior: adjacency.data[edge],
+                    forward_diffusion: adjacency.data[edge] / row_sum.max(1e-12),
+                    backward_diffusion: adjacency.data[edge] / incoming_sum[source].max(1e-12),
+                    learned_adaptive_contribution: logits[offset],
+                    normalized_attention: attention,
+                    horizon_sensitivity,
+                });
+            }
+        }
+        Ok(diagnostics)
+    }
+}
+
+fn parameter_inventory_entry(
+    name: &str,
+    values: &[f64],
+    ownership: &str,
+    node_count_dependent: bool,
+) -> LsttnParameterInventoryEntry {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for value in values {
+        value.to_bits().hash(&mut hasher);
+    }
+    LsttnParameterInventoryEntry {
+        name: name.to_string(),
+        shape: vec![values.len()],
+        byte_size: std::mem::size_of_val(values),
+        ownership: ownership.to_string(),
+        optimizer_ownership: ownership.to_string(),
+        hash: format!("{:016x}", hasher.finish()),
+        node_count_dependent,
+    }
 }
 
 fn graph_in_degrees(adjacency: &CsrAdjacency, nodes: usize) -> Vec<f64> {
@@ -10821,6 +11138,23 @@ fn stable_fingerprint(value: &impl Serialize) -> Result<u64> {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     serde_json::to_vec(value)?.hash(&mut hasher);
     Ok(hasher.finish())
+}
+
+fn bytes_fingerprint(bytes: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn atomic_write_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let temporary = path.with_extension("part");
+    fs::write(&temporary, bytes)?;
+    fs::rename(temporary, path)?;
+    Ok(())
 }
 
 fn write_lsttn_checkpoint(path: &Path, checkpoint: &LsttnTrainingCheckpoint) -> Result<()> {
@@ -11273,6 +11607,22 @@ fn target_center_scale(target: &[Vec<f64>]) -> (f64, f64) {
         1.0
     };
     (mean, scale)
+}
+
+fn target_center_scale_observed(
+    target: &[Vec<f64>],
+    target_mask: Option<&[Vec<bool>]>,
+    imputed_mask: Option<&[Vec<bool>]>,
+) -> (f64, f64) {
+    let values = target.iter().enumerate().flat_map(|(time, row)| {
+        row.iter().enumerate().filter_map(move |(node, value)| {
+            let observed = target_mask.is_none_or(|mask| mask[time][node]);
+            let imputed = imputed_mask.is_some_and(|mask| mask[time][node]);
+            (observed && !imputed).then_some(*value)
+        })
+    });
+    let values = values.collect::<Vec<_>>();
+    target_center_scale(&[values])
 }
 
 fn metric_values(predictions: &[f64], actual: &[f64]) -> (f64, f64, f64) {
@@ -12203,6 +12553,37 @@ mod tests {
     }
 
     #[test]
+    fn graph_temporal_target_mask_distinguishes_missing_transport_values() {
+        let base = traffic_style_fixture_frame();
+        let mut target = base.target.clone();
+        target[0][0] = f64::NAN;
+        assert!(GraphTemporalFrame::new_with_training_metadata(
+            base.node_ids.clone(), base.timestamps.clone(), target.clone(), base.covariates.clone(),
+            base.adjacency.clone(), base.horizon, base.frequency.clone(), None, None, None, None, None,
+        ).is_err());
+        let mut mask = vec![vec![true; base.node_ids.len()]; target.len()];
+        mask[0][0] = false;
+        assert!(GraphTemporalFrame::new_with_training_metadata(
+            base.node_ids, base.timestamps, target, base.covariates, base.adjacency,
+            base.horizon, base.frequency, None, Some(mask), None, None, None,
+        ).is_ok());
+    }
+
+    #[test]
+    fn observed_target_normalization_ignores_masked_and_imputed_transport_values() {
+        let target = vec![vec![0.0, 10.0], vec![2.0, 5000.0]];
+        let target_mask = vec![vec![true, true], vec![true, false]];
+        let imputed_mask = vec![vec![false, false], vec![false, true]];
+        let (mean, scale) = target_center_scale_observed(
+            &target,
+            Some(&target_mask),
+            Some(&imputed_mask),
+        );
+        assert!((mean - 4.0).abs() < 1e-12);
+        assert!(scale.is_finite() && scale < 5.0);
+    }
+
+    #[test]
     fn frozen_lsttn_patch_cache_preserves_trainable_gradients() {
         let frame = traffic_style_fixture_frame();
         let adjacency = frame.adjacency.row_normalized();
@@ -12795,6 +13176,7 @@ mod tests {
             trainable_state: Some(state),
             history: vec![vec![9.0], vec![10.0]],
             history_time_features: None,
+            covariate_roles: None,
             target_mean: 0.0,
             target_scale: 1.0,
         };

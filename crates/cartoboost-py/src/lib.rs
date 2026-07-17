@@ -222,7 +222,10 @@ use cartoboost_spatial_econ::{
     spatial_weights_from_coo, SpatialEconError, SpatialModelKind, SpatialRegressionModel,
     SpatialWeights,
 };
-use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
+use numpy::{
+    Element, IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3,
+    PyUntypedArrayMethods,
+};
 use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyModule, PyType};
@@ -3732,21 +3735,51 @@ impl NativeGraphTemporalFrame {
         target_weights: Option<Vec<Vec<f64>>>,
         covariate_roles: Option<Vec<String>>,
     ) -> PyResult<Self> {
-        let adjacency = CoreStCsrAdjacency::new(indptr, indices, data, node_ids.len())
-            .map_err(to_py_geo_st_error)?;
-        Ok(Self {
-            frame: CoreGraphTemporalFrame::new(
-                node_ids, timestamps, target, covariates, adjacency, horizon, frequency,
-            )
-            .and_then(|frame| frame.with_owner_mask(owner_mask))
-            .and_then(|frame| frame.with_training_metadata(
-                target_mask,
-                imputed_mask,
-                target_weights,
-                covariate_roles,
-            ))
-            .map_err(to_py_geo_st_error)?,
-        })
+        Self::from_owned_parts(
+            node_ids, timestamps, target, indptr, indices, data, horizon, frequency, covariates,
+            owner_mask, target_mask, imputed_mask, target_weights, covariate_roles,
+        )
+    }
+
+    /// Buffer-oriented constructor used by the Python frame wrapper. It accepts
+    /// C-contiguous NumPy arrays directly, avoiding the large intermediate
+    /// nested Python lists required by the compatibility constructor above.
+    #[staticmethod]
+    #[pyo3(signature = (node_ids, timestamps, target, indptr, indices, data, horizon, frequency, covariates=None, owner_mask=None, target_mask=None, imputed_mask=None, target_weights=None, covariate_roles=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn from_numpy(
+        node_ids: Vec<String>,
+        timestamps: Vec<i64>,
+        target: PyReadonlyArray2<'_, f64>,
+        indptr: Vec<usize>,
+        indices: Vec<usize>,
+        data: Vec<f64>,
+        horizon: usize,
+        frequency: String,
+        covariates: Option<PyReadonlyArray3<'_, f64>>,
+        owner_mask: Option<Vec<bool>>,
+        target_mask: Option<PyReadonlyArray2<'_, bool>>,
+        imputed_mask: Option<PyReadonlyArray2<'_, bool>>,
+        target_weights: Option<PyReadonlyArray2<'_, f64>>,
+        covariate_roles: Option<Vec<String>>,
+    ) -> PyResult<Self> {
+        let target = rows_from_numpy_2d(target, "target")?;
+        let covariates = covariates
+            .map(|array| rows_from_numpy_3d(array, "covariates"))
+            .transpose()?;
+        let target_mask = target_mask
+            .map(|array| rows_from_numpy_2d(array, "target_mask"))
+            .transpose()?;
+        let imputed_mask = imputed_mask
+            .map(|array| rows_from_numpy_2d(array, "imputed_mask"))
+            .transpose()?;
+        let target_weights = target_weights
+            .map(|array| rows_from_numpy_2d(array, "target_weights"))
+            .transpose()?;
+        Self::from_owned_parts(
+            node_ids, timestamps, target, indptr, indices, data, horizon, frequency, covariates,
+            owner_mask, target_mask, imputed_mask, target_weights, covariate_roles,
+        )
     }
 
     #[getter]
@@ -3763,6 +3796,48 @@ impl NativeGraphTemporalFrame {
     fn frequency(&self) -> String {
         self.frame.frequency.clone()
     }
+
+}
+
+impl NativeGraphTemporalFrame {
+    #[allow(clippy::too_many_arguments)]
+    fn from_owned_parts(
+        node_ids: Vec<String>,
+        timestamps: Vec<i64>,
+        target: Vec<Vec<f64>>,
+        indptr: Vec<usize>,
+        indices: Vec<usize>,
+        data: Vec<f64>,
+        horizon: usize,
+        frequency: String,
+        covariates: Option<Vec<Vec<Vec<f64>>>>,
+        owner_mask: Option<Vec<bool>>,
+        target_mask: Option<Vec<Vec<bool>>>,
+        imputed_mask: Option<Vec<Vec<bool>>>,
+        target_weights: Option<Vec<Vec<f64>>>,
+        covariate_roles: Option<Vec<String>>,
+    ) -> PyResult<Self> {
+        let adjacency = CoreStCsrAdjacency::new(indptr, indices, data, node_ids.len())
+            .map_err(to_py_geo_st_error)?;
+        Ok(Self {
+            frame: CoreGraphTemporalFrame::new_with_training_metadata(
+                node_ids,
+                timestamps,
+                target,
+                covariates,
+                adjacency,
+                horizon,
+                frequency,
+                owner_mask,
+                target_mask,
+                imputed_mask,
+                target_weights,
+                covariate_roles,
+            )
+            .map_err(to_py_geo_st_error)?,
+        })
+    }
+
 }
 
 #[pyclass(name = "DCRNNForecaster")]
@@ -4262,6 +4337,17 @@ impl NativePaperGraphTransformerForecaster {
         self.model.save_local(path).map_err(to_py_geo_st_error)
     }
 
+    fn save_shard_pair(
+        &self,
+        local_path: PathBuf,
+        shared_path: PathBuf,
+        manifest_path: PathBuf,
+    ) -> PyResult<()> {
+        self.model
+            .save_shard_pair(local_path, shared_path, manifest_path)
+            .map_err(to_py_geo_st_error)
+    }
+
     #[classmethod]
     fn load(_cls: &Bound<'_, PyType>, path: PathBuf) -> PyResult<Self> {
         Ok(Self {
@@ -4278,6 +4364,23 @@ impl NativePaperGraphTransformerForecaster {
         Ok(Self {
             model: CorePaperGraphTransformerForecaster::load_shard(local_path, shared_state_path)
                 .map_err(to_py_geo_st_error)?,
+        })
+    }
+
+    #[classmethod]
+    fn load_shard_pair(
+        _cls: &Bound<'_, PyType>,
+        local_path: PathBuf,
+        shared_path: PathBuf,
+        manifest_path: PathBuf,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            model: CorePaperGraphTransformerForecaster::load_shard_pair(
+                local_path,
+                shared_path,
+                manifest_path,
+            )
+            .map_err(to_py_geo_st_error)?,
         })
     }
 
@@ -4299,6 +4402,21 @@ impl NativePaperGraphTransformerForecaster {
 
     fn architecture_json(&self) -> PyResult<String> {
         serde_json::to_string(&self.model.architecture_report())
+            .map_err(|err| PyRuntimeError::new_err(err.to_string()))
+    }
+
+    fn parameter_inventory_json(&self) -> PyResult<String> {
+        serde_json::to_string(&self.model.parameter_inventory().map_err(to_py_geo_st_error)?)
+            .map_err(|err| PyRuntimeError::new_err(err.to_string()))
+    }
+
+    fn memory_telemetry_json(&self) -> PyResult<String> {
+        serde_json::to_string(&self.model.memory_telemetry().map_err(to_py_geo_st_error)?)
+            .map_err(|err| PyRuntimeError::new_err(err.to_string()))
+    }
+
+    fn edge_diagnostics_json(&self) -> PyResult<String> {
+        serde_json::to_string(&self.model.edge_diagnostics().map_err(to_py_geo_st_error)?)
             .map_err(|err| PyRuntimeError::new_err(err.to_string()))
     }
 }
@@ -12778,6 +12896,34 @@ fn coords_from_array(coords: PyReadonlyArray2<'_, f64>) -> PyResult<Vec<[f64; 2]
     Ok(values
         .chunks_exact(2)
         .map(|chunk| [chunk[0], chunk[1]])
+        .collect())
+}
+
+fn rows_from_numpy_2d<T: Element + Clone>(
+    array: PyReadonlyArray2<'_, T>,
+    name: &str,
+) -> PyResult<Vec<Vec<T>>> {
+    let shape = array.shape();
+    if shape.len() != 2 {
+        return Err(PyValueError::new_err(format!("{name} must be two-dimensional")));
+    }
+    let values = array.as_slice()?;
+    Ok(values.chunks_exact(shape[1]).map(|row| row.to_vec()).collect())
+}
+
+fn rows_from_numpy_3d<T: Element + Clone>(
+    array: PyReadonlyArray3<'_, T>,
+    name: &str,
+) -> PyResult<Vec<Vec<Vec<T>>>> {
+    let shape = array.shape();
+    if shape.len() != 3 {
+        return Err(PyValueError::new_err(format!("{name} must be three-dimensional")));
+    }
+    let values = array.as_slice()?;
+    let row_width = shape[1] * shape[2];
+    Ok(values
+        .chunks_exact(row_width)
+        .map(|time| time.chunks_exact(shape[2]).map(|row| row.to_vec()).collect())
         .collect())
 }
 

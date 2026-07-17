@@ -34,9 +34,11 @@ class GraphTemporalFrame:
         native_class = _native_class("GraphTemporalFrame")
         if native_class is None:
             raise NotImplementedError("Rust binding for GraphTemporalFrame is not available.")
-        target_rows = np.asarray(target, dtype=float).tolist()
+        target_rows = np.ascontiguousarray(np.asarray(target, dtype=float))
         covariate_rows = (
-            None if covariates is None else np.asarray(covariates, dtype=float).tolist()
+            None
+            if covariates is None
+            else np.ascontiguousarray(np.asarray(covariates, dtype=float))
         )
         self._node_ids = list(map(str, node_ids))
         self._timestamps = list(map(int, timestamps))
@@ -48,11 +50,17 @@ class GraphTemporalFrame:
         self._frequency = str(frequency)
         self._covariates = covariate_rows
         self._owner_mask = None if owner_mask is None else list(map(bool, owner_mask))
-        self._target_mask = None if target_mask is None else np.asarray(target_mask, dtype=bool).tolist()
-        self._imputed_mask = None if imputed_mask is None else np.asarray(imputed_mask, dtype=bool).tolist()
-        self._target_weights = None if target_weights is None else np.asarray(target_weights, dtype=float).tolist()
+        self._target_mask = (
+            None if target_mask is None else np.ascontiguousarray(np.asarray(target_mask, dtype=bool))
+        )
+        self._imputed_mask = (
+            None if imputed_mask is None else np.ascontiguousarray(np.asarray(imputed_mask, dtype=bool))
+        )
+        self._target_weights = (
+            None if target_weights is None else np.ascontiguousarray(np.asarray(target_weights, dtype=float))
+        )
         self._covariate_roles = None if covariate_roles is None else list(map(str, covariate_roles))
-        self._native_frame = native_class(
+        native_args = (
             self._node_ids,
             self._timestamps,
             self._target,
@@ -68,6 +76,27 @@ class GraphTemporalFrame:
             self._target_weights,
             self._covariate_roles,
         )
+        # New native builds copy straight from C-contiguous buffers. Keep the
+        # list-compatible constructor as a narrow fallback for old extensions.
+        if hasattr(native_class, "from_numpy"):
+            self._native_frame = native_class.from_numpy(*native_args)
+        else:  # pragma: no cover - compatibility with an older installed wheel.
+            self._native_frame = native_class(
+                self._node_ids,
+                self._timestamps,
+                self._target.tolist(),
+                self._indptr,
+                self._indices,
+                self._data,
+                self._horizon,
+                self._frequency,
+                None if self._covariates is None else self._covariates.tolist(),
+                self._owner_mask,
+                None if self._target_mask is None else self._target_mask.tolist(),
+                None if self._imputed_mask is None else self._imputed_mask.tolist(),
+                None if self._target_weights is None else self._target_weights.tolist(),
+                self._covariate_roles,
+            )
 
     @property
     def node_ids(self) -> list[str]:
@@ -898,6 +927,33 @@ class _PaperGraphTransformerForecaster(ArtifactPersistenceMixin):
         self._check_is_fitted()
         self._native_model.save_local(str(path))
 
+    def save_shard_pair(
+        self,
+        local_path: str | Path,
+        shared_path: str | Path,
+        manifest_path: str | Path,
+    ) -> None:
+        """Atomically commit compatible local/shared state via a manifest."""
+        self._check_is_fitted()
+        self._native_model.save_shard_pair(
+            str(Path(local_path)), str(Path(shared_path)), str(Path(manifest_path))
+        )
+
+    def parameter_inventory(self) -> list[dict[str, Any]]:
+        """Return ownership, optimizer ownership, size, and hashes by state segment."""
+        self._check_is_fitted()
+        return list(json.loads(self._native_model.parameter_inventory_json()))
+
+    def memory_telemetry(self) -> dict[str, int]:
+        """Return component-level native persistent-memory accounting in bytes."""
+        self._check_is_fitted()
+        return {key: int(value) for key, value in json.loads(self._native_model.memory_telemetry_json()).items()}
+
+    def edge_diagnostics(self) -> list[dict[str, Any]]:
+        """Expose per-edge structural, diffusion, learned-attention, and horizon evidence."""
+        self._check_is_fitted()
+        return list(json.loads(self._native_model.edge_diagnostics_json()))
+
     @classmethod
     def load(cls, path: str | Path):
         native_class = _native_class("PaperGraphTransformerForecaster")
@@ -917,6 +973,22 @@ class _PaperGraphTransformerForecaster(ArtifactPersistenceMixin):
             raise NotImplementedError("Rust binding for paper graph transformers is not available.")
         obj = cls.__new__(cls)
         obj._native_model = native_class.load_shard(str(local_path), str(shared_state_path))
+        obj.is_fitted_ = True
+        obj._params = {"profile": cls._profile, "backend": obj._backend_selected(), "horizon": 1}
+        return obj
+
+    @classmethod
+    def load_shard_pair(
+        cls, local_path: str | Path, shared_path: str | Path, manifest_path: str | Path
+    ):
+        """Load only a complete local/shared transaction committed by ``save_shard_pair``."""
+        native_class = _native_class("PaperGraphTransformerForecaster")
+        if native_class is None:
+            raise NotImplementedError("Rust binding for paper graph transformers is not available.")
+        obj = cls.__new__(cls)
+        obj._native_model = native_class.load_shard_pair(
+            str(Path(local_path)), str(Path(shared_path)), str(Path(manifest_path))
+        )
         obj.is_fitted_ = True
         obj._params = {"profile": cls._profile, "backend": obj._backend_selected(), "horizon": 1}
         return obj
