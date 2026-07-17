@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+from cartoboost import CartoBoostClassifier, CartoBoostRanker, CartoBoostRegressor
 from cartoboost.accelerators import (
     adamw_step,
     affine_scores,
@@ -60,6 +61,46 @@ def test_fused_training_kernels_run_on_every_available_backend() -> None:
     for backend in available_backends("tanh_mlp_training"):
         actual = train_tanh_mlp(*mlp_args, backend=backend, **mlp_kwargs)
         np.testing.assert_allclose(actual, mlp_expected, rtol=1.0e-5, atol=1.0e-6)
+
+
+def test_python_booster_families_preserve_every_available_backend() -> None:
+    features = [[0.0], [1.0], [2.0], [3.0]]
+    graph = {
+        "graph_indptr": [0, 1, 2, 3, 4],
+        "graph_indices": [1, 0, 3, 2],
+        "graph_weights": [1.0, 1.0, 1.0, 1.0],
+        "graph_smoothing": 0.5,
+        "graph_smoothing_iterations": 2,
+    }
+    for backend in available_backends():
+        regressor = CartoBoostRegressor(
+            n_estimators=1,
+            max_depth=1,
+            min_samples_leaf=1,
+            backend=backend,
+            **graph,
+        ).fit(features, [0.0, 0.0, 2.0, 2.0])
+        classifier = CartoBoostClassifier(
+            n_estimators=1,
+            max_depth=1,
+            min_samples_leaf=1,
+            backend=backend,
+            **graph,
+        ).fit(features, [0, 0, 1, 1])
+        ranker = CartoBoostRanker(
+            n_estimators=1,
+            max_depth=1,
+            min_samples_leaf=1,
+            backend=backend,
+            **graph,
+        ).fit(features, [0.0, 1.0, 0.0, 1.0], groups=[2, 2])
+
+        assert regressor.backend == backend
+        assert classifier.backend == backend
+        assert ranker.backend == backend
+        assert np.isfinite(regressor.predict(features)).all()
+        assert np.isfinite(classifier.predict_proba(features)).all()
+        assert np.isfinite(ranker.predict(features)).all()
 
 
 def test_workload_decision_reports_actual_threshold_execution() -> None:
