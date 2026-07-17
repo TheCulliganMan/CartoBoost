@@ -625,7 +625,13 @@ impl GeoTemporalDiffusionScenarioModel {
             .collect::<Vec<_>>();
         let (scenario_mean, scenario_mean_backend) =
             scenario_panel_mean_with_backend(&scenarios, horizon, nodes, &self.backend)?;
-        let scenario_variance = scenario_panel_variance(&scenarios, &scenario_mean, horizon, nodes);
+        let (scenario_variance, scenario_variance_backend) = scenario_panel_variance_with_backend(
+            &scenarios,
+            &scenario_mean,
+            horizon,
+            nodes,
+            &self.backend,
+        )?;
         let spatial_correlation = scenario_spatial_correlation(&scenario_mean, edges);
         let mut point_forecast_comparison = BTreeMap::new();
         point_forecast_comparison.insert(
@@ -649,6 +655,10 @@ impl GeoTemporalDiffusionScenarioModel {
         metadata.insert(
             "scenario_mean_backend".to_string(),
             scenario_mean_backend.to_string(),
+        );
+        metadata.insert(
+            "scenario_variance_backend".to_string(),
+            scenario_variance_backend,
         );
         Ok(DiffusionScenarioPrediction {
             scenarios,
@@ -714,7 +724,8 @@ async fn finish_diffusion_prediction_webgpu(
     let nodes = point_forecast[0].len();
     let (scenario_mean, scenario_mean_backend) =
         scenario_panel_mean_webgpu(&scenarios, horizon, nodes).await?;
-    let scenario_variance = scenario_panel_variance(&scenarios, &scenario_mean, horizon, nodes);
+    let (scenario_variance, scenario_variance_backend) =
+        scenario_panel_variance_webgpu(&scenarios, &scenario_mean, horizon, nodes).await?;
     let spatial_correlation = scenario_spatial_correlation(&scenario_mean, edges);
     let mut point_forecast_comparison = BTreeMap::new();
     point_forecast_comparison.insert(
@@ -739,6 +750,10 @@ async fn finish_diffusion_prediction_webgpu(
     metadata.insert(
         "scenario_mean_backend".to_string(),
         scenario_mean_backend.to_string(),
+    );
+    metadata.insert(
+        "scenario_variance_backend".to_string(),
+        scenario_variance_backend,
     );
     Ok(DiffusionScenarioPrediction {
         scenarios,
@@ -1569,6 +1584,97 @@ fn scenario_panel_variance(
         .collect()
 }
 
+fn scenario_panel_variance_with_backend(
+    scenarios: &[Vec<Vec<f64>>],
+    mean: &[Vec<f64>],
+    horizon: usize,
+    nodes: usize,
+    backend: &BackendSelection,
+) -> Result<(Vec<Vec<f64>>, String)> {
+    let workload = scenarios
+        .len()
+        .saturating_mul(horizon)
+        .saturating_mul(nodes);
+    if backend.selected == "cpu" || workload < PROB_DENSE_DISPATCH_MIN_OPS {
+        return Ok((
+            scenario_panel_variance(scenarios, mean, horizon, nodes),
+            "cpu".to_string(),
+        ));
+    }
+    let features = (0..horizon)
+        .flat_map(|time| {
+            (0..nodes).map(move |node| {
+                scenarios
+                    .iter()
+                    .map(|scenario| {
+                        let delta = scenario[time][node] - mean[time][node];
+                        (delta * delta) as f32
+                    })
+                    .collect::<Vec<_>>()
+            })
+        })
+        .collect::<Vec<_>>();
+    let weights = vec![1.0_f32 / scenarios.len() as f32; scenarios.len()];
+    let variances = backend_dense_layer_f32(backend, &features, &weights, &[0.0])
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    Ok((
+        variances
+            .into_iter()
+            .map(|row| f64::from(row[0]))
+            .collect::<Vec<_>>()
+            .chunks_exact(nodes)
+            .map(|row| row.to_vec())
+            .collect(),
+        backend.selected.clone(),
+    ))
+}
+
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+async fn scenario_panel_variance_webgpu(
+    scenarios: &[Vec<Vec<f64>>],
+    mean: &[Vec<f64>],
+    horizon: usize,
+    nodes: usize,
+) -> Result<(Vec<Vec<f64>>, String)> {
+    let workload = scenarios
+        .len()
+        .saturating_mul(horizon)
+        .saturating_mul(nodes);
+    if workload < PROB_DENSE_DISPATCH_MIN_OPS {
+        return Ok((
+            scenario_panel_variance(scenarios, mean, horizon, nodes),
+            "cpu".to_string(),
+        ));
+    }
+    let features = (0..horizon)
+        .flat_map(|time| {
+            (0..nodes).map(move |node| {
+                scenarios
+                    .iter()
+                    .map(|scenario| {
+                        let delta = scenario[time][node] - mean[time][node];
+                        (delta * delta) as f32
+                    })
+                    .collect::<Vec<_>>()
+            })
+        })
+        .collect::<Vec<_>>();
+    let weights = vec![1.0_f32 / scenarios.len() as f32; scenarios.len()];
+    let variances = cartoboost_neural::webgpu_dense_layer_f32_async(&features, &weights, &[0.0])
+        .await
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    Ok((
+        variances
+            .into_iter()
+            .map(|row| f64::from(row[0]))
+            .collect::<Vec<_>>()
+            .chunks_exact(nodes)
+            .map(|row| row.to_vec())
+            .collect(),
+        "webgpu".to_string(),
+    ))
+}
+
 fn mean_abs_panel_delta(a: &[Vec<f64>], b: &[Vec<f64>]) -> f64 {
     let count = a.iter().map(Vec::len).sum::<usize>().max(1);
     a.iter()
@@ -1995,10 +2101,28 @@ mod tests {
                     "{backend} scenario mean: expected {expected}, got {actual}"
                 );
             }
+            for (actual, expected) in actual
+                .scenario_variance
+                .iter()
+                .flatten()
+                .zip(expected.scenario_variance.iter().flatten())
+            {
+                assert!(
+                    (actual - expected).abs() <= 2.0e-4,
+                    "{backend} scenario variance: expected {expected}, got {actual}"
+                );
+            }
             assert_eq!(
                 actual
                     .metadata
                     .get("scenario_mean_backend")
+                    .map(String::as_str),
+                Some(backend.as_str())
+            );
+            assert_eq!(
+                actual
+                    .metadata
+                    .get("scenario_variance_backend")
                     .map(String::as_str),
                 Some(backend.as_str())
             );
