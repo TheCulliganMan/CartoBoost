@@ -58,6 +58,28 @@ def test_nearest_neighbor_gp_save_load_preserves_predictions(tmp_path):
     np.testing.assert_allclose(loaded.predict(None, coords=coords), before)
 
 
+def test_nearest_neighbor_gp_accepts_and_persists_metric_distance_matrix(tmp_path):
+    lanes = np.array(
+        [[0.0, 0.0, 2.0, 0.0], [0.2, 0.0, 2.2, 0.0], [3.0, 0.0, 5.0, 0.0]]
+    )
+    distances = directional_lane_distance_matrix(lanes, origin_weight=2.0)
+    y = np.array([1.0, 1.3, 4.0])
+    model = NearestNeighborGPRegressor(range=2.0, n_neighbors=2).fit(
+        None, y, distance_matrix=distances
+    )
+    before = model.predict(None, distance_matrix=distances)
+    assert abs(before[0] - y[0]) < 1e-3
+    with pytest.raises(ValueError, match="distance_matrix"):
+        model.predict(None, coords=np.array([[0.0, 0.0]]))
+
+    path = tmp_path / "lane-nngp.json"
+    model.save(path)
+    loaded = NearestNeighborGPRegressor.load(path)
+    np.testing.assert_allclose(
+        loaded.predict(None, distance_matrix=distances), before, rtol=0.0, atol=1e-12
+    )
+
+
 def test_directional_lane_metric_preserves_direction_and_supports_crossed_weights():
     lanes = np.array([[0.0, 0.0, 2.0, 0.0], [2.0, 0.0, 0.0, 0.0]])
     forward = directional_lane_distance_matrix(lanes)

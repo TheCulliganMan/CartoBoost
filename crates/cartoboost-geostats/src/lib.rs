@@ -194,7 +194,10 @@ pub fn directional_lane_distance(
     origin_weight: f64,
     destination_weight: f64,
 ) -> Result<f64> {
-    if left.iter().chain(right.iter()).any(|value| !value.is_finite())
+    if left
+        .iter()
+        .chain(right.iter())
+        .any(|value| !value.is_finite())
         || !origin_weight.is_finite()
         || !destination_weight.is_finite()
         || origin_weight < 0.0
@@ -226,9 +229,15 @@ pub fn directional_lane_distance_matrix(
     (0..lanes.len())
         .map(|row| {
             (0..lanes.len())
-                .map(|column| directional_lane_distance(
-                    lanes[row], lanes[column], mode, origin_weight, destination_weight,
-                ))
+                .map(|column| {
+                    directional_lane_distance(
+                        lanes[row],
+                        lanes[column],
+                        mode,
+                        origin_weight,
+                        destination_weight,
+                    )
+                })
                 .collect()
         })
         .collect()
@@ -239,6 +248,7 @@ pub struct NearestNeighborGPRegressor {
     config: NngpConfig,
     coords: Vec<[f64; 2]>,
     search_coords: Vec<[f64; 2]>,
+    precomputed_distances: Option<Vec<Vec<f64>>>,
     values: Vec<f64>,
     neighbor_index: NeighborIndex,
     mean: f64,
@@ -258,6 +268,7 @@ impl NearestNeighborGPRegressor {
             config: config.validate()?,
             coords: Vec::new(),
             search_coords: Vec::new(),
+            precomputed_distances: None,
             values: Vec::new(),
             neighbor_index: NeighborIndex::BruteForce,
             mean: 0.0,
@@ -297,6 +308,30 @@ impl NearestNeighborGPRegressor {
         self.values = y.to_vec();
         self.neighbor_index =
             NeighborIndex::fit(&self.search_coords, self.config.brute_force_threshold);
+        self.precomputed_distances = None;
+        self.mean = y.iter().sum::<f64>() / y.len() as f64;
+        self.fitted = true;
+        Ok(())
+    }
+
+    /// Fit from a symmetric training-by-training metric distance matrix.
+    pub fn fit_from_distance_matrix(&mut self, distances: &[Vec<f64>], y: &[f64]) -> Result<()> {
+        validate_symmetric_distance_matrix(distances, y.len(), "training distance matrix")?;
+        if y.is_empty() {
+            return Err(GeostatsError::InvalidInput(
+                "at least one observation is required".to_string(),
+            ));
+        }
+        if y.iter().any(|value| !value.is_finite()) {
+            return Err(GeostatsError::InvalidInput(
+                "training targets must be finite".to_string(),
+            ));
+        }
+        self.coords = vec![[0.0, 0.0]; y.len()];
+        self.search_coords.clear();
+        self.values = y.to_vec();
+        self.neighbor_index = NeighborIndex::BruteForce;
+        self.precomputed_distances = Some(distances.to_vec());
         self.mean = y.iter().sum::<f64>() / y.len() as f64;
         self.fitted = true;
         Ok(())
@@ -305,6 +340,12 @@ impl NearestNeighborGPRegressor {
     pub fn predict(&self, coords: &[[f64; 2]]) -> Result<Vec<NngpPrediction>> {
         if !self.fitted {
             return Err(GeostatsError::NotFitted);
+        }
+        if self.precomputed_distances.is_some() {
+            return Err(GeostatsError::InvalidInput(
+                "model was fit with a distance matrix; use predict_from_distance_matrix"
+                    .to_string(),
+            ));
         }
         if self.backend.selected != "cpu"
             && matches!(self.neighbor_index, NeighborIndex::BruteForce)
@@ -400,6 +441,50 @@ impl NearestNeighborGPRegressor {
                 self.predict_one_with_neighbors(*coord, neighbors)
             })
             .collect()
+    }
+
+    /// Predict from a query-by-training metric distance matrix.
+    pub fn predict_from_distance_matrix(
+        &self,
+        distances: &[Vec<f64>],
+    ) -> Result<Vec<NngpPrediction>> {
+        if !self.fitted {
+            return Err(GeostatsError::NotFitted);
+        }
+        let training_distances = self.precomputed_distances.as_ref().ok_or_else(|| {
+            GeostatsError::InvalidInput(
+                "model was fit with coordinates; use predict for coordinate queries".to_string(),
+            )
+        })?;
+        if distances.iter().any(|row| {
+            row.len() != self.values.len()
+                || row.iter().any(|value| !value.is_finite() || *value < 0.0)
+        }) {
+            return Err(GeostatsError::InvalidInput(
+                "prediction distance matrix must be finite query-by-training distances".to_string(),
+            ));
+        }
+        distances
+            .par_iter()
+            .map(|row| {
+                let mut ranked = row.iter().copied().enumerate().collect::<Vec<_>>();
+                ranked.sort_by(|left, right| {
+                    left.1
+                        .total_cmp(&right.1)
+                        .then_with(|| left.0.cmp(&right.0))
+                });
+                let neighbors = ranked
+                    .into_iter()
+                    .take(self.config.n_neighbors.min(self.values.len()))
+                    .map(|(index, _)| index)
+                    .collect::<Vec<_>>();
+                self.predict_one_with_metric_distances(row, training_distances, neighbors)
+            })
+            .collect()
+    }
+
+    pub fn uses_precomputed_distances(&self) -> bool {
+        self.precomputed_distances.is_some()
     }
 
     pub fn transformed_points(&self, coords: &[[f64; 2]]) -> Result<Vec<Vec<f32>>> {
@@ -501,10 +586,60 @@ impl NearestNeighborGPRegressor {
             neighbor_indices: neighbors,
         })
     }
+
+    fn predict_one_with_metric_distances(
+        &self,
+        query_distances: &[f64],
+        training_distances: &[Vec<f64>],
+        neighbors: Vec<usize>,
+    ) -> Result<NngpPrediction> {
+        let n = neighbors.len();
+        let mut k_nn = vec![vec![0.0; n]; n];
+        let mut k_star = vec![0.0; n];
+        let mut centered = vec![0.0; n];
+        for (row_pos, &row_idx) in neighbors.iter().enumerate() {
+            centered[row_pos] = self.values[row_idx] - self.mean;
+            k_star[row_pos] = covariance_from_distance(query_distances[row_idx], self.config);
+            for (col_pos, &col_idx) in neighbors.iter().enumerate() {
+                let mut value =
+                    covariance_from_distance(training_distances[row_idx][col_idx], self.config);
+                if row_pos == col_pos {
+                    value += self.config.nugget;
+                }
+                k_nn[row_pos][col_pos] = value;
+            }
+        }
+        let weights = solve_spd(k_nn, k_star.clone())?;
+        let mean = self.mean + dot(&weights, &centered);
+        if !mean.is_finite() || weights.iter().any(|weight| !weight.is_finite()) {
+            return Err(GeostatsError::LinearSolve(
+                "GP prediction produced non-finite weights or mean".to_string(),
+            ));
+        }
+        let prior_variance = self.config.sill + self.config.nugget;
+        let variance_reduction = checked_nonnegative(
+            dot(&k_star, &weights),
+            prior_variance,
+            "GP variance reduction",
+        )?;
+        let variance = checked_nonnegative(
+            prior_variance - variance_reduction,
+            prior_variance.max(variance_reduction),
+            "GP prediction variance",
+        )?;
+        Ok(NngpPrediction {
+            mean,
+            variance,
+            neighbor_indices: neighbors,
+        })
+    }
 }
 
 pub fn covariance(left: [f64; 2], right: [f64; 2], config: NngpConfig) -> f64 {
-    let h = transformed_distance(left, right, config);
+    covariance_from_distance(transformed_distance(left, right, config), config)
+}
+
+fn covariance_from_distance(h: f64, config: NngpConfig) -> f64 {
     let r = h / config.range;
     let corr = match config.kernel {
         CovarianceKernel::Exponential => (-r).exp(),
@@ -519,6 +654,39 @@ pub fn covariance(left: [f64; 2], right: [f64; 2], config: NngpConfig) -> f64 {
         }
     };
     config.sill * corr
+}
+
+fn validate_symmetric_distance_matrix(
+    distances: &[Vec<f64>],
+    expected_len: usize,
+    name: &str,
+) -> Result<()> {
+    if distances.len() != expected_len || distances.iter().any(|row| row.len() != expected_len) {
+        return Err(GeostatsError::InvalidInput(format!(
+            "{name} must be square with one row per target"
+        )));
+    }
+    for row in 0..expected_len {
+        for column in 0..expected_len {
+            let value = distances[row][column];
+            if !value.is_finite() || value < 0.0 {
+                return Err(GeostatsError::InvalidInput(format!(
+                    "{name} must contain finite non-negative distances"
+                )));
+            }
+            if (value - distances[column][row]).abs() > 1.0e-10 {
+                return Err(GeostatsError::InvalidInput(format!(
+                    "{name} must be symmetric"
+                )));
+            }
+        }
+        if distances[row][row].abs() > 1.0e-10 {
+            return Err(GeostatsError::InvalidInput(format!(
+                "{name} diagonal must be zero"
+            )));
+        }
+    }
+    Ok(())
 }
 
 pub fn empirical_semivariogram(
@@ -1502,6 +1670,46 @@ mod tests {
         assert!((train_pred.mean - y[10]).abs() < 1.0e-3);
         assert!(train_pred.variance >= 0.0);
         assert!(far_pred.variance >= train_pred.variance);
+    }
+
+    #[test]
+    fn precomputed_metric_distances_drive_neighbors_and_covariance() {
+        let coords: [[f64; 2]; 3] = [[0.0, 0.0], [1.0, 0.0], [3.0, 0.0]];
+        let targets = [1.0, 2.0, 4.0];
+        let distances = coords
+            .iter()
+            .map(|left| {
+                coords
+                    .iter()
+                    .map(|right| (left[0] - right[0]).hypot(left[1] - right[1]))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let mut model = NearestNeighborGPRegressor::new(NngpConfig {
+            range: 1.5,
+            n_neighbors: 2,
+            ..NngpConfig::default()
+        })
+        .expect("model");
+        model
+            .fit_from_distance_matrix(&distances, &targets)
+            .expect("metric fit");
+        assert!(model.uses_precomputed_distances());
+        let predictions = model
+            .predict_from_distance_matrix(&[vec![0.0, 1.0, 3.0]])
+            .expect("metric prediction");
+        assert_eq!(predictions[0].neighbor_indices, vec![0, 1]);
+        assert!((predictions[0].mean - targets[0]).abs() < 1.0e-4);
+        assert!(model.predict(&[[0.0, 0.0]]).is_err());
+    }
+
+    #[test]
+    fn precomputed_metric_requires_symmetric_training_matrix() {
+        let mut model = NearestNeighborGPRegressor::new(NngpConfig::default()).expect("model");
+        let error = model
+            .fit_from_distance_matrix(&[vec![0.0, 1.0], vec![2.0, 0.0]], &[1.0, 2.0])
+            .expect_err("asymmetric metric must fail");
+        assert!(error.to_string().contains("symmetric"));
     }
 
     #[test]

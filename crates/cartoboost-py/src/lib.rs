@@ -3716,34 +3716,7 @@ impl NativeMarketStructureForecaster {
 
 #[pymethods]
 impl NativeGraphTemporalFrame {
-    #[new]
-    #[pyo3(signature = (node_ids, timestamps, target, indptr, indices, data, horizon, frequency, covariates=None, owner_mask=None, target_mask=None, imputed_mask=None, target_weights=None, covariate_roles=None))]
-    #[allow(clippy::too_many_arguments)]
-    fn new(
-        node_ids: Vec<String>,
-        timestamps: Vec<i64>,
-        target: Vec<Vec<f64>>,
-        indptr: Vec<usize>,
-        indices: Vec<usize>,
-        data: Vec<f64>,
-        horizon: usize,
-        frequency: String,
-        covariates: Option<Vec<Vec<Vec<f64>>>>,
-        owner_mask: Option<Vec<bool>>,
-        target_mask: Option<Vec<Vec<bool>>>,
-        imputed_mask: Option<Vec<Vec<bool>>>,
-        target_weights: Option<Vec<Vec<f64>>>,
-        covariate_roles: Option<Vec<String>>,
-    ) -> PyResult<Self> {
-        Self::from_owned_parts(
-            node_ids, timestamps, target, indptr, indices, data, horizon, frequency, covariates,
-            owner_mask, target_mask, imputed_mask, target_weights, covariate_roles,
-        )
-    }
-
-    /// Buffer-oriented constructor used by the Python frame wrapper. It accepts
-    /// C-contiguous NumPy arrays directly, avoiding the large intermediate
-    /// nested Python lists required by the compatibility constructor above.
+    /// Buffer-oriented constructor used by every Python graph-frame surface.
     #[staticmethod]
     #[pyo3(signature = (node_ids, timestamps, target, indptr, indices, data, horizon, frequency, covariates=None, owner_mask=None, target_mask=None, imputed_mask=None, target_weights=None, covariate_roles=None))]
     #[allow(clippy::too_many_arguments)]
@@ -3777,8 +3750,20 @@ impl NativeGraphTemporalFrame {
             .map(|array| rows_from_numpy_2d(array, "target_weights"))
             .transpose()?;
         Self::from_owned_parts(
-            node_ids, timestamps, target, indptr, indices, data, horizon, frequency, covariates,
-            owner_mask, target_mask, imputed_mask, target_weights, covariate_roles,
+            node_ids,
+            timestamps,
+            target,
+            indptr,
+            indices,
+            data,
+            horizon,
+            frequency,
+            covariates,
+            owner_mask,
+            target_mask,
+            imputed_mask,
+            target_weights,
+            covariate_roles,
         )
     }
 
@@ -3796,7 +3781,6 @@ impl NativeGraphTemporalFrame {
     fn frequency(&self) -> String {
         self.frame.frequency.clone()
     }
-
 }
 
 impl NativeGraphTemporalFrame {
@@ -3837,7 +3821,6 @@ impl NativeGraphTemporalFrame {
             .map_err(to_py_geo_st_error)?,
         })
     }
-
 }
 
 #[pyclass(name = "DCRNNForecaster")]
@@ -4319,6 +4302,38 @@ impl NativePaperGraphTransformerForecaster {
             .map_err(to_py_geo_st_error)
     }
 
+    fn predict_owned(&self, py: Python<'_>, horizon: usize) -> PyResult<Vec<Vec<f64>>> {
+        py.detach(|| self.model.predict_owned(horizon))
+            .map_err(to_py_geo_st_error)
+    }
+
+    fn predict_median(&self, py: Python<'_>, horizon: usize) -> PyResult<Vec<Vec<f64>>> {
+        py.detach(|| self.model.predict_median(horizon))
+            .map_err(to_py_geo_st_error)
+    }
+
+    #[pyo3(signature = (horizon, calibration_actual, calibration_median, alpha=0.1))]
+    fn predict_conformal_json(
+        &self,
+        py: Python<'_>,
+        horizon: usize,
+        calibration_actual: Vec<Vec<Vec<f64>>>,
+        calibration_median: Vec<Vec<Vec<f64>>>,
+        alpha: f64,
+    ) -> PyResult<String> {
+        let result = py
+            .detach(|| {
+                self.model.predict_conformal_from_calibration(
+                    horizon,
+                    &calibration_actual,
+                    &calibration_median,
+                    alpha,
+                )
+            })
+            .map_err(to_py_geo_st_error)?;
+        serde_json::to_string(&result).map_err(to_py_json_error)
+    }
+
     fn historical_fits(&self, py: Python<'_>) -> PyResult<(usize, Vec<Vec<f64>>)> {
         py.detach(|| self.model.historical_fits())
             .map_err(to_py_geo_st_error)
@@ -4406,8 +4421,13 @@ impl NativePaperGraphTransformerForecaster {
     }
 
     fn parameter_inventory_json(&self) -> PyResult<String> {
-        serde_json::to_string(&self.model.parameter_inventory().map_err(to_py_geo_st_error)?)
-            .map_err(|err| PyRuntimeError::new_err(err.to_string()))
+        serde_json::to_string(
+            &self
+                .model
+                .parameter_inventory()
+                .map_err(to_py_geo_st_error)?,
+        )
+        .map_err(|err| PyRuntimeError::new_err(err.to_string()))
     }
 
     fn memory_telemetry_json(&self) -> PyResult<String> {
@@ -5945,6 +5965,18 @@ impl NativeNearestNeighborGPRegressor {
             .map_err(to_py_geostats_error)
     }
 
+    fn fit_from_distance_matrix(
+        &mut self,
+        py: Python<'_>,
+        distances: PyReadonlyArray2<'_, f64>,
+        y: PyReadonlyArray1<'_, f64>,
+    ) -> PyResult<()> {
+        let distances = rows_from_numpy_2d(distances, "distance_matrix")?;
+        let targets = y.as_slice()?.to_vec();
+        py.detach(|| self.model.fit_from_distance_matrix(&distances, &targets))
+            .map_err(to_py_geostats_error)
+    }
+
     fn predict(
         &self,
         py: Python<'_>,
@@ -5953,6 +5985,30 @@ impl NativeNearestNeighborGPRegressor {
         let coords = coords_from_array(coords)?;
         let predictions = py
             .detach(|| self.model.predict(&coords))
+            .map_err(to_py_geostats_error)?;
+        let means = predictions
+            .iter()
+            .map(|prediction| prediction.mean)
+            .collect();
+        let variances = predictions
+            .iter()
+            .map(|prediction| prediction.variance)
+            .collect();
+        let neighbors = predictions
+            .into_iter()
+            .map(|prediction| prediction.neighbor_indices)
+            .collect();
+        Ok((means, variances, neighbors))
+    }
+
+    fn predict_from_distance_matrix(
+        &self,
+        py: Python<'_>,
+        distances: PyReadonlyArray2<'_, f64>,
+    ) -> PyResult<PyNngpPrediction> {
+        let distances = rows_from_numpy_2d(distances, "distance_matrix")?;
+        let predictions = py
+            .detach(|| self.model.predict_from_distance_matrix(&distances))
             .map_err(to_py_geostats_error)?;
         let means = predictions
             .iter()
@@ -5987,6 +6043,10 @@ impl NativeNearestNeighborGPRegressor {
 
     fn backend(&self) -> String {
         self.model.backend().selected.clone()
+    }
+
+    fn uses_precomputed_distances(&self) -> bool {
+        self.model.uses_precomputed_distances()
     }
 }
 
@@ -12905,10 +12965,15 @@ fn rows_from_numpy_2d<T: Element + Clone>(
 ) -> PyResult<Vec<Vec<T>>> {
     let shape = array.shape();
     if shape.len() != 2 {
-        return Err(PyValueError::new_err(format!("{name} must be two-dimensional")));
+        return Err(PyValueError::new_err(format!(
+            "{name} must be two-dimensional"
+        )));
     }
     let values = array.as_slice()?;
-    Ok(values.chunks_exact(shape[1]).map(|row| row.to_vec()).collect())
+    Ok(values
+        .chunks_exact(shape[1])
+        .map(|row| row.to_vec())
+        .collect())
 }
 
 fn rows_from_numpy_3d<T: Element + Clone>(
@@ -12917,13 +12982,19 @@ fn rows_from_numpy_3d<T: Element + Clone>(
 ) -> PyResult<Vec<Vec<Vec<T>>>> {
     let shape = array.shape();
     if shape.len() != 3 {
-        return Err(PyValueError::new_err(format!("{name} must be three-dimensional")));
+        return Err(PyValueError::new_err(format!(
+            "{name} must be three-dimensional"
+        )));
     }
     let values = array.as_slice()?;
     let row_width = shape[1] * shape[2];
     Ok(values
         .chunks_exact(row_width)
-        .map(|time| time.chunks_exact(shape[2]).map(|row| row.to_vec()).collect())
+        .map(|time| {
+            time.chunks_exact(shape[2])
+                .map(|row| row.to_vec())
+                .collect()
+        })
         .collect())
 }
 
@@ -14329,7 +14400,10 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(forecast_evaluate_metrics, m)?)?;
     m.add_function(wrap_pyfunction!(graph_st_available_backends_value, m)?)?;
     m.add_function(wrap_pyfunction!(geostats_empirical_semivariogram_value, m)?)?;
-    m.add_function(wrap_pyfunction!(geostats_directional_lane_distance_matrix_value, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        geostats_directional_lane_distance_matrix_value,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(geostats_deterministic_neighbors_value, m)?)?;
     m.add_function(wrap_pyfunction!(geostats_fit_variogram_wls_value, m)?)?;
     m.add_function(wrap_pyfunction!(deep_response_curve_fit_value, m)?)?;

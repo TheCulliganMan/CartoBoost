@@ -396,7 +396,7 @@ class DelayAwareGraphTransformer(ArtifactPersistenceMixin):
         native_frame = _NativeGraphTemporalFrame(
             node_ids=list(frame.node_ids),
             timestamps=list(frame.timestamps),
-            target=np.asarray(frame.y, dtype=float),
+            target=np.ascontiguousarray(frame.y, dtype=float),
             indptr=indptr,
             indices=indices,
             data=data,
@@ -641,7 +641,7 @@ def _native_public_graph_frame(
     return _NativeGraphTemporalFrame(
         node_ids=list(frame.node_ids),
         timestamps=[int(value) for value in frame.timestamps],
-        target=np.asarray(frame.y, dtype=float),
+        target=np.ascontiguousarray(frame.y, dtype=float),
         indptr=indptr,
         indices=indices,
         data=data,

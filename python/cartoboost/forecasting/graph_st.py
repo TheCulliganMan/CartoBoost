@@ -76,27 +76,11 @@ class GraphTemporalFrame:
             self._target_weights,
             self._covariate_roles,
         )
-        # New native builds copy straight from C-contiguous buffers. Keep the
-        # list-compatible constructor as a narrow fallback for old extensions.
-        if hasattr(native_class, "from_numpy"):
-            self._native_frame = native_class.from_numpy(*native_args)
-        else:  # pragma: no cover - compatibility with an older installed wheel.
-            self._native_frame = native_class(
-                self._node_ids,
-                self._timestamps,
-                self._target.tolist(),
-                self._indptr,
-                self._indices,
-                self._data,
-                self._horizon,
-                self._frequency,
-                None if self._covariates is None else self._covariates.tolist(),
-                self._owner_mask,
-                None if self._target_mask is None else self._target_mask.tolist(),
-                None if self._imputed_mask is None else self._imputed_mask.tolist(),
-                None if self._target_weights is None else self._target_weights.tolist(),
-                self._covariate_roles,
+        if not hasattr(native_class, "from_numpy"):
+            raise RuntimeError(
+                "CartoBoost native extension is incompatible: GraphTemporalFrame.from_numpy is required"
             )
+        self._native_frame = native_class.from_numpy(*native_args)
 
     @property
     def node_ids(self) -> list[str]:
@@ -904,6 +888,44 @@ class _PaperGraphTransformerForecaster(ArtifactPersistenceMixin):
     def predict(self, horizon: int) -> np.ndarray:
         self._check_is_fitted()
         return np.asarray(self._native_model.predict(int(horizon)), dtype=float)
+
+    def predict_owned(self, horizon: int) -> np.ndarray:
+        """Return only owner-node forecasts from a sharded graph frame."""
+        self._check_is_fitted()
+        return np.asarray(self._native_model.predict_owned(int(horizon)), dtype=float)
+
+    def predict_median(self, horizon: int) -> np.ndarray:
+        """Return the stable native direct-decoder median."""
+        self._check_is_fitted()
+        return np.asarray(self._native_model.predict_median(int(horizon)), dtype=float)
+
+    def predict_conformal(
+        self,
+        horizon: int,
+        *,
+        calibration_actual: Any,
+        calibration_median: Any,
+        alpha: float = 0.1,
+    ) -> dict[str, Any]:
+        """Build noncrossing horizon-wise intervals from raw held-out pairs."""
+        self._check_is_fitted()
+        actual = np.asarray(calibration_actual, dtype=float)
+        median = np.asarray(calibration_median, dtype=float)
+        if actual.ndim != 3 or median.shape != actual.shape:
+            raise ValueError(
+                "calibration_actual and calibration_median must match shape "
+                "(origins, horizon, nodes)"
+            )
+        return dict(
+            json.loads(
+                self._native_model.predict_conformal_json(
+                    int(horizon),
+                    actual.tolist(),
+                    median.tolist(),
+                    float(alpha),
+                )
+            )
+        )
 
     def historical_fits(self) -> tuple[int, np.ndarray]:
         """Return frozen-state one-step fits and their first history index."""

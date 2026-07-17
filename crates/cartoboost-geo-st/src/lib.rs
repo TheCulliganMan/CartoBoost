@@ -314,18 +314,8 @@ impl GraphTemporalFrame {
         frequency: String,
     ) -> Result<Self> {
         Self::new_with_training_metadata(
-            node_ids,
-            timestamps,
-            target,
-            covariates,
-            adjacency,
-            horizon,
-            frequency,
-            None,
-            None,
-            None,
-            None,
-            None,
+            node_ids, timestamps, target, covariates, adjacency, horizon, frequency, None, None,
+            None, None, None,
         )
     }
 
@@ -423,16 +413,24 @@ impl GraphTemporalFrame {
         validate_mask("imputed mask", &self.imputed_mask)?;
         if self.target_weights.as_ref().is_some_and(|rows| {
             rows.len() != self.target.len()
-                || rows.iter().any(|row| row.len() != nodes || row.iter().any(|value| !value.is_finite() || *value < 0.0))
+                || rows.iter().any(|row| {
+                    row.len() != nodes || row.iter().any(|value| !value.is_finite() || *value < 0.0)
+                })
         }) {
             return Err(GeoStError::InvalidFrame(
-                "target weights must be finite, non-negative, and have shape [time, node]".to_string(),
+                "target weights must be finite, non-negative, and have shape [time, node]"
+                    .to_string(),
             ));
         }
         for (time, row) in self.target.iter().enumerate() {
-            if row.len() != nodes || row.iter().enumerate().any(|(node, value)| {
-                self.target_mask.as_ref().is_none_or(|mask| mask[time][node]) && !value.is_finite()
-            }) {
+            if row.len() != nodes
+                || row.iter().enumerate().any(|(node, value)| {
+                    self.target_mask
+                        .as_ref()
+                        .is_none_or(|mask| mask[time][node])
+                        && !value.is_finite()
+                })
+            {
                 return Err(GeoStError::InvalidFrame(
                     "active target values must be finite with shape [time, node]".to_string(),
                 ));
@@ -1130,6 +1128,9 @@ pub struct PaperGraphTransformerForecaster {
     history_time_features: Option<Vec<Vec<f64>>>,
     #[serde(default)]
     covariate_roles: Option<Vec<String>>,
+    owner_mask: Vec<bool>,
+    fit_activation_tape_bytes: usize,
+    fit_frozen_patch_cache_bytes: usize,
     target_mean: f64,
     target_scale: f64,
 }
@@ -1278,6 +1279,104 @@ pub struct LsttnEdgeDiagnostic {
     pub learned_adaptive_contribution: f64,
     pub normalized_attention: f64,
     pub horizon_sensitivity: Vec<f64>,
+}
+
+/// Noncrossing conformal intervals around the native LSTTN median decoder.
+/// Calibration observations and their median forecasts are supplied explicitly
+/// so callers can enforce a raw held-out calibration split.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct LsttnConformalForecast {
+    pub lower: Vec<Vec<f64>>,
+    pub median: Vec<Vec<f64>>,
+    pub upper: Vec<Vec<f64>>,
+    pub radius_by_horizon: Vec<f64>,
+    pub calibration_coverage_by_horizon: Vec<f64>,
+    pub calibration_count_by_horizon: Vec<usize>,
+}
+
+pub fn lsttn_conformal_forecast(
+    calibration_actual: &[Vec<Vec<f64>>],
+    calibration_median: &[Vec<Vec<f64>>],
+    forecast_median: &[Vec<f64>],
+    alpha: f64,
+) -> Result<LsttnConformalForecast> {
+    if !(0.0 < alpha && alpha < 1.0)
+        || calibration_actual.is_empty()
+        || calibration_actual.len() != calibration_median.len()
+        || forecast_median.is_empty()
+    {
+        return Err(GeoStError::InvalidFrame(
+            "conformal calibration requires matching non-empty held-out actual and median arrays with alpha in (0, 1)"
+                .to_string(),
+        ));
+    }
+    let horizons = forecast_median.len();
+    let nodes = forecast_median[0].len();
+    if nodes == 0
+        || forecast_median
+            .iter()
+            .any(|row| row.len() != nodes || row.iter().any(|value| !value.is_finite()))
+    {
+        return Err(GeoStError::InvalidFrame(
+            "forecast median must be a finite non-empty horizon by node matrix".to_string(),
+        ));
+    }
+    let mut radii = Vec::with_capacity(horizons);
+    let mut coverage = Vec::with_capacity(horizons);
+    let mut counts = Vec::with_capacity(horizons);
+    for horizon in 0..horizons {
+        let mut residuals = Vec::new();
+        for (actual_origin, median_origin) in calibration_actual.iter().zip(calibration_median) {
+            if actual_origin.len() != horizons
+                || median_origin.len() != horizons
+                || actual_origin.iter().any(|row| row.len() != nodes)
+                || median_origin.iter().any(|row| row.len() != nodes)
+            {
+                return Err(GeoStError::InvalidFrame(
+                    "calibration arrays must have shape [origins, forecast_horizon, nodes]"
+                        .to_string(),
+                ));
+            }
+            for node in 0..nodes {
+                let actual = actual_origin[horizon][node];
+                let median = median_origin[horizon][node];
+                if !actual.is_finite() || !median.is_finite() {
+                    return Err(GeoStError::InvalidFrame(
+                        "calibration actual and median values must be finite".to_string(),
+                    ));
+                }
+                residuals.push((actual - median).abs());
+            }
+        }
+        residuals.sort_by(f64::total_cmp);
+        let count = residuals.len();
+        let rank = (((count + 1) as f64 * (1.0 - alpha)).ceil() as usize)
+            .saturating_sub(1)
+            .min(count - 1);
+        let radius = residuals[rank];
+        let covered = residuals.iter().filter(|value| **value <= radius).count();
+        radii.push(radius);
+        coverage.push(covered as f64 / count as f64);
+        counts.push(count);
+    }
+    let lower = forecast_median
+        .iter()
+        .enumerate()
+        .map(|(horizon, row)| row.iter().map(|value| value - radii[horizon]).collect())
+        .collect();
+    let upper = forecast_median
+        .iter()
+        .enumerate()
+        .map(|(horizon, row)| row.iter().map(|value| value + radii[horizon]).collect())
+        .collect();
+    Ok(LsttnConformalForecast {
+        lower,
+        median: forecast_median.to_vec(),
+        upper,
+        radius_by_horizon: radii,
+        calibration_coverage_by_horizon: coverage,
+        calibration_count_by_horizon: counts,
+    })
 }
 
 /// Serializable native parameters for the graph-transformer profiles.
@@ -9811,6 +9910,9 @@ impl PaperGraphTransformerForecaster {
             history: Vec::new(),
             history_time_features: None,
             covariate_roles: None,
+            owner_mask: Vec::new(),
+            fit_activation_tape_bytes: 0,
+            fit_frozen_patch_cache_bytes: 0,
             target_mean: 0.0,
             target_scale: 1.0,
         })
@@ -9948,9 +10050,19 @@ impl PaperGraphTransformerForecaster {
                 row.iter()
                     .enumerate()
                     .map(|(node, value)| {
-                        let observed = frame.target_mask.as_ref().is_none_or(|mask| mask[time][node]);
-                        let imputed = frame.imputed_mask.as_ref().is_some_and(|mask| mask[time][node]);
-                        if observed && !imputed { (value - mean) / scale } else { -mean / scale }
+                        let observed = frame
+                            .target_mask
+                            .as_ref()
+                            .is_none_or(|mask| mask[time][node]);
+                        let imputed = frame
+                            .imputed_mask
+                            .as_ref()
+                            .is_some_and(|mask| mask[time][node]);
+                        if observed && !imputed {
+                            (value - mean) / scale
+                        } else {
+                            -mean / scale
+                        }
                     })
                     .collect::<Vec<_>>()
             })
@@ -10391,10 +10503,9 @@ impl PaperGraphTransformerForecaster {
                                             .imputed_mask
                                             .as_ref()
                                             .map(|mask| &mask[cutoff..cutoff + frame.horizon]),
-                                        frame
-                                            .target_weights
-                                            .as_ref()
-                                            .map(|weights| &weights[cutoff..cutoff + frame.horizon]),
+                                        frame.target_weights.as_ref().map(|weights| {
+                                            &weights[cutoff..cutoff + frame.horizon]
+                                        }),
                                         frame.owner_mask.as_deref(),
                                     )
                                 })
@@ -10542,6 +10653,30 @@ impl PaperGraphTransformerForecaster {
         self.adjacency = Some(adjacency);
         self.history = normalized;
         self.history_time_features = lsttn_time_features;
+        self.owner_mask = frame
+            .owner_mask
+            .clone()
+            .unwrap_or_else(|| vec![true; frame.node_ids.len()]);
+        self.fit_frozen_patch_cache_bytes = frozen_lsttn_cache.as_ref().map_or(0, |cache| {
+            cache
+                .iter()
+                .flat_map(|window| window.iter())
+                .flat_map(|patch| patch.iter())
+                .map(Vec::len)
+                .sum::<usize>()
+                * std::mem::size_of::<f32>()
+        });
+        // A scalar tape retains forward values and gradients for the active
+        // mini-batch.  This is an allocation upper bound at the supervised
+        // checkpoint, not a process-wide RSS estimate.
+        self.fit_activation_tape_bytes = self
+            .config
+            .batch_size
+            .saturating_mul(self.config.lookback)
+            .saturating_mul(frame.node_ids.len())
+            .saturating_mul(self.config.hidden_size)
+            .saturating_mul(2)
+            .saturating_mul(std::mem::size_of::<f64>());
         self.target_mean = mean;
         self.target_scale = scale;
         if let Some(path) = checkpoint_path {
@@ -10643,6 +10778,22 @@ impl PaperGraphTransformerForecaster {
             .collect())
     }
 
+    /// The deterministic direct decoder is the model's native median surface.
+    pub fn predict_median(&self, horizon: usize) -> Result<Vec<Vec<f64>>> {
+        self.predict(horizon)
+    }
+
+    pub fn predict_conformal_from_calibration(
+        &self,
+        horizon: usize,
+        calibration_actual: &[Vec<Vec<f64>>],
+        calibration_median: &[Vec<Vec<f64>>],
+        alpha: f64,
+    ) -> Result<LsttnConformalForecast> {
+        let median = self.predict_median(horizon)?;
+        lsttn_conformal_forecast(calibration_actual, calibration_median, &median, alpha)
+    }
+
     pub fn historical_fits(&self) -> Result<(usize, Vec<Vec<f64>>)> {
         let state = self.trainable_state.as_ref().ok_or(GeoStError::NotFit)?;
         let adjacency = self.adjacency.as_ref().ok_or(GeoStError::NotFit)?;
@@ -10690,6 +10841,27 @@ impl PaperGraphTransformerForecaster {
             );
         }
         Ok((self.config.lookback, fitted))
+    }
+
+    /// Return forecasts only for this shard's owner nodes.  Halo nodes remain
+    /// available internally for graph message passing but are never emitted
+    /// from this owner-scoped surface.
+    pub fn predict_owned(&self, horizon: usize) -> Result<Vec<Vec<f64>>> {
+        let predictions = self.predict(horizon)?;
+        if self.owner_mask.len() != self.node_ids.len() {
+            return Err(GeoStError::InvalidFrame(
+                "artifact is missing the required owner mask; refit this model".to_string(),
+            ));
+        }
+        Ok(predictions
+            .into_iter()
+            .map(|row| {
+                row.into_iter()
+                    .zip(&self.owner_mask)
+                    .filter_map(|(value, owner)| (*owner).then_some(value))
+                    .collect()
+            })
+            .collect())
     }
 
     pub fn score(&self, actual: &[Vec<f64>]) -> Result<f64> {
@@ -10851,14 +11023,16 @@ impl PaperGraphTransformerForecaster {
             && state.context_window == self.config.lookback
             && state.horizons == self.horizon
             && self.history.iter().all(|row| row.len() == state.nodes)
+            && self.owner_mask.len() == state.nodes
             && self.history_time_features.as_ref().is_none_or(|features| {
                 features.len() == self.history.len()
                     && features.iter().all(|row| row.len() == state.nodes)
             });
         if self.history_time_features.is_some()
-            && self.covariate_roles.as_ref().is_none_or(|roles| {
-                !roles.iter().any(|role| role == "time_of_day")
-            })
+            && self
+                .covariate_roles
+                .as_ref()
+                .is_none_or(|roles| !roles.iter().any(|role| role == "time_of_day"))
         {
             return Err(GeoStError::InvalidFrame(
                 "artifact contains LSTTN covariates without a declared time_of_day role; refit with this CartoBoost version".to_string(),
@@ -10948,12 +11122,27 @@ impl PaperGraphTransformerForecaster {
     pub fn parameter_inventory(&self) -> Result<Vec<LsttnParameterInventoryEntry>> {
         let state = self.trainable_state.as_ref().ok_or(GeoStError::NotFit)?;
         let mut result = Vec::new();
-        for (name, range) in state.shared_ranges() {
-            // Shared ranges are architecture-only. A node-dependent range in
-            // this state would make cross-shard sharing unsound.
-            if range.len() > state.parameters.len() {
+        let alternate_state = TrainableGraphTransformerState {
+            nodes: state.nodes.saturating_add(1),
+            hidden: state.hidden,
+            horizons: state.horizons,
+            experts: state.experts,
+            graph_order: state.graph_order,
+            periodicity: state.periodicity,
+            context_window: state.context_window,
+            ..state.clone()
+        };
+        for ((name, range), (alternate_name, alternate_range)) in state
+            .shared_ranges()
+            .into_iter()
+            .zip(alternate_state.shared_ranges())
+        {
+            if name != alternate_name
+                || range.len() != alternate_range.len()
+                || range.end > state.parameters.len()
+            {
                 return Err(GeoStError::InvalidFrame(format!(
-                    "shared LSTTN parameter segment {name} is out of bounds"
+                    "shared LSTTN parameter segment {name} is node-count-dependent or out of bounds"
                 )));
             }
             result.push(parameter_inventory_entry(
@@ -10974,9 +11163,7 @@ impl PaperGraphTransformerForecaster {
         Ok(result)
     }
 
-    /// Native persistent-memory accounting. Ephemeral tapes/caches are zero
-    /// outside a fit call; progress integrations can sample this report at
-    /// checkpoint boundaries without retaining training allocations.
+    /// Native component accounting at the most recent fit checkpoint.
     pub fn memory_telemetry(&self) -> Result<LsttnMemoryTelemetry> {
         let state = self.trainable_state.as_ref().ok_or(GeoStError::NotFit)?;
         let scalar = std::mem::size_of::<f64>();
@@ -10991,7 +11178,8 @@ impl PaperGraphTransformerForecaster {
                     + adjacency.indptr.len() * std::mem::size_of::<usize>()
             });
         let parameter_bytes = state.parameters.len() * scalar;
-        let optimizer_moment_bytes = (state.first_moment.len() + state.second_moment.len()) * scalar;
+        let optimizer_moment_bytes =
+            (state.first_moment.len() + state.second_moment.len()) * scalar;
         let graph_diffusion_workspace_bytes = self.adjacency.as_ref().map_or(0, |adjacency| {
             adjacency.indices.len() * std::mem::size_of::<usize>()
         });
@@ -10999,10 +11187,13 @@ impl PaperGraphTransformerForecaster {
             frame_storage_bytes,
             parameter_bytes,
             optimizer_moment_bytes,
-            activation_tape_bytes: 0,
-            frozen_patch_cache_bytes: 0,
+            activation_tape_bytes: self.fit_activation_tape_bytes,
+            frozen_patch_cache_bytes: self.fit_frozen_patch_cache_bytes,
             graph_diffusion_workspace_bytes,
-            prediction_buffer_bytes: 0,
+            prediction_buffer_bytes: self
+                .horizon
+                .saturating_mul(state.nodes)
+                .saturating_mul(scalar),
             total_accounted_bytes: 0,
         };
         Ok(LsttnMemoryTelemetry {
@@ -11027,24 +11218,45 @@ impl PaperGraphTransformerForecaster {
         }
         let mut diagnostics = Vec::with_capacity(adjacency.indices.len());
         for target in 0..state.nodes {
+            if !self.owner_mask[target] {
+                continue;
+            }
             let range = adjacency.indptr[target]..adjacency.indptr[target + 1];
-            let row_sum = adjacency.data[range.clone()].iter().map(|v| v.abs()).sum::<f64>();
-            let logits = range.clone().map(|edge| {
-                let source = adjacency.indices[edge];
-                (0..10).map(|latent| {
-                    state.parameters[layout.lsttn_adaptive_source + target * 10 + latent]
-                        * state.parameters[layout.lsttn_adaptive_target + source * 10 + latent]
-                }).sum::<f64>().max(0.0)
-            }).collect::<Vec<_>>();
+            let row_sum = adjacency.data[range.clone()]
+                .iter()
+                .map(|v| v.abs())
+                .sum::<f64>();
+            let logits = range
+                .clone()
+                .map(|edge| {
+                    let source = adjacency.indices[edge];
+                    (0..10)
+                        .map(|latent| {
+                            state.parameters[layout.lsttn_adaptive_source + target * 10 + latent]
+                                * state.parameters
+                                    [layout.lsttn_adaptive_target + source * 10 + latent]
+                        })
+                        .sum::<f64>()
+                        .max(0.0)
+                })
+                .collect::<Vec<_>>();
             let max_logit = logits.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-            let denominator = logits.iter().map(|value| (*value - max_logit).exp()).sum::<f64>();
+            let denominator = logits
+                .iter()
+                .map(|value| (*value - max_logit).exp())
+                .sum::<f64>();
             for (offset, edge) in range.enumerate() {
                 let source = adjacency.indices[edge];
                 let attention = (logits[offset] - max_logit).exp() / denominator.max(1e-12);
-                let horizon_sensitivity = (0..state.horizons).map(|horizon| {
-                    state.parameters[layout.output + horizon * (state.hidden + 1)..layout.output + (horizon + 1) * (state.hidden + 1)]
-                        .iter().map(|value| value.abs()).sum::<f64>()
-                }).collect();
+                let horizon_sensitivity = (0..state.horizons)
+                    .map(|horizon| {
+                        state.parameters[layout.output + horizon * (state.hidden + 1)
+                            ..layout.output + (horizon + 1) * (state.hidden + 1)]
+                            .iter()
+                            .map(|value| value.abs())
+                            .sum::<f64>()
+                    })
+                    .collect();
                 diagnostics.push(LsttnEdgeDiagnostic {
                     source,
                     target,
@@ -12476,6 +12688,47 @@ mod tests {
     }
 
     #[test]
+    fn lsttn_shard_pair_manifest_is_atomic_and_round_trips_state() {
+        let frame = traffic_style_fixture_frame();
+        let config = PaperGraphTransformerConfig {
+            profile: GraphTransformerProfile::LongShortFusion,
+            lookback: 8,
+            hidden_size: 4,
+            attention_heads: 2,
+            graph_order: 2,
+            experts: 2,
+            periodicity: 1,
+            recent_window: 4,
+            epochs: 1,
+            learning_rate: 0.01,
+            weight_decay: 0.0,
+            batch_size: 32,
+            backend: select_compute_backend(Some("cpu")).unwrap(),
+        };
+        let mut model = PaperGraphTransformerForecaster::new(config).unwrap();
+        model.fit(&frame).unwrap();
+        let expected = model.predict(2).unwrap();
+        let expected_state = model.trainable_state.as_ref().unwrap().clone();
+        let directory = tempfile::tempdir().unwrap();
+        let local = directory.path().join("local.json");
+        let shared = directory.path().join("shared.json");
+        let manifest = directory.path().join("pair.json");
+        model.save_shard_pair(&local, &shared, &manifest).unwrap();
+        let restored =
+            PaperGraphTransformerForecaster::load_shard_pair(&local, &shared, &manifest).unwrap();
+        assert_eq!(restored.predict(2).unwrap(), expected);
+        let restored_state = restored.trainable_state.as_ref().unwrap();
+        assert_eq!(restored_state.steps, expected_state.steps);
+        assert_eq!(restored_state.shared_steps, expected_state.shared_steps);
+        assert_eq!(restored_state.local_steps, expected_state.local_steps);
+
+        fs::write(&local, b"interrupted local write").unwrap();
+        assert!(
+            PaperGraphTransformerForecaster::load_shard_pair(&local, &shared, &manifest).is_err()
+        );
+    }
+
+    #[test]
     fn lsttn_shared_state_moves_only_node_independent_segments() {
         let mut source = TrainableGraphTransformerState::initialized(3, 4, 2, 1, 4, 8, 4, 2, 2, 41);
         for (index, value) in source.parameters.iter_mut().enumerate() {
@@ -12504,6 +12757,39 @@ mod tests {
         for range in local_ranges {
             assert_eq!(target.parameters[range.clone()], local_before[range]);
         }
+        let source_shared_bytes = shared
+            .segments
+            .iter()
+            .map(|segment| {
+                (segment.parameters.len()
+                    + segment.first_moment.len()
+                    + segment.second_moment.len())
+                    * std::mem::size_of::<f64>()
+            })
+            .sum::<usize>();
+        let target_shared_bytes = target
+            .export_shared(1.25, 0.5)
+            .segments
+            .iter()
+            .map(|segment| {
+                (segment.parameters.len()
+                    + segment.first_moment.len()
+                    + segment.second_moment.len())
+                    * std::mem::size_of::<f64>()
+            })
+            .sum::<usize>();
+        assert_eq!(source_shared_bytes, target_shared_bytes);
+        let source_local_bytes = source
+            .local_ranges()
+            .into_iter()
+            .map(|range| range.len() * 3 * std::mem::size_of::<f64>())
+            .sum::<usize>();
+        let target_local_bytes = target
+            .local_ranges()
+            .into_iter()
+            .map(|range| range.len() * 3 * std::mem::size_of::<f64>())
+            .sum::<usize>();
+        assert!(target_local_bytes > source_local_bytes);
     }
 
     #[test]
@@ -12558,15 +12844,37 @@ mod tests {
         let mut target = base.target.clone();
         target[0][0] = f64::NAN;
         assert!(GraphTemporalFrame::new_with_training_metadata(
-            base.node_ids.clone(), base.timestamps.clone(), target.clone(), base.covariates.clone(),
-            base.adjacency.clone(), base.horizon, base.frequency.clone(), None, None, None, None, None,
-        ).is_err());
+            base.node_ids.clone(),
+            base.timestamps.clone(),
+            target.clone(),
+            base.covariates.clone(),
+            base.adjacency.clone(),
+            base.horizon,
+            base.frequency.clone(),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .is_err());
         let mut mask = vec![vec![true; base.node_ids.len()]; target.len()];
         mask[0][0] = false;
         assert!(GraphTemporalFrame::new_with_training_metadata(
-            base.node_ids, base.timestamps, target, base.covariates, base.adjacency,
-            base.horizon, base.frequency, None, Some(mask), None, None, None,
-        ).is_ok());
+            base.node_ids,
+            base.timestamps,
+            target,
+            base.covariates,
+            base.adjacency,
+            base.horizon,
+            base.frequency,
+            None,
+            Some(mask),
+            None,
+            None,
+            None,
+        )
+        .is_ok());
     }
 
     #[test]
@@ -12574,13 +12882,152 @@ mod tests {
         let target = vec![vec![0.0, 10.0], vec![2.0, 5000.0]];
         let target_mask = vec![vec![true, true], vec![true, false]];
         let imputed_mask = vec![vec![false, false], vec![false, true]];
-        let (mean, scale) = target_center_scale_observed(
-            &target,
-            Some(&target_mask),
-            Some(&imputed_mask),
-        );
+        let (mean, scale) =
+            target_center_scale_observed(&target, Some(&target_mask), Some(&imputed_mask));
         assert!((mean - 4.0).abs() < 1e-12);
         assert!(scale.is_finite() && scale < 5.0);
+    }
+
+    #[test]
+    fn lsttn_native_conformal_intervals_are_noncrossing_and_horizon_specific() {
+        let actual = vec![
+            vec![vec![1.0, 10.0], vec![2.0, 20.0]],
+            vec![vec![3.0, 30.0], vec![4.0, 40.0]],
+        ];
+        let median = vec![
+            vec![vec![0.0, 11.0], vec![2.5, 18.0]],
+            vec![vec![4.0, 28.0], vec![3.0, 43.0]],
+        ];
+        let forecast = vec![vec![5.0, 50.0], vec![6.0, 60.0]];
+        let intervals = lsttn_conformal_forecast(&actual, &median, &forecast, 0.25).unwrap();
+        assert_eq!(intervals.median, forecast);
+        assert_eq!(intervals.calibration_count_by_horizon, vec![4, 4]);
+        assert_ne!(
+            intervals.radius_by_horizon[0],
+            intervals.radius_by_horizon[1]
+        );
+        for ((lower, median), upper) in intervals
+            .lower
+            .iter()
+            .zip(&intervals.median)
+            .zip(&intervals.upper)
+        {
+            for ((lower, median), upper) in lower.iter().zip(median).zip(upper) {
+                assert!(lower <= median && median <= upper);
+            }
+        }
+    }
+
+    #[test]
+    fn lsttn_target_weights_normalize_and_masks_dominate_loss_gradients() {
+        let frame = traffic_style_fixture_frame();
+        let adjacency = frame.adjacency.row_normalized();
+        let state = TrainableGraphTransformerState::initialized(3, 4, 2, 1, 4, 8, 4, 2, 2, 91);
+        let targets = &frame.target[8..12];
+        let (_, unweighted_gradients) = state.lsttn_example_loss_and_gradients(
+            &frame.target[..8],
+            &adjacency,
+            targets,
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        let uniform = vec![vec![1.0; 3]; 4];
+        let (uniform_loss, uniform_gradients) = state.lsttn_example_loss_and_gradients(
+            &frame.target[..8],
+            &adjacency,
+            targets,
+            0,
+            None,
+            None,
+            None,
+            None,
+            Some(&uniform),
+            None,
+        );
+        let (unweighted_loss, _) = state.lsttn_example_loss_and_gradients(
+            &frame.target[..8],
+            &adjacency,
+            targets,
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        assert!((uniform_loss - unweighted_loss).abs() < 1e-12);
+        assert_eq!(uniform_gradients, unweighted_gradients);
+
+        let mut changed = targets.to_vec();
+        changed[0][0] += 1000.0;
+        let mut zero_weight = uniform.clone();
+        zero_weight[0][0] = 0.0;
+        let (zero_loss, zero_gradients) = state.lsttn_example_loss_and_gradients(
+            &frame.target[..8],
+            &adjacency,
+            targets,
+            0,
+            None,
+            None,
+            None,
+            None,
+            Some(&zero_weight),
+            None,
+        );
+        let (changed_zero_loss, changed_zero_gradients) = state.lsttn_example_loss_and_gradients(
+            &frame.target[..8],
+            &adjacency,
+            &changed,
+            0,
+            None,
+            None,
+            None,
+            None,
+            Some(&zero_weight),
+            None,
+        );
+        assert!((zero_loss - changed_zero_loss).abs() < 1e-12);
+        assert_eq!(zero_gradients, changed_zero_gradients);
+
+        let mut masks = vec![vec![true; 3]; 4];
+        masks[0][1] = false;
+        let mut masked_changed = targets.to_vec();
+        masked_changed[0][1] += 1000.0;
+        let mut high_weight = uniform;
+        high_weight[0][1] = 1_000_000.0;
+        let (masked_loss, masked_gradients) = state.lsttn_example_loss_and_gradients(
+            &frame.target[..8],
+            &adjacency,
+            targets,
+            0,
+            None,
+            None,
+            Some(&masks),
+            None,
+            Some(&high_weight),
+            Some(&[true, true, false]),
+        );
+        let (masked_changed_loss, masked_changed_gradients) = state
+            .lsttn_example_loss_and_gradients(
+                &frame.target[..8],
+                &adjacency,
+                &masked_changed,
+                0,
+                None,
+                None,
+                Some(&masks),
+                None,
+                Some(&high_weight),
+                Some(&[true, true, false]),
+            );
+        assert!((masked_loss - masked_changed_loss).abs() < 1e-12);
+        assert_eq!(masked_gradients, masked_changed_gradients);
     }
 
     #[test]
@@ -13177,6 +13624,9 @@ mod tests {
             history: vec![vec![9.0], vec![10.0]],
             history_time_features: None,
             covariate_roles: None,
+            owner_mask: vec![true],
+            fit_activation_tape_bytes: 0,
+            fit_frozen_patch_cache_bytes: 0,
             target_mean: 0.0,
             target_scale: 1.0,
         };

@@ -39,7 +39,7 @@ from ._native import geostats_fit_variogram_wls_value as _native_fit_variogram_w
 
 
 class NearestNeighborGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseEstimator):
-    """Nearest-neighbor Gaussian process regressor for point coordinates."""
+    """Nearest-neighbor Gaussian process for coordinates or a supplied metric."""
 
     def __init__(
         self,
@@ -66,6 +66,7 @@ class NearestNeighborGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseE
         self.backend = str(backend)
         self._model: Any | None = None
         self._fit_coords: np.ndarray | None = None
+        self._fit_distance_matrix: np.ndarray | None = None
         self._fit_y: np.ndarray | None = None
 
     def fit(
@@ -73,11 +74,19 @@ class NearestNeighborGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseE
         X: Iterable[Iterable[float]] | None,
         y: Iterable[float],
         *,
-        coords: Iterable[Iterable[float]],
+        coords: Iterable[Iterable[float]] | None = None,
+        distance_matrix: Iterable[Iterable[float]] | None = None,
     ) -> NearestNeighborGPRegressor:
         n_features = 0 if X is None else np.asarray(X).shape[1]
-        coords_array = _as_coords(coords)
         y_array = _as_vector(y, "y")
+        if (coords is None) == (distance_matrix is None):
+            raise ValueError("provide exactly one of coords or distance_matrix")
+        coords_array = None if coords is None else _as_coords(coords)
+        distance_array = (
+            None
+            if distance_matrix is None
+            else _as_symmetric_distance_matrix(distance_matrix, y_array.shape[0], "distance_matrix")
+        )
         self._model = _NativeNearestNeighborGPRegressor(
             kernel=str(self.kernel),
             range=float(self.range),
@@ -90,10 +99,15 @@ class NearestNeighborGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseE
             duplicate_tolerance=float(self.duplicate_tolerance),
             backend=self.backend,
         )
-        self._model.fit(coords_array, y_array)
+        if coords_array is not None:
+            self._model.fit(coords_array, y_array)
+        else:
+            assert distance_array is not None
+            self._model.fit_from_distance_matrix(distance_array, y_array)
         self.backend_ = str(self._model.backend())
         self.n_features_in_ = n_features
         self._fit_coords = coords_array
+        self._fit_distance_matrix = distance_array
         self._fit_y = y_array
         return self
 
@@ -101,13 +115,22 @@ class NearestNeighborGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseE
         self,
         X: Iterable[Iterable[float]] | None,
         *,
-        coords: Iterable[Iterable[float]],
+        coords: Iterable[Iterable[float]] | None = None,
+        distance_matrix: Iterable[Iterable[float]] | None = None,
         return_std: bool = False,
         return_var: bool = False,
     ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
         del X
         model = self._require_model()
-        means, variances, _neighbors = model.predict(_as_coords(coords))
+        if bool(model.uses_precomputed_distances()):
+            if coords is not None or distance_matrix is None:
+                raise ValueError("distance-matrix model prediction requires distance_matrix only")
+            distances = _as_distance_queries(distance_matrix, self._fit_y_length())
+            means, variances, _neighbors = model.predict_from_distance_matrix(distances)
+        else:
+            if distance_matrix is not None or coords is None:
+                raise ValueError("coordinate model prediction requires coords only")
+            means, variances, _neighbors = model.predict(_as_coords(coords))
         mean_array = np.asarray(means, dtype=float)
         var_array = np.maximum(np.asarray(variances, dtype=float), 0.0)
         if return_var:
@@ -120,10 +143,13 @@ class NearestNeighborGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseE
         self,
         X: Iterable[Iterable[float]] | None,
         *,
-        coords: Iterable[Iterable[float]],
+        coords: Iterable[Iterable[float]] | None = None,
+        distance_matrix: Iterable[Iterable[float]] | None = None,
         coverage: float = 0.9,
     ) -> tuple[np.ndarray, np.ndarray]:
-        mean, std = self.predict(X, coords=coords, return_std=True)
+        mean, std = self.predict(
+            X, coords=coords, distance_matrix=distance_matrix, return_std=True
+        )
         z = _normal_z_for_coverage(coverage)
         return mean - z * std, mean + z * std
 
@@ -132,9 +158,12 @@ class NearestNeighborGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseE
         X: Iterable[Iterable[float]] | None,
         y: Iterable[float],
         *,
-        coords: Iterable[Iterable[float]],
+        coords: Iterable[Iterable[float]] | None = None,
+        distance_matrix: Iterable[Iterable[float]] | None = None,
     ) -> float:
-        pred = np.asarray(self.predict(X, coords=coords), dtype=float)
+        pred = np.asarray(
+            self.predict(X, coords=coords, distance_matrix=distance_matrix), dtype=float
+        )
         truth = _as_vector(y, "y")
         if pred.shape[0] != truth.shape[0]:
             raise ValueError("prediction and y must have the same length")
@@ -163,18 +192,25 @@ class NearestNeighborGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseE
             setattr(self, key, value)
         self._model = None
         self._fit_coords = None
+        self._fit_distance_matrix = None
         self._fit_y = None
         return self
 
     def save(self, path: str | Path) -> None:
         self._require_model()
-        if self._fit_coords is None or self._fit_y is None:
+        if self._fit_y is None:
             raise ValueError("fitted training data are unavailable for artifact serialization")
+        if self._fit_coords is None and self._fit_distance_matrix is None:
+            raise ValueError("fitted metric data are unavailable for artifact serialization")
         payload = versioned_artifact_payload(
             self.__class__.__name__,
             params=self.get_params(),
-            coords=self._fit_coords.tolist(),
             y=self._fit_y.tolist(),
+            **(
+                {"coords": self._fit_coords.tolist()}
+                if self._fit_coords is not None
+                else {"distance_matrix": self._fit_distance_matrix.tolist()}
+            ),
         )
         Path(path).write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
 
@@ -194,7 +230,10 @@ class NearestNeighborGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseE
         }:
             raise ValueError("artifact is not a NearestNeighborGPRegressor")
         obj = cls(**dict(payload["params"]))
-        obj.fit(None, payload["y"], coords=payload["coords"])
+        if "distance_matrix" in payload:
+            obj.fit(None, payload["y"], distance_matrix=payload["distance_matrix"])
+        else:
+            obj.fit(None, payload["y"], coords=payload["coords"])
         return obj
 
     def config_(self) -> dict[str, Any]:
@@ -204,6 +243,11 @@ class NearestNeighborGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseE
         if self._model is None:
             raise ValueError("NearestNeighborGPRegressor is not fitted")
         return self._model
+
+    def _fit_y_length(self) -> int:
+        if self._fit_y is None:
+            raise ValueError("NearestNeighborGPRegressor is not fitted")
+        return int(self._fit_y.shape[0])
 
 
 class ResidualNNGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseEstimator):
@@ -482,6 +526,34 @@ def _as_coords(coords: Iterable[Iterable[float]]) -> np.ndarray:
         raise ValueError("coords must have shape (n, 2)")
     if not np.isfinite(array).all():
         raise ValueError("coords must contain only finite values")
+    return np.ascontiguousarray(array, dtype=float)
+
+
+def _as_symmetric_distance_matrix(
+    distances: Iterable[Iterable[float]], expected_size: int, name: str
+) -> np.ndarray:
+    array = np.asarray(distances, dtype=float)
+    if array.shape != (expected_size, expected_size):
+        raise ValueError(f"{name} must have shape ({expected_size}, {expected_size})")
+    if not np.isfinite(array).all() or np.any(array < 0.0):
+        raise ValueError(f"{name} must contain finite non-negative values")
+    if not np.allclose(array, array.T, rtol=0.0, atol=1.0e-10):
+        raise ValueError(f"{name} must be symmetric")
+    if not np.allclose(np.diag(array), 0.0, rtol=0.0, atol=1.0e-10):
+        raise ValueError(f"{name} diagonal must be zero")
+    return np.ascontiguousarray(array, dtype=float)
+
+
+def _as_distance_queries(
+    distances: Iterable[Iterable[float]], training_size: int
+) -> np.ndarray:
+    array = np.asarray(distances, dtype=float)
+    if array.ndim != 2 or array.shape[1] != training_size:
+        raise ValueError(
+            f"distance_matrix must have shape (n_queries, {training_size})"
+        )
+    if not np.isfinite(array).all() or np.any(array < 0.0):
+        raise ValueError("distance_matrix must contain finite non-negative values")
     return np.ascontiguousarray(array, dtype=float)
 
 
