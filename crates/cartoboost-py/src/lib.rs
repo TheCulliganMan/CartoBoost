@@ -8354,7 +8354,11 @@ impl NativeGraphSageEncoder {
             l2_regularization,
             backend: neural_select_backend_for_operations(
                 backend,
-                &[BackendOperation::Dense, BackendOperation::CsrDiffusion],
+                &[
+                    BackendOperation::Dense,
+                    BackendOperation::CsrDiffusion,
+                    BackendOperation::CsrDiffusionBackward,
+                ],
             )
             .map_err(to_py_neural_error)?,
         };
@@ -8888,7 +8892,11 @@ impl NativeStandaloneGraphSageRegressor {
             l2_regularization,
             backend: neural_select_backend_for_operations(
                 backend,
-                &[BackendOperation::Dense, BackendOperation::CsrDiffusion],
+                &[
+                    BackendOperation::Dense,
+                    BackendOperation::CsrDiffusion,
+                    BackendOperation::CsrDiffusionBackward,
+                ],
             )
             .map_err(to_py_neural_error)?,
         };
@@ -9012,7 +9020,11 @@ impl NativeStandaloneHeteroGraphSageRegressor {
             l2_regularization,
             backend: neural_select_backend_for_operations(
                 backend,
-                &[BackendOperation::Dense, BackendOperation::CsrDiffusion],
+                &[
+                    BackendOperation::Dense,
+                    BackendOperation::CsrDiffusion,
+                    BackendOperation::CsrDiffusionBackward,
+                ],
             )
             .map_err(to_py_neural_error)?,
         };
@@ -9140,7 +9152,11 @@ impl NativeStandaloneHinSageRegressor {
             neighbor_samples: neighbor_samples.unwrap_or_default(),
             backend: neural_select_backend_for_operations(
                 backend,
-                &[BackendOperation::Dense, BackendOperation::CsrDiffusion],
+                &[
+                    BackendOperation::Dense,
+                    BackendOperation::CsrDiffusion,
+                    BackendOperation::CsrDiffusionBackward,
+                ],
             )
             .map_err(to_py_neural_error)?,
         };
@@ -9354,6 +9370,7 @@ impl NativeStandaloneGraphSageLinkPredictor {
                 &[
                     BackendOperation::Dense,
                     BackendOperation::CsrDiffusion,
+                    BackendOperation::CsrDiffusionBackward,
                     BackendOperation::PairScoring,
                 ],
             )
@@ -9440,6 +9457,7 @@ impl NativeStandaloneHeteroGraphSageLinkPredictor {
                 &[
                     BackendOperation::Dense,
                     BackendOperation::CsrDiffusion,
+                    BackendOperation::CsrDiffusionBackward,
                     BackendOperation::PairScoring,
                 ],
             )
@@ -9530,6 +9548,7 @@ impl NativeStandaloneHinSageLinkPredictor {
                 &[
                     BackendOperation::Dense,
                     BackendOperation::CsrDiffusion,
+                    BackendOperation::CsrDiffusionBackward,
                     BackendOperation::PairScoring,
                 ],
             )
@@ -9618,7 +9637,11 @@ impl NativeHeteroGraphSageEncoder {
             l2_regularization,
             backend: neural_select_backend_for_operations(
                 backend,
-                &[BackendOperation::Dense, BackendOperation::CsrDiffusion],
+                &[
+                    BackendOperation::Dense,
+                    BackendOperation::CsrDiffusion,
+                    BackendOperation::CsrDiffusionBackward,
+                ],
             )
             .map_err(to_py_neural_error)?,
         };
@@ -9782,7 +9805,11 @@ impl NativeHinSageEncoder {
             neighbor_samples: neighbor_samples.unwrap_or_default(),
             backend: neural_select_backend_for_operations(
                 backend,
-                &[BackendOperation::Dense, BackendOperation::CsrDiffusion],
+                &[
+                    BackendOperation::Dense,
+                    BackendOperation::CsrDiffusion,
+                    BackendOperation::CsrDiffusionBackward,
+                ],
             )
             .map_err(to_py_neural_error)?,
         };

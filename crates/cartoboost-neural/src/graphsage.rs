@@ -1,6 +1,6 @@
 use crate::backend::{
-    backend_csr_diffusion_f32, backend_dense_layer_f32, backend_supports_operation,
-    select_backend_for, BackendOperation, BackendSelection,
+    backend_csr_diffusion_backward_f32, backend_csr_diffusion_f32, backend_dense_layer_f32,
+    backend_supports_operation, select_backend_for, BackendOperation, BackendSelection,
 };
 use crate::error::{NeuralError, Result};
 use rayon::prelude::*;
@@ -570,6 +570,7 @@ impl GraphSageEncoder {
                     &grad,
                     self.config.learning_rate,
                     self.config.l2_regularization,
+                    &self.config.backend,
                 )?;
             }
         }
@@ -822,6 +823,7 @@ impl HeteroGraphSageEncoder {
                     &grad,
                     self.config.learning_rate,
                     self.config.l2_regularization,
+                    &self.config.backend,
                 )?;
             }
         }
@@ -1496,6 +1498,110 @@ fn heterogeneous_neighbor_means(
     Ok(relation_means)
 }
 
+fn homogeneous_neighbor_mean_backward(
+    current: &[Vec<f32>],
+    neighbors: &[Vec<usize>],
+    width: usize,
+    output_grad: &[Vec<f32>],
+    backend: &BackendSelection,
+) -> Result<Vec<Vec<f32>>> {
+    let mut indptr = Vec::with_capacity(neighbors.len() + 1);
+    let mut indices = Vec::new();
+    let mut weights = Vec::new();
+    indptr.push(0_u32);
+    for neighbor_ids in neighbors {
+        let weight = if neighbor_ids.is_empty() {
+            0.0
+        } else {
+            1.0 / neighbor_ids.len() as f32
+        };
+        indices.extend(neighbor_ids.iter().map(|neighbor| *neighbor as u32));
+        weights.extend(std::iter::repeat_n(weight, neighbor_ids.len()));
+        indptr.push(indices.len() as u32);
+    }
+    let values = current.iter().flatten().copied().collect::<Vec<_>>();
+    let output_grad = output_grad.iter().flatten().copied().collect::<Vec<_>>();
+    let backward = backend_csr_diffusion_backward_f32(
+        backend,
+        &indptr,
+        &indices,
+        &weights,
+        width,
+        &values,
+        &output_grad,
+    )?;
+    Ok(backward
+        .input_grad
+        .chunks_exact(width)
+        .map(|row| row.to_vec())
+        .collect())
+}
+
+fn heterogeneous_neighbor_mean_backward(
+    current: &[Vec<f32>],
+    neighbors: &[Vec<Vec<usize>>],
+    relation_count: usize,
+    width: usize,
+    output_grad: &[Vec<Vec<f32>>],
+    backend: &BackendSelection,
+) -> Result<Vec<Vec<f32>>> {
+    let row_count = current.len().saturating_mul(relation_count);
+    let mut indptr = Vec::with_capacity(row_count + 1);
+    let mut indices = Vec::new();
+    let mut weights = Vec::new();
+    indptr.push(0_u32);
+    for relation in 0..relation_count {
+        let relation_offset = relation.saturating_mul(current.len());
+        for node_neighbors in neighbors.iter().take(current.len()) {
+            let neighbor_ids = &node_neighbors[relation];
+            let weight = if neighbor_ids.is_empty() {
+                0.0
+            } else {
+                1.0 / neighbor_ids.len() as f32
+            };
+            indices.extend(
+                neighbor_ids
+                    .iter()
+                    .map(|neighbor| (relation_offset + *neighbor) as u32),
+            );
+            weights.extend(std::iter::repeat_n(weight, neighbor_ids.len()));
+            indptr.push(indices.len() as u32);
+        }
+    }
+    let values = (0..relation_count)
+        .flat_map(|_| current.iter().flatten().copied())
+        .collect::<Vec<_>>();
+    let output_grad = (0..relation_count)
+        .flat_map(|relation| {
+            output_grad
+                .iter()
+                .flat_map(move |node_grad| node_grad[relation].iter().copied())
+        })
+        .collect::<Vec<_>>();
+    let backward = backend_csr_diffusion_backward_f32(
+        backend,
+        &indptr,
+        &indices,
+        &weights,
+        width,
+        &values,
+        &output_grad,
+    )?;
+    let mut input_grad = vec![vec![0.0_f32; width]; current.len()];
+    for relation in 0..relation_count {
+        let start = relation * current.len() * width;
+        for (node, row) in backward.input_grad[start..start + current.len() * width]
+            .chunks_exact(width)
+            .enumerate()
+        {
+            for (target, value) in input_grad[node].iter_mut().zip(row) {
+                *target += *value;
+            }
+        }
+    }
+    Ok(input_grad)
+}
+
 #[allow(clippy::needless_range_loop)]
 fn apply_homogeneous_backward(
     layers: &mut [GraphSageLayer],
@@ -1504,6 +1610,7 @@ fn apply_homogeneous_backward(
     grad_output: &[Vec<f32>],
     learning_rate: f32,
     l2_regularization: f32,
+    backend: &BackendSelection,
 ) -> Result<()> {
     if cache.layers.is_empty() {
         return Ok(());
@@ -1524,6 +1631,9 @@ fn apply_homogeneous_backward(
         let mut self_grad = vec![0.0_f32; layer.self_weight.len()];
         let mut neigh_grad = vec![0.0_f32; layer.neigh_weight.len()];
         let mut bias_grad = vec![0.0_f32; layer.bias.len()];
+        let use_device_csr = backend.selected != "cpu"
+            && input.len().saturating_mul(in_dim) >= GRAPH_SAGE_CSR_DISPATCH_MIN_OPS;
+        let mut mean_output_grad = use_device_csr.then(|| vec![vec![0.0_f32; in_dim]; input.len()]);
 
         for node in 0..input.len() {
             for out in 0..out_dim {
@@ -1543,9 +1653,12 @@ fn apply_homogeneous_backward(
                     self_grad[idx] += self_value * g;
                     neigh_grad[idx] += neigh_value * g;
                     next_grad[node][index] += layer.self_weight[idx] * g;
+                    if let Some(mean_grad) = mean_output_grad.as_mut() {
+                        mean_grad[node][index] += layer.neigh_weight[idx] * g;
+                    }
                 }
 
-                if !neighbors[node].is_empty() {
+                if !use_device_csr && !neighbors[node].is_empty() {
                     let inv = 1.0 / neighbors[node].len() as f32;
                     for &neighbor in &neighbors[node] {
                         for index in 0..in_dim {
@@ -1553,6 +1666,16 @@ fn apply_homogeneous_backward(
                             next_grad[neighbor][index] += layer.neigh_weight[idx] * grad * inv;
                         }
                     }
+                }
+            }
+        }
+
+        if let Some(mean_grad) = mean_output_grad {
+            let message_grad =
+                homogeneous_neighbor_mean_backward(input, neighbors, in_dim, &mean_grad, backend)?;
+            for (next_row, message_row) in next_grad.iter_mut().zip(message_grad) {
+                for (next, message) in next_row.iter_mut().zip(message_row) {
+                    *next += message;
                 }
             }
         }
@@ -1581,6 +1704,7 @@ fn apply_hetero_backward(
     grad_output: &[Vec<f32>],
     learning_rate: f32,
     l2_regularization: f32,
+    backend: &BackendSelection,
 ) -> Result<()> {
     if cache.layers.is_empty() {
         return Ok(());
@@ -1602,6 +1726,14 @@ fn apply_hetero_backward(
         let mut self_grad = vec![0.0_f32; layer.self_weight.len()];
         let mut relation_grad = vec![vec![0.0_f32; layer.in_dim * out_dim]; relation_count];
         let mut bias_grad = vec![0.0_f32; layer.bias.len()];
+        let use_device_csr = backend.selected != "cpu"
+            && input
+                .len()
+                .saturating_mul(relation_count)
+                .saturating_mul(in_dim)
+                >= GRAPH_SAGE_CSR_DISPATCH_MIN_OPS;
+        let mut relation_output_grad =
+            use_device_csr.then(|| vec![vec![vec![0.0_f32; in_dim]; relation_count]; input.len()]);
 
         for node in 0..input.len() {
             for out in 0..out_dim {
@@ -1631,10 +1763,30 @@ fn apply_hetero_backward(
                         relation_grad[relation][weight_index] +=
                             means[node][relation][index] * grad;
                         let relation_weight = layer.relation_weights[relation][weight_index];
-                        for &neighbor in neighbors_for_relation {
-                            next_grad[neighbor][index] += relation_weight * grad * inv;
+                        if let Some(mean_grad) = relation_output_grad.as_mut() {
+                            mean_grad[node][relation][index] += relation_weight * grad;
+                        } else {
+                            for &neighbor in neighbors_for_relation {
+                                next_grad[neighbor][index] += relation_weight * grad * inv;
+                            }
                         }
                     }
+                }
+            }
+        }
+
+        if let Some(mean_grad) = relation_output_grad {
+            let message_grad = heterogeneous_neighbor_mean_backward(
+                input,
+                neighbors,
+                relation_count,
+                in_dim,
+                &mean_grad,
+                backend,
+            )?;
+            for (next_row, message_row) in next_grad.iter_mut().zip(message_grad) {
+                for (next, message) in next_row.iter_mut().zip(message_row) {
+                    *next += message;
                 }
             }
         }
@@ -1938,11 +2090,13 @@ fn validate_dense_backend(backend: &BackendSelection) -> Result<()> {
 
 fn validate_homogeneous_backend(backend: &BackendSelection) -> Result<()> {
     validate_dense_backend(backend)?;
-    if backend_supports_operation(&backend.selected, BackendOperation::CsrDiffusion) {
+    if backend_supports_operation(&backend.selected, BackendOperation::CsrDiffusion)
+        && backend_supports_operation(&backend.selected, BackendOperation::CsrDiffusionBackward)
+    {
         Ok(())
     } else {
         Err(NeuralError::InvalidArgument(format!(
-            "backend {:?} does not implement GraphSAGE CSR aggregation",
+            "backend {:?} does not implement GraphSAGE CSR aggregation and backward propagation",
             backend.selected
         )))
     }
@@ -2217,6 +2371,116 @@ mod tests {
                         assert!(
                             (actual - expected).abs() < 2.0e-4,
                             "{backend_name} hetero GraphSAGE mean mismatch: {actual} vs {expected}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn graphsage_csr_backward_matches_cpu_on_available_backends() {
+        let nodes = 512;
+        let relations = 2;
+        let width = 16;
+        let current = (0..nodes)
+            .map(|node| {
+                (0..width)
+                    .map(|feature| ((node * width + feature) as f32 * 0.013).sin())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let homogeneous_neighbors = (0..nodes)
+            .map(|node| vec![(node + 1) % nodes, (node + 9) % nodes])
+            .collect::<Vec<_>>();
+        let hetero_neighbors = (0..nodes)
+            .map(|node| {
+                vec![
+                    vec![(node + 1) % nodes, (node + 9) % nodes],
+                    vec![(node + 17) % nodes],
+                ]
+            })
+            .collect::<Vec<_>>();
+        let homogeneous_grad = (0..nodes)
+            .map(|node| {
+                (0..width)
+                    .map(|feature| ((node + feature) as f32 * 0.017).cos())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let hetero_grad = (0..nodes)
+            .map(|node| {
+                (0..relations)
+                    .map(|relation| {
+                        (0..width)
+                            .map(|feature| {
+                                ((node + relation * width + feature) as f32 * 0.019).sin()
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let operations = [
+            BackendOperation::Dense,
+            BackendOperation::CsrDiffusion,
+            BackendOperation::CsrDiffusionBackward,
+        ];
+        let cpu = crate::select_backend_for_operations(Some("cpu"), &operations).unwrap();
+        let expected_homogeneous = homogeneous_neighbor_mean_backward(
+            &current,
+            &homogeneous_neighbors,
+            width,
+            &homogeneous_grad,
+            &cpu,
+        )
+        .unwrap();
+        let expected_hetero = heterogeneous_neighbor_mean_backward(
+            &current,
+            &hetero_neighbors,
+            relations,
+            width,
+            &hetero_grad,
+            &cpu,
+        )
+        .unwrap();
+        for backend_name in crate::available_backends() {
+            if backend_name == "cpu" {
+                continue;
+            }
+            let Ok(backend) =
+                crate::select_backend_for_operations(Some(&backend_name), &operations)
+            else {
+                continue;
+            };
+            let actual_homogeneous = homogeneous_neighbor_mean_backward(
+                &current,
+                &homogeneous_neighbors,
+                width,
+                &homogeneous_grad,
+                &backend,
+            )
+            .unwrap_or_else(|error| panic!("{backend_name} GraphSAGE CSR backward: {error}"));
+            let actual_hetero = heterogeneous_neighbor_mean_backward(
+                &current,
+                &hetero_neighbors,
+                relations,
+                width,
+                &hetero_grad,
+                &backend,
+            )
+            .unwrap_or_else(|error| {
+                panic!("{backend_name} hetero GraphSAGE CSR backward: {error}")
+            });
+            for (actual_rows, expected_rows) in [
+                (&actual_homogeneous, &expected_homogeneous),
+                (&actual_hetero, &expected_hetero),
+            ] {
+                for (actual_row, expected_row) in actual_rows.iter().zip(expected_rows) {
+                    for (actual, expected) in actual_row.iter().zip(expected_row) {
+                        assert!(
+                            (actual - expected).abs() < 2.0e-4,
+                            "{backend_name} GraphSAGE backward mismatch: {actual} vs {expected}"
                         );
                     }
                 }

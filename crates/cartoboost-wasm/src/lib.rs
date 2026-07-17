@@ -5356,7 +5356,11 @@ fn graph_sage_config(options: &BrowserNeuralOptions) -> Result<GraphSageConfig> 
         hidden_dims: vec![options.embedding_dim.unwrap_or(8)],
         backend: select_backend_for_operations(
             options.backend.as_deref(),
-            &[BackendOperation::Dense, BackendOperation::CsrDiffusion],
+            &[
+                BackendOperation::Dense,
+                BackendOperation::CsrDiffusion,
+                BackendOperation::CsrDiffusionBackward,
+            ],
         )
         .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?,
         ..GraphSageConfig::default()
@@ -5381,7 +5385,11 @@ fn hetero_graph_sage_config(options: &BrowserNeuralOptions) -> Result<HeteroGrap
         hidden_dims: vec![options.embedding_dim.unwrap_or(8)],
         backend: select_backend_for_operations(
             options.backend.as_deref(),
-            &[BackendOperation::Dense, BackendOperation::CsrDiffusion],
+            &[
+                BackendOperation::Dense,
+                BackendOperation::CsrDiffusion,
+                BackendOperation::CsrDiffusionBackward,
+            ],
         )
         .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?,
         ..HeteroGraphSageConfig::default()
@@ -5406,7 +5414,11 @@ fn hin_sage_config(options: &BrowserNeuralOptions) -> Result<HinSageConfig> {
         hidden_dims: vec![options.embedding_dim.unwrap_or(8)],
         backend: select_backend_for_operations(
             options.backend.as_deref(),
-            &[BackendOperation::Dense, BackendOperation::CsrDiffusion],
+            &[
+                BackendOperation::Dense,
+                BackendOperation::CsrDiffusion,
+                BackendOperation::CsrDiffusionBackward,
+            ],
         )
         .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?,
         ..HinSageConfig::default()
