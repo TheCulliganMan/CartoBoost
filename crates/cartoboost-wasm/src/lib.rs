@@ -5354,7 +5354,11 @@ fn browser_neural_backend(options: &BrowserNeuralOptions) -> Result<BackendSelec
 fn graph_sage_config(options: &BrowserNeuralOptions) -> Result<GraphSageConfig> {
     let mut config = GraphSageConfig {
         hidden_dims: vec![options.embedding_dim.unwrap_or(8)],
-        backend: browser_neural_backend(options)?,
+        backend: select_backend_for_operations(
+            options.backend.as_deref(),
+            &[BackendOperation::Dense, BackendOperation::CsrDiffusion],
+        )
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?,
         ..GraphSageConfig::default()
     };
     if let Some(epochs) = options.graph_sage_epochs {

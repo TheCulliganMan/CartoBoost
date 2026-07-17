@@ -1,6 +1,6 @@
 use crate::backend::{
-    backend_dense_layer_f32, backend_supports_operation, select_backend_for, BackendOperation,
-    BackendSelection,
+    backend_csr_diffusion_f32, backend_dense_layer_f32, backend_supports_operation,
+    select_backend_for, BackendOperation, BackendSelection,
 };
 use crate::error::{NeuralError, Result};
 use rayon::prelude::*;
@@ -10,6 +10,7 @@ use std::fs;
 use std::path::Path;
 
 const GRAPH_SAGE_ARTIFACT_TYPE: &str = "cartoboost.neural.graphsage_encoder";
+const GRAPH_SAGE_CSR_DISPATCH_MIN_OPS: usize = 16_384;
 const GRAPH_SAGE_DENSE_DISPATCH_MIN_OPS: usize = 16_384;
 pub const GRAPH_SAGE_ARTIFACT_VERSION: u32 = 1;
 
@@ -424,7 +425,7 @@ impl GraphSageEncoder {
     pub fn new(config: GraphSageConfig, input_dim: usize) -> Result<Self> {
         validate_input_dim(input_dim)?;
         validate_dimensions(&config.hidden_dims)?;
-        validate_dense_backend(&config.backend)?;
+        validate_homogeneous_backend(&config.backend)?;
 
         let mut dims = Vec::with_capacity(config.hidden_dims.len() + 1);
         dims.push(input_dim);
@@ -1240,22 +1241,7 @@ fn forward_homogeneous(
         let current = representations
             .last()
             .expect("layer activation should exist before running forward");
-        let means = neighbors
-            .par_iter()
-            .map(|neighbor_ids| {
-                let mut mean = vec![0.0_f32; layer.in_dim];
-                if neighbor_ids.is_empty() {
-                    return mean;
-                }
-                let inv = 1.0 / (neighbor_ids.len() as f32);
-                for &neighbor in neighbor_ids {
-                    for (slot, value) in mean.iter_mut().zip(current[neighbor].iter()) {
-                        *slot += *value * inv;
-                    }
-                }
-                mean
-            })
-            .collect::<Vec<_>>();
+        let means = homogeneous_neighbor_means(current, neighbors, layer.in_dim, backend)?;
 
         let combined = current
             .iter()
@@ -1300,6 +1286,51 @@ fn forward_homogeneous(
         representations,
         layers: cache_layers,
     })
+}
+
+fn homogeneous_neighbor_means(
+    current: &[Vec<f32>],
+    neighbors: &[Vec<usize>],
+    width: usize,
+    backend: &BackendSelection,
+) -> Result<Vec<Vec<f32>>> {
+    let operations = current.len().saturating_mul(width);
+    if backend.selected != "cpu" && operations >= GRAPH_SAGE_CSR_DISPATCH_MIN_OPS {
+        let mut indptr = Vec::with_capacity(neighbors.len() + 1);
+        let mut indices = Vec::new();
+        let mut weights = Vec::new();
+        indptr.push(0_u32);
+        for neighbor_ids in neighbors {
+            let weight = if neighbor_ids.is_empty() {
+                0.0
+            } else {
+                1.0 / neighbor_ids.len() as f32
+            };
+            indices.extend(neighbor_ids.iter().map(|neighbor| *neighbor as u32));
+            weights.extend(std::iter::repeat_n(weight, neighbor_ids.len()));
+            indptr.push(indices.len() as u32);
+        }
+        let values = current.iter().flatten().copied().collect::<Vec<_>>();
+        let output =
+            backend_csr_diffusion_f32(backend, &indptr, &indices, &weights, width, &values)?;
+        return Ok(output.chunks(width).map(|row| row.to_vec()).collect());
+    }
+    Ok(neighbors
+        .par_iter()
+        .map(|neighbor_ids| {
+            let mut mean = vec![0.0_f32; width];
+            if neighbor_ids.is_empty() {
+                return mean;
+            }
+            let inv = 1.0 / (neighbor_ids.len() as f32);
+            for &neighbor in neighbor_ids {
+                for (slot, value) in mean.iter_mut().zip(current[neighbor].iter()) {
+                    *slot += *value * inv;
+                }
+            }
+            mean
+        })
+        .collect())
 }
 
 fn forward_hetero(
@@ -1847,6 +1878,18 @@ fn validate_dense_backend(backend: &BackendSelection) -> Result<()> {
     }
 }
 
+fn validate_homogeneous_backend(backend: &BackendSelection) -> Result<()> {
+    validate_dense_backend(backend)?;
+    if backend_supports_operation(&backend.selected, BackendOperation::CsrDiffusion) {
+        Ok(())
+    } else {
+        Err(NeuralError::InvalidArgument(format!(
+            "backend {:?} does not implement GraphSAGE CSR aggregation",
+            backend.selected
+        )))
+    }
+}
+
 fn validate_dimensions(hidden_dims: &[usize]) -> Result<()> {
     if hidden_dims.contains(&0) {
         return Err(NeuralError::InvalidArgument(
@@ -2032,6 +2075,45 @@ mod tests {
                     .is_none(),
                 "{backend_name}"
             );
+        }
+    }
+
+    #[test]
+    fn graphsage_csr_means_match_cpu_on_available_backends() {
+        let nodes = 1_024;
+        let width = 16;
+        let current = (0..nodes)
+            .map(|node| {
+                (0..width)
+                    .map(|feature| ((node * width + feature) as f32 * 0.007).sin())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let neighbors = (0..nodes)
+            .map(|node| vec![(node + 1) % nodes, (node + 7) % nodes])
+            .collect::<Vec<_>>();
+        let operations = [BackendOperation::Dense, BackendOperation::CsrDiffusion];
+        let cpu = crate::select_backend_for_operations(Some("cpu"), &operations).unwrap();
+        let expected = homogeneous_neighbor_means(&current, &neighbors, width, &cpu).unwrap();
+        for backend_name in crate::available_backends() {
+            if backend_name == "cpu" {
+                continue;
+            }
+            let Ok(backend) =
+                crate::select_backend_for_operations(Some(&backend_name), &operations)
+            else {
+                continue;
+            };
+            let actual = homogeneous_neighbor_means(&current, &neighbors, width, &backend)
+                .unwrap_or_else(|error| panic!("{backend_name} GraphSAGE CSR: {error}"));
+            for (actual_row, expected_row) in actual.iter().zip(&expected) {
+                for (actual, expected) in actual_row.iter().zip(expected_row) {
+                    assert!(
+                        (actual - expected).abs() < 2.0e-4,
+                        "{backend_name} GraphSAGE mean mismatch: {actual} vs {expected}"
+                    );
+                }
+            }
         }
     }
 

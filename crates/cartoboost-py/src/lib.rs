@@ -8352,8 +8352,11 @@ impl NativeGraphSageEncoder {
             seed,
             add_self_loop,
             l2_regularization,
-            backend: neural_select_backend_for(backend, BackendOperation::Dense)
-                .map_err(to_py_neural_error)?,
+            backend: neural_select_backend_for_operations(
+                backend,
+                &[BackendOperation::Dense, BackendOperation::CsrDiffusion],
+            )
+            .map_err(to_py_neural_error)?,
         };
 
         let encoder =
@@ -8883,8 +8886,11 @@ impl NativeStandaloneGraphSageRegressor {
             seed,
             add_self_loop,
             l2_regularization,
-            backend: neural_select_backend_for(backend, BackendOperation::Dense)
-                .map_err(to_py_neural_error)?,
+            backend: neural_select_backend_for_operations(
+                backend,
+                &[BackendOperation::Dense, BackendOperation::CsrDiffusion],
+            )
+            .map_err(to_py_neural_error)?,
         };
         let model = GraphSageRegressor::new(
             config,
@@ -9339,7 +9345,11 @@ impl NativeStandaloneGraphSageLinkPredictor {
             l2_regularization,
             backend: neural_select_backend_for_operations(
                 backend,
-                &[BackendOperation::Dense, BackendOperation::PairScoring],
+                &[
+                    BackendOperation::Dense,
+                    BackendOperation::CsrDiffusion,
+                    BackendOperation::PairScoring,
+                ],
             )
             .map_err(to_py_neural_error)?,
         };
