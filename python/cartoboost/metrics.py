@@ -142,6 +142,7 @@ def interval_coverage(
     upper: object,
     *,
     sample_weight: object | None = None,
+    backend: Backend | str = Backend.CPU,
 ) -> float:
     """Return the share of targets inside inclusive prediction intervals.
 
@@ -154,8 +155,18 @@ def interval_coverage(
     _, upper_arr = _paired_vectors(y_true_arr, upper, "y_true", "upper")
     if np.any(lower_arr > upper_arr):
         raise ValueError("lower bounds must be less than or equal to upper bounds")
-    covered = (y_true_arr >= lower_arr) & (y_true_arr <= upper_arr)
-    return _weighted_mean(covered.astype(float), sample_weight)
+    weights = None if sample_weight is None else _as_float_vector(sample_weight, "sample_weight")
+    if weights is not None and weights.shape != y_true_arr.shape:
+        raise ValueError("sample_weight must have the same length as y_true")
+    return float(
+        _native.prob_interval_coverage_value(
+            y_true_arr.tolist(),
+            lower_arr.tolist(),
+            upper_arr.tolist(),
+            str(backend),
+            None if weights is None else weights.tolist(),
+        )
+    )
 
 
 def mean_interval_width(
@@ -163,6 +174,7 @@ def mean_interval_width(
     upper: object,
     *,
     sample_weight: object | None = None,
+    backend: Backend | str = Backend.CPU,
 ) -> float:
     """Return the mean width of prediction intervals.
 
@@ -175,7 +187,17 @@ def mean_interval_width(
     widths = upper_arr - lower_arr
     if np.any(widths < 0.0):
         raise ValueError("lower bounds must be less than or equal to upper bounds")
-    return _weighted_mean(widths, sample_weight)
+    weights = None if sample_weight is None else _as_float_vector(sample_weight, "sample_weight")
+    if weights is not None and weights.shape != lower_arr.shape:
+        raise ValueError("sample_weight must have the same length as lower")
+    return float(
+        _native.prob_mean_interval_width_value(
+            lower_arr.tolist(),
+            upper_arr.tolist(),
+            str(backend),
+            None if weights is None else weights.tolist(),
+        )
+    )
 
 
 def logloss(

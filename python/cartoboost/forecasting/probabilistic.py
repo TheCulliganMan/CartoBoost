@@ -708,32 +708,57 @@ def pinball_loss(
     return float(np.mean(np.maximum(quantile * residual, (quantile - 1.0) * residual)))
 
 
-def interval_coverage(y_true: Any, lower: Any, upper: Any) -> float:
+def interval_coverage(
+    y_true: Any,
+    lower: Any,
+    upper: Any,
+    *,
+    sample_weight: Any | None = None,
+    backend: Backend | str = Backend.CPU,
+) -> float:
     truth, lower_arr = _paired(y_true, lower, "y_true", "lower")
     _, upper_arr = _paired(y_true, upper, "y_true", "upper")
     _validate_interval_bounds(lower_arr, upper_arr)
+    weights = _optional_vector(sample_weight)
+    if weights is not None and weights.shape != truth.shape:
+        raise ValueError("sample_weight must have the same length as y_true")
     native = _native_prob_call(
         "prob_interval_coverage_value",
         truth.tolist(),
         lower_arr.tolist(),
         upper_arr.tolist(),
+        str(backend),
+        None if weights is None else weights.tolist(),
     )
     if native is not None:
         return float(native)
-    return float(np.mean((truth >= lower_arr) & (truth <= upper_arr)))
+    covered = ((truth >= lower_arr) & (truth <= upper_arr)).astype(float)
+    return float(np.mean(covered) if weights is None else np.average(covered, weights=weights))
 
 
-def mean_interval_width(lower: Any, upper: Any) -> float:
+def mean_interval_width(
+    lower: Any,
+    upper: Any,
+    *,
+    sample_weight: Any | None = None,
+    backend: Backend | str = Backend.CPU,
+) -> float:
     lower_arr, upper_arr = _paired(lower, upper, "lower", "upper")
     _validate_interval_bounds(lower_arr, upper_arr)
+    weights = _optional_vector(sample_weight)
+    if weights is not None and weights.shape != lower_arr.shape:
+        raise ValueError("sample_weight must have the same length as lower")
     native = _native_prob_call(
         "prob_mean_interval_width_value",
         lower_arr.tolist(),
         upper_arr.tolist(),
+        str(backend),
+        None if weights is None else weights.tolist(),
     )
     if native is not None:
         return float(native)
-    return float(np.mean(upper_arr - lower_arr))
+    widths = upper_arr - lower_arr
+    return float(np.mean(widths) if weights is None else np.average(widths, weights=weights))
 
 
 def weighted_conformal_residual_quantile(

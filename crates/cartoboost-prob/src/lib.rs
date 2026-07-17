@@ -242,6 +242,107 @@ pub fn interval_metrics(actual: &[f64], lower: &[f64], upper: &[f64]) -> Result<
     })
 }
 
+pub fn interval_metrics_with_backend(
+    actual: &[f64],
+    lower: &[f64],
+    upper: &[f64],
+    backend: Option<&str>,
+    sample_weight: Option<&[f64]>,
+) -> Result<IntervalMetrics> {
+    validate_same_non_empty(actual, lower, "actual", "lower")?;
+    validate_same_non_empty(actual, upper, "actual", "upper")?;
+    if lower.iter().zip(upper).any(|(lower, upper)| lower > upper) {
+        return invalid("lower bounds must be less than or equal to upper bounds");
+    }
+    let weight_sum = if let Some(weights) = sample_weight {
+        validate_same_non_empty(actual, weights, "actual", "sample_weight")?;
+        if weights.iter().any(|weight| *weight < 0.0) {
+            return invalid("sample_weight must be nonnegative");
+        }
+        let total = weights.iter().sum::<f64>();
+        if total <= 0.0 {
+            return invalid("sample_weight must contain at least one positive value");
+        }
+        total
+    } else {
+        actual.len() as f64
+    };
+    let selection = select_backend_for(backend.or(Some("cpu")), BackendOperation::Affine)
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    let decision = backend_workload_decision(
+        &selection,
+        BackendOperation::Affine,
+        actual.len().saturating_mul(4),
+        PROB_METRIC_DISPATCH_MIN_OPS,
+    );
+    let residuals = if decision.executed == "cpu" {
+        actual
+            .iter()
+            .zip(lower)
+            .chain(actual.iter().zip(upper))
+            .map(|(&actual, &bound)| actual - bound)
+            .collect::<Vec<_>>()
+    } else {
+        let rows = actual
+            .iter()
+            .zip(lower)
+            .chain(actual.iter().zip(upper))
+            .map(|(&actual, &bound)| vec![actual, bound])
+            .collect::<Vec<_>>();
+        backend_affine_scores(
+            &selection,
+            &rows,
+            &[0.0, 0.0],
+            &[1.0, -1.0],
+            &vec![0.0; rows.len()],
+        )
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?
+    };
+    let n = actual.len();
+    let (covered_weight, width_sum) = residuals[..n]
+        .par_iter()
+        .zip(&residuals[n..])
+        .enumerate()
+        .map(|(index, (&actual_minus_lower, &actual_minus_upper))| {
+            let weight = sample_weight.map_or(1.0, |weights| weights[index]);
+            (
+                if actual_minus_lower >= 0.0 && actual_minus_upper <= 0.0 {
+                    weight
+                } else {
+                    0.0
+                },
+                weight * (actual_minus_lower - actual_minus_upper),
+            )
+        })
+        .reduce(
+            || (0.0, 0.0),
+            |left, right| (left.0 + right.0, left.1 + right.1),
+        );
+    Ok(IntervalMetrics {
+        coverage: covered_weight / weight_sum,
+        mean_width: width_sum / weight_sum,
+    })
+}
+
+pub fn interval_coverage_with_backend(
+    actual: &[f64],
+    lower: &[f64],
+    upper: &[f64],
+    backend: Option<&str>,
+    sample_weight: Option<&[f64]>,
+) -> Result<f64> {
+    Ok(interval_metrics_with_backend(actual, lower, upper, backend, sample_weight)?.coverage)
+}
+
+pub fn mean_interval_width_with_backend(
+    lower: &[f64],
+    upper: &[f64],
+    backend: Option<&str>,
+    sample_weight: Option<&[f64]>,
+) -> Result<f64> {
+    Ok(interval_metrics_with_backend(lower, lower, upper, backend, sample_weight)?.mean_width)
+}
+
 pub fn crps_approximation(
     actual: &[f64],
     quantiles: &[f64],
@@ -721,14 +822,15 @@ impl ConditionalFlowDistributionHead {
                 .iter()
                 .map(|row| row[self.quantiles.len() - 1])
                 .collect::<Vec<_>>();
-            metrics.insert(
-                "interval_coverage".to_string(),
-                interval_coverage(values, &lower, &upper)?,
-            );
-            metrics.insert(
-                "interval_width".to_string(),
-                mean_interval_width(&lower, &upper)?,
-            );
+            let interval_metrics = interval_metrics_with_backend(
+                values,
+                &lower,
+                &upper,
+                Some(&self.backend.selected),
+                None,
+            )?;
+            metrics.insert("interval_coverage".to_string(), interval_metrics.coverage);
+            metrics.insert("interval_width".to_string(), interval_metrics.mean_width);
             metrics.insert(
                 "joint_path_calibration".to_string(),
                 joint_path_calibration(values, &joint_scenario_paths),
@@ -2229,6 +2331,56 @@ mod tests {
                 (actual_score - expected).abs() < 1.0e-5,
                 "backend={backend}: actual={actual_score}, expected={expected}"
             );
+        }
+    }
+
+    #[test]
+    fn interval_metrics_run_on_every_available_affine_backend() {
+        let actual = (0..5_000)
+            .map(|index| (index as f64 * 0.019).sin() * 3.0)
+            .collect::<Vec<_>>();
+        let lower = actual
+            .iter()
+            .enumerate()
+            .map(|(index, value)| value - 0.5 + (index as f64 * 0.003).sin() * 0.7)
+            .collect::<Vec<_>>();
+        let upper = lower.iter().map(|value| value + 1.25).collect::<Vec<_>>();
+        let weights = (0..actual.len())
+            .map(|index| 1.0 + (index % 5) as f64)
+            .collect::<Vec<_>>();
+        let weight_sum = weights.iter().sum::<f64>();
+        let expected_coverage = actual
+            .iter()
+            .zip(&lower)
+            .zip(&upper)
+            .zip(&weights)
+            .map(|(((&actual, &lower), &upper), &weight)| {
+                if actual >= lower && actual <= upper {
+                    weight
+                } else {
+                    0.0
+                }
+            })
+            .sum::<f64>()
+            / weight_sum;
+        let expected_width = upper
+            .iter()
+            .zip(&lower)
+            .zip(&weights)
+            .map(|((&upper, &lower), &weight)| (upper - lower) * weight)
+            .sum::<f64>()
+            / weight_sum;
+        for backend in cartoboost_neural::available_backends() {
+            let metrics = interval_metrics_with_backend(
+                &actual,
+                &lower,
+                &upper,
+                Some(&backend),
+                Some(&weights),
+            )
+            .unwrap_or_else(|error| panic!("{backend} interval metrics failed: {error}"));
+            assert!((metrics.coverage - expected_coverage).abs() < 1.0e-10);
+            assert!((metrics.mean_width - expected_width).abs() < 1.0e-5);
         }
     }
 

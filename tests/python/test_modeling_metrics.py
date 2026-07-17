@@ -78,6 +78,23 @@ def test_weighted_pinball_loss_accepts_every_affine_backend(backend):
     ) == pytest.approx(0.25)
 
 
+@pytest.mark.parametrize("backend", available_backends("affine"))
+def test_weighted_interval_metrics_accept_every_affine_backend(backend):
+    assert interval_coverage(
+        [1.0, 3.0],
+        [0.0, 2.0],
+        [2.0, 2.5],
+        sample_weight=[1.0, 3.0],
+        backend=backend,
+    ) == pytest.approx(0.25)
+    assert mean_interval_width(
+        [0.0, 2.0],
+        [2.0, 5.0],
+        sample_weight=[1.0, 3.0],
+        backend=backend,
+    ) == pytest.approx(2.75)
+
+
 def test_jitter_volatility_uses_per_sample_instability():
     predictions = np.array(
         [

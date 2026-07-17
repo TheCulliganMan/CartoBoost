@@ -350,6 +350,23 @@ def test_weighted_interval_score_accepts_every_affine_backend():
         ) == pytest.approx(expected)
 
 
+def test_interval_metrics_accept_every_affine_backend():
+    from cartoboost.accelerators import available_backends
+
+    for backend in available_backends("affine"):
+        assert interval_coverage(
+            [1.0, 3.0],
+            [0.0, 2.0],
+            [2.0, 2.5],
+            backend=backend,
+        ) == pytest.approx(0.5)
+        assert mean_interval_width(
+            [0.0, 2.0],
+            [2.0, 5.0],
+            backend=backend,
+        ) == pytest.approx(2.5)
+
+
 def test_distributional_metric_helpers_delegate_to_native_when_available(monkeypatch):
     package = ModuleType("cartoboost")
     package.__path__ = []

@@ -204,8 +204,8 @@ use cartoboost_prob::{
     crps_approximation_with_backend as core_prob_crps_approximation,
     diffusion_scenario_generate_with_backend_json as core_prob_diffusion_scenario_generate_json,
     group_conformal_residual_quantiles as core_prob_group_conformal_residual_quantiles,
-    interval_coverage as core_prob_interval_coverage,
-    mean_interval_width as core_prob_mean_interval_width,
+    interval_coverage_with_backend as core_prob_interval_coverage,
+    mean_interval_width_with_backend as core_prob_mean_interval_width,
     nearest_calibration_residual_quantiles_with_backend as core_prob_nearest_calibration_residual_quantiles,
     pinball_loss_with_backend as core_prob_pinball_loss, pit_bins as core_prob_pit_bins,
     rolling_origin_conformal_residual_quantiles as core_prob_rolling_origin_conformal_residual_quantiles,
@@ -10555,17 +10555,42 @@ fn prob_pinball_loss_value(
 }
 
 #[pyfunction]
+#[pyo3(signature = (actual, lower, upper, backend=None, sample_weight=None))]
 fn prob_interval_coverage_value(
+    py: Python<'_>,
     actual: Vec<f64>,
     lower: Vec<f64>,
     upper: Vec<f64>,
+    backend: Option<&str>,
+    sample_weight: Option<Vec<f64>>,
 ) -> PyResult<f64> {
-    core_prob_interval_coverage(&actual, &lower, &upper).map_err(to_py_value_error)
+    let backend = backend.map(str::to_owned);
+    py.detach(move || {
+        core_prob_interval_coverage(
+            &actual,
+            &lower,
+            &upper,
+            backend.as_deref(),
+            sample_weight.as_deref(),
+        )
+    })
+    .map_err(to_py_value_error)
 }
 
 #[pyfunction]
-fn prob_mean_interval_width_value(lower: Vec<f64>, upper: Vec<f64>) -> PyResult<f64> {
-    core_prob_mean_interval_width(&lower, &upper).map_err(to_py_value_error)
+#[pyo3(signature = (lower, upper, backend=None, sample_weight=None))]
+fn prob_mean_interval_width_value(
+    py: Python<'_>,
+    lower: Vec<f64>,
+    upper: Vec<f64>,
+    backend: Option<&str>,
+    sample_weight: Option<Vec<f64>>,
+) -> PyResult<f64> {
+    let backend = backend.map(str::to_owned);
+    py.detach(move || {
+        core_prob_mean_interval_width(&lower, &upper, backend.as_deref(), sample_weight.as_deref())
+    })
+    .map_err(to_py_value_error)
 }
 
 #[pyfunction]
