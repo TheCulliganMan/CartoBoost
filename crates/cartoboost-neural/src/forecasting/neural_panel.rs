@@ -621,14 +621,15 @@ impl NeuralPanelForecaster {
             )
         })?;
         let known_future_index = known_future_covariates.map(index_known_future_covariates);
+        let stationary_by_series = self.stationary_network_effects_batch(&self.series_ids)?;
         let mut by_series = BTreeMap::new();
-        for series_id in &self.series_ids {
+        for (series_index, series_id) in self.series_ids.iter().enumerate() {
             let last_row = self.last_rows.get(series_id).ok_or_else(|| {
                 CartoBoostError::InvalidInput(format!(
                     "missing fitted timestamp tail for series '{series_id}'"
                 ))
             })?;
-            let stationary_effects = self.stationary_network_effects(series_id)?;
+            let stationary_effects = &stationary_by_series[series_index];
             let mut rows = Vec::with_capacity(horizon);
             for step in 1..=horizon {
                 let timestamp = frequency.advance(last_row.timestamp, step)?;
@@ -705,29 +706,59 @@ impl NeuralPanelForecaster {
         ForecastResult::new(predictions)
     }
 
-    fn stationary_network_effects(&self, series_id: &str) -> CoreResult<Vec<f64>> {
-        let mut output = vec![0.0; self.config.n_forecasts];
-        if let (Some(net), Some(tail)) = (&self.ar_net, self.target_tails.get(series_id)) {
-            let start_index = tail.len().saturating_sub(self.config.n_lags);
-            let input = tail[start_index..]
+    fn stationary_network_effects_batch(&self, series_ids: &[String]) -> CoreResult<Vec<Vec<f64>>> {
+        let mut outputs = vec![vec![0.0; self.config.n_forecasts]; series_ids.len()];
+        if let Some(net) = &self.ar_net {
+            let indexed_inputs = series_ids
                 .iter()
                 .enumerate()
-                .map(|(idx, value)| {
-                    let baseline = self.trend_baseline(series_id, idx + start_index + 1);
-                    value - baseline
+                .filter_map(|(index, series_id)| {
+                    self.target_tails.get(series_id).map(|tail| {
+                        let start = tail.len().saturating_sub(self.config.n_lags);
+                        let input = tail[start..]
+                            .iter()
+                            .enumerate()
+                            .map(|(offset, value)| {
+                                value - self.trend_baseline(series_id, offset + start + 1)
+                            })
+                            .collect::<Vec<_>>();
+                        (index, input)
+                    })
                 })
                 .collect::<Vec<_>>();
-            let forward = self.forward_net(net, &input)?;
-            add_median_outputs(&mut output, &forward, &self.config.quantiles);
+            let inputs = indexed_inputs
+                .iter()
+                .map(|(_, input)| input.clone())
+                .collect::<Vec<_>>();
+            for ((index, _), forward) in indexed_inputs.into_iter().zip(
+                net.forward_batch(&inputs, &self.config.backend)
+                    .map_err(|err| CartoBoostError::InvalidInput(err.to_string()))?,
+            ) {
+                add_median_outputs(&mut outputs[index], &forward, &self.config.quantiles);
+            }
         }
-        if let (Some(net), Some(tails)) =
-            (&self.covar_net, self.lagged_covariate_tails.get(series_id))
-        {
-            let input = lagged_covariate_input(&self.config, tails);
-            let forward = self.forward_net(net, &input)?;
-            add_median_outputs(&mut output, &forward, &self.config.quantiles);
+        if let Some(net) = &self.covar_net {
+            let indexed_inputs = series_ids
+                .iter()
+                .enumerate()
+                .filter_map(|(index, series_id)| {
+                    self.lagged_covariate_tails
+                        .get(series_id)
+                        .map(|tails| (index, lagged_covariate_input(&self.config, tails)))
+                })
+                .collect::<Vec<_>>();
+            let inputs = indexed_inputs
+                .iter()
+                .map(|(_, input)| input.clone())
+                .collect::<Vec<_>>();
+            for ((index, _), forward) in indexed_inputs.into_iter().zip(
+                net.forward_batch(&inputs, &self.config.backend)
+                    .map_err(|err| CartoBoostError::InvalidInput(err.to_string()))?,
+            ) {
+                add_median_outputs(&mut outputs[index], &forward, &self.config.quantiles);
+            }
         }
-        Ok(output)
+        Ok(outputs)
     }
 
     fn forward_net(&self, net: &MlpState, input: &[f64]) -> CoreResult<Vec<f64>> {
@@ -2643,6 +2674,62 @@ impl MlpState {
         Ok(activation)
     }
 
+    fn forward_batch(
+        &self,
+        inputs: &[Vec<f64>],
+        backend: &BackendSelection,
+    ) -> Result<Vec<Vec<f64>>> {
+        if inputs.is_empty() {
+            return Ok(Vec::new());
+        }
+        let operations = self.max_layer_ops().saturating_mul(inputs.len());
+        let cpu_backend = panel_dense_cpu_fallback(backend, operations)?;
+        let execution_backend = cpu_backend.as_ref().unwrap_or(backend);
+        if execution_backend.selected == "cpu" {
+            return inputs
+                .iter()
+                .map(|input| self.forward(input, execution_backend))
+                .collect();
+        }
+        let mut activations = inputs
+            .iter()
+            .map(|input| padded_input(input, self.input_width))
+            .collect::<Vec<_>>();
+        for (layer_index, layer) in self.layers.iter().enumerate() {
+            let weights = (0..activations[0].len())
+                .flat_map(|input_index| {
+                    layer.weights.iter().map(move |row| row[input_index] as f32)
+                })
+                .collect::<Vec<_>>();
+            let features = activations
+                .iter()
+                .map(|row| row.iter().map(|value| *value as f32).collect())
+                .collect::<Vec<Vec<f32>>>();
+            let biases = layer
+                .biases
+                .iter()
+                .map(|value| *value as f32)
+                .collect::<Vec<_>>();
+            let is_last = layer_index + 1 == self.layers.len();
+            activations = backend_dense_layer_f32(execution_backend, &features, &weights, &biases)?
+                .into_iter()
+                .map(|row| {
+                    row.into_iter()
+                        .map(|value| {
+                            let value = f64::from(value);
+                            if is_last {
+                                value
+                            } else {
+                                value.max(0.0)
+                            }
+                        })
+                        .collect()
+                })
+                .collect();
+        }
+        Ok(activations)
+    }
+
     fn max_layer_ops(&self) -> usize {
         self.layers
             .iter()
@@ -3445,6 +3532,37 @@ mod dispatch_tests {
             }
             fit_dense_regressor_with_backend(&config, examples.clone(), Some(&backend_name))
                 .unwrap_or_else(|error| panic!("{backend_name} dense regressor failed: {error}"));
+        }
+    }
+
+    #[test]
+    fn panel_batched_inference_matches_cpu_on_available_backends() {
+        let inputs = (0..64)
+            .map(|row| {
+                (0..16)
+                    .map(|column| ((row * 16 + column) as f64 * 0.019).cos())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let net = MlpState::initialized(16, 4, &[16], 41);
+        let cpu = select_backend_for(Some("cpu"), BackendOperation::Dense).unwrap();
+        let expected = net.forward_batch(&inputs, &cpu).unwrap();
+        for backend_name in crate::available_backends() {
+            if backend_name == "cpu"
+                || !crate::backend_supports_operation(&backend_name, BackendOperation::Dense)
+            {
+                continue;
+            }
+            let backend = select_backend_for(Some(&backend_name), BackendOperation::Dense).unwrap();
+            let actual = net.forward_batch(&inputs, &backend).unwrap();
+            for (actual_row, expected_row) in actual.iter().zip(&expected) {
+                for (actual, expected) in actual_row.iter().zip(expected_row) {
+                    assert!(
+                        (actual - expected).abs() < 2.0e-4,
+                        "{backend_name} panel batch mismatch: {actual} vs {expected}"
+                    );
+                }
+            }
         }
     }
 }
