@@ -926,19 +926,31 @@ def benchmark_calibration_report_fields(
     }
 
 
-def crps_approximation(y_true: Any, quantiles: Any, predictions: Any) -> float:
+def crps_approximation(
+    y_true: Any,
+    quantiles: Any,
+    predictions: Any,
+    *,
+    backend: Backend | str = Backend.CPU,
+) -> float:
     truth, levels, matrix = _quantile_matrix(y_true, quantiles, predictions)
     native = _native_prob_call(
         "prob_crps_approximation_value",
         truth.tolist(),
         levels.tolist(),
         matrix.tolist(),
+        str(backend),
     )
     if native is not None:
         return float(native)
     total = 0.0
     for idx, level in enumerate(levels):
-        total += 2.0 * pinball_loss(truth, matrix[:, idx], float(level))
+        total += 2.0 * pinball_loss(
+            truth,
+            matrix[:, idx],
+            float(level),
+            backend=backend,
+        )
     return float(total / len(levels))
 
 

@@ -318,6 +318,22 @@ def test_distributional_metrics_score_quantile_rows():
     assert sum(pit_bins(actual, quantiles, predictions, bins=5)["counts"]) == 2
 
 
+def test_crps_accepts_every_affine_backend():
+    from cartoboost.accelerators import available_backends
+
+    actual = [1.0, 2.0]
+    quantiles = [0.1, 0.5, 0.9]
+    predictions = [[0.0, 1.0, 2.0], [1.0, 2.0, 3.0]]
+    expected = crps_approximation(actual, quantiles, predictions, backend="cpu")
+    for backend in available_backends("affine"):
+        assert crps_approximation(
+            actual,
+            quantiles,
+            predictions,
+            backend=backend,
+        ) == pytest.approx(expected)
+
+
 def test_distributional_metric_helpers_delegate_to_native_when_available(monkeypatch):
     package = ModuleType("cartoboost")
     package.__path__ = []

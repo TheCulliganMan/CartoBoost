@@ -258,6 +258,54 @@ pub fn crps_approximation(
     Ok(total / (actual.len() * quantiles.len()) as f64)
 }
 
+pub fn crps_approximation_with_backend(
+    actual: &[f64],
+    quantiles: &[f64],
+    predictions: &[Vec<f64>],
+    backend: Option<&str>,
+) -> Result<f64> {
+    validate_quantile_rows(actual, quantiles, predictions)?;
+    let selection = select_backend_for(backend.or(Some("cpu")), BackendOperation::Affine)
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    let row_count = actual.len().saturating_mul(quantiles.len());
+    let decision = backend_workload_decision(
+        &selection,
+        BackendOperation::Affine,
+        row_count.saturating_mul(2),
+        PROB_METRIC_DISPATCH_MIN_OPS,
+    );
+    if decision.executed == "cpu" {
+        return crps_approximation(actual, quantiles, predictions);
+    }
+    let rows = actual
+        .iter()
+        .zip(predictions)
+        .flat_map(|(&actual, prediction_row)| {
+            prediction_row
+                .iter()
+                .map(move |&prediction| vec![actual, prediction])
+        })
+        .collect::<Vec<_>>();
+    let residuals = backend_affine_scores(
+        &selection,
+        &rows,
+        &[0.0, 0.0],
+        &[1.0, -1.0],
+        &vec![0.0; rows.len()],
+    )
+    .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    Ok(2.0
+        * residuals
+            .par_iter()
+            .enumerate()
+            .map(|(index, &residual)| {
+                let quantile = quantiles[index % quantiles.len()];
+                (quantile * residual).max((quantile - 1.0) * residual)
+            })
+            .sum::<f64>()
+        / row_count as f64)
+}
+
 pub fn weighted_interval_score(
     actual: &[f64],
     median: &[f64],
@@ -551,7 +599,12 @@ impl ConditionalFlowDistributionHead {
             );
             metrics.insert(
                 "crps".to_string(),
-                crps_approximation(values, &self.quantiles, &marginal_quantiles)?,
+                crps_approximation_with_backend(
+                    values,
+                    &self.quantiles,
+                    &marginal_quantiles,
+                    Some(&self.backend.selected),
+                )?,
             );
             let median_idx = self
                 .quantiles
@@ -564,7 +617,13 @@ impl ConditionalFlowDistributionHead {
                 .collect::<Vec<_>>();
             metrics.insert(
                 "pinball_median".to_string(),
-                pinball_loss(values, &median, self.quantiles[median_idx])?,
+                pinball_loss_with_backend(
+                    values,
+                    &median,
+                    self.quantiles[median_idx],
+                    Some(&self.backend.selected),
+                    None,
+                )?,
             );
             let lower = marginal_quantiles
                 .iter()
@@ -2020,6 +2079,34 @@ mod tests {
             assert!(
                 (actual_loss - expected).abs() < 1.0e-5,
                 "backend={backend}: actual={actual_loss}, expected={expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn crps_surface_runs_on_every_available_affine_backend() {
+        let actual = (0..3_000)
+            .map(|index| (index as f64 * 0.017).sin() * 3.0)
+            .collect::<Vec<_>>();
+        let quantiles = vec![0.1, 0.25, 0.5, 0.75, 0.9];
+        let predictions = actual
+            .iter()
+            .enumerate()
+            .map(|(row, &value)| {
+                quantiles
+                    .iter()
+                    .map(|quantile| value + (*quantile - 0.5) * 1.2 + (row as f64 * 0.003).cos())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let expected = crps_approximation(&actual, &quantiles, &predictions).expect("cpu crps");
+        for backend in cartoboost_neural::available_backends() {
+            let actual_score =
+                crps_approximation_with_backend(&actual, &quantiles, &predictions, Some(&backend))
+                    .unwrap_or_else(|error| panic!("{backend} CRPS failed: {error}"));
+            assert!(
+                (actual_score - expected).abs() < 1.0e-5,
+                "backend={backend}: actual={actual_score}, expected={expected}"
             );
         }
     }

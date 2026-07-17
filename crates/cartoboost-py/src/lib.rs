@@ -201,7 +201,7 @@ use cartoboost_prob::{
     benchmark_calibration_report_fields as core_prob_benchmark_calibration_report_fields,
     conditional_flow_fit_with_backend_json as core_prob_conditional_flow_fit_json,
     conditional_flow_predict_json as core_prob_conditional_flow_predict_json,
-    crps_approximation as core_prob_crps_approximation,
+    crps_approximation_with_backend as core_prob_crps_approximation,
     diffusion_scenario_generate_with_backend_json as core_prob_diffusion_scenario_generate_json,
     group_conformal_residual_quantiles as core_prob_group_conformal_residual_quantiles,
     interval_coverage as core_prob_interval_coverage,
@@ -10569,12 +10569,19 @@ fn prob_mean_interval_width_value(lower: Vec<f64>, upper: Vec<f64>) -> PyResult<
 }
 
 #[pyfunction]
+#[pyo3(signature = (actual, quantiles, predictions, backend=None))]
 fn prob_crps_approximation_value(
+    py: Python<'_>,
     actual: Vec<f64>,
     quantiles: Vec<f64>,
     predictions: Vec<Vec<f64>>,
+    backend: Option<&str>,
 ) -> PyResult<f64> {
-    core_prob_crps_approximation(&actual, &quantiles, &predictions).map_err(to_py_value_error)
+    let backend = backend.map(str::to_owned);
+    py.detach(move || {
+        core_prob_crps_approximation(&actual, &quantiles, &predictions, backend.as_deref())
+    })
+    .map_err(to_py_value_error)
 }
 
 #[pyfunction]
