@@ -4,11 +4,13 @@ import json
 import tempfile
 
 import numpy as np
+from cartoboost.accelerators import available_backends
 from cartoboost.graph import (
     DirectedMetaPath,
     DirectionalFeature,
     DirectionalityConfig,
     EdgeType,
+    GraphBackend,
     GraphEmbeddingsConfig,
     GraphEncoderConfig,
     GraphEncoderFamily,
@@ -926,6 +928,44 @@ def test_top_level_graph_backend_propagates_to_accelerated_encoder() -> None:
         }
     )
     assert native_transformer.sage_kwargs["backend"] == "cpu"
+
+
+def test_typed_and_alias_graph_backends_are_canonicalized() -> None:
+    for requested, selected in (
+        (GraphBackend.CUDA, "cuda"),
+        (GraphBackend.HIP, "rocm"),
+        (GraphBackend.DML, "directml"),
+        (GraphBackend.NATIVE, "cpu"),
+    ):
+        transformer = GraphFeatureTransformer.from_config(
+            {
+                "graph_embeddings": {
+                    "backend": requested,
+                    "encoder": {"family": "graphsage", "input_dim": 2},
+                }
+            }
+        )
+        assert transformer.backend == selected
+        assert transformer.sage_kwargs["backend"] == selected
+
+
+def test_typed_graph_config_executes_on_every_available_training_backend() -> None:
+    features = [[0.1, 0.2], [0.0, 0.3], [0.2, 0.7]]
+    edges = [(0, 1), (1, 2)]
+    for backend in available_backends("tanh_mlp_training"):
+        transformer = GraphFeatureTransformer.from_config(
+            GraphEmbeddingsConfig(
+                backend=GraphBackend(backend),
+                encoder=GraphEncoderConfig(
+                    input_dim=2,
+                    hidden_dims=(2,),
+                    epochs=1,
+                ),
+            )
+        )
+        bundle = transformer.fit_transform(features, edges, node_count=3)
+        assert transformer.backend == backend
+        assert bundle.embeddings.shape == (3, 2)
 
 
 def test_node2vec_propagates_non_cpu_top_level_backend_to_fused_training() -> None:

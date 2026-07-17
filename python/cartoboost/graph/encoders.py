@@ -43,7 +43,12 @@ DEFAULT_NODE2VEC_SEED = 0xA2B2_C2D2_E2F2_1234
 
 
 def _backend_value(backend: Backend | str) -> str:
-    return backend.value if isinstance(backend, Backend) else str(backend)
+    value = backend.value if hasattr(backend, "value") else str(backend)
+    normalized = str(value).strip().lower()
+    return {"native": "cpu", "hip": "rocm", "dml": "directml"}.get(
+        normalized,
+        normalized,
+    )
 
 
 def _graph_embeddings_mapping(
@@ -716,8 +721,7 @@ class GraphFeatureTransformer:
         if family not in {"graphsage", "hinsage", "sage", "node2vec"}:
             raise ValueError(f"unsupported graph family {family!r}")
 
-        requested_backend = str(graph_cfg.get("backend", "native")).lower()
-        accelerator_backend = "cpu" if requested_backend == "native" else requested_backend
+        accelerator_backend = _backend_value(graph_cfg.get("backend", "native"))
         encoder_options = dict(encoder_cfg)
         encoder_options.setdefault("backend", accelerator_backend)
         use_hetero = bool(encoder_cfg.get("hetero", graph_cfg.get("hetero", False)))
