@@ -479,12 +479,18 @@ pub fn spillover_diagnostics_for_units_with_backend(
     let distances = if treated_points.is_empty() || control_points.is_empty() {
         Vec::new()
     } else {
-        backend_pairwise_squared_distances_f32(&selection, &treated_points, &control_points)
-            .map_err(|error| GeoCausalError::InvalidInput(error.to_string()))?
-            .into_iter()
-            .flatten()
-            .map(chord_squared_to_km)
-            .collect::<Vec<_>>()
+        let workload = treated_points.len().saturating_mul(control_points.len());
+        let cpu_backend = pairwise_distance_cpu_fallback(&selection, workload)?;
+        backend_pairwise_squared_distances_f32(
+            cpu_backend.as_ref().unwrap_or(&selection),
+            &treated_points,
+            &control_points,
+        )
+        .map_err(|error| GeoCausalError::InvalidInput(error.to_string()))?
+        .into_iter()
+        .flatten()
+        .map(chord_squared_to_km)
+        .collect::<Vec<_>>()
     };
     let treated_weight_exposure = panel
         .spatial_weights()
@@ -578,10 +584,15 @@ fn estimate_for_treated_units(
             "synthetic DID requires non-empty pre and post periods".to_string(),
         ));
     }
-    let pre_treated_mean = group_period_mean(panel, &treated, &pre_times)?;
+    let pre_treated_mean = group_period_mean_with_backend(panel, &treated, &pre_times, backend)?;
     let mut unit_weights = BTreeMap::new();
     for control in &controls {
-        let control_mean = group_period_mean(panel, std::slice::from_ref(control), &pre_times)?;
+        let control_mean = group_period_mean_with_backend(
+            panel,
+            std::slice::from_ref(control),
+            &pre_times,
+            backend,
+        )?;
         unit_weights.insert(
             control.clone(),
             1.0 / ((control_mean - pre_treated_mean).abs() + 1e-6),
@@ -594,7 +605,7 @@ fn estimate_for_treated_units(
         .collect::<BTreeMap<_, _>>();
     normalize_weights(&mut time_weights);
     let pre_synthetic_mean = weighted_group_period_mean(panel, &unit_weights, &pre_times, backend)?;
-    let treated_post_mean = group_period_mean(panel, &treated, &post_times)?;
+    let treated_post_mean = group_period_mean_with_backend(panel, &treated, &post_times, backend)?;
     let synthetic_post_mean =
         weighted_group_period_mean(panel, &unit_weights, &post_times, backend)?;
     let mut warnings = spillover_warnings(panel, &treated);
@@ -640,7 +651,12 @@ fn control_units(panel: &GeoCausalPanel) -> Vec<String> {
         .collect()
 }
 
-fn group_period_mean(panel: &GeoCausalPanel, units: &[String], times: &[String]) -> Result<f64> {
+fn group_period_mean_with_backend(
+    panel: &GeoCausalPanel,
+    units: &[String],
+    times: &[String],
+    backend: &BackendSelection,
+) -> Result<f64> {
     let unit_set: BTreeSet<_> = units.iter().collect();
     let time_set: BTreeSet<_> = times.iter().collect();
     let values: Vec<_> = panel
@@ -654,7 +670,9 @@ fn group_period_mean(panel: &GeoCausalPanel, units: &[String], times: &[String])
             "panel is missing required unit/time observations".to_string(),
         ));
     }
-    Ok(mean(values))
+    let denominator = values.len() as f64;
+    let weights = vec![1.0; values.len()];
+    affine_weighted_mean(&values, &weights, denominator, backend)
 }
 
 fn weighted_group_period_mean(
@@ -683,6 +701,27 @@ fn weighted_group_period_mean(
             "weighted synthetic control has no observations".to_string(),
         ));
     }
+    affine_weighted_mean(&values, &weights, denom, backend)
+}
+
+fn pairwise_distance_cpu_fallback(
+    backend: &BackendSelection,
+    pair_count: usize,
+) -> Result<Option<BackendSelection>> {
+    if backend.selected != "cpu" && pair_count < GEO_CAUSAL_PAIRWISE_DISPATCH_MIN_PAIRS {
+        return select_backend_for(Some("cpu"), BackendOperation::PairwiseDistance)
+            .map(Some)
+            .map_err(|error| GeoCausalError::InvalidInput(error.to_string()));
+    }
+    Ok(None)
+}
+
+fn affine_weighted_mean(
+    values: &[f64],
+    weights: &[f64],
+    denominator: f64,
+    backend: &BackendSelection,
+) -> Result<f64> {
     let execution_backend =
         if backend.selected != "cpu" && values.len() < GEO_CAUSAL_AFFINE_DISPATCH_MIN_VALUES {
             select_backend_for(Some("cpu"), BackendOperation::Affine)
@@ -692,13 +731,13 @@ fn weighted_group_period_mean(
         };
     let total = backend_affine_scores(
         &execution_backend,
-        &[values],
+        &[values.to_vec()],
         &vec![0.0; weights.len()],
         &weights,
         &[0.0],
     )
     .map_err(|error| GeoCausalError::InvalidInput(error.to_string()))?[0];
-    Ok(total / denom)
+    Ok(total / denominator)
 }
 
 fn normalize_weights(weights: &mut BTreeMap<String, f64>) {
@@ -1351,6 +1390,8 @@ mod tests {
         let times = vec!["pre".to_string()];
         let cpu = select_backend_for(Some("cpu"), BackendOperation::Affine).unwrap();
         let expected = weighted_group_period_mean(&panel, &unit_weights, &times, &cpu).unwrap();
+        let expected_unweighted =
+            group_period_mean_with_backend(&panel, &["control".to_string()], &times, &cpu).unwrap();
         for backend_name in available_backends() {
             if !backend_supports_operation(&backend_name, BackendOperation::Affine) {
                 continue;
@@ -1359,10 +1400,40 @@ mod tests {
                 select_backend_for(Some(&backend_name), BackendOperation::Affine).unwrap();
             let actual = weighted_group_period_mean(&panel, &unit_weights, &times, &backend)
                 .unwrap_or_else(|error| panic!("{backend_name} weighted mean failed: {error}"));
+            let actual_unweighted =
+                group_period_mean_with_backend(&panel, &["control".to_string()], &times, &backend)
+                    .unwrap_or_else(|error| {
+                        panic!("{backend_name} unweighted mean failed: {error}")
+                    });
             assert!(
                 (actual - expected).abs() <= 2.0e-4,
                 "{backend_name}: expected {expected}, got {actual}"
             );
+            assert!((actual_unweighted - expected_unweighted).abs() <= 2.0e-4);
+        }
+    }
+
+    #[test]
+    fn spillover_pairwise_dispatch_avoids_small_device_launches() {
+        for backend_name in available_backends() {
+            if !backend_supports_operation(&backend_name, BackendOperation::PairwiseDistance) {
+                continue;
+            }
+            let backend =
+                select_backend_for(Some(&backend_name), BackendOperation::PairwiseDistance)
+                    .unwrap();
+            assert_eq!(
+                pairwise_distance_cpu_fallback(&backend, 1)
+                    .unwrap()
+                    .is_some(),
+                backend_name != "cpu"
+            );
+            assert!(pairwise_distance_cpu_fallback(
+                &backend,
+                GEO_CAUSAL_PAIRWISE_DISPATCH_MIN_PAIRS
+            )
+            .unwrap()
+            .is_none());
         }
     }
 
