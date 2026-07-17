@@ -8584,12 +8584,28 @@ impl DelayAwareGraphTransformer {
                 time_idx,
                 &self.config.backend,
             )?;
-            let mut next = vec![0.0; self.node_ids.len()];
-            for node in 0..self.node_ids.len() {
-                next[node] = self.coefficients[0]
-                    + self.coefficients[1] * history[time_idx][node]
-                    + self.coefficients[2] * signal[node];
-            }
+            let features = history[time_idx]
+                .iter()
+                .zip(&signal)
+                .map(|(&current, &graph)| vec![current, graph])
+                .collect::<Vec<_>>();
+            let execution_backend = profitable_affine_backend(
+                BackendSelection {
+                    requested: self.config.backend.requested.clone(),
+                    selected: self.config.backend.selected.clone(),
+                    available: self.config.backend.available.clone(),
+                },
+                features.len(),
+                2,
+            )?;
+            let next = backend_affine_scores(
+                &execution_backend,
+                &features,
+                &[0.0, 0.0],
+                &self.coefficients[1..3],
+                &vec![self.coefficients[0]; features.len()],
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
             history.push(next.clone());
             predictions.push(
                 next.into_iter()
@@ -10758,6 +10774,49 @@ mod tests {
                 assert!(
                     (actual - expected).abs() < 2.0e-4,
                     "{backend_name} STAEformer mismatch: {actual} vs {expected}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn delay_aware_decode_matches_cpu_on_available_backends() {
+        let nodes = 8_192;
+        let operations = [BackendOperation::CsrDiffusion, BackendOperation::Affine];
+        let build = |backend| DelayAwareGraphTransformer {
+            config: DelayAwareGraphConfig {
+                horizon: 1,
+                edge_delay_prior: vec![1; nodes],
+                ridge: 1.0e-6,
+                backend,
+            },
+            node_ids: (0..nodes).map(|node| format!("node_{node}")).collect(),
+            frequency: "hourly".to_string(),
+            edges: (0..nodes).map(|node| (node, (node + 1) % nodes)).collect(),
+            edge_weights: vec![1.0; nodes],
+            coefficients: vec![0.03, 0.8, 0.17],
+            history: vec![(0..nodes).map(|node| (node as f64 * 0.004).sin()).collect()],
+            target_mean: 0.0,
+            target_scale: 1.0,
+        };
+        let cpu = select_compute_backend_for_operations(Some("cpu"), &operations).unwrap();
+        let expected = build(cpu).predict(1).unwrap();
+        for backend_name in available_compute_backends() {
+            if backend_name == "cpu" {
+                continue;
+            }
+            let Ok(backend) =
+                select_compute_backend_for_operations(Some(&backend_name), &operations)
+            else {
+                continue;
+            };
+            let actual = build(backend)
+                .predict(1)
+                .unwrap_or_else(|error| panic!("{backend_name} delay decode: {error}"));
+            for (actual, expected) in actual[0].iter().zip(&expected[0]) {
+                assert!(
+                    (actual - expected).abs() < 2.0e-4,
+                    "{backend_name} delay decode mismatch: {actual} vs {expected}"
                 );
             }
         }
