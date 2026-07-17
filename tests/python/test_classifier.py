@@ -267,4 +267,6 @@ def test_classifier_graph_smoothing_roundtrip(tmp_path: Path):
 
     assert loaded.graph_indptr == [0, 1, 2, 3, 4]
     assert loaded.graph_smoothing == pytest.approx(0.5)
+    assert classifier.selected_backend_ == "cpu"
+    assert loaded.selected_backend_ == "cpu"
     assert loaded.predict_proba([[0.0], [3.0]]) == pytest.approx(expected)

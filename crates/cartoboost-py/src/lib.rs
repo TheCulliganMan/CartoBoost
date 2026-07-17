@@ -5922,6 +5922,16 @@ impl NativeCartoBoostRegressor {
         &self.backend
     }
 
+    #[getter]
+    fn selected_backend(&self) -> String {
+        self.model
+            .as_ref()
+            .and_then(|model| model.training_config.as_ref())
+            .and_then(|config| config.backend.as_ref())
+            .map(|selection| selection.selected.clone())
+            .unwrap_or_else(|| self.backend.clone())
+    }
+
     #[pyo3(signature = (x, y, sample_weight=None, sparse_sets=None, feature_schema_json=None))]
     fn fit(
         &mut self,
@@ -6706,6 +6716,15 @@ impl NativeQuantileRegressorSet {
     }
 
     #[getter]
+    fn selected_backend(&self) -> String {
+        self.model
+            .as_ref()
+            .and_then(|model| model.backend())
+            .map(|selection| selection.selected.clone())
+            .unwrap_or_else(|| self.backend.clone())
+    }
+
+    #[getter]
     fn is_fitted(&self) -> bool {
         self.model.is_some()
     }
@@ -6870,6 +6889,16 @@ impl NativeCartoBoostClassifier {
     #[getter]
     fn backend(&self) -> &str {
         &self.backend
+    }
+
+    #[getter]
+    fn selected_backend(&self) -> String {
+        self.model
+            .as_ref()
+            .and_then(|model| model.training_config.as_ref())
+            .and_then(|config| config.backend.as_ref())
+            .map(|selection| selection.selected.clone())
+            .unwrap_or_else(|| self.backend.clone())
     }
 
     #[pyo3(signature = (x, y, sample_weight=None, sparse_sets=None, feature_schema_json=None))]
@@ -7453,6 +7482,16 @@ impl NativeCartoBoostRanker {
     #[getter]
     fn backend(&self) -> &str {
         &self.backend
+    }
+
+    #[getter]
+    fn selected_backend(&self) -> String {
+        self.model
+            .as_ref()
+            .and_then(|model| model.training_config.as_ref())
+            .and_then(|config| config.backend.as_ref())
+            .map(|selection| selection.selected.clone())
+            .unwrap_or_else(|| self.backend.clone())
     }
 
     #[pyo3(signature = (

@@ -337,6 +337,9 @@ class QuantileCartoBoostRegressor(ArtifactPersistenceMixin):
                 native.fit(dense, targets)
                 self._native_model = native
                 self.models_ = {}
+                self.selected_backend_ = str(
+                    getattr(native, "selected_backend", self.backend)
+                )
                 return self
             except (TypeError, ValueError):
                 # Categorical/mixed inputs and options outside the native set's
@@ -346,6 +349,11 @@ class QuantileCartoBoostRegressor(ArtifactPersistenceMixin):
             self._build_models()
         for model in self.models_.values():
             model.fit(x, y)
+        selected = {
+            str(getattr(model, "selected_backend_", self.backend))
+            for model in self.models_.values()
+        }
+        self.selected_backend_ = next(iter(selected)) if len(selected) == 1 else self.backend
         return self
 
     def predict(self, x: Any) -> np.ndarray:
@@ -406,7 +414,9 @@ class QuantileCartoBoostRegressor(ArtifactPersistenceMixin):
                 "requested": self.backend,
                 "selected": (
                     {
-                        str(q): str(getattr(self._native_model, "backend", self.backend))
+                        str(q): str(
+                            getattr(self._native_model, "selected_backend", self.backend)
+                        )
                         for q in self.quantiles
                     }
                     if self._native_model is not None
@@ -414,7 +424,7 @@ class QuantileCartoBoostRegressor(ArtifactPersistenceMixin):
                         str(q): str(
                             getattr(
                                 getattr(model, "_model", None),
-                                "backend",
+                                "selected_backend_",
                                 getattr(model, "backend", self.backend),
                             )
                         )
@@ -459,12 +469,20 @@ class QuantileCartoBoostRegressor(ArtifactPersistenceMixin):
         if native_payload is not None and native_class is not None:
             obj._native_model = native_class.loads(str(native_payload))
             obj.models_ = {}
+            obj.selected_backend_ = str(
+                getattr(obj._native_model, "selected_backend", obj.backend)
+            )
         else:
             obj._native_model = None
             obj.models_ = {
                 float(level): load_model_artifact(model_payload)
                 for level, model_payload in payload["models"].items()
             }
+            selected = {
+                str(getattr(model, "selected_backend_", obj.backend))
+                for model in obj.models_.values()
+            }
+            obj.selected_backend_ = next(iter(selected)) if len(selected) == 1 else obj.backend
         return obj
 
 

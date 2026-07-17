@@ -98,6 +98,9 @@ def test_python_booster_families_preserve_every_available_backend() -> None:
         assert regressor.backend == backend
         assert classifier.backend == backend
         assert ranker.backend == backend
+        assert regressor.selected_backend_ == backend
+        assert classifier.selected_backend_ == backend
+        assert ranker.selected_backend_ == backend
         assert np.isfinite(regressor.predict(features)).all()
         assert np.isfinite(classifier.predict_proba(features)).all()
         assert np.isfinite(ranker.predict(features)).all()

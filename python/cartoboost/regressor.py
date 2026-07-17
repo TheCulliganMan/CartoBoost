@@ -272,7 +272,9 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
                 None if self.graph_indices is None else [int(value) for value in self.graph_indices]
             ),
             graph_weights=(
-                None if self.graph_weights is None else [float(value) for value in self.graph_weights]
+                None
+                if self.graph_weights is None
+                else [float(value) for value in self.graph_weights]
             ),
             graph_smoothing=float(self.graph_smoothing),
             graph_smoothing_iterations=int(self.graph_smoothing_iterations),
@@ -295,6 +297,7 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
         )
         self.metadata_ = _json_attr(model, "metadata_json")
         self.training_config_ = _json_attr(model, "training_config_json")
+        self.selected_backend_ = str(getattr(model, "selected_backend", self.backend))
         self.training_history_ = _json_attr(model, "training_history_json") or []
         write_training_history(
             model,
@@ -705,6 +708,9 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
         estimator.n_sparse_sets_in_ = len(estimator.sparse_set_names_)
         estimator.metadata_ = _json_attr(native_model, "metadata_json")
         estimator.training_config_ = _json_attr(native_model, "training_config_json")
+        estimator.selected_backend_ = str(
+            getattr(native_model, "selected_backend", estimator.backend)
+        )
         estimator.training_history_ = _json_attr(native_model, "training_history_json") or []
         estimator.requires_sparse_sets_ = bool(getattr(native_model, "requires_sparse_sets", False))
         estimator.is_fitted_ = True

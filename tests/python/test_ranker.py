@@ -303,4 +303,6 @@ def test_ranker_graph_smoothing_roundtrip(tmp_path: Path):
 
     assert loaded.graph_indices == [1, 0, 3, 2]
     assert loaded.graph_smoothing_iterations == 2
+    assert ranker.selected_backend_ == "cpu"
+    assert loaded.selected_backend_ == "cpu"
     assert loaded.predict([[0.0], [1.0]]) == pytest.approx(expected)

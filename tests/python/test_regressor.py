@@ -318,6 +318,8 @@ def test_graph_smoothed_boosting_roundtrip(tmp_path: Path):
     assert loaded.graph_weights == pytest.approx([1.0, 1.0, 1.0, 1.0])
     assert loaded.graph_smoothing == pytest.approx(0.75)
     assert loaded.graph_smoothing_iterations == 3
+    assert model.selected_backend_ == "cpu"
+    assert loaded.selected_backend_ == "cpu"
     assert loaded.predict([[0.0], [1.0], [2.0], [3.0]]) == pytest.approx(predictions)
 
 
