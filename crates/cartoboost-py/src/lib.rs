@@ -211,7 +211,7 @@ use cartoboost_prob::{
     rolling_origin_conformal_residual_quantiles as core_prob_rolling_origin_conformal_residual_quantiles,
     split_conformal_residual_quantile as core_prob_split_conformal_residual_quantile,
     weighted_conformal_residual_quantile as core_prob_weighted_conformal_residual_quantile,
-    weighted_interval_score as core_prob_weighted_interval_score,
+    weighted_interval_score_with_backend as core_prob_weighted_interval_score,
     DiffusionEdge as CoreDiffusionEdge, SplitOrder as CoreProbSplitOrder,
 };
 use cartoboost_spatial_econ::{
@@ -10585,12 +10585,19 @@ fn prob_crps_approximation_value(
 }
 
 #[pyfunction]
+#[pyo3(signature = (actual, median, intervals, backend=None))]
 fn prob_weighted_interval_score_value(
+    py: Python<'_>,
     actual: Vec<f64>,
     median: Vec<f64>,
     intervals: Vec<(f64, Vec<f64>, Vec<f64>)>,
+    backend: Option<&str>,
 ) -> PyResult<f64> {
-    core_prob_weighted_interval_score(&actual, &median, &intervals).map_err(to_py_value_error)
+    let backend = backend.map(str::to_owned);
+    py.detach(move || {
+        core_prob_weighted_interval_score(&actual, &median, &intervals, backend.as_deref())
+    })
+    .map_err(to_py_value_error)
 }
 
 #[pyfunction]

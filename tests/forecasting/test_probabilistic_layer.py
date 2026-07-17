@@ -334,6 +334,22 @@ def test_crps_accepts_every_affine_backend():
         ) == pytest.approx(expected)
 
 
+def test_weighted_interval_score_accepts_every_affine_backend():
+    from cartoboost.accelerators import available_backends
+
+    actual = [1.0, 2.0]
+    median = [1.0, 2.0]
+    intervals = [(0.2, [0.0, 1.0], [2.0, 3.0])]
+    expected = weighted_interval_score(actual, median, intervals, backend="cpu")
+    for backend in available_backends("affine"):
+        assert weighted_interval_score(
+            actual,
+            median,
+            intervals,
+            backend=backend,
+        ) == pytest.approx(expected)
+
+
 def test_distributional_metric_helpers_delegate_to_native_when_available(monkeypatch):
     package = ModuleType("cartoboost")
     package.__path__ = []

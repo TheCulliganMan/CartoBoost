@@ -340,6 +340,94 @@ pub fn weighted_interval_score(
     Ok(score / (actual.len() as f64 * weight_sum))
 }
 
+pub fn weighted_interval_score_with_backend(
+    actual: &[f64],
+    median: &[f64],
+    intervals: &[(f64, Vec<f64>, Vec<f64>)],
+    backend: Option<&str>,
+) -> Result<f64> {
+    validate_same_non_empty(actual, median, "actual", "median")?;
+    if intervals.is_empty() {
+        return invalid("intervals must contain at least one central interval");
+    }
+    for (alpha, lower, upper) in intervals {
+        validate_alpha(*alpha)?;
+        validate_same_non_empty(actual, lower, "actual", "lower")?;
+        validate_same_non_empty(actual, upper, "actual", "upper")?;
+        if lower.iter().zip(upper).any(|(lower, upper)| lower > upper) {
+            return invalid("lower bounds must be less than or equal to upper bounds");
+        }
+    }
+    let residual_count = actual
+        .len()
+        .saturating_mul(1 + intervals.len().saturating_mul(2));
+    let selection = select_backend_for(backend.or(Some("cpu")), BackendOperation::Affine)
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    let decision = backend_workload_decision(
+        &selection,
+        BackendOperation::Affine,
+        residual_count.saturating_mul(2),
+        PROB_METRIC_DISPATCH_MIN_OPS,
+    );
+    if decision.executed == "cpu" {
+        return weighted_interval_score(actual, median, intervals);
+    }
+    let mut rows = Vec::with_capacity(residual_count);
+    rows.extend(
+        actual
+            .iter()
+            .zip(median)
+            .map(|(&actual, &median)| vec![actual, median]),
+    );
+    for (_, lower, upper) in intervals {
+        rows.extend(
+            actual
+                .iter()
+                .zip(lower)
+                .map(|(&actual, &lower)| vec![actual, lower]),
+        );
+        rows.extend(
+            actual
+                .iter()
+                .zip(upper)
+                .map(|(&actual, &upper)| vec![actual, upper]),
+        );
+    }
+    let residuals = backend_affine_scores(
+        &selection,
+        &rows,
+        &[0.0, 0.0],
+        &[1.0, -1.0],
+        &vec![0.0; rows.len()],
+    )
+    .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    let n = actual.len();
+    let mut score = 0.5
+        * residuals[..n]
+            .par_iter()
+            .map(|value| value.abs())
+            .sum::<f64>();
+    let mut weight_sum = 0.5;
+    for (interval_index, (alpha, _, _)) in intervals.iter().enumerate() {
+        let lower_start = n + interval_index * 2 * n;
+        let upper_start = lower_start + n;
+        let weight = *alpha / 2.0;
+        weight_sum += weight;
+        score += weight
+            * residuals[lower_start..upper_start]
+                .par_iter()
+                .zip(&residuals[upper_start..upper_start + n])
+                .map(|(&actual_minus_lower, &actual_minus_upper)| {
+                    let width = actual_minus_lower - actual_minus_upper;
+                    let below = (-actual_minus_lower).max(0.0) * 2.0 / alpha;
+                    let above = actual_minus_upper.max(0.0) * 2.0 / alpha;
+                    width + below + above
+                })
+                .sum::<f64>();
+    }
+    Ok(score / (n as f64 * weight_sum))
+}
+
 pub fn pit_bins(
     actual: &[f64],
     quantiles: &[f64],
@@ -2104,6 +2192,39 @@ mod tests {
             let actual_score =
                 crps_approximation_with_backend(&actual, &quantiles, &predictions, Some(&backend))
                     .unwrap_or_else(|error| panic!("{backend} CRPS failed: {error}"));
+            assert!(
+                (actual_score - expected).abs() < 1.0e-5,
+                "backend={backend}: actual={actual_score}, expected={expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn weighted_interval_surface_runs_on_every_available_affine_backend() {
+        let actual = (0..2_000)
+            .map(|index| (index as f64 * 0.021).sin() * 4.0)
+            .collect::<Vec<_>>();
+        let median = actual
+            .iter()
+            .enumerate()
+            .map(|(index, value)| value + (index as f64 * 0.007).cos() * 0.4)
+            .collect::<Vec<_>>();
+        let intervals = [0.1, 0.2, 0.4]
+            .into_iter()
+            .map(|alpha| {
+                let radius = 0.5 + alpha;
+                (
+                    alpha,
+                    median.iter().map(|value| value - radius).collect(),
+                    median.iter().map(|value| value + radius).collect(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let expected = weighted_interval_score(&actual, &median, &intervals).expect("cpu WIS");
+        for backend in cartoboost_neural::available_backends() {
+            let actual_score =
+                weighted_interval_score_with_backend(&actual, &median, &intervals, Some(&backend))
+                    .unwrap_or_else(|error| panic!("{backend} WIS failed: {error}"));
             assert!(
                 (actual_score - expected).abs() < 1.0e-5,
                 "backend={backend}: actual={actual_score}, expected={expected}"

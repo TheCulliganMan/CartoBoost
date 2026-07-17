@@ -958,6 +958,8 @@ def weighted_interval_score(
     y_true: Any,
     median: Any,
     intervals: list[tuple[float, Any, Any]],
+    *,
+    backend: Backend | str = Backend.CPU,
 ) -> float:
     truth, med = _paired(y_true, median, "y_true", "median")
     if not intervals:
@@ -980,6 +982,7 @@ def weighted_interval_score(
         truth.tolist(),
         med.tolist(),
         native_intervals,
+        str(backend),
     )
     if native is not None:
         return float(native)
