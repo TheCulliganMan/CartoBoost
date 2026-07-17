@@ -1,14 +1,17 @@
 use crate::data::{validate_weights, Dataset};
 use crate::graph_regularization::GraphLeafSmoothing;
 use crate::loss::LossConfig;
-use crate::objectives::{LambdaRankObjective, Objective, PairwiseLogitObjective};
+use crate::objectives::{
+    pairwise_gradients_with_accelerated_rhos, GradientPair, LambdaRankObjective, Objective,
+    PairwiseLogitObjective,
+};
 use crate::tree::{
     FuzzyKernel, LeafPredictorKind, ModelMetadata, SplitterKind, TrainingMetric, Tree, TreeBuilder,
 };
 use crate::{CartoBoostError, Result};
 use cartoboost_accelerator::{
-    backend_dense_layer_f32, select_backend_for, select_backend_for_operations, BackendOperation,
-    BackendSelection,
+    backend_dense_layer_f32, backend_pair_sigmoid_scores_f32, select_backend_for,
+    select_backend_for_operations, BackendOperation, BackendSelection,
 };
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -16,6 +19,7 @@ use std::path::Path;
 
 pub const RANKER_MODEL_ARTIFACT_VERSION: u32 = 1;
 const RANKER_DENSE_DISPATCH_MIN_OPS: usize = 16_384;
+const RANKER_PAIR_DISPATCH_MIN_PAIRS: usize = 16_384;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RankingObjective {
@@ -184,8 +188,18 @@ impl Ranker {
         let fit_context = builder.fit_context(x);
 
         for iteration in 0..self.config.n_estimators {
-            let derivative_pairs =
-                objective.gradients_hessians(y, &scores, Some(&weights), Some(groups))?;
+            let derivative_pairs = accelerated_ranking_gradients(
+                self.config.objective,
+                y,
+                &scores,
+                &weights,
+                groups,
+                &self.backend,
+            )?
+            .map_or_else(
+                || objective.gradients_hessians(y, &scores, Some(&weights), Some(groups)),
+                Ok,
+            )?;
             let mut targets = vec![0.0; y.len()];
             let mut hessian_weights = vec![1.0e-12; y.len()];
             targets
@@ -491,11 +505,74 @@ pub fn mean_reciprocal_rank(y: &[f64], scores: &[f64], groups: &[usize]) -> Resu
 }
 
 fn ranker_backend_operations(config: &RankerConfig) -> Vec<BackendOperation> {
-    let mut operations = vec![BackendOperation::Dense];
+    let mut operations = vec![BackendOperation::Dense, BackendOperation::PairScoring];
     if config.graph_leaf_smoothing.is_some() {
         operations.push(BackendOperation::CsrDiffusion);
     }
     operations
+}
+
+fn accelerated_ranking_gradients(
+    objective: RankingObjective,
+    targets: &[f64],
+    scores: &[f64],
+    weights: &[f64],
+    groups: &[usize],
+    backend: &BackendSelection,
+) -> Result<Option<Vec<GradientPair>>> {
+    if backend.selected == "cpu" {
+        return Ok(None);
+    }
+    let pair_count = ranking_pair_count(targets, groups);
+    if pair_count < RANKER_PAIR_DISPATCH_MIN_PAIRS {
+        return Ok(None);
+    }
+    let mut embeddings = Vec::with_capacity(pair_count.saturating_mul(2));
+    let mut pairs = Vec::with_capacity(pair_count);
+    let mut start = 0usize;
+    for &group_size in groups {
+        let end = start + group_size;
+        for high in start..end {
+            for low in start..end {
+                if targets[high] <= targets[low] {
+                    continue;
+                }
+                let pair_start = embeddings.len();
+                embeddings.push(vec![scores[low] as f32, 1.0]);
+                embeddings.push(vec![1.0, -scores[high] as f32]);
+                pairs.push((pair_start, pair_start + 1));
+            }
+        }
+        start = end;
+    }
+    let rhos = backend_pair_sigmoid_scores_f32(backend, &embeddings, &pairs)
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    pairwise_gradients_with_accelerated_rhos(
+        targets,
+        scores,
+        Some(weights),
+        Some(groups),
+        objective == RankingObjective::LambdaRank,
+        &rhos,
+    )
+    .map(Some)
+}
+
+fn ranking_pair_count(targets: &[f64], groups: &[usize]) -> usize {
+    let mut start = 0usize;
+    let mut count = 0usize;
+    for &group_size in groups {
+        let end = start + group_size;
+        for high in start..end {
+            count = count.saturating_add(
+                (start..end)
+                    .filter(|low| targets[high] > targets[*low])
+                    .count(),
+            );
+        }
+        start = end;
+    }
+    count
 }
 
 fn validate_graph_leaf_smoothing(config: &RankerConfig, row_count: usize) -> Result<()> {
@@ -709,5 +786,96 @@ mod tests {
             .unwrap()
             .graph_leaf_smoothing
             .is_some());
+    }
+
+    #[test]
+    fn large_pairwise_training_matches_cpu_on_every_backend() {
+        let rows = 256;
+        let targets = (0..rows)
+            .map(|row| if row < rows / 2 { 2.0 } else { 0.0 })
+            .collect::<Vec<_>>();
+        let scores = (0..rows)
+            .map(|row| (row as f64 * 0.031).sin())
+            .collect::<Vec<_>>();
+        let weights = (0..rows)
+            .map(|row| 0.75 + (row % 11) as f64 * 0.025)
+            .collect::<Vec<_>>();
+        let groups = vec![rows];
+        assert_eq!(ranking_pair_count(&targets, &groups), 16_384);
+
+        let objective_kind = RankingObjective::LambdaRank;
+        let expected = make_objective(objective_kind)
+            .gradients_hessians(&targets, &scores, Some(&weights), Some(&groups))
+            .unwrap();
+        for backend_name in cartoboost_accelerator::available_backends() {
+            if backend_name == "cpu" {
+                continue;
+            }
+            let backend = Ranker::new_with_backend(
+                RankerConfig {
+                    objective: objective_kind,
+                    ..RankerConfig::default()
+                },
+                Some(&backend_name),
+            )
+            .unwrap_or_else(|error| panic!("{backend_name} ranker selection: {error}"))
+            .backend
+            .clone();
+            let actual = accelerated_ranking_gradients(
+                objective_kind,
+                &targets,
+                &scores,
+                &weights,
+                &groups,
+                &backend,
+            )
+            .unwrap_or_else(|error| panic!("{backend_name} pair gradients: {error}"))
+            .expect("large workload must dispatch");
+            for (actual, expected) in actual.iter().zip(&expected) {
+                assert!(
+                    (actual.gradient - expected.gradient).abs() <= 2.0e-4,
+                    "{backend_name} gradient: expected {}, got {}",
+                    expected.gradient,
+                    actual.gradient
+                );
+                assert!(
+                    (actual.hessian - expected.hessian).abs() <= 2.0e-4,
+                    "{backend_name} hessian: expected {}, got {}",
+                    expected.hessian,
+                    actual.hessian
+                );
+            }
+        }
+
+        let x = Dataset::from_rows(
+            (0..rows)
+                .map(|row| vec![if row < rows / 2 { 1.0 } else { -1.0 }])
+                .collect(),
+        )
+        .unwrap();
+        let config = RankerConfig {
+            n_estimators: 1,
+            learning_rate: 0.3,
+            max_depth: 1,
+            min_samples_leaf: 4,
+            min_gain: 0.0,
+            splitters: vec![SplitterKind::Axis],
+            objective: RankingObjective::PairwiseLogit,
+            ..RankerConfig::default()
+        };
+        let expected = Ranker::new_with_backend(config.clone(), Some("cpu"))
+            .unwrap()
+            .fit(&x, &targets, &groups, None)
+            .unwrap();
+        let expected_scores = expected.predict(&x).unwrap();
+        for backend_name in cartoboost_accelerator::available_backends() {
+            let actual = Ranker::new_with_backend(config.clone(), Some(&backend_name))
+                .unwrap()
+                .fit(&x, &targets, &groups, None)
+                .unwrap_or_else(|error| panic!("{backend_name} ranker fit: {error}"));
+            for (actual, expected) in actual.predict(&x).unwrap().iter().zip(&expected_scores) {
+                assert!((actual - expected).abs() <= 2.0e-4);
+            }
+        }
     }
 }

@@ -845,6 +845,42 @@ fn pairwise_gradients(
     groups: Option<&[usize]>,
     scale_by_ndcg_delta: bool,
 ) -> Result<Vec<GradientPair>> {
+    pairwise_gradients_with_rhos(
+        targets,
+        raw_predictions,
+        weights,
+        groups,
+        scale_by_ndcg_delta,
+        None,
+    )
+}
+
+pub(crate) fn pairwise_gradients_with_accelerated_rhos(
+    targets: &[f64],
+    raw_predictions: &[f64],
+    weights: Option<&[f64]>,
+    groups: Option<&[usize]>,
+    scale_by_ndcg_delta: bool,
+    rhos: &[f64],
+) -> Result<Vec<GradientPair>> {
+    pairwise_gradients_with_rhos(
+        targets,
+        raw_predictions,
+        weights,
+        groups,
+        scale_by_ndcg_delta,
+        Some(rhos),
+    )
+}
+
+fn pairwise_gradients_with_rhos(
+    targets: &[f64],
+    raw_predictions: &[f64],
+    weights: Option<&[f64]>,
+    groups: Option<&[usize]>,
+    scale_by_ndcg_delta: bool,
+    accelerated_rhos: Option<&[f64]>,
+) -> Result<Vec<GradientPair>> {
     validate_targets(targets)?;
     validate_prediction_shape(targets, raw_predictions, 1)?;
     validate_objective_weights(weights, targets.len())?;
@@ -861,6 +897,7 @@ fn pairwise_gradients(
     } else {
         Vec::new()
     };
+    let mut rho_index = 0usize;
     for range in ranges {
         if range.len() < 2 {
             continue;
@@ -887,7 +924,18 @@ fn pairwise_gradients(
                     continue;
                 }
                 let score_delta = high_prediction - raw_predictions[low];
-                let rho = sigmoid(-score_delta);
+                let rho = if let Some(rhos) = accelerated_rhos {
+                    let value = rhos.get(rho_index).copied().ok_or_else(|| {
+                        CartoBoostError::InvalidInput(
+                            "accelerated pair probabilities are shorter than ranking pairs"
+                                .to_string(),
+                        )
+                    })?;
+                    rho_index += 1;
+                    value
+                } else {
+                    sigmoid(-score_delta)
+                };
                 let pair_weight = if let Some(values) = weights {
                     0.5 * (high_weight + values[low])
                 } else {
@@ -911,6 +959,11 @@ fn pairwise_gradients(
                 pairs[low].hessian += hessian;
             }
         }
+    }
+    if accelerated_rhos.is_some_and(|rhos| rho_index != rhos.len()) {
+        return Err(CartoBoostError::InvalidInput(
+            "accelerated pair probabilities do not match ranking pairs".to_string(),
+        ));
     }
     Ok(pairs)
 }
