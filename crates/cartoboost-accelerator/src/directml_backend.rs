@@ -683,6 +683,27 @@ pub(crate) fn csr_diffusion(
 ) -> Result<Vec<f32>> {
     let nodes = indptr.len() - 1;
     let batch = values.len() / (nodes * channels);
+    // DirectML has no native sparse matrix multiplication operator. Expanding
+    // a genuinely sparse graph to N x N makes both memory and execution scale
+    // quadratically, which is dramatically slower than walking the CSR data.
+    // Keep GEMM for sufficiently dense graphs and use the compact host kernel
+    // otherwise. This is a deterministic shape policy, not runtime calibration.
+    if weights.len().saturating_mul(16) < nodes.saturating_mul(nodes) {
+        let mut output = vec![0.0_f32; values.len()];
+        for batch_index in 0..batch {
+            for row in 0..nodes {
+                for edge in indptr[row] as usize..indptr[row + 1] as usize {
+                    let neighbor = indices[edge] as usize;
+                    let weight = weights[edge];
+                    for channel in 0..channels {
+                        output[(batch_index * nodes + row) * channels + channel] +=
+                            weight * values[(batch_index * nodes + neighbor) * channels + channel];
+                    }
+                }
+            }
+        }
+        return Ok(output);
+    }
     let output_columns = batch * channels;
     let mut adjacency = vec![0.0_f32; nodes * nodes];
     for row in 0..nodes {
@@ -725,6 +746,28 @@ pub(crate) fn csr_diffusion_backward(
 ) -> Result<CsrDiffusionBackward> {
     let nodes = indptr.len() - 1;
     let batch = values.len() / (nodes * channels);
+    if weights.len().saturating_mul(16) < nodes.saturating_mul(nodes) {
+        let mut input_grad = vec![0.0_f32; values.len()];
+        let mut edge_grad = vec![0.0_f32; weights.len()];
+        for batch_index in 0..batch {
+            for row in 0..nodes {
+                for edge in indptr[row] as usize..indptr[row + 1] as usize {
+                    let neighbor = indices[edge] as usize;
+                    for channel in 0..channels {
+                        let grad = output_grad[(batch_index * nodes + row) * channels + channel];
+                        input_grad[(batch_index * nodes + neighbor) * channels + channel] +=
+                            weights[edge] * grad;
+                        edge_grad[edge] +=
+                            values[(batch_index * nodes + neighbor) * channels + channel] * grad;
+                    }
+                }
+            }
+        }
+        return Ok(CsrDiffusionBackward {
+            input_grad,
+            edge_grad,
+        });
+    }
     let columns = batch * channels;
     let mut adjacency_transpose = vec![0.0_f32; nodes * nodes];
     for row in 0..nodes {
@@ -892,6 +935,35 @@ mod tests {
             .collect::<Vec<_>>();
         for (actual, expected) in actual.iter().zip(expected) {
             assert!((actual - expected).abs() <= 1.0e-5);
+        }
+    }
+
+    #[test]
+    fn sparse_csr_avoids_dense_expansion_and_preserves_gradients() {
+        let nodes = 64_u32;
+        let indptr = (0..=nodes).collect::<Vec<_>>();
+        let indices = (0..nodes)
+            .map(|node| (node + 1) % nodes)
+            .collect::<Vec<_>>();
+        let weights = vec![0.5_f32; nodes as usize];
+        let values = (0..nodes as usize * 2)
+            .map(|value| value as f32)
+            .collect::<Vec<_>>();
+
+        let output = csr_diffusion(&indptr, &indices, &weights, 2, &values).unwrap();
+        for node in 0..nodes as usize {
+            let neighbor = (node + 1) % nodes as usize;
+            assert_eq!(output[node * 2], 0.5 * values[neighbor * 2]);
+            assert_eq!(output[node * 2 + 1], 0.5 * values[neighbor * 2 + 1]);
+        }
+
+        let gradients = vec![1.0_f32; values.len()];
+        let backward =
+            csr_diffusion_backward(&indptr, &indices, &weights, 2, &values, &gradients).unwrap();
+        assert!(backward.input_grad.iter().all(|gradient| *gradient == 0.5));
+        for (edge, gradient) in backward.edge_grad.iter().enumerate() {
+            let neighbor = (edge + 1) % nodes as usize;
+            assert_eq!(*gradient, values[neighbor * 2] + values[neighbor * 2 + 1]);
         }
     }
 }
