@@ -2,7 +2,8 @@ use crate::data::{validate_weights, Dataset};
 use crate::graph_regularization::GraphLeafSmoothing;
 use crate::loss::LossConfig;
 use crate::objectives::{
-    BinaryLogLossObjective, MulticlassLogLossObjective, Objective, PredictionTransformKind,
+    BinaryLogLossObjective, GradientPair, MetricValue, MulticlassLogLossObjective, Objective,
+    PredictionTransformKind,
 };
 use crate::tree::{
     FuzzyKernel, LeafPredictorKind, ModelMetadata, SplitterKind, TrainingMetric, Tree, TreeBuilder,
@@ -195,11 +196,24 @@ impl Classifier {
         let fit_context = builder.fit_context(x);
 
         for iteration in 0..self.config.n_estimators {
-            let derivative_pairs = objective.gradients_hessians(
+            let derivative_pairs = multiclass_derivatives_with_backend(
+                self.config.objective,
                 y,
                 &raw_predictions,
-                Some(&effective_weights),
-                None,
+                &effective_weights,
+                output_dimension,
+                &self.backend,
+            )?
+            .map_or_else(
+                || {
+                    objective.gradients_hessians(
+                        y,
+                        &raw_predictions,
+                        Some(&effective_weights),
+                        None,
+                    )
+                },
+                Ok,
             )?;
             let mut iteration_trees = Vec::with_capacity(output_dimension);
             for output in 0..output_dimension {
@@ -238,7 +252,14 @@ impl Classifier {
                 iteration_trees.push(tree);
             }
             trees.push(iteration_trees);
-            let metric = objective.default_metric(y, &raw_predictions, None)?;
+            let metric = multiclass_metric_with_backend(
+                self.config.objective,
+                y,
+                &raw_predictions,
+                output_dimension,
+                &self.backend,
+            )?
+            .map_or_else(|| objective.default_metric(y, &raw_predictions, None), Ok)?;
             training_history.push(TrainingMetric {
                 iteration: iteration + 1,
                 name: format!("train/{}", metric.name),
@@ -400,34 +421,16 @@ impl ClassifierModel {
         let objective = make_objective(self.objective, self.class_values.len())?;
         let transform = objective.prediction_transform();
         let margins = self.decision_function_with_selection(x, selection)?;
-        if transform == PredictionTransformKind::Softmax
-            && selection.selected != "cpu"
-            && margins.len().saturating_mul(self.output_dimension())
-                >= CLASSIFIER_SOFTMAX_DISPATCH_MIN_OPS
-        {
+        if transform == PredictionTransformKind::Softmax {
             let width = self.output_dimension();
-            let indptr = (0..=margins.len())
-                .map(|row| {
-                    u32::try_from(row.saturating_mul(width)).map_err(|_| {
-                        CartoBoostError::InvalidInput(
-                            "classifier softmax tensor exceeds u32 indexing".to_string(),
-                        )
-                    })
-                })
-                .collect::<Result<Vec<_>>>()?;
-            let logits = margins
-                .iter()
-                .flatten()
-                .map(|value| *value as f32)
-                .collect::<Vec<_>>();
-            return backend_csr_row_softmax_f32(selection, &indptr, &logits)
-                .map(|values| {
-                    values
-                        .chunks_exact(width)
-                        .map(|row| row.iter().map(|value| f64::from(*value)).collect())
-                        .collect()
-                })
-                .map_err(|error| CartoBoostError::InvalidInput(error.to_string()));
+            let logits = margins.iter().flatten().copied().collect::<Vec<_>>();
+            if let Some(values) = accelerated_row_softmax(selection, &logits, margins.len(), width)?
+            {
+                return Ok(values
+                    .chunks_exact(width)
+                    .map(|row| row.iter().map(|value| f64::from(*value)).collect())
+                    .collect());
+            }
         }
         Ok(margins
             .into_par_iter()
@@ -523,6 +526,95 @@ fn classifier_backend_operations(config: &ClassifierConfig) -> Vec<BackendOperat
         operations.push(BackendOperation::CsrDiffusion);
     }
     operations
+}
+
+fn accelerated_row_softmax(
+    backend: &BackendSelection,
+    logits: &[f64],
+    row_count: usize,
+    width: usize,
+) -> Result<Option<Vec<f32>>> {
+    if backend.selected == "cpu"
+        || row_count.saturating_mul(width) < CLASSIFIER_SOFTMAX_DISPATCH_MIN_OPS
+    {
+        return Ok(None);
+    }
+    let indptr = (0..=row_count)
+        .map(|row| {
+            u32::try_from(row.saturating_mul(width)).map_err(|_| {
+                CartoBoostError::InvalidInput(
+                    "classifier softmax tensor exceeds u32 indexing".to_string(),
+                )
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let logits = logits.iter().map(|value| *value as f32).collect::<Vec<_>>();
+    backend_csr_row_softmax_f32(backend, &indptr, &logits)
+        .map(Some)
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))
+}
+
+fn multiclass_derivatives_with_backend(
+    objective: ClassificationObjective,
+    targets: &[f64],
+    raw_predictions: &[f64],
+    weights: &[f64],
+    class_count: usize,
+    backend: &BackendSelection,
+) -> Result<Option<Vec<GradientPair>>> {
+    if objective != ClassificationObjective::MulticlassLogLoss {
+        return Ok(None);
+    }
+    let Some(probabilities) =
+        accelerated_row_softmax(backend, raw_predictions, targets.len(), class_count)?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(
+        probabilities
+            .chunks_exact(class_count)
+            .zip(targets)
+            .zip(weights)
+            .flat_map(|((row, target), weight)| {
+                let target = *target as usize;
+                row.iter().enumerate().map(move |(output, probability)| {
+                    let probability = f64::from(*probability);
+                    let label = if output == target { 1.0 } else { 0.0 };
+                    GradientPair {
+                        gradient: weight * (probability - label),
+                        hessian: weight * probability * (1.0 - probability),
+                    }
+                })
+            })
+            .collect(),
+    ))
+}
+
+fn multiclass_metric_with_backend(
+    objective: ClassificationObjective,
+    targets: &[f64],
+    raw_predictions: &[f64],
+    class_count: usize,
+    backend: &BackendSelection,
+) -> Result<Option<MetricValue>> {
+    if objective != ClassificationObjective::MulticlassLogLoss {
+        return Ok(None);
+    }
+    let Some(probabilities) =
+        accelerated_row_softmax(backend, raw_predictions, targets.len(), class_count)?
+    else {
+        return Ok(None);
+    };
+    let loss = targets
+        .iter()
+        .zip(probabilities.chunks_exact(class_count))
+        .map(|(target, row)| -f64::from(row[*target as usize]).clamp(1.0e-15, 1.0).ln())
+        .sum::<f64>()
+        / targets.len().max(1) as f64;
+    Ok(Some(MetricValue {
+        name: "logloss",
+        value: loss,
+    }))
 }
 
 fn validate_graph_leaf_smoothing(config: &ClassifierConfig, row_count: usize) -> Result<()> {
@@ -920,6 +1012,58 @@ mod tests {
                         "{backend_name}: expected {expected}, got {actual}"
                     );
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn large_multiclass_training_matches_cpu_on_every_backend() {
+        let row_count = 6_000;
+        let x = Dataset::from_rows(
+            (0..row_count)
+                .map(|row| {
+                    let class = row % 3;
+                    vec![class as f64 * 2.0 + (row % 17) as f64 * 0.001]
+                })
+                .collect(),
+        )
+        .unwrap();
+        let y = (0..row_count)
+            .map(|row| (row % 3) as f64)
+            .collect::<Vec<_>>();
+        let config = ClassifierConfig {
+            n_estimators: 2,
+            learning_rate: 0.4,
+            max_depth: 2,
+            min_samples_leaf: 8,
+            min_gain: 0.0,
+            splitters: vec![SplitterKind::Axis],
+            objective: ClassificationObjective::MulticlassLogLoss,
+            class_count: 3,
+            ..ClassifierConfig::default()
+        };
+        let expected = Classifier::new_with_backend(config.clone(), Some("cpu"))
+            .unwrap()
+            .fit(&x, &y, None)
+            .unwrap();
+        let expected_predictions = expected.predict(&x).unwrap();
+        for backend_name in cartoboost_accelerator::available_backends() {
+            let actual = Classifier::new_with_backend(config.clone(), Some(&backend_name))
+                .unwrap_or_else(|error| panic!("{backend_name} classifier selection: {error}"))
+                .fit(&x, &y, None)
+                .unwrap_or_else(|error| panic!("{backend_name} multiclass fit: {error}"));
+            assert_eq!(actual.predict(&x).unwrap(), expected_predictions);
+            for (actual_metric, expected_metric) in actual
+                .training_history
+                .iter()
+                .zip(&expected.training_history)
+            {
+                assert!(
+                    (actual_metric.value - expected_metric.value).abs() <= 2.0e-4,
+                    "{backend_name}: expected {}, got {}",
+                    expected_metric.value,
+                    actual_metric.value
+                );
             }
         }
     }
