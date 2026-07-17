@@ -343,6 +343,77 @@ pub fn mean_interval_width_with_backend(
     Ok(interval_metrics_with_backend(lower, lower, upper, backend, sample_weight)?.mean_width)
 }
 
+pub fn brier_score_with_backend(
+    targets: &[f64],
+    probabilities: &[f64],
+    backend: Option<&str>,
+    sample_weight: Option<&[f64]>,
+) -> Result<f64> {
+    validate_same_non_empty(targets, probabilities, "targets", "probabilities")?;
+    if targets
+        .iter()
+        .any(|target| *target != 0.0 && *target != 1.0)
+    {
+        return invalid("targets must contain only zero and one");
+    }
+    if probabilities
+        .iter()
+        .any(|probability| *probability < 0.0 || *probability > 1.0)
+    {
+        return invalid("probabilities must be between zero and one");
+    }
+    let weight_sum = if let Some(weights) = sample_weight {
+        validate_same_non_empty(targets, weights, "targets", "sample_weight")?;
+        if weights.iter().any(|weight| *weight < 0.0) {
+            return invalid("sample_weight must be nonnegative");
+        }
+        let total = weights.iter().sum::<f64>();
+        if total <= 0.0 {
+            return invalid("sample_weight must contain at least one positive value");
+        }
+        total
+    } else {
+        targets.len() as f64
+    };
+    let selection = select_backend_for(backend.or(Some("cpu")), BackendOperation::Affine)
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    let decision = backend_workload_decision(
+        &selection,
+        BackendOperation::Affine,
+        targets.len().saturating_mul(2),
+        PROB_METRIC_DISPATCH_MIN_OPS,
+    );
+    let residuals = if decision.executed == "cpu" {
+        probabilities
+            .iter()
+            .zip(targets)
+            .map(|(&probability, &target)| probability - target)
+            .collect::<Vec<_>>()
+    } else {
+        let rows = probabilities
+            .iter()
+            .zip(targets)
+            .map(|(&probability, &target)| vec![probability, target])
+            .collect::<Vec<_>>();
+        backend_affine_scores(
+            &selection,
+            &rows,
+            &[0.0, 0.0],
+            &[1.0, -1.0],
+            &vec![0.0; rows.len()],
+        )
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?
+    };
+    Ok(residuals
+        .par_iter()
+        .enumerate()
+        .map(|(index, residual)| {
+            residual * residual * sample_weight.map_or(1.0, |weights| weights[index])
+        })
+        .sum::<f64>()
+        / weight_sum)
+}
+
 pub fn crps_approximation(
     actual: &[f64],
     quantiles: &[f64],
@@ -2477,6 +2548,39 @@ mod tests {
                 pit_bins_with_backend(&actual, &quantiles, &predictions, 12, Some(&backend))
                     .unwrap_or_else(|error| panic!("{backend} PIT failed: {error}"));
             assert_eq!(actual_bins, expected, "backend={backend}");
+        }
+    }
+
+    #[test]
+    fn brier_score_runs_on_every_available_affine_backend() {
+        let targets = (0..10_000)
+            .map(|index| if index % 3 == 0 { 1.0 } else { 0.0 })
+            .collect::<Vec<_>>();
+        let probabilities = (0..10_000)
+            .map(|index| 0.05 + 0.9 * ((index as f64 * 0.017).sin() * 0.5 + 0.5))
+            .collect::<Vec<_>>();
+        let weights = (0..10_000)
+            .map(|index| 1.0 + (index % 7) as f64)
+            .collect::<Vec<_>>();
+        let weight_sum = weights.iter().sum::<f64>();
+        let expected = probabilities
+            .iter()
+            .zip(&targets)
+            .zip(&weights)
+            .map(|((&probability, &target), &weight)| {
+                let residual = probability - target;
+                residual * residual * weight
+            })
+            .sum::<f64>()
+            / weight_sum;
+        for backend in cartoboost_neural::available_backends() {
+            let actual =
+                brier_score_with_backend(&targets, &probabilities, Some(&backend), Some(&weights))
+                    .unwrap_or_else(|error| panic!("{backend} Brier score failed: {error}"));
+            assert!(
+                (actual - expected).abs() < 1.0e-5,
+                "backend={backend}: actual={actual}, expected={expected}"
+            );
         }
     }
 

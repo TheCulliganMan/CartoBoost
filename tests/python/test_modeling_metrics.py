@@ -121,6 +121,16 @@ def test_classification_metrics_cover_probability_quality():
     assert ece_calibration_error(y_true, y_proba, n_bins=2) == pytest.approx(0.15)
 
 
+@pytest.mark.parametrize("backend", available_backends("affine"))
+def test_weighted_brier_score_accepts_every_affine_backend(backend):
+    assert brier_score(
+        [0, 1],
+        [0.25, 0.75],
+        sample_weight=[1.0, 3.0],
+        backend=backend,
+    ) == pytest.approx(0.0625)
+
+
 def test_classification_metrics_accept_mixed_hashable_labels():
     y_true = np.array(["airport", "airport", 1, 1], dtype=object)
     y_proba = np.array([0.1, 0.2, 0.8, 0.9])

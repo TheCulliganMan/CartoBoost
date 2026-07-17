@@ -199,6 +199,7 @@ use cartoboost_neural::{
 };
 use cartoboost_prob::{
     benchmark_calibration_report_fields as core_prob_benchmark_calibration_report_fields,
+    brier_score_with_backend as core_prob_brier_score,
     conditional_flow_fit_with_backend_json as core_prob_conditional_flow_fit_json,
     conditional_flow_predict_json as core_prob_conditional_flow_predict_json,
     crps_approximation_with_backend as core_prob_crps_approximation,
@@ -10595,6 +10596,27 @@ fn prob_mean_interval_width_value(
 }
 
 #[pyfunction]
+#[pyo3(signature = (targets, probabilities, backend=None, sample_weight=None))]
+fn prob_brier_score_value(
+    py: Python<'_>,
+    targets: Vec<f64>,
+    probabilities: Vec<f64>,
+    backend: Option<&str>,
+    sample_weight: Option<Vec<f64>>,
+) -> PyResult<f64> {
+    let backend = backend.map(str::to_owned);
+    py.detach(move || {
+        core_prob_brier_score(
+            &targets,
+            &probabilities,
+            backend.as_deref(),
+            sample_weight.as_deref(),
+        )
+    })
+    .map_err(to_py_value_error)
+}
+
+#[pyfunction]
 #[pyo3(signature = (actual, quantiles, predictions, backend=None))]
 fn prob_crps_approximation_value(
     py: Python<'_>,
@@ -13951,6 +13973,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(prob_pinball_loss_value, m)?)?;
     m.add_function(wrap_pyfunction!(prob_interval_coverage_value, m)?)?;
     m.add_function(wrap_pyfunction!(prob_mean_interval_width_value, m)?)?;
+    m.add_function(wrap_pyfunction!(prob_brier_score_value, m)?)?;
     m.add_function(wrap_pyfunction!(prob_crps_approximation_value, m)?)?;
     m.add_function(wrap_pyfunction!(prob_weighted_interval_score_value, m)?)?;
     m.add_function(wrap_pyfunction!(prob_pit_bins_value, m)?)?;

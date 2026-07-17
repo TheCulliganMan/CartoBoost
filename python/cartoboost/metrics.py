@@ -230,6 +230,7 @@ def brier_score(
     *,
     positive_label: object | None = None,
     sample_weight: object | None = None,
+    backend: Backend | str = Backend.CPU,
 ) -> float:
     """Return the binary Brier score for positive-class probabilities.
 
@@ -244,7 +245,17 @@ def brier_score(
         raise ValueError("y_true and y_proba must have matching row counts")
     positive = _resolve_positive_label(truth, positive_label)
     target = np.asarray([value == positive for value in truth.tolist()], dtype=float)
-    return _weighted_mean((proba - target) ** 2, sample_weight)
+    weights = None if sample_weight is None else _as_float_vector(sample_weight, "sample_weight")
+    if weights is not None and weights.shape != target.shape:
+        raise ValueError("sample_weight must have the same length as y_true")
+    return float(
+        _native.prob_brier_score_value(
+            target.tolist(),
+            proba.tolist(),
+            str(backend),
+            None if weights is None else weights.tolist(),
+        )
+    )
 
 
 def roc_auc(
