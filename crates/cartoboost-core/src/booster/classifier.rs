@@ -9,8 +9,8 @@ use crate::tree::{
 };
 use crate::{CartoBoostError, Result};
 use cartoboost_accelerator::{
-    backend_dense_layer_f32, select_backend_for, select_backend_for_operations, BackendOperation,
-    BackendSelection,
+    backend_csr_row_softmax_f32, backend_dense_layer_f32, select_backend_for,
+    select_backend_for_operations, BackendOperation, BackendSelection,
 };
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -18,6 +18,7 @@ use std::path::Path;
 
 pub const CLASSIFIER_MODEL_ARTIFACT_VERSION: u32 = 1;
 const CLASSIFIER_DENSE_DISPATCH_MIN_OPS: usize = 16_384;
+const CLASSIFIER_SOFTMAX_DISPATCH_MIN_OPS: usize = 16_384;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ClassificationObjective {
@@ -386,13 +387,9 @@ impl ClassifierModel {
         x: &Dataset,
         backend: Option<&str>,
     ) -> Result<Vec<Vec<f64>>> {
-        let objective = make_objective(self.objective, self.class_values.len())?;
-        let transform = objective.prediction_transform();
-        let margins = self.decision_function_with_backend(x, backend)?;
-        Ok(margins
-            .into_par_iter()
-            .map(|row| transform_margin_row(transform, &row))
-            .collect())
+        let selection = select_backend_for_operations(backend, &self.inference_operations())
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+        self.predict_proba_with_selection(x, &selection)
     }
 
     fn predict_proba_with_selection(
@@ -403,6 +400,35 @@ impl ClassifierModel {
         let objective = make_objective(self.objective, self.class_values.len())?;
         let transform = objective.prediction_transform();
         let margins = self.decision_function_with_selection(x, selection)?;
+        if transform == PredictionTransformKind::Softmax
+            && selection.selected != "cpu"
+            && margins.len().saturating_mul(self.output_dimension())
+                >= CLASSIFIER_SOFTMAX_DISPATCH_MIN_OPS
+        {
+            let width = self.output_dimension();
+            let indptr = (0..=margins.len())
+                .map(|row| {
+                    u32::try_from(row.saturating_mul(width)).map_err(|_| {
+                        CartoBoostError::InvalidInput(
+                            "classifier softmax tensor exceeds u32 indexing".to_string(),
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let logits = margins
+                .iter()
+                .flatten()
+                .map(|value| *value as f32)
+                .collect::<Vec<_>>();
+            return backend_csr_row_softmax_f32(selection, &indptr, &logits)
+                .map(|values| {
+                    values
+                        .chunks_exact(width)
+                        .map(|row| row.iter().map(|value| f64::from(*value)).collect())
+                        .collect()
+                })
+                .map_err(|error| CartoBoostError::InvalidInput(error.to_string()));
+        }
         Ok(margins
             .into_par_iter()
             .map(|row| transform_margin_row(transform, &row))
@@ -429,6 +455,14 @@ impl ClassifierModel {
         self.training_config
             .as_ref()
             .and_then(|config| config.backend.as_ref())
+    }
+
+    fn inference_operations(&self) -> Vec<BackendOperation> {
+        let mut operations = vec![BackendOperation::Dense];
+        if self.objective == ClassificationObjective::MulticlassLogLoss {
+            operations.push(BackendOperation::CsrRowSoftmax);
+        }
+        operations
     }
 
     pub fn predict_with_backend(&self, x: &Dataset, backend: Option<&str>) -> Result<Vec<f64>> {
@@ -482,6 +516,9 @@ impl ClassifierModel {
 
 fn classifier_backend_operations(config: &ClassifierConfig) -> Vec<BackendOperation> {
     let mut operations = vec![BackendOperation::Dense];
+    if config.objective == ClassificationObjective::MulticlassLogLoss {
+        operations.push(BackendOperation::CsrRowSoftmax);
+    }
     if config.graph_leaf_smoothing.is_some() {
         operations.push(BackendOperation::CsrDiffusion);
     }
@@ -835,6 +872,56 @@ mod tests {
             .iter()
             .all(|row| (row.iter().sum::<f64>() - 1.0).abs() < 1.0e-12));
         assert_eq!(model.predict(&x).unwrap(), y);
+    }
+
+    #[test]
+    fn large_multiclass_softmax_matches_cpu_on_every_backend() {
+        let training_x = Dataset::from_rows(vec![
+            vec![0.0],
+            vec![0.2],
+            vec![2.0],
+            vec![2.2],
+            vec![4.0],
+            vec![4.2],
+        ])
+        .unwrap();
+        let classifier = Classifier::new(ClassifierConfig {
+            n_estimators: 6,
+            learning_rate: 0.4,
+            max_depth: 2,
+            min_samples_leaf: 1,
+            min_gain: 0.0,
+            splitters: vec![SplitterKind::Axis],
+            objective: ClassificationObjective::MulticlassLogLoss,
+            class_count: 3,
+            ..ClassifierConfig::default()
+        });
+        let model = classifier
+            .fit(&training_x, &[0.0, 0.0, 1.0, 1.0, 2.0, 2.0], None)
+            .unwrap();
+        let inference_x = Dataset::from_rows(
+            (0..6_000)
+                .map(|row| vec![(row % 43) as f64 * 0.1])
+                .collect(),
+        )
+        .unwrap();
+        let expected = model
+            .predict_proba_with_backend(&inference_x, Some("cpu"))
+            .unwrap();
+        for backend_name in cartoboost_accelerator::available_backends() {
+            let actual = model
+                .predict_proba_with_backend(&inference_x, Some(&backend_name))
+                .unwrap_or_else(|error| panic!("{backend_name} multiclass inference: {error}"));
+            for (actual_row, expected_row) in actual.iter().zip(&expected) {
+                assert!((actual_row.iter().sum::<f64>() - 1.0).abs() <= 2.0e-5);
+                for (actual, expected) in actual_row.iter().zip(expected_row) {
+                    assert!(
+                        (actual - expected).abs() <= 2.0e-4,
+                        "{backend_name}: expected {expected}, got {actual}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
