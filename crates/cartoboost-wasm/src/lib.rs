@@ -4393,7 +4393,11 @@ fn run_graph_forecast_request(
             ridge: request.options.ridge,
             backend: graph_st_select_backend_for_operations(
                 Some(&request.options.backend),
-                &[BackendOperation::Affine],
+                &[
+                    BackendOperation::Affine,
+                    BackendOperation::CsrDiffusion,
+                    BackendOperation::Dense,
+                ],
             )
             .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?,
         };

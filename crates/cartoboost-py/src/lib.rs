@@ -3785,7 +3785,11 @@ impl NativeDcrnnForecaster {
                 ridge,
                 backend: graph_st_select_compute_backend_for_operations(
                     backend,
-                    &[BackendOperation::Affine],
+                    &[
+                        BackendOperation::Affine,
+                        BackendOperation::CsrDiffusion,
+                        BackendOperation::Dense,
+                    ],
                 )
                 .map_err(to_py_geo_st_error)?,
             })

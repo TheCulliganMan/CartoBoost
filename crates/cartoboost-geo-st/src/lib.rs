@@ -15,6 +15,10 @@ use std::hash::{Hash, Hasher};
 use std::path::Path;
 
 const GEO_ST_AFFINE_DISPATCH_MIN_OPS: usize = 16_384;
+#[cfg(not(test))]
+const GEO_ST_CSR_DISPATCH_MIN_OPS: usize = 16_384;
+#[cfg(test)]
+const GEO_ST_CSR_DISPATCH_MIN_OPS: usize = 2_048;
 const GEO_ST_DENSE_DISPATCH_MIN_OPS: usize = 16_384;
 const GEO_ST_ADAMW_DISPATCH_MIN_VALUES: usize = 16_384;
 
@@ -494,14 +498,14 @@ impl DcrnnForecaster {
         let mut hidden_by_cutoff = Vec::with_capacity(samples);
         let mut hidden = vec![vec![0.0; self.config.hidden_size]; nodes];
         for row in normalized_target.iter().take(samples) {
-            hidden = self.recurrent_hidden(&hidden, row, &forward, &reverse);
+            hidden = self.recurrent_hidden(&hidden, row, &forward, &reverse)?;
             hidden_by_cutoff.push(hidden.clone());
         }
         let teacher_ratio = self.average_teacher_forcing_ratio();
 
         self.weights = (0..frame.horizon)
             .into_par_iter()
-            .map(|h| {
+            .map(|h| -> Result<Vec<f64>> {
                 let mut xtx = vec![vec![0.0; decoder_feature_len]; decoder_feature_len];
                 let mut xty = vec![0.0; decoder_feature_len];
                 for t in 0..samples {
@@ -514,7 +518,7 @@ impl DcrnnForecaster {
                             &decoder_hidden,
                             &forward,
                             &reverse,
-                        );
+                        )?;
                         if step == h {
                             for node in 0..nodes {
                                 let actual = normalized_target[t + h + 1][node];
@@ -537,16 +541,16 @@ impl DcrnnForecaster {
                             &prior_prediction,
                             &forward,
                             &reverse,
-                        );
+                        )?;
                         decoder_input = prior_prediction.clone();
                     }
                 }
                 for (idx, row) in xtx.iter_mut().enumerate() {
                     row[idx] += self.config.ridge.max(1.0e-8);
                 }
-                solve_linear_system(xtx, xty)
+                Ok(solve_linear_system(xtx, xty))
             })
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
         self.intercepts = vec![0.0; frame.horizon];
 
         self.node_ids = frame.node_ids.clone();
@@ -588,7 +592,7 @@ impl DcrnnForecaster {
         let mut predictions = Vec::with_capacity(horizon);
         for step in 0..horizon {
             let h = step.min(self.weights.len() - 1);
-            let features = self.decoder_features(&state, &hidden, forward, reverse);
+            let features = self.decoder_features(&state, &hidden, forward, reverse)?;
             let feature_len = self.weights[h].len();
             let rows = features
                 .chunks(feature_len)
@@ -612,7 +616,7 @@ impl DcrnnForecaster {
             .into_iter()
             .map(|value| value.clamp(normalized_min, normalized_max))
             .collect::<Vec<_>>();
-            hidden = self.recurrent_hidden(&hidden, &next, forward, reverse);
+            hidden = self.recurrent_hidden(&hidden, &next, forward, reverse)?;
             state = next.clone();
             predictions.push(
                 next.into_iter()
@@ -678,22 +682,93 @@ impl DcrnnForecaster {
         state: &[f64],
         forward: &CsrAdjacency,
         reverse: &CsrAdjacency,
-    ) -> Vec<f64> {
+    ) -> Result<Vec<f64>> {
         let nodes = state.len();
         let feature_len = self.diffusion_feature_len();
         let mut vectors = Vec::with_capacity(feature_len - 1);
         vectors.push(state.to_vec());
+        let backend = self.neural_backend_selection();
+        let accelerate = backend.selected != "cpu"
+            && nodes.saturating_mul(self.config.diffusion_steps) >= GEO_ST_CSR_DISPATCH_MIN_OPS;
+        let forward_indptr = forward
+            .indptr
+            .iter()
+            .map(|value| *value as u32)
+            .collect::<Vec<_>>();
+        let forward_indices = forward
+            .indices
+            .iter()
+            .map(|value| *value as u32)
+            .collect::<Vec<_>>();
+        let forward_weights = forward
+            .data
+            .iter()
+            .map(|value| *value as f32)
+            .collect::<Vec<_>>();
+        let reverse_indptr = reverse
+            .indptr
+            .iter()
+            .map(|value| *value as u32)
+            .collect::<Vec<_>>();
+        let reverse_indices = reverse
+            .indices
+            .iter()
+            .map(|value| *value as u32)
+            .collect::<Vec<_>>();
+        let reverse_weights = reverse
+            .data
+            .iter()
+            .map(|value| *value as f32)
+            .collect::<Vec<_>>();
         let mut current = state.to_vec();
         for _ in 0..self.config.diffusion_steps {
-            let mut next = vec![0.0; nodes];
-            forward.matvec(&current, &mut next);
+            let next = if accelerate {
+                backend_csr_diffusion_f32(
+                    &backend,
+                    &forward_indptr,
+                    &forward_indices,
+                    &forward_weights,
+                    1,
+                    &current
+                        .iter()
+                        .map(|value| *value as f32)
+                        .collect::<Vec<_>>(),
+                )
+                .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?
+                .into_iter()
+                .map(f64::from)
+                .collect()
+            } else {
+                let mut next = vec![0.0; nodes];
+                forward.matvec(&current, &mut next);
+                next
+            };
             vectors.push(next.clone());
             current = next;
         }
         current = state.to_vec();
         for _ in 0..self.config.diffusion_steps {
-            let mut next = vec![0.0; nodes];
-            reverse.matvec(&current, &mut next);
+            let next = if accelerate {
+                backend_csr_diffusion_f32(
+                    &backend,
+                    &reverse_indptr,
+                    &reverse_indices,
+                    &reverse_weights,
+                    1,
+                    &current
+                        .iter()
+                        .map(|value| *value as f32)
+                        .collect::<Vec<_>>(),
+                )
+                .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?
+                .into_iter()
+                .map(f64::from)
+                .collect()
+            } else {
+                let mut next = vec![0.0; nodes];
+                reverse.matvec(&current, &mut next);
+                next
+            };
             vectors.push(next.clone());
             current = next;
         }
@@ -705,7 +780,7 @@ impl DcrnnForecaster {
             }
             out[offset + feature_len - 1] = 1.0;
         }
-        out
+        Ok(out)
     }
 
     fn decoder_features(
@@ -714,11 +789,11 @@ impl DcrnnForecaster {
         hidden: &[Vec<f64>],
         forward: &CsrAdjacency,
         reverse: &CsrAdjacency,
-    ) -> Vec<f64> {
+    ) -> Result<Vec<f64>> {
         let nodes = state.len();
         let diffusion_len = self.diffusion_feature_len();
         let decoder_len = self.decoder_feature_len();
-        let diffusion = self.diffusion_features(state, forward, reverse);
+        let diffusion = self.diffusion_features(state, forward, reverse)?;
         let mut out = vec![0.0; nodes * decoder_len];
         for (node, hidden_row) in hidden.iter().enumerate().take(nodes) {
             let src = node * diffusion_len;
@@ -726,7 +801,7 @@ impl DcrnnForecaster {
             out[dst..dst + diffusion_len].copy_from_slice(&diffusion[src..src + diffusion_len]);
             out[dst + diffusion_len..dst + decoder_len].copy_from_slice(hidden_row);
         }
-        out
+        Ok(out)
     }
 
     fn recurrent_hidden(
@@ -735,24 +810,54 @@ impl DcrnnForecaster {
         state: &[f64],
         forward: &CsrAdjacency,
         reverse: &CsrAdjacency,
-    ) -> Vec<Vec<f64>> {
-        let nodes = state.len();
+    ) -> Result<Vec<Vec<f64>>> {
         let diffusion_len = self.diffusion_feature_len();
-        let diffusion = self.diffusion_features(state, forward, reverse);
-        let mut next = vec![vec![0.0; self.config.hidden_size]; nodes];
-        for (node, next_row) in next.iter_mut().enumerate().take(nodes) {
-            let x = &diffusion[node * diffusion_len..(node + 1) * diffusion_len];
-            for (unit, value) in next_row
-                .iter_mut()
-                .enumerate()
-                .take(self.config.hidden_size)
-            {
-                let input_term = dot(&self.encoder_weights[unit], x);
-                let recurrent_term = dot(&self.recurrent_weights[unit], &previous_hidden[node]);
-                *value = (input_term + 0.35 * recurrent_term).tanh();
-            }
-        }
-        next
+        let diffusion = self.diffusion_features(state, forward, reverse)?;
+        let diffusion_rows = diffusion
+            .chunks(diffusion_len)
+            .map(|row| row.to_vec())
+            .collect::<Vec<_>>();
+        let transpose = |weights: &[Vec<f64>], input_width: usize, output_width: usize| {
+            (0..input_width)
+                .flat_map(|input| (0..output_width).map(move |output| weights[output][input]))
+                .collect::<Vec<_>>()
+        };
+        let backend = self.neural_backend_selection();
+        let input_terms = dense_matrix_product(
+            &diffusion_rows,
+            &transpose(
+                &self.encoder_weights,
+                diffusion_len,
+                self.config.hidden_size,
+            ),
+            &vec![0.0; self.config.hidden_size],
+            diffusion_len,
+            self.config.hidden_size,
+            Some(&backend),
+        )?;
+        let recurrent_terms = dense_matrix_product(
+            previous_hidden,
+            &transpose(
+                &self.recurrent_weights,
+                self.config.hidden_size,
+                self.config.hidden_size,
+            ),
+            &vec![0.0; self.config.hidden_size],
+            self.config.hidden_size,
+            self.config.hidden_size,
+            Some(&backend),
+        )?;
+        Ok(input_terms
+            .into_iter()
+            .zip(recurrent_terms)
+            .map(|(input, recurrent)| {
+                input
+                    .into_iter()
+                    .zip(recurrent)
+                    .map(|(input, recurrent)| (input + 0.35 * recurrent).tanh())
+                    .collect()
+            })
+            .collect())
     }
 
     fn encode_history(
@@ -766,7 +871,7 @@ impl DcrnnForecaster {
         }
         let mut hidden = vec![vec![0.0; self.config.hidden_size]; nodes];
         for row in &self.history {
-            hidden = self.recurrent_hidden(&hidden, row, forward, reverse);
+            hidden = self.recurrent_hidden(&hidden, row, forward, reverse)?;
         }
         Ok(hidden)
     }
@@ -10064,10 +10169,6 @@ pub fn traffic_style_fixture_frame() -> GraphTemporalFrame {
     .expect("traffic frame")
 }
 
-fn dot(weights: &[f64], values: &[f64]) -> f64 {
-    weights.iter().zip(values.iter()).map(|(w, v)| w * v).sum()
-}
-
 fn attention_pool(values: &[f64], query: &[f64], key: &[f64]) -> f64 {
     let width = values.len().min(query.len()).min(key.len());
     let scores = (0..width)
@@ -10395,6 +10496,71 @@ mod tests {
                     backend_name.as_str()
                 }
             );
+        }
+    }
+
+    #[test]
+    fn dcrnn_recurrent_stage_matches_cpu_on_available_backends() {
+        let nodes = 512;
+        let indptr = (0..=nodes).collect::<Vec<_>>();
+        let indices = (0..nodes)
+            .map(|node| (node + 1) % nodes)
+            .collect::<Vec<_>>();
+        let adjacency = CsrAdjacency::new(indptr, indices, vec![1.0; nodes], nodes).unwrap();
+        let reverse = adjacency.transpose(nodes);
+        let state = (0..nodes)
+            .map(|node| (node as f64 * 0.007).sin())
+            .collect::<Vec<_>>();
+        let previous = (0..nodes)
+            .map(|node| {
+                (0..4)
+                    .map(|unit| ((node * 4 + unit) as f64 * 0.011).cos())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let operations = [
+            BackendOperation::Affine,
+            BackendOperation::CsrDiffusion,
+            BackendOperation::Dense,
+        ];
+        let build = |backend| {
+            let mut model = DcrnnForecaster::new(DcrnnConfig {
+                diffusion_steps: 4,
+                hidden_size: 4,
+                epochs: 1,
+                backend,
+                ..DcrnnConfig::default()
+            })
+            .unwrap();
+            model.encoder_weights = deterministic_weight_matrix(4, 10, 17);
+            model.recurrent_weights = deterministic_weight_matrix(4, 4, 29);
+            model
+        };
+        let cpu_backend = select_compute_backend_for_operations(Some("cpu"), &operations).unwrap();
+        let expected = build(cpu_backend)
+            .recurrent_hidden(&previous, &state, &adjacency, &reverse)
+            .unwrap();
+
+        for backend_name in available_compute_backends() {
+            if backend_name == "cpu" {
+                continue;
+            }
+            let Ok(backend) =
+                select_compute_backend_for_operations(Some(&backend_name), &operations)
+            else {
+                continue;
+            };
+            let actual = build(backend)
+                .recurrent_hidden(&previous, &state, &adjacency, &reverse)
+                .unwrap_or_else(|error| panic!("{backend_name} DCRNN recurrent stage: {error}"));
+            for (actual_row, expected_row) in actual.iter().zip(&expected) {
+                for (actual, expected) in actual_row.iter().zip(expected_row) {
+                    assert!(
+                        (actual - expected).abs() < 3.0e-4,
+                        "{backend_name} DCRNN mismatch: {actual} vs {expected}"
+                    );
+                }
+            }
         }
     }
 
