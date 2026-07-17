@@ -10,6 +10,7 @@ use std::fs;
 use std::path::Path;
 
 const NODE2VEC_ARTIFACT_TYPE: &str = "cartoboost.neural.node2vec_encoder";
+const NODE2VEC_ACCEL_MIN_SAMPLES: usize = 16_384;
 pub const NODE2VEC_ARTIFACT_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -282,7 +283,7 @@ impl EmbeddingFeatureTransformer {
     ) -> Result<EdgeEmbeddingFeatures> {
         let degrees = neighborhood_degrees(self.model.node_count, graph_edges)?;
         let values = edges
-            .iter()
+            .par_iter()
             .map(|&(origin, destination)| {
                 if origin >= self.model.node_count || destination >= self.model.node_count {
                     return Err(NeuralError::InvalidArgument(
@@ -390,10 +391,10 @@ impl Node2VecEncoder {
         let adjacency = WeightedGraph::from_edges(node_count, edges, &weights)?;
         let walks = generate_walks(&self.config, &adjacency);
         let mut model = SkipGramState::new(node_count, &self.config);
-        self.losses = if self.backend.selected == "cpu" {
-            model.fit(&self.config, &walks, &adjacency)
-        } else {
+        self.losses = if should_accelerate_node2vec(&self.backend, &self.config, &walks) {
             model.fit_accelerated(&self.config, &walks, &adjacency, &self.backend)?
+        } else {
+            model.fit(&self.config, &walks, &adjacency)
         };
         self.embeddings = finalize_embeddings(model.embeddings, self.config.normalize);
         self.context_embeddings = model.context_embeddings;
@@ -973,6 +974,32 @@ fn context_pairs(walks: &[Vec<usize>], window_size: usize) -> Vec<(usize, usize)
         }
     }
     pairs
+}
+
+fn should_accelerate_node2vec(
+    backend: &BackendSelection,
+    config: &Node2VecConfig,
+    walks: &[Vec<usize>],
+) -> bool {
+    if backend.selected == "cpu" {
+        return false;
+    }
+    let pair_count = walks
+        .iter()
+        .map(|walk| {
+            (0..walk.len())
+                .map(|index| {
+                    let left = index.saturating_sub(config.window_size);
+                    let right = (index + config.window_size + 1).min(walk.len());
+                    right.saturating_sub(left + 1)
+                })
+                .sum::<usize>()
+        })
+        .sum::<usize>();
+    pair_count
+        .saturating_mul(config.negative_samples + 1)
+        .saturating_mul(config.epochs)
+        >= NODE2VEC_ACCEL_MIN_SAMPLES
 }
 
 fn negative_distribution(graph: &WeightedGraph) -> Vec<f32> {
@@ -1637,6 +1664,29 @@ mod tests {
                 .iter()
                 .flatten()
                 .all(|value| value.is_finite()));
+        }
+    }
+
+    #[test]
+    fn node2vec_device_dispatch_requires_a_profitable_sample_count() {
+        let config = small_config();
+        let small_walks = vec![vec![0, 1, 2]];
+        let large_walks = vec![vec![0; 1_024]; 8];
+        for backend_name in cartoboost_accelerator::backend::available_backends() {
+            if !cartoboost_accelerator::backend::backend_supports_operation(
+                &backend_name,
+                BackendOperation::ScalarGraphTraining,
+            ) {
+                continue;
+            }
+            let backend =
+                select_backend_for(Some(&backend_name), BackendOperation::ScalarGraphTraining)
+                    .unwrap();
+            assert!(!should_accelerate_node2vec(&backend, &config, &small_walks));
+            assert_eq!(
+                should_accelerate_node2vec(&backend, &config, &large_walks),
+                backend_name != "cpu"
+            );
         }
     }
 
