@@ -1223,6 +1223,72 @@ pub fn ordinary_kriging_leave_one_out_with_backend(
             "kriging leave-one-out requires at least two observations".to_string(),
         ));
     }
+    if !uses_local_neighbors(config) {
+        let backend = select_backend_for(backend, BackendOperation::PairwiseDistance)
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+        let full_matrix = build_kriging_system_matrix_with_backend(observations, config, &backend)?;
+        let observation_count = observations.len();
+        let drift_terms = drift_term_count(config.drift);
+        return observations
+            .par_iter()
+            .enumerate()
+            .map(|(held_out_idx, held_out)| {
+                let training_indices = (0..observation_count)
+                    .filter(|idx| *idx != held_out_idx)
+                    .collect::<Vec<_>>();
+                let training = training_indices
+                    .iter()
+                    .map(|idx| observations[*idx])
+                    .collect::<Vec<_>>();
+                let system_indices = training_indices
+                    .iter()
+                    .copied()
+                    .chain(observation_count..observation_count + drift_terms)
+                    .collect::<Vec<_>>();
+                let matrix = system_indices
+                    .iter()
+                    .map(|row| {
+                        system_indices
+                            .iter()
+                            .map(|col| full_matrix[*row][*col])
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>();
+                let mut rhs = training_indices
+                    .iter()
+                    .map(|idx| full_matrix[held_out_idx][*idx])
+                    .collect::<Vec<_>>();
+                rhs.extend(
+                    drift_basis((held_out.x, held_out.y), config.drift)
+                        .into_iter()
+                        .take(drift_terms),
+                );
+                let factorization = LinearSystemFactorization::factor(matrix).ok_or_else(|| {
+                    CartoBoostError::InvalidInput(
+                        "kriging system is singular or numerically ill-conditioned; adjust coordinates, variogram scale, or nugget".to_string(),
+                    )
+                })?;
+                let solution = factorization.solve(&rhs).ok_or_else(|| {
+                    CartoBoostError::InvalidInput(
+                        "kriging solve produced a non-finite result".to_string(),
+                    )
+                })?;
+                kriging_prediction_from_solution(
+                    &training,
+                    (held_out.x, held_out.y),
+                    config,
+                    &rhs,
+                    &solution,
+                    training_indices,
+                )
+            })
+            .collect();
+    }
+    // Local-neighborhood selection and its small, branch-heavy factorization
+    // stay on CPU. Validate an explicit device once instead of once per held-out
+    // row; the latter needlessly repeated runtime/device probing during inference.
+    select_backend_for(backend, BackendOperation::PairwiseDistance)
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
     observations
         .par_iter()
         .enumerate()
@@ -1237,13 +1303,8 @@ pub fn ordinary_kriging_leave_one_out_with_backend(
                 .iter()
                 .map(|(_, observation)| *observation)
                 .collect::<Vec<_>>();
-            let mut prediction = ordinary_kriging_predict_many_with_backend(
-                &training,
-                &[(held_out.x, held_out.y)],
-                config,
-                backend,
-            )?
-            .remove(0);
+            let mut prediction =
+                ordinary_kriging_predict_unchecked(&training, (held_out.x, held_out.y), config)?;
             prediction.neighbor_indices = prediction
                 .neighbor_indices
                 .iter()
@@ -2715,6 +2776,45 @@ mod tests {
         assert!(diagnostics
             .iter()
             .all(|prediction| prediction.variance >= 0.0));
+    }
+
+    #[test]
+    fn cached_leave_one_out_matrix_matches_independent_global_solves() {
+        let observations = (0..8)
+            .map(|idx| {
+                let x = idx as f64;
+                KrigingObservation {
+                    x,
+                    y: (x * 0.37).sin(),
+                    value: 3.0 + 1.25 * x - 0.5 * (x * 0.37).sin(),
+                }
+            })
+            .collect::<Vec<_>>();
+        let config = OrdinaryKrigingConfig::new(4.0, 1.0e-5)
+            .expect("config")
+            .with_sill(2.5)
+            .expect("sill")
+            .with_drift(KrigingDrift::Linear);
+        let cached =
+            ordinary_kriging_leave_one_out_with_backend(&observations, config, Some("cpu"))
+                .expect("cached leave-one-out");
+        for (held_out_idx, actual) in cached.iter().enumerate() {
+            let training = observations
+                .iter()
+                .enumerate()
+                .filter(|(idx, _)| *idx != held_out_idx)
+                .map(|(_, observation)| *observation)
+                .collect::<Vec<_>>();
+            let held_out = observations[held_out_idx];
+            let expected = ordinary_kriging_predict(&training, (held_out.x, held_out.y), config)
+                .expect("independent prediction");
+            assert!((actual.mean - expected.mean).abs() < 1.0e-10);
+            assert!((actual.variance - expected.variance).abs() < 1.0e-10);
+            assert_eq!(
+                actual.neighbor_indices.len(),
+                expected.neighbor_indices.len()
+            );
+        }
     }
 
     #[test]
