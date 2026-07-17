@@ -25,6 +25,11 @@ class GraphTemporalFrame:
         horizon: int,
         frequency: str,
         covariates: Any | None = None,
+        owner_mask: list[bool] | None = None,
+        target_mask: Any | None = None,
+        imputed_mask: Any | None = None,
+        target_weights: Any | None = None,
+        covariate_roles: list[str] | None = None,
     ) -> None:
         native_class = _native_class("GraphTemporalFrame")
         if native_class is None:
@@ -42,6 +47,11 @@ class GraphTemporalFrame:
         self._horizon = int(horizon)
         self._frequency = str(frequency)
         self._covariates = covariate_rows
+        self._owner_mask = None if owner_mask is None else list(map(bool, owner_mask))
+        self._target_mask = None if target_mask is None else np.asarray(target_mask, dtype=bool).tolist()
+        self._imputed_mask = None if imputed_mask is None else np.asarray(imputed_mask, dtype=bool).tolist()
+        self._target_weights = None if target_weights is None else np.asarray(target_weights, dtype=float).tolist()
+        self._covariate_roles = None if covariate_roles is None else list(map(str, covariate_roles))
         self._native_frame = native_class(
             self._node_ids,
             self._timestamps,
@@ -52,6 +62,11 @@ class GraphTemporalFrame:
             self._horizon,
             self._frequency,
             covariate_rows,
+            self._owner_mask,
+            self._target_mask,
+            self._imputed_mask,
+            self._target_weights,
+            self._covariate_roles,
         )
 
     @property
@@ -80,6 +95,11 @@ class GraphTemporalFrame:
             horizon=self._horizon,
             frequency=self._frequency,
             covariates=covariates,
+            owner_mask=self._owner_mask,
+            target_mask=None if self._target_mask is None else self._target_mask[:size],
+            imputed_mask=None if self._imputed_mask is None else self._imputed_mask[:size],
+            target_weights=None if self._target_weights is None else self._target_weights[:size],
+            covariate_roles=self._covariate_roles,
         )
 
     def splitter_data(self) -> dict[str, list[int]]:
@@ -825,9 +845,42 @@ class _PaperGraphTransformerForecaster(ArtifactPersistenceMixin):
         self.is_fitted_ = True
         return self
 
+    def fit_shard(
+        self,
+        frame: GraphTemporalFrame,
+        *,
+        shared_state_path: str | Path,
+        checkpoint_path: str | Path,
+        identity: dict[str, Any] | str,
+        phase: str = "supervised",
+        normalization: tuple[float, float] | None = None,
+    ):
+        """Update shared and shard-local LSTTN state for one guarded shard pass."""
+        if phase not in {"pretrain", "supervised", "local_adaptation"}:
+            raise ValueError("phase must be pretrain, supervised, or local_adaptation")
+        mean, scale = (None, None) if normalization is None else normalization
+        identity_json = identity if isinstance(identity, str) else json.dumps(identity, sort_keys=True)
+        self._native_model.fit_shard(
+            _native_frame(frame),
+            str(Path(shared_state_path)),
+            str(Path(checkpoint_path)),
+            identity_json,
+            phase,
+            mean,
+            scale,
+        )
+        self.is_fitted_ = True
+        return self
+
     def predict(self, horizon: int) -> np.ndarray:
         self._check_is_fitted()
         return np.asarray(self._native_model.predict(int(horizon)), dtype=float)
+
+    def historical_fits(self) -> tuple[int, np.ndarray]:
+        """Return frozen-state one-step fits and their first history index."""
+        self._check_is_fitted()
+        start, values = self._native_model.historical_fits()
+        return int(start), np.asarray(values, dtype=float)
 
     def score(self, actual: Any) -> float:
         self._check_is_fitted()
@@ -840,6 +893,11 @@ class _PaperGraphTransformerForecaster(ArtifactPersistenceMixin):
         self._check_is_fitted()
         self._native_model.save(str(path))
 
+    def save_local(self, path: str | Path) -> None:
+        """Persist only shard-local parameters; pair with :meth:`load_shard`."""
+        self._check_is_fitted()
+        self._native_model.save_local(str(path))
+
     @classmethod
     def load(cls, path: str | Path):
         native_class = _native_class("PaperGraphTransformerForecaster")
@@ -847,6 +905,18 @@ class _PaperGraphTransformerForecaster(ArtifactPersistenceMixin):
             raise NotImplementedError("Rust binding for paper graph transformers is not available.")
         obj = cls.__new__(cls)
         obj._native_model = native_class.load(str(path))
+        obj.is_fitted_ = True
+        obj._params = {"profile": cls._profile, "backend": obj._backend_selected(), "horizon": 1}
+        return obj
+
+    @classmethod
+    def load_shard(cls, local_path: str | Path, shared_state_path: str | Path):
+        """Combine a shard-local state with its compatible shared backbone."""
+        native_class = _native_class("PaperGraphTransformerForecaster")
+        if native_class is None:
+            raise NotImplementedError("Rust binding for paper graph transformers is not available.")
+        obj = cls.__new__(cls)
+        obj._native_model = native_class.load_shard(str(local_path), str(shared_state_path))
         obj.is_fitted_ = True
         obj._params = {"profile": cls._profile, "backend": obj._backend_selected(), "horizon": 1}
         return obj

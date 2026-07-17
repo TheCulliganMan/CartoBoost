@@ -3689,12 +3689,14 @@ impl NativeMarketStructureForecaster {
     fn save(&self, path: PathBuf) -> PyResult<()> {
         self.model.save(path).map_err(to_py_geo_st_error)
     }
+
     #[classmethod]
     fn load(_cls: &Bound<'_, PyType>, path: PathBuf) -> PyResult<Self> {
         Ok(Self {
             model: CoreMarketStructureForecaster::load(path).map_err(to_py_geo_st_error)?,
         })
     }
+
     fn to_json(&self) -> PyResult<String> {
         self.model.to_json_string().map_err(to_py_geo_st_error)
     }
@@ -3710,7 +3712,7 @@ impl NativeMarketStructureForecaster {
 #[pymethods]
 impl NativeGraphTemporalFrame {
     #[new]
-    #[pyo3(signature = (node_ids, timestamps, target, indptr, indices, data, horizon, frequency, covariates=None))]
+    #[pyo3(signature = (node_ids, timestamps, target, indptr, indices, data, horizon, frequency, covariates=None, owner_mask=None, target_mask=None, imputed_mask=None, target_weights=None, covariate_roles=None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         node_ids: Vec<String>,
@@ -3722,6 +3724,11 @@ impl NativeGraphTemporalFrame {
         horizon: usize,
         frequency: String,
         covariates: Option<Vec<Vec<Vec<f64>>>>,
+        owner_mask: Option<Vec<bool>>,
+        target_mask: Option<Vec<Vec<bool>>>,
+        imputed_mask: Option<Vec<Vec<bool>>>,
+        target_weights: Option<Vec<Vec<f64>>>,
+        covariate_roles: Option<Vec<String>>,
     ) -> PyResult<Self> {
         let adjacency = CoreStCsrAdjacency::new(indptr, indices, data, node_ids.len())
             .map_err(to_py_geo_st_error)?;
@@ -3729,6 +3736,13 @@ impl NativeGraphTemporalFrame {
             frame: CoreGraphTemporalFrame::new(
                 node_ids, timestamps, target, covariates, adjacency, horizon, frequency,
             )
+            .and_then(|frame| frame.with_owner_mask(owner_mask))
+            .and_then(|frame| frame.with_training_metadata(
+                target_mask,
+                imputed_mask,
+                target_weights,
+                covariate_roles,
+            ))
             .map_err(to_py_geo_st_error)?,
         })
     }
@@ -4188,8 +4202,48 @@ impl NativePaperGraphTransformerForecaster {
             .map_err(to_py_geo_st_error)
     }
 
+    #[pyo3(signature = (frame, shared_state_path, checkpoint_path, identity_json, phase="supervised", normalization_mean=None, normalization_scale=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn fit_shard(
+        &mut self,
+        py: Python<'_>,
+        frame: &NativeGraphTemporalFrame,
+        shared_state_path: PathBuf,
+        checkpoint_path: PathBuf,
+        identity_json: &str,
+        phase: &str,
+        normalization_mean: Option<f64>,
+        normalization_scale: Option<f64>,
+    ) -> PyResult<()> {
+        let normalization = match (normalization_mean, normalization_scale) {
+            (Some(mean), Some(scale)) => Some((mean, scale)),
+            (None, None) => None,
+            _ => {
+                return Err(PyValueError::new_err(
+                    "normalization_mean and normalization_scale must be supplied together",
+                ))
+            }
+        };
+        py.detach(|| {
+            self.model.fit_shard(
+                &frame.frame,
+                shared_state_path,
+                checkpoint_path,
+                phase,
+                normalization,
+                identity_json,
+            )
+        })
+        .map_err(to_py_geo_st_error)
+    }
+
     fn predict(&self, py: Python<'_>, horizon: usize) -> PyResult<Vec<Vec<f64>>> {
         py.detach(|| self.model.predict(horizon))
+            .map_err(to_py_geo_st_error)
+    }
+
+    fn historical_fits(&self, py: Python<'_>) -> PyResult<(usize, Vec<Vec<f64>>)> {
+        py.detach(|| self.model.historical_fits())
             .map_err(to_py_geo_st_error)
     }
 
@@ -4202,10 +4256,26 @@ impl NativePaperGraphTransformerForecaster {
         self.model.save(path).map_err(to_py_geo_st_error)
     }
 
+    fn save_local(&self, path: PathBuf) -> PyResult<()> {
+        self.model.save_local(path).map_err(to_py_geo_st_error)
+    }
+
     #[classmethod]
     fn load(_cls: &Bound<'_, PyType>, path: PathBuf) -> PyResult<Self> {
         Ok(Self {
             model: CorePaperGraphTransformerForecaster::load(path).map_err(to_py_geo_st_error)?,
+        })
+    }
+
+    #[classmethod]
+    fn load_shard(
+        _cls: &Bound<'_, PyType>,
+        local_path: PathBuf,
+        shared_state_path: PathBuf,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            model: CorePaperGraphTransformerForecaster::load_shard(local_path, shared_state_path)
+                .map_err(to_py_geo_st_error)?,
         })
     }
 

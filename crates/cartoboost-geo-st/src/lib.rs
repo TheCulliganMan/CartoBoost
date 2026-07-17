@@ -284,6 +284,23 @@ pub struct GraphTemporalFrame {
     pub adjacency: CsrAdjacency,
     pub horizon: usize,
     pub frequency: String,
+    #[serde(default)]
+    pub owner_mask: Option<Vec<bool>>,
+    /// Explicit observation status; `target` values are transport values and
+    /// may legitimately be zero when this mask is true.
+    #[serde(default)]
+    pub target_mask: Option<Vec<Vec<bool>>>,
+    /// Values filled by an upstream imputer. These remain available as model
+    /// inputs, but do not become supervised labels.
+    #[serde(default)]
+    pub imputed_mask: Option<Vec<Vec<bool>>>,
+    /// Optional per-label reliability weights, aligned with `target`.
+    #[serde(default)]
+    pub target_weights: Option<Vec<Vec<f64>>>,
+    /// Declared covariate channel roles. LSTTN requires a `time_of_day` role
+    /// whenever covariates are supplied.
+    #[serde(default)]
+    pub covariate_roles: Option<Vec<String>>,
 }
 
 impl GraphTemporalFrame {
@@ -304,9 +321,35 @@ impl GraphTemporalFrame {
             adjacency,
             horizon,
             frequency,
+            owner_mask: None,
+            target_mask: None,
+            imputed_mask: None,
+            target_weights: None,
+            covariate_roles: None,
         };
         frame.validate()?;
         Ok(frame)
+    }
+
+    pub fn with_owner_mask(mut self, owner_mask: Option<Vec<bool>>) -> Result<Self> {
+        self.owner_mask = owner_mask;
+        self.validate()?;
+        Ok(self)
+    }
+
+    pub fn with_training_metadata(
+        mut self,
+        target_mask: Option<Vec<Vec<bool>>>,
+        imputed_mask: Option<Vec<Vec<bool>>>,
+        target_weights: Option<Vec<Vec<f64>>>,
+        covariate_roles: Option<Vec<String>>,
+    ) -> Result<Self> {
+        self.target_mask = target_mask;
+        self.imputed_mask = imputed_mask;
+        self.target_weights = target_weights;
+        self.covariate_roles = covariate_roles;
+        self.validate()?;
+        Ok(self)
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -314,6 +357,15 @@ impl GraphTemporalFrame {
         if nodes == 0 {
             return Err(GeoStError::InvalidFrame(
                 "node ids cannot be empty".to_string(),
+            ));
+        }
+        if self
+            .owner_mask
+            .as_ref()
+            .is_some_and(|mask| mask.len() != nodes || !mask.iter().any(|value| *value))
+        {
+            return Err(GeoStError::InvalidFrame(
+                "owner mask must match node ids and select at least one owner".to_string(),
             ));
         }
         if self.timestamps.len() != self.target.len() {
@@ -326,10 +378,32 @@ impl GraphTemporalFrame {
                 "target length must exceed a positive horizon".to_string(),
             ));
         }
-        for row in &self.target {
-            if row.len() != nodes || row.iter().any(|value| !value.is_finite()) {
+        let validate_mask = |name: &str, mask: &Option<Vec<Vec<bool>>>| -> Result<()> {
+            if mask.as_ref().is_some_and(|rows| {
+                rows.len() != self.target.len() || rows.iter().any(|row| row.len() != nodes)
+            }) {
+                return Err(GeoStError::InvalidFrame(format!(
+                    "{name} must have shape [time, node]"
+                )));
+            }
+            Ok(())
+        };
+        validate_mask("target mask", &self.target_mask)?;
+        validate_mask("imputed mask", &self.imputed_mask)?;
+        if self.target_weights.as_ref().is_some_and(|rows| {
+            rows.len() != self.target.len()
+                || rows.iter().any(|row| row.len() != nodes || row.iter().any(|value| !value.is_finite() || *value < 0.0))
+        }) {
+            return Err(GeoStError::InvalidFrame(
+                "target weights must be finite, non-negative, and have shape [time, node]".to_string(),
+            ));
+        }
+        for (time, row) in self.target.iter().enumerate() {
+            if row.len() != nodes || row.iter().enumerate().any(|(node, value)| {
+                self.target_mask.as_ref().is_none_or(|mask| mask[time][node]) && !value.is_finite()
+            }) {
                 return Err(GeoStError::InvalidFrame(
-                    "target must be finite with shape [time, node]".to_string(),
+                    "active target values must be finite with shape [time, node]".to_string(),
                 ));
             }
         }
@@ -358,6 +432,17 @@ impl GraphTemporalFrame {
                     "covariates must have a non-empty, finite, consistent feature axis".to_string(),
                 ));
             }
+            if let Some(roles) = &self.covariate_roles {
+                if roles.len() != feature_count || roles.iter().any(|role| role.trim().is_empty()) {
+                    return Err(GeoStError::InvalidFrame(
+                        "covariate roles must name every covariate channel".to_string(),
+                    ));
+                }
+            }
+        } else if self.covariate_roles.is_some() {
+            return Err(GeoStError::InvalidFrame(
+                "covariate roles require covariates".to_string(),
+            ));
         }
         Ok(())
     }
@@ -1019,12 +1104,87 @@ pub struct PaperGraphTransformerForecaster {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct LsttnTrainingCheckpoint {
     version: u32,
-    data_fingerprint: u64,
+    architecture_fingerprint: u64,
+    backbone_fingerprint: u64,
+    shard_data_fingerprint: u64,
+    epoch_fingerprint: u64,
     config_json: String,
     state: TrainableGraphTransformerState,
     pretraining_completed: usize,
     supervised_batches_completed: usize,
     complete: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct LsttnSharedSegment {
+    name: String,
+    parameters: Vec<f64>,
+    first_moment: Vec<f64>,
+    second_moment: Vec<f64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct LsttnSharedState {
+    version: u32,
+    architecture_fingerprint: u64,
+    backbone_fingerprint: u64,
+    hidden: usize,
+    attention_heads: usize,
+    periodicity: usize,
+    recent_window: usize,
+    context_window: usize,
+    horizons: usize,
+    experts: usize,
+    graph_order: usize,
+    steps: u64,
+    target_mean: f64,
+    target_scale: f64,
+    segments: Vec<LsttnSharedSegment>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct LsttnShardIdentity {
+    backbone_id: String,
+    equipment_category: String,
+    target_unit: String,
+    node_registry_fingerprint: String,
+    graph_cutoff: String,
+    shard_policy_fingerprint: String,
+    epoch: usize,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+enum LsttnTrainingPhase {
+    Both,
+    Pretrain,
+    Supervised,
+    LocalAdaptation,
+}
+
+impl LsttnTrainingPhase {
+    fn parse(value: &str) -> Result<Self> {
+        match value {
+            "both" => Ok(Self::Both),
+            "pretrain" => Ok(Self::Pretrain),
+            "supervised" => Ok(Self::Supervised),
+            "local_adaptation" => Ok(Self::LocalAdaptation),
+            _ => Err(GeoStError::InvalidFrame(format!(
+                "unknown LSTTN shard training phase {value:?}"
+            ))),
+        }
+    }
+
+    fn runs_pretraining(self) -> bool {
+        matches!(self, Self::Both | Self::Pretrain)
+    }
+
+    fn runs_supervised(self) -> bool {
+        !matches!(self, Self::Pretrain)
+    }
+
+    fn freezes_shared(self) -> bool {
+        matches!(self, Self::LocalAdaptation)
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -1048,6 +1208,16 @@ struct TrainableGraphTransformerState {
     first_moment: Vec<f64>,
     second_moment: Vec<f64>,
     steps: u64,
+    #[serde(default)]
+    shared_steps: u64,
+    #[serde(default)]
+    local_steps: u64,
+    #[serde(default)]
+    architecture_fingerprint: u64,
+    #[serde(default)]
+    backbone_fingerprint: u64,
+    #[serde(default)]
+    shard_data_fingerprint: u64,
     nodes: usize,
     hidden: usize,
     attention_heads: usize,
@@ -1065,6 +1235,15 @@ struct TrainableGraphTransformerState {
     target_scale: f64,
     #[serde(default)]
     normalized_zero: f64,
+    /// Present only in compact shard-local artifacts. Each pair addresses a
+    /// range in the architecture's full parameter vector; loading expands
+    /// these values before a shared backbone is imported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    local_parameter_ranges: Option<Vec<(usize, usize)>>,
+    #[serde(skip)]
+    shard_training: bool,
+    #[serde(skip)]
+    freeze_shared: bool,
 }
 
 /// CUDA-owned, portable-state bridge for LSTTN.  It deliberately owns no
@@ -4209,6 +4388,51 @@ impl CudaLsttnTensorExecutor {
             .map_err(|error| GeoStError::InvalidBackend(error.to_string()))
     }
 
+    fn portable_adamw_step(
+        &mut self,
+        state: &mut TrainableGraphTransformerState,
+        learning_rate: f64,
+        weight_decay: f64,
+    ) -> Result<()> {
+        let mut gradients = vec![0.0_f32; state.parameters.len()];
+        self.arena
+            .download_f32(Self::PARAMETER_GRADIENT, &mut gradients)
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        let mut gradients = gradients.into_iter().map(f64::from).collect::<Vec<_>>();
+        clip_gradient_norm(&mut gradients, 5.0);
+        state.adamw_step(&gradients, learning_rate, weight_decay, None)?;
+        let to_f32 = |values: &[f64], label: &str| -> Result<Vec<f32>> {
+            values
+                .iter()
+                .map(|value| {
+                    let value = *value as f32;
+                    if value.is_finite() {
+                        Ok(value)
+                    } else {
+                        Err(GeoStError::InvalidFrame(format!(
+                            "LSTTN CUDA {label} contains a non-finite f32 value"
+                        )))
+                    }
+                })
+                .collect()
+        };
+        self.arena
+            .upload_f32(Self::PARAMETERS, &to_f32(&state.parameters, "parameters")?)
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        self.arena
+            .upload_f32(
+                Self::FIRST_MOMENT,
+                &to_f32(&state.first_moment, "first moments")?,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        self.arena
+            .upload_f32(
+                Self::SECOND_MOMENT,
+                &to_f32(&state.second_moment, "second moments")?,
+            )
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))
+    }
+
     /// Packs the real supervised contract without per-node host dispatch:
     /// inputs are row-major `[batch, lookback, nodes, channels]`, targets
     /// are `[batch, horizon, nodes]`. `windows` and `targets` retain the
@@ -4667,14 +4891,11 @@ impl CudaLsttnTensorExecutor {
                 hidden,
             )
             .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
-        let next_step = state.steps + 1;
-        self.adamw_supervised_step(next_step, learning_rate, weight_decay)?;
-        state.steps = next_step;
+        self.portable_adamw_step(state, learning_rate, weight_decay)?;
         let mut loss = [0.0_f32; 2];
         self.arena
             .download_f32(Self::PRETRAIN_LOSS, &mut loss)
             .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
-        self.synchronize_portable_state(state)?;
         Ok(f64::from(loss[0]))
     }
 
@@ -4981,6 +5202,11 @@ impl TrainableGraphTransformerState {
             second_moment: vec![0.0; layout.total],
             parameters,
             steps: 0,
+            shared_steps: 0,
+            local_steps: 0,
+            architecture_fingerprint: 0,
+            backbone_fingerprint: 0,
+            shard_data_fingerprint: 0,
             nodes,
             hidden,
             attention_heads,
@@ -4993,6 +5219,9 @@ impl TrainableGraphTransformerState {
             periodic_short_lag: 0,
             target_scale: 1.0,
             normalized_zero: 0.0,
+            local_parameter_ranges: None,
+            shard_training: false,
+            freeze_shared: false,
         }
     }
 
@@ -5006,6 +5235,172 @@ impl TrainableGraphTransformerState {
             self.periodicity,
             self.context_window,
         )
+    }
+
+    fn shared_ranges(&self) -> Vec<(&'static str, std::ops::Range<usize>)> {
+        let layout = self.layout();
+        vec![
+            ("input_time", layout.input..layout.in_degree_embedding),
+            ("attention", layout.temporal_q..layout.shortest_path_bias),
+            (
+                "routing_temporal",
+                layout.router..layout.lsttn_adaptive_source,
+            ),
+            (
+                "periodic_fusion",
+                layout.lsttn_periodic_projection..layout.graphon_nodes,
+            ),
+            ("decoder", layout.graphon_time..layout.total),
+        ]
+    }
+
+    fn export_shared(&self, target_mean: f64, target_scale: f64) -> LsttnSharedState {
+        let segments = self
+            .shared_ranges()
+            .into_iter()
+            .map(|(name, range)| LsttnSharedSegment {
+                name: name.to_string(),
+                parameters: self.parameters[range.clone()].to_vec(),
+                first_moment: self.first_moment[range.clone()].to_vec(),
+                second_moment: self.second_moment[range].to_vec(),
+            })
+            .collect();
+        LsttnSharedState {
+            version: 2,
+            architecture_fingerprint: self.architecture_fingerprint,
+            backbone_fingerprint: self.backbone_fingerprint,
+            hidden: self.hidden,
+            attention_heads: self.attention_heads,
+            periodicity: self.periodicity,
+            recent_window: self.recent_window,
+            context_window: self.context_window,
+            horizons: self.horizons,
+            experts: self.experts,
+            graph_order: self.graph_order,
+            steps: self.shared_steps,
+            target_mean,
+            target_scale,
+            segments,
+        }
+    }
+
+    fn import_shared(&mut self, shared: &LsttnSharedState) -> Result<()> {
+        if shared.version != 2
+            || shared.architecture_fingerprint != self.architecture_fingerprint
+            || shared.backbone_fingerprint != self.backbone_fingerprint
+            || shared.hidden != self.hidden
+            || shared.attention_heads != self.attention_heads
+            || shared.periodicity != self.periodicity
+            || shared.recent_window != self.recent_window
+            || shared.context_window != self.context_window
+            || shared.horizons != self.horizons
+            || shared.experts != self.experts
+            || shared.graph_order != self.graph_order
+        {
+            return Err(GeoStError::InvalidFrame(
+                "shared LSTTN state is incompatible with the shard architecture".to_string(),
+            ));
+        }
+        let ranges = self.shared_ranges();
+        if shared.segments.len() != ranges.len() {
+            return Err(GeoStError::InvalidFrame(
+                "shared LSTTN state has an invalid segment count".to_string(),
+            ));
+        }
+        for (segment, (name, range)) in shared.segments.iter().zip(ranges) {
+            let length = range.len();
+            if segment.name != name
+                || segment.parameters.len() != length
+                || segment.first_moment.len() != length
+                || segment.second_moment.len() != length
+            {
+                return Err(GeoStError::InvalidFrame(format!(
+                    "shared LSTTN segment {name} is incompatible"
+                )));
+            }
+            self.parameters[range.clone()].copy_from_slice(&segment.parameters);
+            self.first_moment[range.clone()].copy_from_slice(&segment.first_moment);
+            self.second_moment[range].copy_from_slice(&segment.second_moment);
+        }
+        self.shared_steps = shared.steps;
+        self.steps = self.steps.max(self.shared_steps).max(self.local_steps);
+        Ok(())
+    }
+
+    fn freeze_shared_gradients(&self, gradients: &mut [f64]) {
+        for (_, range) in self.shared_ranges() {
+            gradients[range].fill(0.0);
+        }
+    }
+
+    fn local_ranges(&self) -> Vec<std::ops::Range<usize>> {
+        let mut ranges = Vec::new();
+        let mut cursor = 0;
+        for (_, shared) in self.shared_ranges() {
+            if cursor < shared.start {
+                ranges.push(cursor..shared.start);
+            }
+            cursor = shared.end;
+        }
+        if cursor < self.layout().total {
+            ranges.push(cursor..self.layout().total);
+        }
+        ranges
+    }
+
+    fn compact_to_local_state(&mut self) {
+        let ranges = self.local_ranges();
+        self.parameters = ranges
+            .iter()
+            .flat_map(|range| self.parameters[range.clone()].iter().copied())
+            .collect();
+        self.first_moment = ranges
+            .iter()
+            .flat_map(|range| self.first_moment[range.clone()].iter().copied())
+            .collect();
+        self.second_moment = ranges
+            .iter()
+            .flat_map(|range| self.second_moment[range.clone()].iter().copied())
+            .collect();
+        self.local_parameter_ranges = Some(
+            ranges
+                .into_iter()
+                .map(|range| (range.start, range.end))
+                .collect(),
+        );
+    }
+
+    fn expand_local_state(&mut self) -> Result<()> {
+        let Some(ranges) = self.local_parameter_ranges.take() else {
+            return Ok(());
+        };
+        let compact_length: usize = ranges.iter().map(|(start, end)| end - start).sum();
+        if compact_length != self.parameters.len()
+            || compact_length != self.first_moment.len()
+            || compact_length != self.second_moment.len()
+            || ranges
+                .iter()
+                .any(|(start, end)| start >= end || *end > self.layout().total)
+        {
+            return Err(GeoStError::InvalidFrame(
+                "compact shard-local LSTTN state is incompatible".to_string(),
+            ));
+        }
+        let mut parameters = vec![0.0; self.layout().total];
+        let mut first_moment = vec![0.0; self.layout().total];
+        let mut second_moment = vec![0.0; self.layout().total];
+        let mut offset = 0;
+        for (start, end) in ranges {
+            let length = end - start;
+            parameters[start..end].copy_from_slice(&self.parameters[offset..offset + length]);
+            first_moment[start..end].copy_from_slice(&self.first_moment[offset..offset + length]);
+            second_moment[start..end].copy_from_slice(&self.second_moment[offset..offset + length]);
+            offset += length;
+        }
+        self.parameters = parameters;
+        self.first_moment = first_moment;
+        self.second_moment = second_moment;
+        Ok(())
     }
 
     fn frozen_lsttn_patch_representations(
@@ -5095,6 +5490,10 @@ impl TrainableGraphTransformerState {
         weight_decay: f64,
         backend: Option<&BackendSelection>,
     ) -> Result<()> {
+        if self.shard_training {
+            self.adamw_shard_step(gradients, learning_rate, weight_decay);
+            return Ok(());
+        }
         let next_step = self.steps + 1;
         if let Some(selection) = backend.filter(|selection| {
             selection.selected != "cpu" && self.parameters.len() >= GEO_ST_ADAMW_DISPATCH_MIN_VALUES
@@ -5150,6 +5549,40 @@ impl TrainableGraphTransformerState {
         Ok(())
     }
 
+    fn adamw_shard_step(&mut self, gradients: &[f64], learning_rate: f64, weight_decay: f64) {
+        let shared_ranges = self.shared_ranges();
+        let mut is_shared = vec![false; self.parameters.len()];
+        for (_, range) in shared_ranges {
+            is_shared[range].fill(true);
+        }
+        let next_shared_step = self.shared_steps + u64::from(!self.freeze_shared);
+        let next_local_step = self.local_steps + 1;
+        for (index, gradient) in gradients.iter().copied().enumerate() {
+            let shared = is_shared[index];
+            if (shared && self.freeze_shared) || gradient == 0.0 {
+                continue;
+            }
+            let step = if shared {
+                next_shared_step
+            } else {
+                next_local_step
+            } as f64;
+            let gradient = gradient + weight_decay * self.parameters[index];
+            self.first_moment[index] = 0.9 * self.first_moment[index] + 0.1 * gradient;
+            self.second_moment[index] =
+                0.999 * self.second_moment[index] + 0.001 * gradient * gradient;
+            let corrected_first = self.first_moment[index] / (1.0 - 0.9_f64.powf(step));
+            let corrected_second = self.second_moment[index] / (1.0 - 0.999_f64.powf(step));
+            self.parameters[index] -=
+                learning_rate * corrected_first / (corrected_second.sqrt() + 1e-8);
+        }
+        if !self.freeze_shared {
+            self.shared_steps = next_shared_step;
+        }
+        self.local_steps = next_local_step;
+        self.steps = self.steps.max(self.shared_steps).max(self.local_steps);
+    }
+
     /// The paper pretrains MST and freezes it before fitting LSTTN.  These
     /// ranges own the patch projection, learned patch positions, and the
     /// temporal Q/K/V projections used to contextualize patch embeddings.
@@ -5175,6 +5608,10 @@ impl TrainableGraphTransformerState {
         phase_offset: usize,
         frozen_patches: Option<&[Vec<Vec<f32>>]>,
         time_features: Option<&[Vec<f64>]>,
+        target_mask: Option<&[Vec<bool>]>,
+        imputed_mask: Option<&[Vec<bool>]>,
+        target_weights: Option<&[Vec<f64>]>,
+        owner_mask: Option<&[bool]>,
     ) -> (f64, Vec<f64>) {
         let owned_frozen = frozen_patches
             .is_none()
@@ -5193,15 +5630,24 @@ impl TrainableGraphTransformerState {
             training: true,
         });
         let mut loss = tape.constant(0.0);
-        let valid = targets
-            .iter()
-            .flatten()
-            .filter(|target| (**target - self.normalized_zero).abs() > 1e-12)
-            .count();
-        let scale = tape.constant(1.0 / valid.max(1) as f64);
+        let active_weight = |horizon: usize, node: usize| {
+            let observed = target_mask.is_none_or(|mask| mask[horizon][node]);
+            let imputed = imputed_mask.is_some_and(|mask| mask[horizon][node]);
+            let owner = owner_mask.is_none_or(|mask| mask[node]);
+            if observed && !imputed && owner {
+                target_weights.map_or(1.0, |weights| weights[horizon][node])
+            } else {
+                0.0
+            }
+        };
+        let total_weight: f64 = (0..self.horizons)
+            .flat_map(|horizon| (0..self.nodes).map(move |node| active_weight(horizon, node)))
+            .sum();
+        let scale = tape.constant(1.0 / total_weight.max(1.0));
         for node in 0..self.nodes {
             for horizon in 0..self.horizons {
-                if (targets[horizon][node] - self.normalized_zero).abs() <= 1e-12 {
+                let weight = active_weight(horizon, node);
+                if weight == 0.0 {
                     continue;
                 }
                 let residual = tape.add(
@@ -5210,7 +5656,7 @@ impl TrainableGraphTransformerState {
                 );
                 let residual = tape.mul(residual, tape.constant(self.target_scale));
                 let mae = tape.sqrt(tape.add(tape.mul(residual, residual), tape.constant(1e-12)));
-                loss = tape.add(loss, tape.mul(mae, scale));
+                loss = tape.add(loss, tape.mul(mae, tape.mul(scale, tape.constant(weight))));
             }
         }
         (tape.value(loss), tape.backward(loss, self.parameters.len()))
@@ -9286,7 +9732,15 @@ impl PaperGraphTransformerForecaster {
     }
 
     pub fn fit(&mut self, frame: &GraphTemporalFrame) -> Result<()> {
-        self.fit_internal(frame, None)
+        self.fit_internal(
+            frame,
+            None,
+            None,
+            None,
+            LsttnTrainingPhase::Both,
+            None,
+            None,
+        )
     }
 
     pub fn fit_checkpointed(
@@ -9294,13 +9748,71 @@ impl PaperGraphTransformerForecaster {
         frame: &GraphTemporalFrame,
         checkpoint_path: impl AsRef<Path>,
     ) -> Result<()> {
-        self.fit_internal(frame, Some(checkpoint_path.as_ref()))
+        self.fit_internal(
+            frame,
+            Some(checkpoint_path.as_ref()),
+            None,
+            None,
+            LsttnTrainingPhase::Both,
+            None,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn fit_shard(
+        &mut self,
+        frame: &GraphTemporalFrame,
+        shared_state_path: impl AsRef<Path>,
+        checkpoint_path: impl AsRef<Path>,
+        phase: &str,
+        normalization: Option<(f64, f64)>,
+        identity_json: &str,
+    ) -> Result<()> {
+        if self.config.profile != GraphTransformerProfile::LongShortFusion {
+            return Err(GeoStError::InvalidFrame(
+                "shared shard training is available only for LSTTN".to_string(),
+            ));
+        }
+        let phase = LsttnTrainingPhase::parse(phase)?;
+        let identity: LsttnShardIdentity =
+            serde_json::from_str(identity_json).map_err(|error| {
+                GeoStError::InvalidFrame(format!("invalid LSTTN shard identity: {error}"))
+            })?;
+        let shared_path = shared_state_path.as_ref();
+        let shared = shared_path
+            .is_file()
+            .then(|| -> Result<LsttnSharedState> {
+                Ok(serde_json::from_str(&fs::read_to_string(shared_path)?)?)
+            })
+            .transpose()?;
+        let seed = self.trainable_state.clone();
+        self.fit_internal(
+            frame,
+            Some(checkpoint_path.as_ref()),
+            seed,
+            shared,
+            phase,
+            normalization,
+            Some(identity),
+        )?;
+        let state = self.trainable_state.as_ref().ok_or(GeoStError::NotFit)?;
+        let shared = state.export_shared(self.target_mean, self.target_scale);
+        let temporary = shared_path.with_extension("tmp");
+        fs::write(&temporary, serde_json::to_vec(&shared)?)?;
+        fs::rename(temporary, shared_path)?;
+        Ok(())
     }
 
     fn fit_internal(
         &mut self,
         frame: &GraphTemporalFrame,
         checkpoint_path: Option<&Path>,
+        seed_state: Option<TrainableGraphTransformerState>,
+        shared_state: Option<LsttnSharedState>,
+        training_phase: LsttnTrainingPhase,
+        normalization: Option<(f64, f64)>,
+        shard_identity: Option<LsttnShardIdentity>,
     ) -> Result<()> {
         frame.validate()?;
         if self.config.profile == GraphTransformerProfile::LongShortFusion {
@@ -9327,60 +9839,197 @@ impl PaperGraphTransformerForecaster {
                 "target length must exceed lookback plus horizon".to_string(),
             ));
         }
-        let (mean, scale) = target_center_scale(&frame.target);
+        let (mean, scale) = if let Some(shared) = &shared_state {
+            (shared.target_mean, shared.target_scale)
+        } else if let Some((mean, scale)) = normalization {
+            if !mean.is_finite() || !scale.is_finite() || scale <= 0.0 {
+                return Err(GeoStError::InvalidFrame(
+                    "global LSTTN normalization must be finite with positive scale".to_string(),
+                ));
+            }
+            (mean, scale)
+        } else {
+            target_center_scale(&frame.target)
+        };
         let normalized = frame
             .target
             .iter()
             .map(|row| row.iter().map(|v| (v - mean) / scale).collect::<Vec<_>>())
             .collect::<Vec<_>>();
-        let lsttn_time_features = frame.covariates.as_ref().map(|covariates| {
-            covariates
-                .iter()
-                .map(|time| time.iter().map(|node| node[0]).collect::<Vec<_>>())
-                .collect::<Vec<_>>()
-        });
-        let adjacency = frame.adjacency.row_normalized();
-        let backend = BackendSelection {
-            requested: self.config.backend.requested.clone(),
-            selected: self.config.backend.selected.clone(),
-            available: self.config.backend.available.clone(),
+        let mut training_normalized = normalized.clone();
+        if let Some(owner_mask) = &frame.owner_mask {
+            let normalized_zero = -mean / scale;
+            for row in &mut training_normalized {
+                for (node, is_owner) in owner_mask.iter().enumerate() {
+                    if !is_owner {
+                        row[node] = normalized_zero;
+                    }
+                }
+            }
+        }
+        let lsttn_time_features = if let Some(covariates) = &frame.covariates {
+            let role_index = frame
+                .covariate_roles
+                .as_ref()
+                .and_then(|roles| roles.iter().position(|role| role == "time_of_day"))
+                .ok_or_else(|| GeoStError::InvalidFrame(
+                    "LSTTN covariates require a declared 'time_of_day' role; positional channel 0 is no longer supported".to_string(),
+                ))?;
+            Some(
+                covariates
+                    .iter()
+                    .map(|time| time.iter().map(|node| node[role_index]).collect::<Vec<_>>())
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            None
         };
-        let data_fingerprint = graph_temporal_training_fingerprint(frame);
-        let config_json = serde_json::to_string(&self.config)?;
+        let adjacency = frame.adjacency.row_normalized();
+        if !matches!(training_phase, LsttnTrainingPhase::Both) && shard_identity.is_none() {
+            return Err(GeoStError::InvalidFrame(
+                "shared LSTTN shard training requires an explicit backbone/shard identity"
+                    .to_string(),
+            ));
+        }
+        let backend = if training_phase.freezes_shared() {
+            BackendSelection {
+                requested: "cpu".to_string(),
+                selected: "cpu".to_string(),
+                available: self.config.backend.available.clone(),
+            }
+        } else {
+            BackendSelection {
+                requested: self.config.backend.requested.clone(),
+                selected: self.config.backend.selected.clone(),
+                available: self.config.backend.available.clone(),
+            }
+        };
+        let frame_fingerprint = graph_temporal_training_fingerprint(frame);
+        let architecture_fingerprint = stable_fingerprint(&serde_json::json!({
+            "profile": self.config.profile,
+            "lookback": self.config.lookback,
+            "hidden_size": self.config.hidden_size,
+            "attention_heads": self.config.attention_heads,
+            "graph_order": self.config.graph_order,
+            "experts": self.config.experts,
+            "periodicity": self.config.periodicity,
+            "recent_window": self.config.recent_window,
+            "horizon": frame.horizon,
+            "frequency": frame.frequency,
+        }))?;
+        let backbone_fingerprint = shard_identity
+            .as_ref()
+            .map(|identity| {
+                stable_fingerprint(&serde_json::json!({
+                    "backbone_id": identity.backbone_id,
+                    "equipment_category": identity.equipment_category,
+                    "target_unit": identity.target_unit,
+                }))
+            })
+            .transpose()?
+            .unwrap_or(0);
+        let shard_data_fingerprint = shard_identity
+            .as_ref()
+            .map(|identity| {
+                stable_fingerprint(&serde_json::json!({
+                    "frame": frame_fingerprint,
+                    "node_registry": identity.node_registry_fingerprint,
+                    "graph_cutoff": identity.graph_cutoff,
+                    "shard_policy": identity.shard_policy_fingerprint,
+                }))
+            })
+            .transpose()?
+            .unwrap_or(frame_fingerprint);
+        let shared_fingerprint = shared_state.as_ref().map(|shared| {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            serde_json::to_vec(shared)
+                .expect("serializable shared LSTTN state")
+                .hash(&mut hasher);
+            hasher.finish()
+        });
+        let epoch_fingerprint = stable_fingerprint(&serde_json::json!({
+            "phase": training_phase,
+            "epoch": shard_identity.as_ref().map(|identity| identity.epoch),
+            "epochs_per_pass": self.config.epochs,
+            "learning_rate": self.config.learning_rate,
+            "weight_decay": self.config.weight_decay,
+            "batch_size": self.config.batch_size,
+            "normalization": [mean, scale],
+            "shared_fingerprint": shared_fingerprint,
+        }))?;
+        let config_json = serde_json::to_string(&serde_json::json!({
+            "config": &self.config,
+            "identity": &shard_identity,
+            "architecture_fingerprint": architecture_fingerprint,
+            "backbone_fingerprint": backbone_fingerprint,
+            "shard_data_fingerprint": shard_data_fingerprint,
+            "epoch_fingerprint": epoch_fingerprint,
+            "owner_mask": &frame.owner_mask,
+            "normalization": [mean, scale],
+            "shared_fingerprint": shared_fingerprint,
+        }))?;
         let resumed = checkpoint_path
             .filter(|path| path.is_file())
             .map(|path| -> Result<LsttnTrainingCheckpoint> {
                 let checkpoint: LsttnTrainingCheckpoint =
                     serde_json::from_str(&fs::read_to_string(path)?)?;
-                if checkpoint.version != 2
-                    || checkpoint.data_fingerprint != data_fingerprint
-                    || checkpoint.config_json != config_json
+                if checkpoint.version != 3
+                    || checkpoint.architecture_fingerprint != architecture_fingerprint
+                    || checkpoint.backbone_fingerprint != backbone_fingerprint
+                    || checkpoint.shard_data_fingerprint != shard_data_fingerprint
+                    || checkpoint.epoch_fingerprint != epoch_fingerprint
                 {
                     return Err(GeoStError::InvalidFrame(format!(
-                        "LSTTN checkpoint {} does not match this frame and configuration",
+                        "LSTTN checkpoint {} has an incompatible architecture, backbone, shard data, or epoch identity",
                         path.display()
                     )));
                 }
                 Ok(checkpoint)
             })
             .transpose()?;
-        let mut state = resumed
-            .as_ref()
-            .map(|checkpoint| checkpoint.state.clone())
-            .unwrap_or_else(|| {
-                TrainableGraphTransformerState::initialized(
-                    frame.node_ids.len(),
-                    self.config.hidden_size,
-                    self.config.attention_heads,
-                    self.config.periodicity,
-                    self.config.recent_window,
-                    self.config.lookback,
-                    frame.horizon,
-                    self.config.experts,
-                    self.config.graph_order,
-                    0x5354_474d_4f45,
-                )
-            });
+        let mut state = if let Some(checkpoint) = &resumed {
+            checkpoint.state.clone()
+        } else if let Some(seed) = seed_state {
+            seed
+        } else {
+            TrainableGraphTransformerState::initialized(
+                frame.node_ids.len(),
+                self.config.hidden_size,
+                self.config.attention_heads,
+                self.config.periodicity,
+                self.config.recent_window,
+                self.config.lookback,
+                frame.horizon,
+                self.config.experts,
+                self.config.graph_order,
+                0x5354_474d_4f45,
+            )
+        };
+        if state.nodes != frame.node_ids.len()
+            || state.hidden != self.config.hidden_size
+            || state.horizons != frame.horizon
+            || (state.architecture_fingerprint != 0
+                && state.architecture_fingerprint != architecture_fingerprint)
+            || (state.backbone_fingerprint != 0
+                && state.backbone_fingerprint != backbone_fingerprint)
+            || (state.shard_data_fingerprint != 0
+                && state.shard_data_fingerprint != shard_data_fingerprint)
+        {
+            return Err(GeoStError::InvalidFrame(
+                "local LSTTN state is incompatible with the architecture, backbone, node registry, cutoff, or shard policy"
+                    .to_string(),
+            ));
+        }
+        state.architecture_fingerprint = architecture_fingerprint;
+        state.backbone_fingerprint = backbone_fingerprint;
+        state.shard_data_fingerprint = shard_data_fingerprint;
+        if resumed.is_none() {
+            if let Some(shared) = &shared_state {
+                state.import_shared(shared)?;
+            }
+        }
+        state.shard_training = !matches!(training_phase, LsttnTrainingPhase::Both);
+        state.freeze_shared = training_phase.freezes_shared();
         state.target_scale = scale;
         state.normalized_zero = -mean / scale;
         state.periodic_short_lag = if frame.frequency.eq_ignore_ascii_case("weekly") {
@@ -9417,7 +10066,9 @@ impl PaperGraphTransformerForecaster {
         let uses_cuda_tensor_executor = cuda_executor.is_some();
         #[cfg(not(all(feature = "cuda", target_os = "linux")))]
         let uses_cuda_tensor_executor = false;
-        if self.config.profile == GraphTransformerProfile::LongShortFusion {
+        if self.config.profile == GraphTransformerProfile::LongShortFusion
+            && training_phase.runs_pretraining()
+        {
             // LSTTN first reconstructs randomly withheld whole patches from
             // the unmasked long-history context, then fine-tunes those shared
             // representations for direct multi-horizon forecasting. Cover
@@ -9479,8 +10130,11 @@ impl PaperGraphTransformerForecaster {
                         write_lsttn_checkpoint(
                             path,
                             &LsttnTrainingCheckpoint {
-                                version: 2,
-                                data_fingerprint,
+                                version: 3,
+                                architecture_fingerprint,
+                                backbone_fingerprint,
+                                shard_data_fingerprint,
+                                epoch_fingerprint,
                                 config_json: config_json.clone(),
                                 state: state.clone(),
                                 pretraining_completed,
@@ -9495,6 +10149,7 @@ impl PaperGraphTransformerForecaster {
         let supervised_starts = (0..sample_count).collect::<Vec<_>>();
         let frozen_lsttn_cache = if self.config.profile == GraphTransformerProfile::LongShortFusion
             && !uses_cuda_tensor_executor
+            && training_phase.runs_supervised()
         {
             let patch_width = (self.config.periodicity / 24).max(1);
             let patches = self.config.lookback / patch_width;
@@ -9534,208 +10189,242 @@ impl PaperGraphTransformerForecaster {
         } else {
             None
         };
-        if self.config.profile == GraphTransformerProfile::LongShortFusion {
-            // The reference LSTTN trainer uses 32-example mini-batches. Each
-            // example is independent up to Adam's update, so evaluate all
-            // scalar tapes on Rayon workers, average their gradients in
-            // stable start-order, and take one serialized Adam step.
-            let lsttn_batch_size = self.config.batch_size;
-            let batches_per_epoch = supervised_starts.len().div_ceil(lsttn_batch_size);
-            let total_batches = batches_per_epoch * self.config.epochs;
-            for epoch in 0..self.config.epochs {
-                for (batch_index, starts) in supervised_starts.chunks(lsttn_batch_size).enumerate()
-                {
-                    let task_index = epoch * batches_per_epoch + batch_index;
-                    if task_index < supervised_batches_completed {
-                        continue;
-                    }
-                    let scheduler_steps = [1usize, 18, 36, 54, 72]
-                        .into_iter()
-                        .filter(|milestone| *milestone <= epoch)
-                        .count();
-                    let epoch_learning_rate =
-                        self.config.learning_rate * 0.5_f64.powi(scheduler_steps as i32);
-                    #[cfg(all(feature = "cuda", target_os = "linux"))]
-                    let cuda_batch_loss = if let Some(executor) = cuda_executor.as_mut() {
-                        let windows = starts
-                            .iter()
-                            .map(|start| {
-                                let cutoff = *start + self.config.lookback;
-                                &normalized[*start..cutoff]
-                            })
-                            .collect::<Vec<_>>();
-                        let targets = starts
-                            .iter()
-                            .map(|start| {
-                                let cutoff = *start + self.config.lookback;
-                                &normalized[cutoff..cutoff + frame.horizon]
-                            })
-                            .collect::<Vec<_>>();
-                        executor.upload_supervised_batch(&windows, &targets, 1)?;
-                        executor.supervised_forward(&state, starts.len(), 1, starts[0], true)?;
-                        executor.supervised_backward(&state, starts.len(), 1, starts[0], true)?;
-                        executor.freeze_pretrained_transformer_gradients(&state)?;
-                        executor.adamw_supervised_step(
-                            state.steps + 1,
-                            epoch_learning_rate,
-                            self.config.weight_decay,
-                        )?;
-                        state.steps += 1;
-                        let loss = executor.mean_supervised_loss()?;
-                        executor.synchronize_portable_state(&mut state)?;
-                        Some(loss)
-                    } else {
-                        None
-                    };
-                    #[cfg(not(all(feature = "cuda", target_os = "linux")))]
-                    let cuda_batch_loss: Option<f64> = None;
-                    let mean_batch_loss = if let Some(loss) = cuda_batch_loss {
-                        loss
-                    } else {
-                        let examples = starts
-                            .par_iter()
-                            .map(|start| {
-                                let cutoff = *start + self.config.lookback;
-                                let cache_index = supervised_starts
-                                    .binary_search(start)
-                                    .expect("supervised start has a frozen MST cache entry");
-                                state.lsttn_example_loss_and_gradients(
-                                    &normalized[*start..cutoff],
-                                    &adjacency,
-                                    &normalized[cutoff..cutoff + frame.horizon],
-                                    *start,
-                                    frozen_lsttn_cache
-                                        .as_ref()
-                                        .map(|cache| cache[cache_index].as_slice()),
-                                    lsttn_time_features
-                                        .as_ref()
-                                        .map(|features| &features[*start..cutoff]),
-                                )
-                            })
-                            .collect::<Vec<_>>();
-                        let mut gradients = vec![0.0; state.parameters.len()];
-                        let mut loss = 0.0;
-                        for (example_loss, example_gradients) in examples {
-                            loss += example_loss;
-                            for (total, gradient) in gradients.iter_mut().zip(example_gradients) {
-                                *total += gradient;
+        if training_phase.runs_supervised() {
+            if self.config.profile == GraphTransformerProfile::LongShortFusion {
+                // The reference LSTTN trainer uses 32-example mini-batches. Each
+                // example is independent up to Adam's update, so evaluate all
+                // scalar tapes on Rayon workers, average their gradients in
+                // stable start-order, and take one serialized Adam step.
+                let lsttn_batch_size = self.config.batch_size;
+                let batches_per_epoch = supervised_starts.len().div_ceil(lsttn_batch_size);
+                let total_batches = batches_per_epoch * self.config.epochs;
+                for epoch in 0..self.config.epochs {
+                    for (batch_index, starts) in
+                        supervised_starts.chunks(lsttn_batch_size).enumerate()
+                    {
+                        let task_index = epoch * batches_per_epoch + batch_index;
+                        if task_index < supervised_batches_completed {
+                            continue;
+                        }
+                        let scheduler_steps = [1usize, 18, 36, 54, 72]
+                            .into_iter()
+                            .filter(|milestone| *milestone <= epoch)
+                            .count();
+                        let epoch_learning_rate =
+                            self.config.learning_rate * 0.5_f64.powi(scheduler_steps as i32);
+                        #[cfg(all(feature = "cuda", target_os = "linux"))]
+                        let cuda_batch_loss = if let Some(executor) = cuda_executor.as_mut() {
+                            let windows = starts
+                                .iter()
+                                .map(|start| {
+                                    let cutoff = *start + self.config.lookback;
+                                    &normalized[*start..cutoff]
+                                })
+                                .collect::<Vec<_>>();
+                            let targets = starts
+                                .iter()
+                                .map(|start| {
+                                    let cutoff = *start + self.config.lookback;
+                                    &training_normalized[cutoff..cutoff + frame.horizon]
+                                })
+                                .collect::<Vec<_>>();
+                            executor.upload_supervised_batch(&windows, &targets, 1)?;
+                            executor.supervised_forward(
+                                &state,
+                                starts.len(),
+                                1,
+                                starts[0],
+                                true,
+                            )?;
+                            executor.supervised_backward(
+                                &state,
+                                starts.len(),
+                                1,
+                                starts[0],
+                                true,
+                            )?;
+                            executor.freeze_pretrained_transformer_gradients(&state)?;
+                            executor.portable_adamw_step(
+                                &mut state,
+                                epoch_learning_rate,
+                                self.config.weight_decay,
+                            )?;
+                            let loss = executor.mean_supervised_loss()?;
+                            Some(loss)
+                        } else {
+                            None
+                        };
+                        #[cfg(not(all(feature = "cuda", target_os = "linux")))]
+                        let cuda_batch_loss: Option<f64> = None;
+                        let mean_batch_loss = if let Some(loss) = cuda_batch_loss {
+                            loss
+                        } else {
+                            let examples = starts
+                                .par_iter()
+                                .map(|start| {
+                                    let cutoff = *start + self.config.lookback;
+                                    let cache_index = supervised_starts
+                                        .binary_search(start)
+                                        .expect("supervised start has a frozen MST cache entry");
+                                    state.lsttn_example_loss_and_gradients(
+                                        &normalized[*start..cutoff],
+                                        &adjacency,
+                                        &training_normalized[cutoff..cutoff + frame.horizon],
+                                        *start,
+                                        frozen_lsttn_cache
+                                            .as_ref()
+                                            .map(|cache| cache[cache_index].as_slice()),
+                                        lsttn_time_features
+                                            .as_ref()
+                                            .map(|features| &features[*start..cutoff]),
+                                        frame
+                                            .target_mask
+                                            .as_ref()
+                                            .map(|mask| &mask[cutoff..cutoff + frame.horizon]),
+                                        frame
+                                            .imputed_mask
+                                            .as_ref()
+                                            .map(|mask| &mask[cutoff..cutoff + frame.horizon]),
+                                        frame
+                                            .target_weights
+                                            .as_ref()
+                                            .map(|weights| &weights[cutoff..cutoff + frame.horizon]),
+                                        frame.owner_mask.as_deref(),
+                                    )
+                                })
+                                .collect::<Vec<_>>();
+                            let mut gradients = vec![0.0; state.parameters.len()];
+                            let mut loss = 0.0;
+                            for (example_loss, example_gradients) in examples {
+                                loss += example_loss;
+                                for (total, gradient) in gradients.iter_mut().zip(example_gradients)
+                                {
+                                    *total += gradient;
+                                }
                             }
+                            let batch_scale = 1.0 / starts.len() as f64;
+                            for gradient in &mut gradients {
+                                *gradient *= batch_scale;
+                            }
+                            state
+                                .freeze_lsttn_transformer_gradients(state.layout(), &mut gradients);
+                            if training_phase.freezes_shared() {
+                                state.freeze_shared_gradients(&mut gradients);
+                            }
+                            clip_gradient_norm(&mut gradients, 3.0);
+                            state.adamw_step(
+                                &gradients,
+                                epoch_learning_rate,
+                                self.config.weight_decay,
+                                Some(&backend),
+                            )?;
+                            loss * batch_scale
+                        };
+                        supervised_batches_completed = task_index + 1;
+                        eprintln!(
+                            "LSTTN supervised epoch {}/{} batch {}/{} ({}/{}) loss={:.8}",
+                            epoch + 1,
+                            self.config.epochs,
+                            batch_index + 1,
+                            batches_per_epoch,
+                            supervised_batches_completed,
+                            total_batches,
+                            mean_batch_loss
+                        );
+                        if let Some(path) = checkpoint_path {
+                            write_lsttn_checkpoint(
+                                path,
+                                &LsttnTrainingCheckpoint {
+                                    version: 3,
+                                    architecture_fingerprint,
+                                    backbone_fingerprint,
+                                    shard_data_fingerprint,
+                                    epoch_fingerprint,
+                                    config_json: config_json.clone(),
+                                    state: state.clone(),
+                                    pretraining_completed,
+                                    supervised_batches_completed,
+                                    complete: false,
+                                },
+                            )?;
                         }
-                        let batch_scale = 1.0 / starts.len() as f64;
-                        for gradient in &mut gradients {
-                            *gradient *= batch_scale;
-                        }
-                        state.freeze_lsttn_transformer_gradients(state.layout(), &mut gradients);
-                        clip_gradient_norm(&mut gradients, 3.0);
-                        state.adamw_step(
-                            &gradients,
-                            epoch_learning_rate,
-                            self.config.weight_decay,
-                            Some(&backend),
-                        )?;
-                        loss * batch_scale
-                    };
-                    supervised_batches_completed = task_index + 1;
-                    eprintln!(
-                        "LSTTN supervised epoch {}/{} batch {}/{} ({}/{}) loss={:.8}",
-                        epoch + 1,
-                        self.config.epochs,
-                        batch_index + 1,
-                        batches_per_epoch,
-                        supervised_batches_completed,
-                        total_batches,
-                        mean_batch_loss
-                    );
-                    if let Some(path) = checkpoint_path {
-                        write_lsttn_checkpoint(
-                            path,
-                            &LsttnTrainingCheckpoint {
-                                version: 2,
-                                data_fingerprint,
-                                config_json: config_json.clone(),
-                                state: state.clone(),
-                                pretraining_completed,
-                                supervised_batches_completed,
-                                complete: false,
-                            },
-                        )?;
                     }
                 }
-            }
-        } else {
-            for _ in 0..self.config.epochs {
-                for start in supervised_starts.iter().copied() {
-                    let cutoff = start + self.config.lookback;
-                    // Keep the frame's native resolution through the input
-                    // projection. The long branch forms learned patches inside
-                    // `forward`, while the short branch consumes the configured
-                    // number of recent rows instead of pre-averaged values.
-                    let long_context_is_pooled = false;
-                    let model_window = &normalized[start..cutoff];
-                    // LSTTN's decoder predicts the traffic-flow value at every
-                    // forecast step directly.  Do not turn this profile into a
-                    // residual forecaster: that changes both the paper's output
-                    // equation and the meaning of its multi-step MAE objective.
-                    // Other graph-transformer profiles retain their established
-                    // displacement heads for backward-compatible behaviour.
-                    let targets: Vec<Vec<f64>> =
-                        if self.config.profile == GraphTransformerProfile::LongShortFusion {
-                            normalized[cutoff..cutoff + frame.horizon].to_vec()
+            } else {
+                for _ in 0..self.config.epochs {
+                    for start in supervised_starts.iter().copied() {
+                        let cutoff = start + self.config.lookback;
+                        // Keep the frame's native resolution through the input
+                        // projection. The long branch forms learned patches inside
+                        // `forward`, while the short branch consumes the configured
+                        // number of recent rows instead of pre-averaged values.
+                        let long_context_is_pooled = false;
+                        let model_window = &normalized[start..cutoff];
+                        // LSTTN's decoder predicts the traffic-flow value at every
+                        // forecast step directly.  Do not turn this profile into a
+                        // residual forecaster: that changes both the paper's output
+                        // equation and the meaning of its multi-step MAE objective.
+                        // Other graph-transformer profiles retain their established
+                        // displacement heads for backward-compatible behaviour.
+                        let targets: Vec<Vec<f64>> =
+                            if self.config.profile == GraphTransformerProfile::LongShortFusion {
+                                training_normalized[cutoff..cutoff + frame.horizon].to_vec()
+                            } else {
+                                let baseline = &normalized[cutoff - 1];
+                                training_normalized[cutoff..cutoff + frame.horizon]
+                                    .iter()
+                                    .map(|row| {
+                                        row.iter()
+                                            .zip(baseline)
+                                            .map(|(value, base)| value - base)
+                                            .collect()
+                                    })
+                                    .collect()
+                            };
+                        if let Some(environments) = &spatial_shift_environments {
+                            // First learn each expert graphon on the observed traffic
+                            // environment.  The episodic pass then hides the
+                            // environment's designated expert, forcing the router to
+                            // mix the remaining graphons for that shifted relation.
+                            state.train_example_with_context(
+                                &self.config.profile,
+                                model_window,
+                                &adjacency,
+                                &targets,
+                                None,
+                                self.config.learning_rate * 0.5,
+                                self.config.weight_decay,
+                                start,
+                                long_context_is_pooled,
+                                Some(&backend),
+                            )?;
+                            let environment = environments[cutoff % environments.len()];
+                            state.train_example_with_context(
+                                &self.config.profile,
+                                model_window,
+                                &adjacency,
+                                &targets,
+                                Some(environment),
+                                self.config.learning_rate * 0.5,
+                                self.config.weight_decay,
+                                start,
+                                long_context_is_pooled,
+                                Some(&backend),
+                            )?;
                         } else {
-                            let baseline = &normalized[cutoff - 1];
-                            normalized[cutoff..cutoff + frame.horizon]
-                                .iter()
-                                .map(|row| {
-                                    row.iter()
-                                        .zip(baseline)
-                                        .map(|(value, base)| value - base)
-                                        .collect()
-                                })
-                                .collect()
-                        };
-                    if let Some(environments) = &spatial_shift_environments {
-                        // First learn each expert graphon on the observed traffic
-                        // environment.  The episodic pass then hides the
-                        // environment's designated expert, forcing the router to
-                        // mix the remaining graphons for that shifted relation.
-                        state.train_example_with_context(
-                            &self.config.profile,
-                            model_window,
-                            &adjacency,
-                            &targets,
-                            None,
-                            self.config.learning_rate * 0.5,
-                            self.config.weight_decay,
-                            start,
-                            long_context_is_pooled,
-                            Some(&backend),
-                        )?;
-                        let environment = environments[cutoff % environments.len()];
-                        state.train_example_with_context(
-                            &self.config.profile,
-                            model_window,
-                            &adjacency,
-                            &targets,
-                            Some(environment),
-                            self.config.learning_rate * 0.5,
-                            self.config.weight_decay,
-                            start,
-                            long_context_is_pooled,
-                            Some(&backend),
-                        )?;
-                    } else {
-                        state.train_example_with_context(
-                            &self.config.profile,
-                            model_window,
-                            &adjacency,
-                            &targets,
-                            None,
-                            self.config.learning_rate,
-                            self.config.weight_decay,
-                            start,
-                            long_context_is_pooled,
-                            Some(&backend),
-                        )?;
+                            state.train_example_with_context(
+                                &self.config.profile,
+                                model_window,
+                                &adjacency,
+                                &targets,
+                                None,
+                                self.config.learning_rate,
+                                self.config.weight_decay,
+                                start,
+                                long_context_is_pooled,
+                                Some(&backend),
+                            )?;
+                        }
                     }
                 }
             }
@@ -9753,8 +10442,11 @@ impl PaperGraphTransformerForecaster {
             write_lsttn_checkpoint(
                 path,
                 &LsttnTrainingCheckpoint {
-                    version: 2,
-                    data_fingerprint,
+                    version: 3,
+                    architecture_fingerprint,
+                    backbone_fingerprint,
+                    shard_data_fingerprint,
+                    epoch_fingerprint,
                     config_json,
                     state: self
                         .trainable_state
@@ -9845,6 +10537,55 @@ impl PaperGraphTransformerForecaster {
             .collect())
     }
 
+    pub fn historical_fits(&self) -> Result<(usize, Vec<Vec<f64>>)> {
+        let state = self.trainable_state.as_ref().ok_or(GeoStError::NotFit)?;
+        let adjacency = self.adjacency.as_ref().ok_or(GeoStError::NotFit)?;
+        if self.history.len() <= self.config.lookback {
+            return Ok((self.config.lookback, Vec::new()));
+        }
+        let backend = BackendSelection {
+            requested: self.config.backend.requested.clone(),
+            selected: self.config.backend.selected.clone(),
+            available: self.config.backend.available.clone(),
+        };
+        let mut fitted = Vec::with_capacity(self.history.len() - self.config.lookback);
+        for cutoff in self.config.lookback..self.history.len() {
+            let start = cutoff - self.config.lookback;
+            let window = &self.history[start..cutoff];
+            let predictions = state.predict_window_with_context(
+                &self.config.profile,
+                window,
+                adjacency,
+                start,
+                false,
+                Some(&backend),
+                self.history_time_features
+                    .as_ref()
+                    .map(|features| &features[start..cutoff]),
+            )?;
+            let first = predictions.first().ok_or_else(|| {
+                GeoStError::InvalidFrame("LSTTN historical fit returned no horizon".to_string())
+            })?;
+            let baseline = window.last().expect("historical fit window is non-empty");
+            fitted.push(
+                first
+                    .iter()
+                    .zip(baseline)
+                    .map(|(prediction, previous)| {
+                        let normalized =
+                            if self.config.profile == GraphTransformerProfile::LongShortFusion {
+                                *prediction
+                            } else {
+                                prediction + previous
+                            };
+                        normalized * self.target_scale + self.target_mean
+                    })
+                    .collect(),
+            );
+        }
+        Ok((self.config.lookback, fitted))
+    }
+
     pub fn score(&self, actual: &[Vec<f64>]) -> Result<f64> {
         if actual.is_empty() {
             return Err(GeoStError::InvalidFrame(
@@ -9873,9 +10614,38 @@ impl PaperGraphTransformerForecaster {
         fs::write(path, serde_json::to_string_pretty(self)?)?;
         Ok(())
     }
+    pub fn save_local(&self, path: impl AsRef<Path>) -> Result<()> {
+        self.validate_artifact()?;
+        let mut local = self.clone();
+        local
+            .trainable_state
+            .as_mut()
+            .ok_or(GeoStError::NotFit)?
+            .compact_to_local_state();
+        fs::write(path, serde_json::to_string_pretty(&local)?)?;
+        Ok(())
+    }
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
-        let model: Self = serde_json::from_str(&fs::read_to_string(path)?)?;
+        let mut model: Self = serde_json::from_str(&fs::read_to_string(path)?)?;
+        if let Some(state) = &mut model.trainable_state {
+            state.expand_local_state()?;
+        }
         model.validate_artifact()?;
+        Ok(model)
+    }
+    pub fn load_shard(
+        local_path: impl AsRef<Path>,
+        shared_state_path: impl AsRef<Path>,
+    ) -> Result<Self> {
+        let mut model = Self::load(local_path)?;
+        let shared: LsttnSharedState =
+            serde_json::from_str(&fs::read_to_string(shared_state_path)?)?;
+        let state = model.trainable_state.as_mut().ok_or(GeoStError::NotFit)?;
+        state.import_shared(&shared)?;
+        model.target_mean = shared.target_mean;
+        model.target_scale = shared.target_scale;
+        state.target_scale = shared.target_scale;
+        state.normalized_zero = -shared.target_mean / shared.target_scale;
         Ok(model)
     }
     pub fn to_json_string(&self) -> Result<String> {
@@ -9883,7 +10653,10 @@ impl PaperGraphTransformerForecaster {
         Ok(serde_json::to_string(self)?)
     }
     pub fn from_json_string(value: &str) -> Result<Self> {
-        let model: Self = serde_json::from_str(value)?;
+        let mut model: Self = serde_json::from_str(value)?;
+        if let Some(state) = &mut model.trainable_state {
+            state.expand_local_state()?;
+        }
         model.validate_artifact()?;
         Ok(model)
     }
@@ -10042,6 +10815,12 @@ fn graph_temporal_training_fingerprint(frame: &GraphTemporalFrame) -> u64 {
         value.to_bits().hash(&mut hasher);
     }
     hasher.finish()
+}
+
+fn stable_fingerprint(value: &impl Serialize) -> Result<u64> {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    serde_json::to_vec(value)?.hash(&mut hasher);
+    Ok(hasher.finish())
 }
 
 fn write_lsttn_checkpoint(path: &Path, checkpoint: &LsttnTrainingCheckpoint) -> Result<()> {
@@ -11347,6 +12126,83 @@ mod tests {
     }
 
     #[test]
+    fn lsttn_shared_state_moves_only_node_independent_segments() {
+        let mut source = TrainableGraphTransformerState::initialized(3, 4, 2, 1, 4, 8, 4, 2, 2, 41);
+        for (index, value) in source.parameters.iter_mut().enumerate() {
+            *value = index as f64 / 1000.0;
+        }
+        source.steps = 17;
+        source.shared_steps = 17;
+        let shared = source.export_shared(1.25, 0.5);
+        let mut target = TrainableGraphTransformerState::initialized(5, 4, 2, 1, 4, 8, 4, 2, 2, 99);
+        let local_before = target.parameters.clone();
+        let local_ranges = {
+            let layout = target.layout();
+            vec![
+                layout.in_degree_embedding..layout.temporal_q,
+                layout.shortest_path_bias..layout.router,
+                layout.lsttn_adaptive_source..layout.lsttn_periodic_projection,
+                layout.graphon_nodes..layout.graphon_time,
+            ]
+        };
+        target.import_shared(&shared).unwrap();
+        assert_eq!(target.steps, 17);
+        assert_eq!(target.shared_steps, 17);
+        for (_, range) in target.shared_ranges() {
+            assert_ne!(target.parameters[range.clone()], local_before[range]);
+        }
+        for range in local_ranges {
+            assert_eq!(target.parameters[range.clone()], local_before[range]);
+        }
+    }
+
+    #[test]
+    fn lsttn_local_adaptation_freezes_shared_adam_state() {
+        let mut state = TrainableGraphTransformerState::initialized(3, 4, 2, 1, 4, 8, 4, 2, 2, 41);
+        state.shard_training = true;
+        let gradients = vec![0.25; state.parameters.len()];
+        state.adamw_step(&gradients, 0.01, 0.00001, None).unwrap();
+        assert_eq!(state.shared_steps, 1);
+        assert_eq!(state.local_steps, 1);
+        let shared_before = state
+            .shared_ranges()
+            .into_iter()
+            .map(|(_, range)| {
+                (
+                    state.parameters[range.clone()].to_vec(),
+                    state.first_moment[range.clone()].to_vec(),
+                    state.second_moment[range].to_vec(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let local_before = state.local_ranges()[0].clone();
+        let local_parameters = state.parameters[local_before.clone()].to_vec();
+        state.freeze_shared = true;
+        state.adamw_step(&gradients, 0.01, 0.00001, None).unwrap();
+        assert_eq!(state.shared_steps, 1);
+        assert_eq!(state.local_steps, 2);
+        for ((parameters, first, second), (_, range)) in
+            shared_before.iter().zip(state.shared_ranges())
+        {
+            assert_eq!(&state.parameters[range.clone()], parameters);
+            assert_eq!(&state.first_moment[range.clone()], first);
+            assert_eq!(&state.second_moment[range], second);
+        }
+        assert_ne!(state.parameters[local_before], local_parameters);
+    }
+
+    #[test]
+    fn graph_temporal_owner_mask_is_validated() {
+        let frame = traffic_style_fixture_frame();
+        assert!(frame
+            .clone()
+            .with_owner_mask(Some(vec![true, false, false]))
+            .is_ok());
+        assert!(frame.clone().with_owner_mask(Some(vec![false; 3])).is_err());
+        assert!(frame.with_owner_mask(Some(vec![true])).is_err());
+    }
+
+    #[test]
     fn frozen_lsttn_patch_cache_preserves_trainable_gradients() {
         let frame = traffic_style_fixture_frame();
         let adjacency = frame.adjacency.row_normalized();
@@ -11359,6 +12215,10 @@ mod tests {
             0,
             None,
             None,
+            None,
+            None,
+            None,
+            None,
         );
         let (cached_loss, cached) = state.lsttn_example_loss_and_gradients(
             &frame.target[..8],
@@ -11366,6 +12226,10 @@ mod tests {
             &frame.target[8..12],
             0,
             Some(&cache),
+            None,
+            None,
+            None,
+            None,
             None,
         );
         assert!((cached_loss - uncached_loss).abs() < 1e-5);
@@ -11838,6 +12702,10 @@ mod tests {
             0,
             None,
             Some(&first),
+            None,
+            None,
+            None,
+            None,
         );
         let (second_loss, second_gradients) = state.lsttn_example_loss_and_gradients(
             &frame.target[..8],
@@ -11846,6 +12714,10 @@ mod tests {
             0,
             None,
             Some(&second),
+            None,
+            None,
+            None,
+            None,
         );
         let layout = state.layout();
         assert!(second_gradients
