@@ -134,8 +134,8 @@ use cartoboost_geo_st::{
     STAEformerConfig as CoreSTAEformerConfig, STAEformerForecaster as CoreSTAEformerForecaster,
 };
 use cartoboost_geostats::{
-    fit_variogram_wls as geostats_fit_variogram_wls, Anisotropy as CoreGeostatsAnisotropy,
-    CovarianceKernel as CoreCovarianceKernel,
+    fit_variogram_wls_with_backend as geostats_fit_variogram_wls,
+    Anisotropy as CoreGeostatsAnisotropy, CovarianceKernel as CoreCovarianceKernel,
     NearestNeighborGPRegressor as CoreNearestNeighborGPRegressor, NngpConfig as CoreNngpConfig,
 };
 use cartoboost_neural::{
@@ -12679,6 +12679,7 @@ fn geostats_deterministic_neighbors_value(
 }
 
 #[pyfunction]
+#[pyo3(signature = (bins, kernels, range_candidates, sill_candidates, nugget_candidates, backend=None))]
 fn geostats_fit_variogram_wls_value(
     py: Python<'_>,
     bins: Vec<BTreeMap<String, f64>>,
@@ -12686,6 +12687,7 @@ fn geostats_fit_variogram_wls_value(
     range_candidates: Vec<f64>,
     sill_candidates: Vec<f64>,
     nugget_candidates: Vec<f64>,
+    backend: Option<&str>,
 ) -> PyResult<String> {
     let parsed_bins = bins
         .into_iter()
@@ -12708,6 +12710,7 @@ fn geostats_fit_variogram_wls_value(
         .iter()
         .map(|kernel| CoreCovarianceKernel::parse(kernel).map_err(to_py_geostats_error))
         .collect::<PyResult<Vec<_>>>()?;
+    let backend = backend.map(str::to_owned);
     let fit = py
         .detach(move || {
             geostats_fit_variogram_wls(
@@ -12716,6 +12719,7 @@ fn geostats_fit_variogram_wls_value(
                 &range_candidates,
                 &sill_candidates,
                 &nugget_candidates,
+                backend.as_deref(),
             )
         })
         .map_err(to_py_geostats_error)?;

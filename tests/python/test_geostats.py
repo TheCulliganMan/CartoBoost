@@ -78,6 +78,35 @@ def test_variogram_utilities_return_weighted_fit():
     assert fit["weighted_sse"] >= 0.0
 
 
+@pytest.mark.parametrize("backend", available_backends("dense"))
+def test_variogram_fit_accepts_every_dense_backend(backend):
+    bins = [
+        {
+            "lag_start": 0.0,
+            "lag_end": 1.0,
+            "lag_center": 0.5,
+            "semivariance": 0.2,
+            "pair_count": 4,
+        },
+        {
+            "lag_start": 1.0,
+            "lag_end": 2.0,
+            "lag_center": 1.5,
+            "semivariance": 0.7,
+            "pair_count": 3,
+        },
+    ]
+    fit = fit_variogram_wls(
+        bins,
+        kernels=["exponential"],
+        range_candidates=[0.5, 1.0],
+        sill_candidates=[0.5, 1.0],
+        nugget_candidates=[0.0, 0.05],
+        backend=backend,
+    )
+    assert fit["weighted_sse"] >= 0.0
+
+
 def test_empirical_variogram_runs_on_every_available_backend():
     coords = np.array([[0.0, 0.0], [0.6, 0.2], [1.4, -0.1], [2.2, 0.4], [3.0, 0.0]])
     values = np.array([0.0, 1.0, 1.4, 1.8, 2.1])

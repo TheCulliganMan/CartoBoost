@@ -417,6 +417,7 @@ def fit_variogram_wls(
     range_candidates: Iterable[float],
     sill_candidates: Iterable[float],
     nugget_candidates: Iterable[float] = (0.0, 1.0e-6, 1.0e-4),
+    backend: Backend | str = Backend.CPU,
 ) -> dict[str, Any]:
     numeric_bins = [
         {
@@ -436,6 +437,7 @@ def fit_variogram_wls(
                 [float(value) for value in range_candidates],
                 [float(value) for value in sill_candidates],
                 [float(value) for value in nugget_candidates],
+                str(backend),
             )
         )
     )

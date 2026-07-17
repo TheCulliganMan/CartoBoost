@@ -1,11 +1,13 @@
 use cartoboost_neural::{
-    backend_pairwise_squared_distances_f32, select_backend_for, BackendOperation, BackendSelection,
+    backend_dense_layer_f32, backend_pairwise_squared_distances_f32, backend_workload_decision,
+    select_backend_for, BackendOperation, BackendSelection,
 };
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 const GEOSTATS_PAIRWISE_DISPATCH_MIN_PAIRS: usize = 16_384;
+const VARIOGRAM_GRID_DENSE_DISPATCH_MIN_OPS: usize = 16_384;
 
 #[derive(Debug, Error)]
 pub enum GeostatsError {
@@ -733,6 +735,147 @@ pub fn fit_variogram_wls(
         })
 }
 
+pub fn fit_variogram_wls_with_backend(
+    bins: &[EmpiricalVariogramBin],
+    kernels: &[CovarianceKernel],
+    range_candidates: &[f64],
+    sill_candidates: &[f64],
+    nugget_candidates: &[f64],
+    backend: Option<&str>,
+) -> Result<VariogramFit> {
+    validate_variogram_grid_inputs(bins, range_candidates, sill_candidates, nugget_candidates)?;
+    let kernels = if kernels.is_empty() {
+        vec![CovarianceKernel::Exponential]
+    } else {
+        kernels.to_vec()
+    };
+    let candidate_count =
+        kernels.len() * range_candidates.len() * sill_candidates.len() * nugget_candidates.len();
+    let workload = bins.len().saturating_mul(candidate_count).saturating_mul(2);
+    let selection = select_backend_for(backend, BackendOperation::Dense)
+        .map_err(|error| GeostatsError::InvalidInput(error.to_string()))?;
+    let decision = backend_workload_decision(
+        &selection,
+        BackendOperation::Dense,
+        workload,
+        VARIOGRAM_GRID_DENSE_DISPATCH_MIN_OPS,
+    );
+    if decision.executed == "cpu" {
+        return fit_variogram_wls(
+            bins,
+            &kernels,
+            range_candidates,
+            sill_candidates,
+            nugget_candidates,
+        );
+    }
+
+    let output_count = sill_candidates.len() * nugget_candidates.len();
+    let mut weights = Vec::with_capacity(2 * output_count);
+    for &sill in sill_candidates {
+        for _ in nugget_candidates {
+            weights.push(sill as f32);
+        }
+    }
+    for _ in sill_candidates {
+        for &nugget in nugget_candidates {
+            weights.push(nugget as f32);
+        }
+    }
+    let biases = vec![0.0_f32; output_count];
+    let features = kernels
+        .iter()
+        .flat_map(|&kernel| {
+            range_candidates.iter().flat_map(move |&range| {
+                bins.iter().map(move |bin| {
+                    let correlation = covariance(
+                        [0.0, 0.0],
+                        [bin.lag_center, 0.0],
+                        NngpConfig {
+                            kernel,
+                            range,
+                            sill: 1.0,
+                            nugget: 0.0,
+                            ..NngpConfig::default()
+                        },
+                    );
+                    vec![(1.0 - correlation) as f32, 1.0]
+                })
+            })
+        })
+        .collect::<Vec<_>>();
+    let predictions = backend_dense_layer_f32(&selection, &features, &weights, &biases)
+        .map_err(|error| GeostatsError::InvalidInput(error.to_string()))?;
+    let mut best: Option<(usize, VariogramFit)> = None;
+    for (kernel_index, &kernel) in kernels.iter().enumerate() {
+        for (range_index, &range) in range_candidates.iter().enumerate() {
+            let row_start = (kernel_index * range_candidates.len() + range_index) * bins.len();
+            for output in 0..output_count {
+                let sill_index = output / nugget_candidates.len();
+                let nugget_index = output % nugget_candidates.len();
+                let weighted_sse = bins
+                    .iter()
+                    .enumerate()
+                    .map(|(bin_index, bin)| {
+                        let residual = bin.semivariance
+                            - f64::from(predictions[row_start + bin_index][output]);
+                        bin.pair_count as f64 * residual * residual
+                    })
+                    .sum::<f64>();
+                if !weighted_sse.is_finite() {
+                    return Err(GeostatsError::InvalidInput(
+                        "variogram weighted SSE is not finite".to_string(),
+                    ));
+                }
+                let index = ((kernel_index * range_candidates.len() + range_index)
+                    * sill_candidates.len()
+                    + sill_index)
+                    * nugget_candidates.len()
+                    + nugget_index;
+                let candidate = VariogramFit {
+                    kernel,
+                    range,
+                    sill: sill_candidates[sill_index],
+                    nugget: nugget_candidates[nugget_index],
+                    weighted_sse,
+                };
+                if best.as_ref().is_none_or(|(best_index, current)| {
+                    weighted_sse
+                        .total_cmp(&current.weighted_sse)
+                        .then_with(|| index.cmp(best_index))
+                        .is_lt()
+                }) {
+                    best = Some((index, candidate));
+                }
+            }
+        }
+    }
+    best.map(|(_, candidate)| candidate).ok_or_else(|| {
+        GeostatsError::InvalidInput("no valid variogram candidates were supplied".to_string())
+    })
+}
+
+fn validate_variogram_grid_inputs(
+    bins: &[EmpiricalVariogramBin],
+    range_candidates: &[f64],
+    sill_candidates: &[f64],
+    nugget_candidates: &[f64],
+) -> Result<()> {
+    if bins.is_empty()
+        || range_candidates.is_empty()
+        || sill_candidates.is_empty()
+        || nugget_candidates.is_empty()
+    {
+        return Err(GeostatsError::InvalidInput(
+            "variogram fitting requires bins and nonempty candidate grids".to_string(),
+        ));
+    }
+    validate_variogram_bins(bins)?;
+    validate_positive_candidates(range_candidates, "range candidates")?;
+    validate_positive_candidates(sill_candidates, "sill candidates")?;
+    validate_nonnegative_candidates(nugget_candidates, "nugget candidates")
+}
+
 fn evaluate_variogram_candidate(
     bins: &[EmpiricalVariogramBin],
     kernel: CovarianceKernel,
@@ -1453,6 +1596,45 @@ mod tests {
         )
         .expect("fit");
         assert!(fit.weighted_sse.is_finite());
+    }
+
+    #[test]
+    fn variogram_grid_runs_dense_candidates_on_every_available_backend() {
+        let coords = (0..48)
+            .map(|index| [index as f64 * 0.13, (index as f64 * 0.17).sin()])
+            .collect::<Vec<_>>();
+        let values = (0..48)
+            .map(|index| (index as f64 * 0.09).cos())
+            .collect::<Vec<_>>();
+        let bins = empirical_semivariogram(&coords, &values, 12, None, Anisotropy::default())
+            .expect("bins");
+        let ranges = (1..=16).map(|value| value as f64 * 0.2).collect::<Vec<_>>();
+        let sills = (1..=16).map(|value| value as f64 * 0.1).collect::<Vec<_>>();
+        let nuggets = (0..=8).map(|value| value as f64 * 0.01).collect::<Vec<_>>();
+        let kernels = [CovarianceKernel::Exponential, CovarianceKernel::Matern32];
+        let expected =
+            fit_variogram_wls(&bins, &kernels, &ranges, &sills, &nuggets).expect("cpu fit");
+        for backend in cartoboost_neural::available_backends() {
+            let actual = fit_variogram_wls_with_backend(
+                &bins,
+                &kernels,
+                &ranges,
+                &sills,
+                &nuggets,
+                Some(&backend),
+            )
+            .unwrap_or_else(|error| panic!("{backend} variogram fit failed: {error}"));
+            assert_eq!(actual.kernel, expected.kernel, "backend={backend}");
+            assert_eq!(actual.range, expected.range, "backend={backend}");
+            assert_eq!(actual.sill, expected.sill, "backend={backend}");
+            assert_eq!(actual.nugget, expected.nugget, "backend={backend}");
+            assert!(
+                (actual.weighted_sse - expected.weighted_sse).abs() < 1.0e-4,
+                "backend={backend}: actual={}, expected={}",
+                actual.weighted_sse,
+                expected.weighted_sse
+            );
+        }
     }
 
     #[test]
