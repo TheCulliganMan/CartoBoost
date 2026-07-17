@@ -685,7 +685,13 @@ class ForecastConformalCalibrator:
         )
 
 
-def pinball_loss(y_true: Any, y_pred: Any, quantile: float) -> float:
+def pinball_loss(
+    y_true: Any,
+    y_pred: Any,
+    quantile: float,
+    *,
+    backend: Backend | str = Backend.CPU,
+) -> float:
     _validate_quantile(quantile, "quantile")
     truth, pred = _paired(y_true, y_pred, "y_true", "y_pred")
     native = _native_prob_call(
@@ -693,6 +699,8 @@ def pinball_loss(y_true: Any, y_pred: Any, quantile: float) -> float:
         truth.tolist(),
         pred.tolist(),
         float(quantile),
+        str(backend),
+        None,
     )
     if native is not None:
         return float(native)

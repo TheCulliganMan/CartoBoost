@@ -110,6 +110,7 @@ def pinball_loss(
     *,
     quantile: float,
     sample_weight: object | None = None,
+    backend: Backend | str = Backend.CPU,
 ) -> float:
     """Return mean pinball loss for a quantile prediction.
 
@@ -121,9 +122,18 @@ def pinball_loss(
     if not 0.0 < quantile < 1.0:
         raise ValueError("quantile must be between 0 and 1")
     y_true_arr, y_pred_arr = _paired_vectors(y_true, y_pred, "y_true", "y_pred")
-    residual = y_true_arr - y_pred_arr
-    losses = np.maximum(quantile * residual, (quantile - 1.0) * residual)
-    return _weighted_mean(losses, sample_weight)
+    weights = None if sample_weight is None else _as_float_vector(sample_weight, "sample_weight")
+    if weights is not None and weights.shape != y_true_arr.shape:
+        raise ValueError("sample_weight must have the same length as y_true")
+    return float(
+        _native.prob_pinball_loss_value(
+            y_true_arr.tolist(),
+            y_pred_arr.tolist(),
+            float(quantile),
+            str(backend),
+            None if weights is None else weights.tolist(),
+        )
+    )
 
 
 def interval_coverage(

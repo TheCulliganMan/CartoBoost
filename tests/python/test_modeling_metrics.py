@@ -19,6 +19,7 @@ from cartoboost import (
     roc_auc,
     spatial_cv_gap,
 )
+from cartoboost.accelerators import available_backends
 
 
 def test_conformal_residual_quantile_builds_calibrated_intervals():
@@ -54,6 +55,27 @@ def test_pinball_interval_coverage_and_width_metrics():
     assert pinball_loss(y_true, y_pred, quantile=0.8) == pytest.approx(0.7)
     assert interval_coverage(y_true, lower, upper) == pytest.approx(0.5)
     assert mean_interval_width(lower, upper) == pytest.approx(2.125)
+
+
+@pytest.mark.parametrize("backend", available_backends("affine"))
+def test_pinball_loss_accepts_every_affine_backend(backend):
+    assert pinball_loss(
+        [1.0, 3.0],
+        [0.5, 4.0],
+        quantile=0.8,
+        backend=backend,
+    ) == pytest.approx(0.3)
+
+
+@pytest.mark.parametrize("backend", available_backends("affine"))
+def test_weighted_pinball_loss_accepts_every_affine_backend(backend):
+    assert pinball_loss(
+        [1.0, 3.0],
+        [0.5, 4.0],
+        quantile=0.8,
+        sample_weight=[1.0, 3.0],
+        backend=backend,
+    ) == pytest.approx(0.25)
 
 
 def test_jitter_volatility_uses_per_sample_instability():

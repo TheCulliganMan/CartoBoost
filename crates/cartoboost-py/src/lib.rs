@@ -207,7 +207,7 @@ use cartoboost_prob::{
     interval_coverage as core_prob_interval_coverage,
     mean_interval_width as core_prob_mean_interval_width,
     nearest_calibration_residual_quantiles_with_backend as core_prob_nearest_calibration_residual_quantiles,
-    pinball_loss as core_prob_pinball_loss, pit_bins as core_prob_pit_bins,
+    pinball_loss_with_backend as core_prob_pinball_loss, pit_bins as core_prob_pit_bins,
     rolling_origin_conformal_residual_quantiles as core_prob_rolling_origin_conformal_residual_quantiles,
     split_conformal_residual_quantile as core_prob_split_conformal_residual_quantile,
     weighted_conformal_residual_quantile as core_prob_weighted_conformal_residual_quantile,
@@ -10532,8 +10532,26 @@ fn forecast_weighted_blend_candidate_value(
 }
 
 #[pyfunction]
-fn prob_pinball_loss_value(actual: Vec<f64>, prediction: Vec<f64>, quantile: f64) -> PyResult<f64> {
-    core_prob_pinball_loss(&actual, &prediction, quantile).map_err(to_py_value_error)
+#[pyo3(signature = (actual, prediction, quantile, backend=None, sample_weight=None))]
+fn prob_pinball_loss_value(
+    py: Python<'_>,
+    actual: Vec<f64>,
+    prediction: Vec<f64>,
+    quantile: f64,
+    backend: Option<&str>,
+    sample_weight: Option<Vec<f64>>,
+) -> PyResult<f64> {
+    let backend = backend.map(str::to_owned);
+    py.detach(move || {
+        core_prob_pinball_loss(
+            &actual,
+            &prediction,
+            quantile,
+            backend.as_deref(),
+            sample_weight.as_deref(),
+        )
+    })
+    .map_err(to_py_value_error)
 }
 
 #[pyfunction]

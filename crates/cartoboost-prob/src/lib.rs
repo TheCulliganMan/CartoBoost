@@ -1,8 +1,8 @@
 use cartoboost_core::{CartoBoostError, Result};
 use cartoboost_neural::{
     backend_affine_scores, backend_csr_diffusion_f32, backend_dense_layer_f32,
-    backend_pairwise_squared_distances_f32, select_backend, select_backend_for,
-    select_backend_for_operations, BackendOperation, BackendSelection,
+    backend_pairwise_squared_distances_f32, backend_workload_decision, select_backend,
+    select_backend_for, select_backend_for_operations, BackendOperation, BackendSelection,
 };
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 const PROB_PAIRWISE_DISPATCH_MIN_PAIRS: usize = 16_384;
 const PROB_DENSE_DISPATCH_MIN_OPS: usize = 16_384;
 const PROB_SPARSE_DISPATCH_MIN_OPS: usize = 16_384;
+const PROB_METRIC_DISPATCH_MIN_OPS: usize = 16_384;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CalibrationMetadata {
@@ -157,6 +158,73 @@ impl SplitOrder {
 
 pub fn pinball_loss(actual: &[f64], prediction: &[f64], quantile: f64) -> Result<f64> {
     cartoboost_core::forecasting::pinball_loss(actual, prediction, quantile)
+}
+
+pub fn pinball_loss_with_backend(
+    actual: &[f64],
+    prediction: &[f64],
+    quantile: f64,
+    backend: Option<&str>,
+    sample_weight: Option<&[f64]>,
+) -> Result<f64> {
+    validate_same_non_empty(actual, prediction, "actual", "prediction")?;
+    if !quantile.is_finite() || quantile <= 0.0 || quantile >= 1.0 {
+        return invalid("quantile must be finite and strictly between zero and one");
+    }
+    let selection = select_backend_for(backend.or(Some("cpu")), BackendOperation::Affine)
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    let decision = backend_workload_decision(
+        &selection,
+        BackendOperation::Affine,
+        actual.len().saturating_mul(2),
+        PROB_METRIC_DISPATCH_MIN_OPS,
+    );
+    let weight_sum = if let Some(weights) = sample_weight {
+        validate_same_non_empty(actual, weights, "actual", "sample_weight")?;
+        if weights.iter().any(|weight| *weight < 0.0) {
+            return invalid("sample_weight must be nonnegative");
+        }
+        let total = weights.iter().sum::<f64>();
+        if total <= 0.0 {
+            return invalid("sample_weight must contain at least one positive value");
+        }
+        total
+    } else {
+        actual.len() as f64
+    };
+    if decision.executed == "cpu" && sample_weight.is_none() {
+        return pinball_loss(actual, prediction, quantile);
+    }
+    let residuals = if decision.executed == "cpu" {
+        actual
+            .iter()
+            .zip(prediction)
+            .map(|(&actual, &prediction)| actual - prediction)
+            .collect::<Vec<_>>()
+    } else {
+        let rows = actual
+            .iter()
+            .zip(prediction)
+            .map(|(&actual, &prediction)| vec![actual, prediction])
+            .collect::<Vec<_>>();
+        backend_affine_scores(
+            &selection,
+            &rows,
+            &[0.0, 0.0],
+            &[1.0, -1.0],
+            &vec![0.0; rows.len()],
+        )
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?
+    };
+    Ok(residuals
+        .par_iter()
+        .enumerate()
+        .map(|(index, &residual)| {
+            let loss = (quantile * residual).max((quantile - 1.0) * residual);
+            loss * sample_weight.map_or(1.0, |weights| weights[index])
+        })
+        .sum::<f64>()
+        / weight_sum)
 }
 
 pub fn interval_coverage(actual: &[f64], lower: &[f64], upper: &[f64]) -> Result<f64> {
@@ -1934,6 +2002,26 @@ mod tests {
         )
         .unwrap();
         assert!(wis >= 0.0);
+    }
+
+    #[test]
+    fn pinball_loss_runs_on_every_available_affine_backend() {
+        let actual = (0..10_000)
+            .map(|index| (index as f64 * 0.013).sin() * 5.0)
+            .collect::<Vec<_>>();
+        let prediction = (0..10_000)
+            .map(|index| (index as f64 * 0.011).cos() * 4.0)
+            .collect::<Vec<_>>();
+        let expected = pinball_loss(&actual, &prediction, 0.73).expect("cpu loss");
+        for backend in cartoboost_neural::available_backends() {
+            let actual_loss =
+                pinball_loss_with_backend(&actual, &prediction, 0.73, Some(&backend), None)
+                    .unwrap_or_else(|error| panic!("{backend} pinball loss failed: {error}"));
+            assert!(
+                (actual_loss - expected).abs() < 1.0e-5,
+                "backend={backend}: actual={actual_loss}, expected={expected}"
+            );
+        }
     }
 
     #[test]
