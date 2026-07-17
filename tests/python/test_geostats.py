@@ -4,6 +4,7 @@ from cartoboost import (
     NearestNeighborGPRegressor,
     ResidualNNGPRegressor,
     binned_variogram,
+    deterministic_neighbors,
     empirical_semivariogram,
     fit_variogram_wls,
 )
@@ -99,6 +100,14 @@ def test_empirical_variogram_runs_on_every_available_backend():
             backend=backend,
         )
         assert actual == expected
+
+
+def test_deterministic_neighbors_runs_on_every_available_backend():
+    coords = np.array([[0.0, 0.0], [1.0, 0.0], [3.0, 0.0], [6.0, 0.0]])
+    targets = np.array([[0.25, 0.0], [4.0, 0.0]])
+    expected = deterministic_neighbors(coords, targets, k=2, backend="cpu")
+    for backend in available_backends("pairwise_distance"):
+        assert deterministic_neighbors(coords, targets, k=2, backend=backend) == expected
 
 
 def test_residual_nngp_adds_base_prediction_and_returns_std():

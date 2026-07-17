@@ -388,26 +388,8 @@ def deterministic_neighbors(
 
     if k < 0:
         raise ValueError("k must be nonnegative")
-    from . import _native
+    from ._native import geostats_deterministic_neighbors_value as native_neighbors
 
-    native_neighbors = getattr(_native, "geostats_deterministic_neighbors_value", None)
-    if native_neighbors is None:
-        if str(backend) != Backend.CPU.value:
-            raise RuntimeError(
-                "the installed CartoBoost native extension predates accelerated "
-                "batched geostatistical neighbors; rebuild or upgrade the extension"
-            )
-        coordinate_rows = _as_coords(coords)
-        target_rows = _as_coords(targets)
-        return [
-            np.argsort(
-                np.sum((coordinate_rows - target[None, :]) ** 2, axis=1),
-                kind="stable",
-            )[: int(k)]
-            .astype(int)
-            .tolist()
-            for target in target_rows
-        ]
     return [
         [int(index) for index in row]
         for row in native_neighbors(

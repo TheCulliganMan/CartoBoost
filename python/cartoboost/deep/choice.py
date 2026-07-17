@@ -27,21 +27,12 @@ class ChoiceSetTransformer:
     def score(self, candidates: list[dict[str, Any]]) -> dict[str, Any]:
         report = require_native("deep_choice_set_transformer_report_value")
         rows = self._with_outside_options(candidates)
-        try:
-            payload = report(
-                dumps(rows),
-                self.temperature,
-                self.monotone_candidate_value,
-                self.backend,
-            )
-        except TypeError:
-            if self.backend != Backend.CPU.value:
-                raise
-            payload = report(
-                dumps(rows),
-                self.temperature,
-                self.monotone_candidate_value,
-            )
+        payload = report(
+            dumps(rows),
+            self.temperature,
+            self.monotone_candidate_value,
+            self.backend,
+        )
         return loads(payload)
 
     def predict_proba(self, candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:

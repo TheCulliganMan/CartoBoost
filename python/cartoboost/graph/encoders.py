@@ -86,15 +86,7 @@ def _compute_homogeneous_directional_features(
         str(feature_prefix),
         list(directionality_cfg.directional_features),
     )
-    try:
-        values, names = _native_compute_directional_features(*args, backend)
-    except TypeError as error:
-        if backend != "cpu":
-            raise RuntimeError(
-                "the installed CartoBoost native extension predates accelerated "
-                "directional graph features; rebuild or upgrade the extension"
-            ) from error
-        values, names = _native_compute_directional_features(*args)
+    values, names = _native_compute_directional_features(*args, backend)
     return np.asarray(values, dtype=np.float32), list(names)
 
 
@@ -364,16 +356,7 @@ class Node2VecFeatureEncoder:
             normalize=bool(config.normalize),
             backend=_backend_value(config.backend),
         )
-        try:
-            self._encoder = _NativeNode2VecEncoder(**kwargs)
-        except TypeError as error:
-            if _backend_value(config.backend) != Backend.CPU.value:
-                raise RuntimeError(
-                    "the installed CartoBoost native extension predates accelerated "
-                    "Node2Vec training; rebuild or upgrade the extension"
-                ) from error
-            kwargs.pop("backend")
-            self._encoder = _NativeNode2VecEncoder(**kwargs)
+        self._encoder = _NativeNode2VecEncoder(**kwargs)
         self.graph: HomogeneousGraph | None = None
 
     def fit(
