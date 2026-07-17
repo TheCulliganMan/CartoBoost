@@ -233,7 +233,12 @@ class ResidualNNGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseEstima
         self.base_estimator_.fit(x_array, y_array)
         base_pred = np.asarray(self.base_estimator_.predict(x_array), dtype=float)
         residuals = y_array - base_pred
-        self.gp_ = self.gp or NearestNeighborGPRegressor(backend=self.backend)
+        if self.gp is None:
+            self.gp_ = NearestNeighborGPRegressor(backend=self.backend)
+        else:
+            gp_params = self.gp.get_params()
+            gp_params["backend"] = self.backend
+            self.gp_ = type(self.gp)(**gp_params)
         self.gp_.fit(None, residuals, coords=coords)
         self.n_features_in_ = x_array.shape[1]
         return self
@@ -297,6 +302,7 @@ class ResidualNNGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseEstima
             if key not in valid:
                 raise ValueError(f"unknown parameter {key!r}")
             setattr(self, key, value)
+        self.backend = str(self.backend)
         return self
 
     def save(self, path: str | Path) -> None:
@@ -309,6 +315,7 @@ class ResidualNNGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseEstima
                 purpose="residual NNGP artifacts",
             ),
             gp=dump_model_artifact(self.gp_, purpose="residual NNGP artifacts"),
+            backend=self.backend,
             n_features_in=int(self.n_features_in_),
         )
         Path(path).write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
@@ -317,9 +324,11 @@ class ResidualNNGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseEstima
     def load(cls, path: str | Path) -> ResidualNNGPRegressor:
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
         require_artifact_payload(payload, "ResidualNNGPRegressor")
+        gp = load_model_artifact(payload["gp"])
         obj = cls(
             load_model_artifact(payload["base_estimator"]),
-            gp=load_model_artifact(payload["gp"]),
+            gp=gp,
+            backend=str(payload.get("backend", getattr(gp, "backend", "cpu"))),
         )
         obj.base_estimator_ = obj.base_estimator
         obj.gp_ = obj.gp

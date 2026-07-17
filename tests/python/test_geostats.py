@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 from cartoboost import (
+    CartoBoostRegressor,
     NearestNeighborGPRegressor,
     ResidualNNGPRegressor,
     binned_variogram,
@@ -130,6 +131,29 @@ def test_residual_nngp_constructs_spatial_stage_on_every_backend(backend):
     coords = np.array([[0.0, 0.0], [0.3, 0.0], [0.6, 0.0], [0.9, 0.0]])
     x = coords[:, :1]
     y = np.array([2.0, 2.4, 1.8, 2.2])
-    model = ResidualNNGPRegressor(MeanRegressor(), backend=backend).fit(x, y, coords=coords)
+    supplied_gp = NearestNeighborGPRegressor(n_neighbors=3)
+    model = ResidualNNGPRegressor(
+        MeanRegressor(), gp=supplied_gp, backend=backend
+    ).fit(x, y, coords=coords)
     assert model.gp_.backend_ == backend
+    assert supplied_gp.backend == "cpu"
     assert np.all(np.isfinite(model.predict(x, coords=coords)))
+
+
+@pytest.mark.parametrize("backend", available_backends("pairwise_distance"))
+def test_residual_nngp_preserves_backend_through_artifact(tmp_path, backend):
+    coords = np.array([[0.0, 0.0], [0.3, 0.0], [0.6, 0.0], [0.9, 0.0]])
+    x = coords[:, :1]
+    y = np.array([2.0, 2.4, 1.8, 2.2])
+    model = ResidualNNGPRegressor(
+        CartoBoostRegressor(n_estimators=2, min_samples_leaf=1),
+        backend=backend,
+    ).fit(x, y, coords=coords)
+    path = tmp_path / "residual-nngp.json"
+    model.save(path)
+
+    restored = ResidualNNGPRegressor.load(path)
+
+    assert restored.backend == backend
+    assert restored.gp_.backend_ == backend
+    np.testing.assert_allclose(restored.predict(x, coords=coords), model.predict(x, coords=coords))
