@@ -1028,6 +1028,60 @@ mod kernels {
     }
 
     #[kernel]
+    pub fn weighted_inverse_scale_mae_loss_f32(
+        prediction: &[f32],
+        target: &[f32],
+        weight: &[f32],
+        mut loss: DisjointSlice<f32>,
+        len: u32,
+        target_scale: f32,
+    ) {
+        let index = thread::index_1d();
+        let item = index.get();
+        if item < 2 {
+            let mut total = 0.0;
+            let mut weight_total = 0.0;
+            let mut position = 0;
+            while position < len as usize {
+                let value = weight[position];
+                if value > 0.0 {
+                    total += value * libm::fabsf((prediction[position] - target[position]) * target_scale);
+                    weight_total += value;
+                }
+                position += 1;
+            }
+            if let Some(value) = loss.get_mut(index) {
+                *value = if item == 0 { total / if weight_total == 0.0 { 1.0 } else { weight_total } } else { weight_total };
+            }
+        }
+    }
+
+    #[kernel]
+    pub fn weighted_inverse_scale_mae_gradient_f32(
+        prediction: &[f32],
+        target: &[f32],
+        weight: &[f32],
+        loss: &[f32],
+        mut gradient: DisjointSlice<f32>,
+        len: u32,
+        target_scale: f32,
+    ) {
+        let index = thread::index_1d();
+        let item = index.get();
+        if let Some(value) = gradient.get_mut(index) {
+            let denominator = loss[1];
+            let item_weight = weight[item];
+            if item_weight <= 0.0 || denominator <= 0.0 {
+                *value = 0.0;
+            } else {
+                let residual = prediction[item] - target[item];
+                let sign = if residual > 0.0 { 1.0 } else if residual < 0.0 { -1.0 } else { 0.0 };
+                *value = sign * target_scale * item_weight / denominator;
+            }
+        }
+    }
+
+    #[kernel]
     pub fn gradient_l2_norm_f32(gradients: &[f32], mut norm: DisjointSlice<f32>, len: u32) {
         let index = thread::index_1d();
         if index.get() == 0 {
@@ -6509,6 +6563,46 @@ impl CudaTensorArena {
         })
     }
 
+    pub fn weighted_inverse_scale_mae_loss_backward_f32(
+        &mut self,
+        prediction: usize,
+        target: usize,
+        weight: usize,
+        prediction_gradient: usize,
+        loss: usize,
+        len: usize,
+        target_scale: f32,
+    ) -> Result<()> {
+        if len == 0 || !target_scale.is_finite() || target_scale <= 0.0
+            || [prediction, target, weight, prediction_gradient, loss].iter().enumerate()
+                .any(|(index, slot)| [prediction, target, weight, prediction_gradient, loss][..index].contains(slot))
+            || self.capacity_f32(prediction)? < len || self.capacity_f32(target)? < len || self.capacity_f32(weight)? < len
+        {
+            return Err(NeuralError::InvalidArgument("invalid CUDA weighted MAE slots or arguments".to_string()));
+        }
+        self.reserve_f32(prediction_gradient, len)?;
+        self.reserve_f32(loss, 2)?;
+        let module = kernels::load(&self.context).map_err(|error| NeuralError::InvalidArgument(error.to_string()))?;
+        {
+            let (prediction_values, target_values, weight_values, loss_values) =
+                get_four_f32_slots(&mut self.f32_slots, prediction, target, weight, loss)?;
+            unsafe {
+                module.weighted_inverse_scale_mae_loss_f32(
+                    &self.stream, LaunchConfig::for_num_elems(2), prediction_values, target_values,
+                    weight_values, loss_values, len as u32, target_scale,
+                )
+            }.map_err(|error| NeuralError::InvalidArgument(format!("failed to launch CUDA weighted MAE loss: {error}")))?;
+        }
+        let (prediction_values, target_values, weight_values, loss_values, gradient_values) =
+            get_five_f32_slots(&mut self.f32_slots, prediction, target, weight, loss, prediction_gradient)?;
+        unsafe {
+            module.weighted_inverse_scale_mae_gradient_f32(
+                &self.stream, LaunchConfig::for_num_elems(len as u32), prediction_values, target_values,
+                weight_values, loss_values, gradient_values, len as u32, target_scale,
+            )
+        }.map_err(|error| NeuralError::InvalidArgument(format!("failed to launch CUDA weighted MAE gradient: {error}")))
+    }
+
     pub fn gated_tanh_sigmoid_backward_f32(
         &mut self,
         filter: usize,
@@ -9719,6 +9813,38 @@ fn get_four_f32_slots(
             ))
         })?;
         Ok((first, second, third, output))
+    }
+}
+
+fn get_five_f32_slots(
+    slots: &mut [Option<DeviceBuffer<f32>>],
+    first: usize,
+    second: usize,
+    third: usize,
+    fourth: usize,
+    output: usize,
+) -> Result<(
+    &DeviceBuffer<f32>,
+    &DeviceBuffer<f32>,
+    &DeviceBuffer<f32>,
+    &DeviceBuffer<f32>,
+    &mut DeviceBuffer<f32>,
+)> {
+    let indices = [first, second, third, fourth, output];
+    if indices.iter().any(|index| *index >= slots.len())
+        || indices.iter().enumerate().any(|(index, value)| indices[..index].contains(value))
+    {
+        return Err(NeuralError::InvalidArgument("cuda-oxide arena requires five distinct in-range tensor slots".to_string()));
+    }
+    let ptr = slots.as_mut_ptr();
+    unsafe {
+        let get = |index: usize| (*ptr.add(index)).as_ref().ok_or_else(|| NeuralError::InvalidArgument(format!("CUDA tensor slot {index} has not been allocated"));
+        let first = get(first)?;
+        let second = get(second)?;
+        let third = get(third)?;
+        let fourth = get(fourth)?;
+        let output = (*ptr.add(output)).as_mut().ok_or_else(|| NeuralError::InvalidArgument(format!("CUDA tensor slot {output} has not been allocated")))?;
+        Ok((first, second, third, fourth, output))
     }
 }
 

@@ -1200,6 +1200,17 @@ struct LsttnShardIdentity {
     epoch: usize,
 }
 
+/// Immutable output of one independently trained shard round.  The base hash
+/// prevents applying a delta to a different frozen shared state.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct LsttnSharedRound {
+    version: u32,
+    shard_id: String,
+    objective_weight: f64,
+    base_shared_hash: u64,
+    shared: LsttnSharedState,
+}
+
 #[derive(Clone, Copy, Debug, Serialize)]
 enum LsttnTrainingPhase {
     Both,
@@ -1401,6 +1412,8 @@ struct TrainableGraphTransformerState {
     backbone_fingerprint: u64,
     #[serde(default)]
     shard_data_fingerprint: u64,
+    #[serde(default)]
+    warm_start_policy_fingerprint: u64,
     nodes: usize,
     hidden: usize,
     attention_heads: usize,
@@ -1604,6 +1617,7 @@ impl CudaLsttnTensorExecutor {
     const PRETRAIN_LAYER_GRAD_B: usize = 153;
     const PRETRAIN_DECODER_OUTPUT: usize = 154;
     const PRETRAIN_POSITION_GRADIENT: usize = 155;
+    const SUPERVISED_WEIGHT: usize = 156;
     const FORWARD_INDPTR: usize = 0;
     const FORWARD_INDICES: usize = 1;
     const REVERSE_INDPTR: usize = 2;
@@ -1644,7 +1658,7 @@ impl CudaLsttnTensorExecutor {
                 })
                 .collect()
         };
-        let mut arena = CudaTensorArena::new(156)
+        let mut arena = CudaTensorArena::new(157)
             .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
         arena
             .upload_f32(Self::PARAMETERS, &to_f32(&state.parameters, "parameters")?)
@@ -3377,13 +3391,13 @@ impl CudaLsttnTensorExecutor {
         let len = batches * state.horizons * self.nodes;
         self.begin_supervised_gradient()?;
         self.arena
-            .masked_inverse_scale_mae_loss_backward_f32(
+            .weighted_inverse_scale_mae_loss_backward_f32(
                 Self::FUSED_DIRECT_OUTPUT,
                 Self::SUPERVISED_TARGET,
+                Self::SUPERVISED_WEIGHT,
                 Self::DIRECT_OUTPUT_GRADIENT,
                 Self::SUPERVISED_LOSS,
                 len,
-                state.normalized_zero as f32,
                 state.target_scale as f32,
             )
             .map_err(|e| GeoStError::InvalidBackend(e.to_string()))?;
@@ -4624,9 +4638,10 @@ impl CudaLsttnTensorExecutor {
         &mut self,
         windows: &[&[Vec<f64>]],
         targets: &[&[Vec<f64>]],
+        weights: &[&[Vec<f64>]],
         channels: usize,
     ) -> Result<()> {
-        self.upload_supervised_node_tile(windows, targets, channels, 0..self.nodes)
+        self.upload_supervised_node_tile(windows, targets, weights, channels, 0..self.nodes)
     }
 
     /// Physical node-tile upload for the global logical batch.  Rows remain
@@ -4636,12 +4651,14 @@ impl CudaLsttnTensorExecutor {
         &mut self,
         windows: &[&[Vec<f64>]],
         targets: &[&[Vec<f64>]],
+        weights: &[&[Vec<f64>]],
         channels: usize,
         node_range: std::ops::Range<usize>,
     ) -> Result<()> {
         if windows.is_empty()
             || windows.len() > 32
             || windows.len() != targets.len()
+            || targets.len() != weights.len()
             || channels == 0
             || node_range.start >= node_range.end
             || node_range.end > self.nodes
@@ -4677,11 +4694,14 @@ impl CudaLsttnTensorExecutor {
         let tile_nodes = node_range.len();
         let mut input = Vec::with_capacity(windows.len() * lookback * tile_nodes * channels);
         let mut target = Vec::with_capacity(targets.len() * horizon * tile_nodes);
-        for (window, target_rows) in windows.iter().zip(targets) {
+        let mut weight = Vec::with_capacity(targets.len() * horizon * tile_nodes);
+        for ((window, target_rows), weight_rows) in windows.iter().zip(targets).zip(weights) {
             if window.len() != lookback
                 || target_rows.len() != horizon
                 || window.iter().any(|row| row.len() != nodes * channels)
                 || target_rows.iter().any(|row| row.len() != nodes)
+                || weight_rows.len() != horizon
+                || weight_rows.iter().any(|row| row.len() != nodes)
             {
                 return Err(GeoStError::InvalidFrame(
                     "CUDA LSTTN batch has inconsistent tensor rows".to_string(),
@@ -4699,12 +4719,20 @@ impl CudaLsttnTensorExecutor {
                     target.push(finite_f32(row[node])?);
                 }
             }
+            for row in weight_rows.iter() {
+                for node in node_range.clone() {
+                    weight.push(finite_f32(row[node])?);
+                }
+            }
         }
         self.arena
             .upload_f32(Self::SUPERVISED_INPUT, &input)
             .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
         self.arena
             .upload_f32(Self::SUPERVISED_TARGET, &target)
+            .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
+        self.arena
+            .upload_f32(Self::SUPERVISED_WEIGHT, &weight)
             .map_err(|error| GeoStError::InvalidBackend(error.to_string()))?;
         self.arena
             .reserve_f32(Self::DIRECT_OUTPUT, target.len())
@@ -5390,6 +5418,7 @@ impl TrainableGraphTransformerState {
             architecture_fingerprint: 0,
             backbone_fingerprint: 0,
             shard_data_fingerprint: 0,
+            warm_start_policy_fingerprint: 0,
             nodes,
             hidden,
             attention_heads,
@@ -9946,8 +9975,44 @@ impl PaperGraphTransformerForecaster {
         )
     }
 
+    /// Convert a compatible shard artifact into a fresh-cutoff warm start.
+    /// Parameters remain, while every cutoff-bound optimizer/normalization
+    /// field is reset. Exact resume continues to use the checkpoint path.
+    pub fn prepare_shard_warm_start(&mut self, identity_json: &str) -> Result<()> {
+        let identity: LsttnShardIdentity =
+            serde_json::from_str(identity_json).map_err(|error| {
+                GeoStError::InvalidFrame(format!("invalid LSTTN shard identity: {error}"))
+            })?;
+        let policy = stable_fingerprint(&serde_json::json!({
+            "equipment_category": identity.equipment_category,
+            "target_unit": identity.target_unit,
+            "node_registry": identity.node_registry_fingerprint,
+            "shard_policy": identity.shard_policy_fingerprint,
+        }))?;
+        let state = self.trainable_state.as_mut().ok_or(GeoStError::NotFit)?;
+        if state.warm_start_policy_fingerprint == 0 || state.warm_start_policy_fingerprint != policy
+        {
+            return Err(GeoStError::InvalidFrame(
+                "LSTTN warm start rejects an objective or node-policy mismatch".to_string(),
+            ));
+        }
+        state.first_moment.fill(0.0);
+        state.second_moment.fill(0.0);
+        state.steps = 0;
+        state.shared_steps = 0;
+        state.local_steps = 0;
+        state.shard_data_fingerprint = 0;
+        state.target_scale = 1.0;
+        state.normalized_zero = 0.0;
+        Ok(())
+    }
+
+    /// Fit against a frozen shared snapshot and return an objective-local
+    /// proposal. This method never writes shared state, so shard workers can
+    /// fan out safely; only the deterministic reducer may publish a new
+    /// snapshot.
     #[allow(clippy::too_many_arguments)]
-    pub fn fit_shard(
+    pub fn fit_shard_round(
         &mut self,
         frame: &GraphTemporalFrame,
         shared_state_path: impl AsRef<Path>,
@@ -9955,10 +10020,11 @@ impl PaperGraphTransformerForecaster {
         phase: &str,
         normalization: Option<(f64, f64)>,
         identity_json: &str,
-    ) -> Result<()> {
-        if self.config.profile != GraphTransformerProfile::LongShortFusion {
+        objective_weight: f64,
+    ) -> Result<String> {
+        if !objective_weight.is_finite() || objective_weight <= 0.0 {
             return Err(GeoStError::InvalidFrame(
-                "shared shard training is available only for LSTTN".to_string(),
+                "LSTTN shard round objective weight must be finite and positive".to_string(),
             ));
         }
         let phase = LsttnTrainingPhase::parse(phase)?;
@@ -9967,28 +10033,118 @@ impl PaperGraphTransformerForecaster {
                 GeoStError::InvalidFrame(format!("invalid LSTTN shard identity: {error}"))
             })?;
         let shared_path = shared_state_path.as_ref();
-        let shared = shared_path
+        let shared_bytes = shared_path
             .is_file()
-            .then(|| -> Result<LsttnSharedState> {
-                Ok(serde_json::from_str(&fs::read_to_string(shared_path)?)?)
-            })
+            .then(|| fs::read(shared_path))
             .transpose()?;
-        let seed = self.trainable_state.clone();
+        let base_shared_hash = shared_bytes
+            .as_ref()
+            .map_or(0, |bytes| bytes_fingerprint(bytes));
+        let shared = shared_bytes
+            .as_ref()
+            .map(|bytes| serde_json::from_slice(bytes))
+            .transpose()?;
         self.fit_internal(
             frame,
             Some(checkpoint_path.as_ref()),
-            seed,
+            self.trainable_state.clone(),
             shared,
             phase,
             normalization,
-            Some(identity),
+            Some(identity.clone()),
         )?;
         let state = self.trainable_state.as_ref().ok_or(GeoStError::NotFit)?;
-        let shared = state.export_shared(self.target_mean, self.target_scale);
-        let temporary = shared_path.with_extension("tmp");
-        fs::write(&temporary, serde_json::to_vec(&shared)?)?;
-        fs::rename(temporary, shared_path)?;
-        Ok(())
+        serde_json::to_string(&LsttnSharedRound {
+            version: 1,
+            shard_id: identity.node_registry_fingerprint,
+            objective_weight,
+            base_shared_hash,
+            shared: state.export_shared(self.target_mean, self.target_scale),
+        })
+        .map_err(Into::into)
+    }
+
+    /// Reduce independently emitted rounds in stable shard order. A round can
+    /// only be reduced once against the exact frozen shared snapshot it used.
+    pub fn reduce_shard_rounds(rounds_json: &[String], expected_base_hash: u64) -> Result<String> {
+        if rounds_json.is_empty() {
+            return Err(GeoStError::InvalidFrame(
+                "LSTTN shared round reduction requires at least one round".to_string(),
+            ));
+        }
+        let mut rounds = rounds_json
+            .iter()
+            .map(|json| serde_json::from_str::<LsttnSharedRound>(json))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        if rounds.iter().any(|round| {
+            round.version != 1
+                || round.base_shared_hash != expected_base_hash
+                || !round.objective_weight.is_finite()
+                || round.objective_weight <= 0.0
+        }) {
+            return Err(GeoStError::InvalidFrame(
+                "LSTTN shared rounds do not share a valid frozen base".to_string(),
+            ));
+        }
+        rounds.sort_by(|left, right| left.shard_id.cmp(&right.shard_id));
+        if rounds
+            .windows(2)
+            .any(|pair| pair[0].shard_id == pair[1].shard_id)
+        {
+            return Err(GeoStError::InvalidFrame(
+                "LSTTN shared round contains duplicate shard identities".to_string(),
+            ));
+        }
+        let mut reduced = rounds[0].shared.clone();
+        for round in &rounds[1..] {
+            if round.shared.version != reduced.version
+                || round.shared.architecture_fingerprint != reduced.architecture_fingerprint
+                || round.shared.backbone_fingerprint != reduced.backbone_fingerprint
+                || round.shared.segments.len() != reduced.segments.len()
+            {
+                return Err(GeoStError::InvalidFrame(
+                    "LSTTN shared rounds are architecturally incompatible".to_string(),
+                ));
+            }
+        }
+        let total = rounds
+            .iter()
+            .map(|round| round.objective_weight)
+            .sum::<f64>();
+        for segment_index in 0..reduced.segments.len() {
+            let output = &mut reduced.segments[segment_index];
+            for index in 0..output.parameters.len() {
+                output.parameters[index] = rounds
+                    .iter()
+                    .map(|round| {
+                        round.shared.segments[segment_index].parameters[index]
+                            * round.objective_weight
+                            / total
+                    })
+                    .sum();
+            }
+            for index in 0..output.first_moment.len() {
+                output.first_moment[index] = rounds
+                    .iter()
+                    .map(|round| {
+                        round.shared.segments[segment_index].first_moment[index]
+                            * round.objective_weight
+                            / total
+                    })
+                    .sum();
+            }
+            for index in 0..output.second_moment.len() {
+                output.second_moment[index] = rounds
+                    .iter()
+                    .map(|round| {
+                        round.shared.segments[segment_index].second_moment[index]
+                            * round.objective_weight
+                            / total
+                    })
+                    .sum();
+            }
+        }
+        serde_json::to_string(&reduced).map_err(Into::into)
     }
 
     fn fit_internal(
@@ -10235,6 +10391,18 @@ impl PaperGraphTransformerForecaster {
         state.architecture_fingerprint = architecture_fingerprint;
         state.backbone_fingerprint = backbone_fingerprint;
         state.shard_data_fingerprint = shard_data_fingerprint;
+        state.warm_start_policy_fingerprint = shard_identity
+            .as_ref()
+            .map(|identity| {
+                stable_fingerprint(&serde_json::json!({
+                    "equipment_category": identity.equipment_category,
+                    "target_unit": identity.target_unit,
+                    "node_registry": identity.node_registry_fingerprint,
+                    "shard_policy": identity.shard_policy_fingerprint,
+                }))
+                .expect("serializable LSTTN warm-start policy")
+            })
+            .unwrap_or(0);
         if resumed.is_none() {
             if let Some(shared) = &shared_state {
                 state.import_shared(shared)?;
@@ -10269,12 +10437,6 @@ impl PaperGraphTransformerForecaster {
         #[cfg(all(feature = "cuda", target_os = "linux"))]
         let mut cuda_executor = if self.config.profile == GraphTransformerProfile::LongShortFusion
             && backend.selected == "cuda"
-            // The portable tape is authoritative until the CUDA loss kernel
-            // receives its aligned observation/imputation/reliability buffers.
-            // Never silently drop these supervision semantics on accelerator.
-            && frame.target_mask.is_none()
-            && frame.imputed_mask.is_none()
-            && frame.target_weights.is_none()
         {
             Some(CudaLsttnTensorExecutor::new(&state, &adjacency)?)
         } else {
@@ -10446,7 +10608,47 @@ impl PaperGraphTransformerForecaster {
                                     &training_normalized[cutoff..cutoff + frame.horizon]
                                 })
                                 .collect::<Vec<_>>();
-                            executor.upload_supervised_batch(&windows, &targets, 1)?;
+                            let objective_weights = starts
+                                .iter()
+                                .map(|start| {
+                                    let cutoff = *start + self.config.lookback;
+                                    (0..frame.horizon)
+                                        .map(|horizon| {
+                                            (0..frame.node_ids.len())
+                                                .map(|node| {
+                                                    let observed =
+                                                        frame.target_mask.as_ref().is_none_or(
+                                                            |mask| mask[cutoff + horizon][node],
+                                                        );
+                                                    let imputed =
+                                                        frame.imputed_mask.as_ref().is_some_and(
+                                                            |mask| mask[cutoff + horizon][node],
+                                                        );
+                                                    let owned = frame
+                                                        .owner_mask
+                                                        .as_ref()
+                                                        .is_none_or(|owners| owners[node]);
+                                                    if observed && !imputed && owned {
+                                                        frame.target_weights.as_ref().map_or(
+                                                            1.0,
+                                                            |weights| {
+                                                                weights[cutoff + horizon][node]
+                                                            },
+                                                        )
+                                                    } else {
+                                                        0.0
+                                                    }
+                                                })
+                                                .collect::<Vec<_>>()
+                                        })
+                                        .collect::<Vec<_>>()
+                                })
+                                .collect::<Vec<_>>();
+                            let weights = objective_weights
+                                .iter()
+                                .map(Vec::as_slice)
+                                .collect::<Vec<_>>();
+                            executor.upload_supervised_batch(&windows, &targets, &weights, 1)?;
                             executor.supervised_forward(
                                 &state,
                                 starts.len(),
@@ -11099,10 +11301,14 @@ impl PaperGraphTransformerForecaster {
         if self.config.profile == GraphTransformerProfile::LongShortFusion
             && self.config.backend.selected != "cpu"
         {
-            components.push(format!(
-                "{}_accelerated_graph_training_and_inference",
-                self.config.backend.selected
-            ));
+            components.push(if self.config.backend.selected == "metal" {
+                "metal_full_graph_training_and_inference".to_string()
+            } else {
+                format!(
+                    "{}_accelerated_graph_training_and_inference",
+                    self.config.backend.selected
+                )
+            });
         }
         PaperGraphTransformerArchitectureReport {
             profile: self.config.profile.clone(),
@@ -12245,6 +12451,7 @@ mod tests {
             }
         }
         let mut executor = CudaLsttnTensorExecutor::new(&state, &adjacency).unwrap();
+        let unit_weights = vec![vec![vec![1.0; state.nodes]; 4]];
         assert_eq!(executor.forward_edges, adjacency.indices.len());
         assert_eq!(executor.reverse_edges, adjacency.indices.len());
         assert!(executor.adaptive_edges >= adjacency.indices.len());
@@ -12253,7 +12460,12 @@ mod tests {
         // one-time construction; no batch activation has been allocated yet.
         assert!(executor.allocation_count() >= 9);
         executor
-            .upload_supervised_batch(&[&frame.target[..8]], &[&frame.target[8..12]], 1)
+            .upload_supervised_batch(
+                &[&frame.target[..8]],
+                &[&frame.target[8..12]],
+                &[&unit_weights[0]],
+                1,
+            )
             .unwrap();
         assert_eq!(
             executor
@@ -12518,7 +12730,12 @@ mod tests {
 
         let mut supervised = CudaLsttnTensorExecutor::new(&state, &adjacency).unwrap();
         supervised
-            .upload_supervised_batch(&[&frame.target[..8]], &[&frame.target[8..12]], 1)
+            .upload_supervised_batch(
+                &[&frame.target[..8]],
+                &[&frame.target[8..12]],
+                &[&unit_weights[0]],
+                1,
+            )
             .unwrap();
         supervised
             .supervised_forward(&state, 1, 1, 0, true)
@@ -12790,6 +13007,89 @@ mod tests {
             .map(|range| range.len() * 3 * std::mem::size_of::<f64>())
             .sum::<usize>();
         assert!(target_local_bytes > source_local_bytes);
+    }
+
+    #[test]
+    fn lsttn_shared_round_reducer_is_order_independent_and_rejects_wrong_base() {
+        let state = TrainableGraphTransformerState::initialized(3, 4, 2, 1, 4, 8, 4, 2, 2, 41);
+        let mut left = state.export_shared(0.0, 1.0);
+        let mut right = state.export_shared(0.0, 1.0);
+        left.segments[0].parameters[0] = 2.0;
+        right.segments[0].parameters[0] = 8.0;
+        let round = |shard_id: &str, objective_weight: f64, shared: LsttnSharedState| {
+            serde_json::to_string(&LsttnSharedRound {
+                version: 1,
+                shard_id: shard_id.to_string(),
+                objective_weight,
+                base_shared_hash: 77,
+                shared,
+            })
+            .unwrap()
+        };
+        let left = round("left", 1.0, left);
+        let right = round("right", 3.0, right);
+        let forward = PaperGraphTransformerForecaster::reduce_shard_rounds(
+            &[left.clone(), right.clone()],
+            77,
+        )
+        .unwrap();
+        let reverse =
+            PaperGraphTransformerForecaster::reduce_shard_rounds(&[right, left], 77).unwrap();
+        assert_eq!(forward, reverse);
+        let reduced: LsttnSharedState = serde_json::from_str(&forward).unwrap();
+        assert!((reduced.segments[0].parameters[0] - 6.5).abs() < 1e-12);
+        assert!(PaperGraphTransformerForecaster::reduce_shard_rounds(&[forward], 77).is_err());
+    }
+
+    #[test]
+    fn lsttn_warm_start_keeps_parameters_but_resets_cutoff_bound_state() {
+        let identity = serde_json::json!({
+            "backbone_id": "backbone", "equipment_category": "objective", "target_unit": "unit",
+            "node_registry_fingerprint": "nodes", "graph_cutoff": "2026-01-01",
+            "shard_policy_fingerprint": "policy", "epoch": 0,
+        });
+        let policy = stable_fingerprint(&serde_json::json!({
+            "equipment_category": "objective", "target_unit": "unit", "node_registry": "nodes", "shard_policy": "policy",
+        })).unwrap();
+        let mut state = TrainableGraphTransformerState::initialized(3, 4, 2, 1, 4, 8, 4, 2, 2, 41);
+        state.parameters[0] = 9.0;
+        state.first_moment.fill(2.0);
+        state.second_moment.fill(3.0);
+        state.steps = 7;
+        state.shared_steps = 6;
+        state.local_steps = 5;
+        state.shard_data_fingerprint = 99;
+        state.warm_start_policy_fingerprint = policy;
+        let mut model =
+            PaperGraphTransformerForecaster::new(PaperGraphTransformerConfig::default()).unwrap();
+        model.trainable_state = Some(state);
+        model
+            .prepare_shard_warm_start(&identity.to_string())
+            .unwrap();
+        let reset = model.trainable_state.unwrap();
+        assert_eq!(reset.parameters[0], 9.0);
+        assert!(reset.first_moment.iter().all(|value| *value == 0.0));
+        assert!(reset.second_moment.iter().all(|value| *value == 0.0));
+        assert_eq!(
+            (
+                reset.steps,
+                reset.shared_steps,
+                reset.local_steps,
+                reset.shard_data_fingerprint
+            ),
+            (0, 0, 0, 0)
+        );
+        let incompatible = serde_json::json!({
+            "backbone_id": "backbone", "equipment_category": "other", "target_unit": "unit",
+            "node_registry_fingerprint": "nodes", "graph_cutoff": "2026-01-08",
+            "shard_policy_fingerprint": "policy", "epoch": 0,
+        });
+        let mut rejected =
+            PaperGraphTransformerForecaster::new(PaperGraphTransformerConfig::default()).unwrap();
+        rejected.trainable_state = Some(reset);
+        assert!(rejected
+            .prepare_shard_warm_start(&incompatible.to_string())
+            .is_err());
     }
 
     #[test]

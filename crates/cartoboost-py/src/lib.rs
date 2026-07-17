@@ -4262,19 +4262,20 @@ impl NativePaperGraphTransformerForecaster {
             .map_err(to_py_geo_st_error)
     }
 
-    #[pyo3(signature = (frame, shared_state_path, checkpoint_path, identity_json, phase="supervised", normalization_mean=None, normalization_scale=None))]
+    #[pyo3(signature = (frame, shared_state_path, checkpoint_path, identity_json, objective_weight, phase="supervised", normalization_mean=None, normalization_scale=None))]
     #[allow(clippy::too_many_arguments)]
-    fn fit_shard(
+    fn fit_shard_round(
         &mut self,
         py: Python<'_>,
         frame: &NativeGraphTemporalFrame,
         shared_state_path: PathBuf,
         checkpoint_path: PathBuf,
         identity_json: &str,
+        objective_weight: f64,
         phase: &str,
         normalization_mean: Option<f64>,
         normalization_scale: Option<f64>,
-    ) -> PyResult<()> {
+    ) -> PyResult<String> {
         let normalization = match (normalization_mean, normalization_scale) {
             (Some(mean), Some(scale)) => Some((mean, scale)),
             (None, None) => None,
@@ -4285,16 +4286,28 @@ impl NativePaperGraphTransformerForecaster {
             }
         };
         py.detach(|| {
-            self.model.fit_shard(
+            self.model.fit_shard_round(
                 &frame.frame,
                 shared_state_path,
                 checkpoint_path,
                 phase,
                 normalization,
                 identity_json,
+                objective_weight,
             )
         })
         .map_err(to_py_geo_st_error)
+    }
+
+    fn prepare_shard_warm_start(&mut self, py: Python<'_>, identity_json: &str) -> PyResult<()> {
+        py.detach(|| self.model.prepare_shard_warm_start(identity_json))
+            .map_err(to_py_geo_st_error)
+    }
+
+    #[staticmethod]
+    fn reduce_shard_rounds(rounds: Vec<String>, expected_base_hash: u64) -> PyResult<String> {
+        CorePaperGraphTransformerForecaster::reduce_shard_rounds(&rounds, expected_base_hash)
+            .map_err(to_py_geo_st_error)
     }
 
     fn predict(&self, py: Python<'_>, horizon: usize) -> PyResult<Vec<Vec<f64>>> {

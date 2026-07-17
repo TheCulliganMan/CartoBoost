@@ -858,32 +858,41 @@ class _PaperGraphTransformerForecaster(ArtifactPersistenceMixin):
         self.is_fitted_ = True
         return self
 
-    def fit_shard(
+    def fit_shard_round(
         self,
         frame: GraphTemporalFrame,
         *,
         shared_state_path: str | Path,
         checkpoint_path: str | Path,
         identity: dict[str, Any] | str,
+        objective_weight: float,
         phase: str = "supervised",
         normalization: tuple[float, float] | None = None,
-    ):
-        """Update shared and shard-local LSTTN state for one guarded shard pass."""
+    ) -> str:
+        """Emit a frozen-base shared proposal without mutating shared state."""
         if phase not in {"pretrain", "supervised", "local_adaptation"}:
             raise ValueError("phase must be pretrain, supervised, or local_adaptation")
         mean, scale = (None, None) if normalization is None else normalization
         identity_json = identity if isinstance(identity, str) else json.dumps(identity, sort_keys=True)
-        self._native_model.fit_shard(
-            _native_frame(frame),
-            str(Path(shared_state_path)),
-            str(Path(checkpoint_path)),
-            identity_json,
-            phase,
-            mean,
-            scale,
+        proposal = self._native_model.fit_shard_round(
+            _native_frame(frame), str(Path(shared_state_path)), str(Path(checkpoint_path)),
+            identity_json, float(objective_weight), phase, mean, scale,
         )
         self.is_fitted_ = True
+        return str(proposal)
+
+    def prepare_shard_warm_start(self, identity: dict[str, Any] | str):
+        """Reset cutoff-bound optimizer state after strict policy validation."""
+        identity_json = identity if isinstance(identity, str) else json.dumps(identity, sort_keys=True)
+        self._native_model.prepare_shard_warm_start(identity_json)
         return self
+
+    @staticmethod
+    def reduce_shard_rounds(rounds: list[str], expected_base_hash: int) -> str:
+        native_class = _native_class("PaperGraphTransformerForecaster")
+        if native_class is None:
+            raise NotImplementedError("Rust binding for paper graph transformers is not available.")
+        return str(native_class.reduce_shard_rounds(list(rounds), int(expected_base_hash)))
 
     def predict(self, horizon: int) -> np.ndarray:
         self._check_is_fitted()
