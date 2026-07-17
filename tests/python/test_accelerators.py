@@ -15,6 +15,8 @@ from cartoboost.accelerators import (
     layer_norm,
     pair_sigmoid_scores,
     pairwise_squared_distances,
+    scalar_graph_train_step,
+    train_tanh_mlp,
     workload_decision,
 )
 
@@ -25,6 +27,39 @@ def test_vector_dispatch_report_runs_on_every_available_backend() -> None:
         assert report["selected"] == backend
         assert report["accelerated"] is (backend != "cpu")
         assert abs(report["checksum"] - report["expected_checksum"]) < 1.0e-4
+
+
+def test_fused_training_kernels_run_on_every_available_backend() -> None:
+    scalar_args = ([2.0, 0.0, 0.0], [0, 1, 3], [0, 0, 0], [0, 0, 1], [0, 0, 0])
+    scalar_kwargs = {
+        "loss": 2,
+        "parameters": [3.0],
+        "first_moment": [0.0],
+        "second_moment": [0.0],
+        "step": 1,
+        "learning_rate": 0.01,
+    }
+    scalar_expected = scalar_graph_train_step(
+        *scalar_args,
+        backend="cpu",
+        **scalar_kwargs,
+    )
+    mlp_args = ([[0.25, -0.5], [1.0, 0.75]], [0.2, -0.4])
+    mlp_kwargs = {
+        "hidden_size": 2,
+        "epochs": 1,
+        "learning_rate": 0.01,
+        "parameters": [0.1, -0.2, 0.3, 0.05, -0.04, 0.2, -0.1, 0.07, 0.01],
+    }
+    mlp_expected = train_tanh_mlp(*mlp_args, backend="cpu", **mlp_kwargs)
+    for backend in available_backends("scalar_graph_training"):
+        actual = scalar_graph_train_step(*scalar_args, backend=backend, **scalar_kwargs)
+        assert abs(actual[0] - scalar_expected[0]) < 1.0e-5
+        for left, right in zip(actual[1:], scalar_expected[1:], strict=True):
+            np.testing.assert_allclose(left, right, rtol=1.0e-5, atol=1.0e-6)
+    for backend in available_backends("tanh_mlp_training"):
+        actual = train_tanh_mlp(*mlp_args, backend=backend, **mlp_kwargs)
+        np.testing.assert_allclose(actual, mlp_expected, rtol=1.0e-5, atol=1.0e-6)
 
 
 def test_workload_decision_reports_actual_threshold_execution() -> None:
