@@ -134,8 +134,10 @@ use cartoboost_geo_st::{
     STAEformerConfig as CoreSTAEformerConfig, STAEformerForecaster as CoreSTAEformerForecaster,
 };
 use cartoboost_geostats::{
+    directional_lane_distance_matrix as core_directional_lane_distance_matrix,
     fit_variogram_wls_with_backend as geostats_fit_variogram_wls,
     Anisotropy as CoreGeostatsAnisotropy, CovarianceKernel as CoreCovarianceKernel,
+    DirectionalLaneDistanceMode as CoreDirectionalLaneDistanceMode,
     NearestNeighborGPRegressor as CoreNearestNeighborGPRegressor, NngpConfig as CoreNngpConfig,
 };
 use cartoboost_neural::{
@@ -12779,6 +12781,37 @@ fn coords_from_array(coords: PyReadonlyArray2<'_, f64>) -> PyResult<Vec<[f64; 2]
         .collect())
 }
 
+fn lanes_from_array(lanes: PyReadonlyArray2<'_, f64>) -> PyResult<Vec<[f64; 4]>> {
+    let shape = lanes.shape();
+    if shape.len() != 2 || shape[1] != 4 {
+        return Err(PyValueError::new_err(
+            "directed lanes must have shape (n, 4): [O_LAT, O_LNG, D_LAT, D_LNG]",
+        ));
+    }
+    let values = lanes.as_slice()?;
+    Ok(values
+        .chunks_exact(4)
+        .map(|chunk| [chunk[0], chunk[1], chunk[2], chunk[3]])
+        .collect())
+}
+
+#[pyfunction]
+#[pyo3(signature = (lanes, mode="forward", origin_weight=1.0, destination_weight=1.0))]
+fn geostats_directional_lane_distance_matrix_value(
+    py: Python<'_>,
+    lanes: PyReadonlyArray2<'_, f64>,
+    mode: &str,
+    origin_weight: f64,
+    destination_weight: f64,
+) -> PyResult<Vec<Vec<f64>>> {
+    let lanes = lanes_from_array(lanes)?;
+    let mode = CoreDirectionalLaneDistanceMode::parse(mode).map_err(to_py_geostats_error)?;
+    py.detach(move || {
+        core_directional_lane_distance_matrix(&lanes, mode, origin_weight, destination_weight)
+            .map_err(to_py_geostats_error)
+    })
+}
+
 #[pyfunction]
 #[pyo3(signature = (coords, values, bin_count=12, max_distance=None, anisotropy_angle_degrees=0.0, anisotropy_scaling=1.0, backend=None))]
 #[allow(clippy::too_many_arguments)]
@@ -14150,6 +14183,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(forecast_evaluate_metrics, m)?)?;
     m.add_function(wrap_pyfunction!(graph_st_available_backends_value, m)?)?;
     m.add_function(wrap_pyfunction!(geostats_empirical_semivariogram_value, m)?)?;
+    m.add_function(wrap_pyfunction!(geostats_directional_lane_distance_matrix_value, m)?)?;
     m.add_function(wrap_pyfunction!(geostats_deterministic_neighbors_value, m)?)?;
     m.add_function(wrap_pyfunction!(geostats_fit_variogram_wls_value, m)?)?;
     m.add_function(wrap_pyfunction!(deep_response_curve_fit_value, m)?)?;

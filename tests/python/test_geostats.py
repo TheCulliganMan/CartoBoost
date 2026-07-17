@@ -10,6 +10,7 @@ from cartoboost import (
     fit_variogram_wls,
 )
 from cartoboost.accelerators import available_backends
+from cartoboost.geostats import directional_lane_distance_matrix
 
 
 class MeanRegressor:
@@ -55,6 +56,19 @@ def test_nearest_neighbor_gp_save_load_preserves_predictions(tmp_path):
     loaded = NearestNeighborGPRegressor.load(path)
 
     np.testing.assert_allclose(loaded.predict(None, coords=coords), before)
+
+
+def test_directional_lane_metric_preserves_direction_and_supports_crossed_weights():
+    lanes = np.array([[0.0, 0.0, 2.0, 0.0], [2.0, 0.0, 0.0, 0.0]])
+    forward = directional_lane_distance_matrix(lanes)
+    crossed = directional_lane_distance_matrix(lanes, mode="crossed")
+    weighted = directional_lane_distance_matrix(
+        lanes, origin_weight=2.0, destination_weight=0.5
+    )
+    np.testing.assert_allclose(np.diag(forward), 0.0)
+    assert forward[0, 1] > 0.0  # A→B is distinct from B→A.
+    assert crossed[0, 1] == 0.0
+    assert weighted[0, 1] != forward[0, 1]
 
 
 def test_nearest_neighbor_gp_rejects_duplicate_coordinates():

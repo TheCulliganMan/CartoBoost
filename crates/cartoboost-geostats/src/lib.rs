@@ -160,6 +160,80 @@ pub struct VariogramFit {
     pub weighted_sse: f64,
 }
 
+/// Metric for directed origin/destination lane vectors `[O_LAT, O_LNG,
+/// D_LAT, D_LNG]`.  `Forward` compares like endpoints and keeps A→B distinct
+/// from B→A; `Crossed` compares opposite endpoints; `Minimum` is useful for
+/// callers explicitly asking for direction-insensitive matching.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DirectionalLaneDistanceMode {
+    Forward,
+    Crossed,
+    Minimum,
+}
+
+impl DirectionalLaneDistanceMode {
+    pub fn parse(value: &str) -> Result<Self> {
+        match value.to_ascii_lowercase().as_str() {
+            "forward" | "endpoint" => Ok(Self::Forward),
+            "crossed" | "reverse" => Ok(Self::Crossed),
+            "minimum" | "min" => Ok(Self::Minimum),
+            _ => Err(GeostatsError::InvalidInput(
+                "directional lane distance mode must be forward, crossed, or minimum".to_string(),
+            )),
+        }
+    }
+}
+
+/// Compute a directed-lane endpoint distance with independently weighted
+/// origin and destination terms. Coordinates are planar latitude/longitude
+/// values; callers needing geodesic units should project before fitting.
+pub fn directional_lane_distance(
+    left: [f64; 4],
+    right: [f64; 4],
+    mode: DirectionalLaneDistanceMode,
+    origin_weight: f64,
+    destination_weight: f64,
+) -> Result<f64> {
+    if left.iter().chain(right.iter()).any(|value| !value.is_finite())
+        || !origin_weight.is_finite()
+        || !destination_weight.is_finite()
+        || origin_weight < 0.0
+        || destination_weight < 0.0
+    {
+        return Err(GeostatsError::InvalidInput(
+            "lane coordinates and endpoint weights must be finite, with non-negative weights"
+                .to_string(),
+        ));
+    }
+    let distance = |a0: f64, a1: f64, b0: f64, b1: f64| (a0 - b0).hypot(a1 - b1);
+    let forward = origin_weight * distance(left[0], left[1], right[0], right[1])
+        + destination_weight * distance(left[2], left[3], right[2], right[3]);
+    let crossed = origin_weight * distance(left[0], left[1], right[2], right[3])
+        + destination_weight * distance(left[2], left[3], right[0], right[1]);
+    Ok(match mode {
+        DirectionalLaneDistanceMode::Forward => forward,
+        DirectionalLaneDistanceMode::Crossed => crossed,
+        DirectionalLaneDistanceMode::Minimum => forward.min(crossed),
+    })
+}
+
+pub fn directional_lane_distance_matrix(
+    lanes: &[[f64; 4]],
+    mode: DirectionalLaneDistanceMode,
+    origin_weight: f64,
+    destination_weight: f64,
+) -> Result<Vec<Vec<f64>>> {
+    (0..lanes.len())
+        .map(|row| {
+            (0..lanes.len())
+                .map(|column| directional_lane_distance(
+                    lanes[row], lanes[column], mode, origin_weight, destination_weight,
+                ))
+                .collect()
+        })
+        .collect()
+}
+
 #[derive(Clone, Debug)]
 pub struct NearestNeighborGPRegressor {
     config: NngpConfig,

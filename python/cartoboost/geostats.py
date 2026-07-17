@@ -32,6 +32,9 @@ from ._artifacts import (
 )
 from ._native import NearestNeighborGPRegressor as _NativeNearestNeighborGPRegressor
 from ._native import geostats_empirical_semivariogram_value as _native_empirical_semivariogram
+from ._native import (
+    geostats_directional_lane_distance_matrix_value as _native_directional_lane_distance_matrix,
+)
 from ._native import geostats_fit_variogram_wls_value as _native_fit_variogram_wls
 
 
@@ -338,6 +341,36 @@ class ResidualNNGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseEstima
 
 class SpatialGaussianProcessRegressor(NearestNeighborGPRegressor):
     """Facade for scalable spatial Gaussian process regression."""
+
+
+def directional_lane_distance_matrix(
+    lanes: Iterable[Iterable[float]],
+    *,
+    mode: str = "forward",
+    origin_weight: float = 1.0,
+    destination_weight: float = 1.0,
+) -> np.ndarray:
+    """Return a native directed-lane distance matrix.
+
+    Each row is ``[O_LAT, O_LNG, D_LAT, D_LNG]``.  ``forward`` compares
+    matching endpoints and therefore keeps A→B separate from B→A; ``crossed``
+    compares origin-to-destination endpoints; ``minimum`` selects the smaller
+    of the two for callers explicitly requesting direction-insensitive search.
+    """
+    array = np.asarray(lanes, dtype=float)
+    if array.ndim != 2 or array.shape[1] != 4:
+        raise ValueError("lanes must have shape (n, 4): [O_LAT, O_LNG, D_LAT, D_LNG]")
+    if not np.isfinite(array).all():
+        raise ValueError("lanes must contain only finite values")
+    return np.asarray(
+        _native_directional_lane_distance_matrix(
+            np.ascontiguousarray(array, dtype=float),
+            str(mode),
+            float(origin_weight),
+            float(destination_weight),
+        ),
+        dtype=float,
+    )
 
 
 def empirical_semivariogram(
