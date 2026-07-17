@@ -253,7 +253,7 @@ runs on Metal at 207-sensor, four-week-history, one-week-horizon scale.
 
 ## Interactive Example
 
-<ForecastModelExample title="Graph-style panel forecast sanity check" model="neural_panel" sample="spatial" />
+<ForecastModelExample title="Graph-style multi-route panel forecast" model="neural_panel" sample="spatial" />
 
 The embedded browser example uses the same panel forecasting surface and a
 multi-location demand panel. Use it as a quick shape check for panel behavior.
@@ -268,7 +268,7 @@ WASM. It is intentionally separate from the real TLC benchmark evidence below:
 the fixture is an interactive scale check, while the maintained taxi benchmark
 uses real records and reports the quality claim.
 
-## Public Contract
+## Python Example
 
 ```python
 import numpy as np

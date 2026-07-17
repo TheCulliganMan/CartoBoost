@@ -141,6 +141,8 @@ Issues = "https://github.com/theculliganman/cartoboost/issues"
 manifest-path = "crates/cartoboost-py/Cargo.toml"
 module-name = "cartoboost._native"
 python-source = "python"
+# Keep source/editable builds CPU-only unless a backend is explicitly chosen.
+# Release wheels select platform-appropriate accelerator feature sets in CI.
 features = ["pyo3/extension-module"]
 bindings = "pyo3"
 strip = true

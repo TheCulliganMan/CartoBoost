@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..config import Backend
 from ._native import dumps, loads, require_native
 
 
@@ -15,22 +16,24 @@ class ChoiceSetTransformer:
         monotone_candidate_value: str | None = None,
         outside_option: bool = False,
         outside_utility: float = 0.0,
+        backend: Backend | str = Backend.CPU,
     ) -> None:
         self.temperature = float(temperature)
         self.monotone_candidate_value = monotone_candidate_value
         self.outside_option = bool(outside_option)
         self.outside_utility = float(outside_utility)
+        self.backend = str(backend)
 
     def score(self, candidates: list[dict[str, Any]]) -> dict[str, Any]:
         report = require_native("deep_choice_set_transformer_report_value")
         rows = self._with_outside_options(candidates)
-        return loads(
-            report(
-                dumps(rows),
-                self.temperature,
-                self.monotone_candidate_value,
-            )
+        payload = report(
+            dumps(rows),
+            self.temperature,
+            self.monotone_candidate_value,
+            self.backend,
         )
+        return loads(payload)
 
     def predict_proba(self, candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return self.score(candidates)["predictions"]
@@ -48,6 +51,7 @@ class ChoiceSetTransformer:
             "monotone_candidate_value": self.monotone_candidate_value,
             "outside_option": self.outside_option,
             "outside_utility": self.outside_utility,
+            "backend": self.backend,
         }
 
     def _with_outside_options(self, candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:

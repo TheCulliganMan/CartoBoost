@@ -7,7 +7,7 @@ boundary may depend on time, location, route membership, or sparse signals.
 It fits binary logistic loss for two classes and multiclass logistic loss for
 three or more classes.
 
-## Public Contract
+## Python Example
 
 ```python
 from cartoboost import CartoBoostClassifier
@@ -49,3 +49,9 @@ ROC-AUC or PR-AUC when the positive class is rare. Compare against dummy and
 standard tabular baselines on the same split.
 
 For workflow and method details, see [Python API Reference](../../reference/python-api.md).
+
+## Limitations
+
+- Probability calibration must be checked on held-out rows.
+- Rare classes need enough examples in every training and evaluation split.
+- Spatial or temporal structure is used only when declared in the feature schema.

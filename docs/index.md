@@ -9,8 +9,9 @@
 
 CartoBoost is a Python toolkit for structured regression, classification,
 ranking, and forecasting when time, location, route structure, or repeated IDs
-are part of the signal. The docs focus on how to use the model families, what
-each one is good for, and which baseline to compare against.
+are part of the signal. These docs are organized around practical modeling
+workflows: preparing data, choosing an estimator, validating it without
+leakage, interpreting results, and deploying reproducible artifacts.
 
 ## What It Is Good For
 
@@ -20,18 +21,33 @@ each one is good for, and which baseline to compare against.
 - Learned ID embeddings when stable identifiers carry repeated residual signal.
 - Leakage-aware evaluation against strong baselines on the same split.
 
-## Start Here
+## Choose Your Path
 
-- [Getting Started](getting-started.md): first run, install paths, and local workflow.
-- [Migrating to 0.3](migration-v0.3.md): root API reset, named modules, and supported surfaces.
-- [Choose A Model](user-guide/model-types.md): pick the right entry point.
-- `cartoboost.models`: supported model metadata and registry; stable estimators live at the package root.
+- **First model:** [Getting Started](getting-started.md) covers installation,
+  fitting, validation, baseline comparison, and persistence.
+- **Model selection:** [Choose A Model](user-guide/model-types.md) maps data and
+  prediction tasks to the appropriate estimator family.
+- **Tabular and spatial ML:** [Boosting Model Guides](user-guide/boosting-models/index.md)
+  cover regression, classification, ranking, categorical data, and structured splits.
+- **Time series:** [Forecasting](forecasting.md) covers validated frames,
+  rolling-origin backtesting, metrics, artifacts, and CLI workflows.
+- **Production integration:** [Python API](reference/python-api.md),
+  [CLI Reference](reference/cli.md), and [Model Artifacts](model_artifact.md).
+- **Evidence:** [Benchmarks](benchmarks/index.md) reports commands, datasets,
+  splits, metrics, and limitations.
+
+## Model Families
+
 - [CartoBoost Boosting Model Guides](user-guide/boosting-models/index.md): row-level tree models.
 - [CartoBoost Forecasting Model Guides](user-guide/forecasting-models/index.md): one guide per forecast family.
 - [Geo-Causal Experiment Models](user-guide/geo-causal-models.md): synthetic DID, GeoLift-style design, and spillover diagnostics.
 - [CartoBoost Graph Model Guides](user-guide/graph-models/index.md): directed movement, link prediction, and graph features.
 - [CartoBoost Neural Model Guides](user-guide/neural-models/index.md): standalone ID embeddings and embedding features.
 - [Benchmark Overview](benchmarks/index.md): current benchmark evidence and limits.
+
+Stable estimators are available from the package root. The
+`cartoboost.models` registry provides machine-readable metadata for tools that
+need to enumerate supported model surfaces.
 
 ## Reference
 
@@ -47,8 +63,8 @@ each one is good for, and which baseline to compare against.
 uv add cartoboost
 ```
 
-Optional extras:
+Optional dependencies are installed directly:
 
 ```sh
-uv add "cartoboost[explain,optuna,polars,onnx]"
+uv add shap optuna polars onnx
 ```

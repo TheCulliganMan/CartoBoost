@@ -11,6 +11,7 @@ use crate::forecasting::{
 };
 use crate::tree::Model;
 use crate::{CartoBoostError, Result};
+use cartoboost_accelerator::backend::{select_backend_for, BackendOperation, BackendSelection};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -29,6 +30,7 @@ pub struct CartoBoostDirectForecaster {
     lag_builder: LagFeatureBuilder,
     booster_config: BoosterConfig,
     fitted: Option<FittedDirectState>,
+    backend: BackendSelection,
 }
 
 #[derive(Debug, Clone)]
@@ -45,6 +47,7 @@ pub struct RectifiedRecursiveForecaster {
     lag_builder: LagFeatureBuilder,
     booster_config: BoosterConfig,
     fitted: Option<FittedRectifiedState>,
+    backend: BackendSelection,
 }
 
 #[derive(Debug, Clone)]
@@ -57,10 +60,21 @@ struct FittedRectifiedState {
 
 impl CartoBoostDirectForecaster {
     pub fn new(lag_config: LagFeatureConfig, booster_config: BoosterConfig) -> Result<Self> {
+        Self::new_with_backend(lag_config, booster_config, Some("cpu"))
+    }
+
+    pub fn new_with_backend(
+        lag_config: LagFeatureConfig,
+        booster_config: BoosterConfig,
+        backend: Option<&str>,
+    ) -> Result<Self> {
+        let backend = select_backend_for(backend, BackendOperation::Dense)
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
         Ok(Self {
             lag_builder: LagFeatureBuilder::new(lag_config)?,
             booster_config,
             fitted: None,
+            backend,
         })
     }
 
@@ -86,15 +100,25 @@ impl CartoBoostDirectForecaster {
         frame.require_regular_for_model(self.model_name())?;
         validate_horizon(horizon)?;
         validate_direct_lag_history(frame, self.lag_builder.config(), horizon, self.model_name())?;
-        let mut models = Vec::with_capacity(horizon);
-        let mut training_rows_by_horizon = Vec::with_capacity(horizon);
-        for step in 1..=horizon {
+        let fit_step = |step| {
             let training = build_direct_training(frame, &self.lag_builder, step)?;
-            let model =
-                Booster::new(self.booster_config.clone()).fit(&training.x, &training.y, None)?;
-            training_rows_by_horizon.push(training.y.len());
-            models.push(model);
-        }
+            let training_rows = training.y.len();
+            let model = Booster::new_with_backend(
+                self.booster_config.clone(),
+                Some(&self.backend.selected),
+            )?
+            .fit(&training.x, &training.y, None)?;
+            Ok((model, training_rows))
+        };
+        let fitted_steps = if self.backend.selected == "cpu" {
+            (1..=horizon)
+                .into_par_iter()
+                .map(fit_step)
+                .collect::<Result<Vec<_>>>()?
+        } else {
+            (1..=horizon).map(fit_step).collect::<Result<Vec<_>>>()?
+        };
+        let (models, training_rows_by_horizon) = fitted_steps.into_iter().unzip();
         self.fitted = Some(FittedDirectState {
             frame: frame.clone(),
             history_by_series: history_by_series(frame.rows()),
@@ -102,6 +126,39 @@ impl CartoBoostDirectForecaster {
             training_rows_by_horizon,
         });
         Ok(())
+    }
+
+    fn predict_accelerated(&self, horizon: usize) -> Result<ForecastResult> {
+        let fitted = self.fitted.as_ref().ok_or_else(not_fitted)?;
+        let series = fitted.history_by_series.iter().collect::<Vec<_>>();
+        let mut predictions = Vec::with_capacity(series.len() * horizon);
+        for step in 1..=horizon {
+            let mut rows = Vec::with_capacity(series.len());
+            let mut timestamps = Vec::with_capacity(series.len());
+            for (series_id, history) in &series {
+                let last = history.last().ok_or_else(|| {
+                    CartoBoostError::InvalidInput(format!("series {series_id} has no history"))
+                })?;
+                let timestamp = fitted.frame.frequency().advance(last.timestamp, step)?;
+                rows.push(
+                    self.lag_builder
+                        .transform_next_sorted_prior(series_id, history, timestamp)?,
+                );
+                timestamps.push(timestamp);
+            }
+            let dataset = Dataset::from_rows(rows)?;
+            let means = fitted.models[step - 1].try_predict(&dataset)?;
+            for (((series_id, _), timestamp), mean) in series.iter().zip(timestamps).zip(means) {
+                predictions.push(ForecastPrediction {
+                    series_id: (*series_id).clone(),
+                    timestamp,
+                    horizon: step,
+                    model: self.model_name().to_string(),
+                    mean,
+                });
+            }
+        }
+        ForecastResult::new(predictions)
     }
 }
 
@@ -118,6 +175,9 @@ impl Forecaster for CartoBoostDirectForecaster {
                 "direct forecaster was fitted for {} horizons but {horizon} were requested",
                 fitted.models.len()
             )));
+        }
+        if self.backend.selected != "cpu" {
+            return self.predict_accelerated(horizon);
         }
         let predictions = fitted
             .history_by_series
@@ -163,6 +223,7 @@ impl Forecaster for CartoBoostDirectForecaster {
             "feature_names": self.lag_builder.feature_names(),
             "lag_config": self.lag_builder.config(),
             "booster_config": self.booster_config,
+            "backend": self.backend,
         });
         if let Some(fitted) = &self.fitted {
             payload["fitted_horizon"] = json!(fitted.models.len());
@@ -174,15 +235,28 @@ impl Forecaster for CartoBoostDirectForecaster {
 
 impl RectifiedRecursiveForecaster {
     pub fn new(lag_config: LagFeatureConfig, booster_config: BoosterConfig) -> Result<Self> {
+        Self::new_with_backend(lag_config, booster_config, Some("cpu"))
+    }
+
+    pub fn new_with_backend(
+        lag_config: LagFeatureConfig,
+        booster_config: BoosterConfig,
+        backend: Option<&str>,
+    ) -> Result<Self> {
+        let backend = select_backend_for(backend, BackendOperation::Dense)
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
         Ok(Self {
-            recursive: CartoBoostLagForecaster::new_with_target_mode(
+            recursive: CartoBoostLagForecaster::new_with_backend(
                 lag_config.clone(),
                 booster_config.clone(),
                 GlobalForecastTargetMode::Level,
+                crate::forecasting::GlobalForecastSampleWeightMode::Uniform,
+                Some(&backend.selected),
             )?,
             lag_builder: LagFeatureBuilder::new(lag_config)?,
             booster_config,
             fitted: None,
+            backend,
         })
     }
 
@@ -190,10 +264,12 @@ impl RectifiedRecursiveForecaster {
         frame.require_regular_for_model(self.model_name())?;
         validate_horizon(horizon)?;
         validate_direct_lag_history(frame, self.lag_builder.config(), horizon, self.model_name())?;
-        self.recursive = CartoBoostLagForecaster::new_with_target_mode(
+        self.recursive = CartoBoostLagForecaster::new_with_backend(
             self.lag_builder.config().clone(),
             self.booster_config.clone(),
             GlobalForecastTargetMode::Level,
+            crate::forecasting::GlobalForecastSampleWeightMode::Uniform,
+            Some(&self.backend.selected),
         )?;
         self.recursive.fit(frame)?;
         let (recursive_baselines, validation_window) = recursive_training_predictions(
@@ -201,21 +277,32 @@ impl RectifiedRecursiveForecaster {
             &self.lag_builder,
             &self.booster_config,
             horizon,
+            Some(&self.backend.selected),
         )?;
-        let mut corrections = Vec::with_capacity(horizon);
-        let mut training_rows_by_horizon = Vec::with_capacity(horizon);
-        for step in 1..=horizon {
+        let fit_step = |step| {
             let training = build_rectification_training(
                 frame,
                 &self.lag_builder,
                 step,
                 &recursive_baselines[step - 1],
             )?;
-            let model =
-                Booster::new(self.booster_config.clone()).fit(&training.x, &training.y, None)?;
-            training_rows_by_horizon.push(training.y.len());
-            corrections.push(model);
-        }
+            let training_rows = training.y.len();
+            let model = Booster::new_with_backend(
+                self.booster_config.clone(),
+                Some(&self.backend.selected),
+            )?
+            .fit(&training.x, &training.y, None)?;
+            Ok((model, training_rows))
+        };
+        let fitted_steps = if self.backend.selected == "cpu" {
+            (1..=horizon)
+                .into_par_iter()
+                .map(fit_step)
+                .collect::<Result<Vec<_>>>()?
+        } else {
+            (1..=horizon).map(fit_step).collect::<Result<Vec<_>>>()?
+        };
+        let (corrections, training_rows_by_horizon) = fitted_steps.into_iter().unzip();
         self.fitted = Some(FittedRectifiedState {
             history_by_series: history_by_series(frame.rows()),
             corrections,
@@ -248,6 +335,43 @@ impl Forecaster for RectifiedRecursiveForecaster {
         }
         let baseline = self.recursive.predict(horizon)?;
         let base_predictions = baseline.predictions();
+        if self.backend.selected != "cpu" {
+            let mut corrected = base_predictions.to_vec();
+            for step in 1..=horizon {
+                let indices = base_predictions
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, prediction)| (prediction.horizon == step).then_some(index))
+                    .collect::<Vec<_>>();
+                let rows = indices
+                    .iter()
+                    .map(|index| {
+                        let prediction = &base_predictions[*index];
+                        let history = fitted
+                            .history_by_series
+                            .get(&prediction.series_id)
+                            .ok_or_else(|| {
+                                CartoBoostError::InvalidInput(format!(
+                                    "missing history for series {}",
+                                    prediction.series_id
+                                ))
+                            })?;
+                        self.lag_builder.transform_next_sorted_prior(
+                            &prediction.series_id,
+                            history,
+                            prediction.timestamp,
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let corrections =
+                    fitted.corrections[step - 1].try_predict(&Dataset::from_rows(rows)?)?;
+                for (index, correction) in indices.into_iter().zip(corrections) {
+                    corrected[index].model = self.model_name().to_string();
+                    corrected[index].mean += correction;
+                }
+            }
+            return ForecastResult::new(corrected);
+        }
         let corrected = base_predictions
             .par_iter()
             .map(|prediction| {
@@ -290,6 +414,7 @@ impl Forecaster for RectifiedRecursiveForecaster {
             "lag_config": self.lag_builder.config(),
             "booster_config": self.booster_config,
             "recursive": self.recursive.metadata(),
+            "backend": self.backend,
         });
         if let Some(fitted) = &self.fitted {
             payload["fitted_horizon"] = json!(fitted.corrections.len());
@@ -399,6 +524,7 @@ fn recursive_training_predictions(
     lag_builder: &LagFeatureBuilder,
     booster_config: &BoosterConfig,
     horizon: usize,
+    backend: Option<&str>,
 ) -> Result<(Vec<Vec<Option<f64>>>, usize)> {
     let histories = history_by_series(frame.rows());
     let minimum_history = histories.values().map(Vec::len).min().unwrap_or(0);
@@ -419,8 +545,13 @@ fn recursive_training_predictions(
     }
 
     let mut result = vec![Vec::new(); horizon];
-    let one_step =
-        fit_recursive_prefix_model(frame, lag_builder, booster_config, validation_window)?;
+    let one_step = fit_recursive_prefix_model(
+        frame,
+        lag_builder,
+        booster_config,
+        validation_window,
+        backend,
+    )?;
     for (_series_id, history) in histories {
         let first_validation_origin = history.len() - validation_window - 1;
         for origin_idx in 0..history.len() {
@@ -482,6 +613,7 @@ fn fit_recursive_prefix_model(
     lag_builder: &LagFeatureBuilder,
     booster_config: &BoosterConfig,
     validation_window: usize,
+    backend: Option<&str>,
 ) -> Result<Model> {
     let mut prefix_rows = Vec::new();
     for (_series_id, history) in history_by_series(frame.rows()) {
@@ -518,7 +650,7 @@ fn fit_recursive_prefix_model(
         .iter()
         .map(|row| row.target)
         .collect::<Vec<_>>();
-    Booster::new(booster_config.clone()).fit(&x, &y, None)
+    Booster::new_with_backend(booster_config.clone(), backend)?.fit(&x, &y, None)
 }
 
 fn dataset_from_lag_rows(
@@ -551,6 +683,7 @@ fn not_fitted() -> CartoBoostError {
 mod tests {
     use super::*;
     use crate::forecasting::ForecastFrequency;
+    use cartoboost_accelerator::backend::available_backends;
     use chrono::{NaiveDate, NaiveDateTime};
 
     fn ts(day: u32) -> NaiveDateTime {
@@ -626,6 +759,90 @@ mod tests {
     }
 
     #[test]
+    fn available_accelerators_match_cpu_direct_forecasting() {
+        let frame = short_panel_frame();
+        let lag_config = LagFeatureConfig {
+            lags: vec![1],
+            rolling_mean_windows: vec![2],
+            partial_rolling_mean_windows: Vec::new(),
+            rolling_std_windows: Vec::new(),
+            rolling_min_windows: Vec::new(),
+            rolling_max_windows: Vec::new(),
+            ewm_alpha_percents: Vec::new(),
+            calendar_features: Vec::new(),
+            difference_lags: Vec::new(),
+            rolling_trend_windows: Vec::new(),
+            covariate_features: Vec::new(),
+            covariate_indicator_values: Default::default(),
+            covariate_calendar_interactions: false,
+        };
+        let booster = BoosterConfig {
+            n_estimators: 4,
+            max_depth: 2,
+            min_samples_leaf: 1,
+            ..BoosterConfig::default()
+        };
+        let mut cpu = CartoBoostDirectForecaster::new(lag_config.clone(), booster.clone()).unwrap();
+        cpu.fit_horizon(&frame, 2).unwrap();
+        let expected = cpu.predict(2).unwrap();
+        for backend in available_backends()
+            .into_iter()
+            .filter(|name| name != "cpu")
+        {
+            let mut accelerated = CartoBoostDirectForecaster::new_with_backend(
+                lag_config.clone(),
+                booster.clone(),
+                Some(&backend),
+            )
+            .unwrap_or_else(|error| panic!("{backend} direct setup failed: {error}"));
+            accelerated
+                .fit_horizon(&frame, 2)
+                .unwrap_or_else(|error| panic!("{backend} direct fit failed: {error}"));
+            let actual = accelerated.predict(2).unwrap();
+            for (actual, expected) in actual.predictions().iter().zip(expected.predictions()) {
+                assert!((actual.mean - expected.mean).abs() <= 1.0e-4);
+            }
+            assert_eq!(accelerated.metadata()["backend"]["selected"], backend);
+        }
+    }
+
+    #[test]
+    fn available_accelerators_match_cpu_rectified_forecasting() {
+        let frame = short_panel_frame();
+        let lag_config = LagFeatureConfig {
+            lags: vec![1],
+            rolling_mean_windows: vec![2],
+            ..LagFeatureConfig::default()
+        };
+        let booster = BoosterConfig {
+            n_estimators: 3,
+            max_depth: 2,
+            min_samples_leaf: 1,
+            ..BoosterConfig::default()
+        };
+        let mut cpu =
+            RectifiedRecursiveForecaster::new(lag_config.clone(), booster.clone()).unwrap();
+        cpu.fit_horizon(&frame, 2).unwrap();
+        let expected = cpu.predict(2).unwrap();
+        for backend in available_backends()
+            .into_iter()
+            .filter(|name| name != "cpu")
+        {
+            let mut accelerated = RectifiedRecursiveForecaster::new_with_backend(
+                lag_config.clone(),
+                booster.clone(),
+                Some(&backend),
+            )
+            .unwrap();
+            accelerated.fit_horizon(&frame, 2).unwrap();
+            let actual = accelerated.predict(2).unwrap();
+            for (actual, expected) in actual.predictions().iter().zip(expected.predictions()) {
+                assert!((actual.mean - expected.mean).abs() <= 1.0e-4, "{backend}");
+            }
+        }
+    }
+
+    #[test]
     fn rectified_recursive_validation_baselines_are_causal() {
         let original = ForecastFrame::new(
             (1..=10)
@@ -659,9 +876,10 @@ mod tests {
         };
 
         let (original_baselines, original_window) =
-            recursive_training_predictions(&original, &builder, &booster, 1).expect("baselines");
+            recursive_training_predictions(&original, &builder, &booster, 1, Some("cpu"))
+                .expect("baselines");
         let (changed_baselines, changed_window) =
-            recursive_training_predictions(&changed_future, &builder, &booster, 1)
+            recursive_training_predictions(&changed_future, &builder, &booster, 1, Some("cpu"))
                 .expect("baselines");
 
         assert_eq!(original_window, 2);

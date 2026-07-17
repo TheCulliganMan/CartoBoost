@@ -246,3 +246,27 @@ def test_classifier_rejects_single_class_training_data():
 def test_classifier_rejects_2d_label_array():
     with pytest.raises(ValueError, match="1D array"):
         CartoBoostClassifier().fit([[0.0], [1.0]], np.asarray([[0], [1]], dtype=object))
+
+
+def test_classifier_graph_smoothing_roundtrip(tmp_path: Path):
+    classifier = CartoBoostClassifier(
+        n_estimators=2,
+        max_depth=1,
+        min_samples_leaf=1,
+        graph_indptr=[0, 1, 2, 3, 4],
+        graph_indices=[1, 0, 3, 2],
+        graph_weights=[1.0, 1.0, 1.0, 1.0],
+        graph_smoothing=0.5,
+        graph_smoothing_iterations=2,
+        backend="cpu",
+    ).fit([[0.0], [1.0], [2.0], [3.0]], [0, 0, 1, 1])
+    path = tmp_path / "classifier-graph.json"
+    expected = classifier.predict_proba([[0.0], [3.0]])
+    classifier.save(path)
+    loaded = CartoBoostClassifier.load(path)
+
+    assert loaded.graph_indptr == [0, 1, 2, 3, 4]
+    assert loaded.graph_smoothing == pytest.approx(0.5)
+    assert classifier.selected_backend_ == "cpu"
+    assert loaded.selected_backend_ == "cpu"
+    assert loaded.predict_proba([[0.0], [3.0]]) == pytest.approx(expected)

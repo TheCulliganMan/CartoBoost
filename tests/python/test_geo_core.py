@@ -20,6 +20,7 @@ from cartoboost.geo import (
     radial_anchor_distances,
     rbf_anchor_features,
     rolling_origin_panel_split_manifest,
+    route_feature_rows,
     route_feature_vector,
     route_latlng_points,
     spatial_block_cv_manifest,
@@ -58,6 +59,11 @@ def test_bearing_unit_vectors_preserve_clockwise_wraparound() -> None:
     assert northwest[1] > 0.0
     assert clockwise_bearing_unit_vector((1.0, 1.0), (1.0, 1.0)) is None
     assert clockwise_bearing_unit_vectors([(0.0, 0.0)], [(0.0, 1.0)]) == [(0.0, 1.0)]
+    assert clockwise_bearing_unit_vectors(
+        [(0.0, 0.0), (1.0, 1.0)],
+        [(0.0, 1.0), (1.0, 1.0)],
+        backend="cpu",
+    ) == [(0.0, 1.0), None]
 
 
 def test_latlng_initial_bearing_unit_vectors_are_native_backed() -> None:
@@ -70,10 +76,20 @@ def test_latlng_initial_bearing_unit_vectors_are_native_backed() -> None:
     assert northwest[0] < 0.0
     assert northwest[1] > 0.0
     assert initial_bearing_unit_vectors_latlng([(40.0, -73.0)], [(41.0, -73.0)])[0] == north
+    assert initial_bearing_unit_vectors_latlng(
+        [(40.0, -73.0), (40.0, -73.0)],
+        [(41.0, -73.0), (40.0, -73.0)],
+        backend="cpu",
+    ) == [north, None]
 
 
 def test_route_radial_rbf_and_local_frame_features_are_native_backed() -> None:
     assert route_feature_vector((0.0, 0.0), (3.0, 4.0)) == (1.5, 2.0, 5.0, 0.6, 0.8)
+    assert route_feature_rows(
+        [(0.0, 0.0), (1.0, 1.0)],
+        [(3.0, 4.0), (1.0, 1.0)],
+        backend="cpu",
+    ) == [(1.5, 2.0, 5.0, 0.6, 0.8), None]
     assert radial_anchor_distances((3.0, 4.0), [(0.0, 0.0), (3.0, 0.0)]) == [5.0, 4.0]
     rbf = rbf_anchor_features((0.0, 0.0), [(0.0, 0.0), (1.0, 0.0)], length_scale=1.0)
     assert rbf[0] == 1.0

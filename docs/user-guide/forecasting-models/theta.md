@@ -74,7 +74,7 @@ Here `b0` is the fitted linear slope and `T` is the prefix length. The
 sample-length and smoothing adjustment matters most on short histories; it is
 not equivalent to adding an unadjusted `h * slope` term.
 
-## Example
+## Python Example
 
 ```python
 from cartoboost.forecasting import OptimizedThetaForecaster, ThetaForecaster
@@ -262,7 +262,7 @@ It fits a theta model against `examples/forecasting/forecast_cli_input.csv` with
 `timestamp`, `demand`, and `series_id` columns, then prints the saved
 model artifact JSON.
 
-## Validation Notes
+## Validation
 
 Theta models are local univariate models. They do not encode hour-of-week
 calendar features beyond the configured seasonal pattern, and they do not share
@@ -274,3 +274,10 @@ and seasonal naive on the same split.
 When reporting results, include RMSE, MAE, R2 when available, training time,
 prediction time, horizon, split dates, model settings, sample size, and whether
 the data came from real taxi trips or generated acceptance data.
+
+## Limitations
+
+- Theta is local and does not share information across related series.
+- Strong multiple seasonalities need explicit preprocessing or another model.
+- Events, spatial spillover, and external regressors are not modeled automatically.
+- Optimized variants must choose parameters inside training folds.

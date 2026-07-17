@@ -1,6 +1,8 @@
 import math
 
+import numpy as np
 import pytest
+from cartoboost.accelerators import available_backends
 from cartoboost.forecasting import (
     ReferenceSignal,
     SequenceRow,
@@ -276,6 +278,46 @@ def test_general_empirical_variogram_and_fit_report_statistics():
     assert fit["config"]["variogram_model"] in {"exponential", "spherical"}
     assert diagnostics["diagnostics"]["observation_count"] == len(observations)
     assert diagnostics["diagnostics"]["rmse"] >= 0.0
+
+
+def test_general_empirical_variogram_runs_on_every_pairwise_backend():
+    observations = [
+        (
+            index * 0.17,
+            np.sin(index * 0.11) * 2.0,
+            np.cos(index * 0.07) + index * 0.01,
+        )
+        for index in range(128)
+    ]
+    expected = empirical_variogram(
+        observations,
+        bin_count=8,
+        anisotropy_angle_degrees=17.0,
+        anisotropy_scaling=1.4,
+        backend="cpu",
+    )
+
+    for backend in available_backends("pairwise_distance"):
+        actual = empirical_variogram(
+            observations,
+            bin_count=8,
+            anisotropy_angle_degrees=17.0,
+            anisotropy_scaling=1.4,
+            backend=backend,
+        )
+        assert [row["pair_count"] for row in actual] == [row["pair_count"] for row in expected]
+        assert np.allclose(
+            [row["mean_distance"] for row in actual],
+            [row["mean_distance"] for row in expected],
+            rtol=2.0e-5,
+            atol=2.0e-5,
+        )
+        assert np.allclose(
+            [row["semivariance"] for row in actual],
+            [row["semivariance"] for row in expected],
+            rtol=2.0e-5,
+            atol=2.0e-5,
+        )
 
 
 def test_general_ordinary_kriging_rejects_bad_inputs():

@@ -4,6 +4,9 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
+import numpy as np
+
+from ..config import Backend
 from ._native_wrappers import NativeForecastWrapper
 
 
@@ -20,6 +23,7 @@ class WeightedEnsembleForecaster(NativeForecastWrapper):
         lower_bound: float | None = None,
         upper_bound: float | None = None,
         metadata: Mapping[str, Any] | None = None,
+        backend: Backend | str = Backend.CPU,
     ) -> None:
         if not models:
             raise ValueError("WeightedEnsembleForecaster requires at least one model")
@@ -35,9 +39,11 @@ class WeightedEnsembleForecaster(NativeForecastWrapper):
             lower_bound=lower_bound,
             upper_bound=upper_bound,
             metadata={} if metadata is None else dict(metadata),
+            backend=str(backend),
         )
         self.models = dict(models)
         self.weights = weights
+        self.backend = str(backend)
 
     def _new_native_model(self) -> Any:
         try:
@@ -56,7 +62,7 @@ class WeightedEnsembleForecaster(NativeForecastWrapper):
         for name, model in self.models.items():
             native_model = _native_model_from_wrapper(model)
             native_members.append((name, native_model, self.weights[name]))
-        return native_ensemble_class(native_members)
+        return native_ensemble_class(native_members, self.backend)
 
     def get_metadata(self) -> dict[str, Any]:
         self._check_is_fitted()
@@ -83,6 +89,7 @@ class BacktestWeightedEnsembleForecaster(WeightedEnsembleForecaster):
         min_train_size: int | None = None,
         step_size: int = 1,
         error_floor: float = 1e-9,
+        backend: Backend | str = Backend.CPU,
     ) -> None:
         if backtest_horizon < 1:
             raise ValueError("backtest_horizon must be a positive integer")
@@ -95,6 +102,7 @@ class BacktestWeightedEnsembleForecaster(WeightedEnsembleForecaster):
             lower_bound=lower_bound,
             upper_bound=upper_bound,
             metadata=metadata,
+            backend=backend,
         )
         self._params.update(
             {
@@ -163,6 +171,7 @@ class BottomUpReconciler(NativeForecastWrapper):
         child_column: str | None = None,
         non_negative: bool = False,
         metadata: Mapping[str, Any] | None = None,
+        backend: Backend | str = Backend.CPU,
         **params: Any,
     ) -> None:
         _validate_reconciliation_inputs(
@@ -180,6 +189,7 @@ class BottomUpReconciler(NativeForecastWrapper):
             child_column=child_column,
             non_negative=bool(non_negative),
             metadata={} if metadata is None else dict(metadata),
+            backend=str(backend),
             **params,
         )
 
@@ -201,6 +211,7 @@ class MinTraceReconciler(NativeForecastWrapper):
         child_column: str | None = None,
         non_negative: bool = False,
         metadata: Mapping[str, Any] | None = None,
+        backend: Backend | str = Backend.CPU,
         **params: Any,
     ) -> None:
         if not covariance_method:
@@ -222,8 +233,59 @@ class MinTraceReconciler(NativeForecastWrapper):
             child_column=child_column,
             non_negative=bool(non_negative),
             metadata={} if metadata is None else dict(metadata),
+            backend=str(backend),
             **params,
         )
+
+
+def reconcile_hierarchy(
+    hierarchy: Mapping[str, str | None] | list[tuple[str, str | None]],
+    base_forecasts: Any,
+    *,
+    method: str = "bottom_up",
+    variances: Any | None = None,
+    residuals: Any | None = None,
+    shrinkage: float = 0.5,
+    level: int | None = None,
+    backend: Backend | str = Backend.CPU,
+) -> dict[str, Any]:
+    """Reconcile a forecast panel through the shared accelerator contract."""
+
+    from cartoboost import _native
+
+    function = getattr(_native, "forecast_hierarchy_reconcile_value", None)
+    if function is None:
+        raise RuntimeError("native hierarchy reconciliation binding is unavailable")
+    edges = list(hierarchy.items()) if isinstance(hierarchy, Mapping) else list(hierarchy)
+    panel = np.asarray(base_forecasts, dtype=float)
+    if panel.ndim != 2 or not np.isfinite(panel).all():
+        raise ValueError("base_forecasts must be a finite two-dimensional array")
+    residual_rows = None
+    if residuals is not None:
+        residual_array = np.asarray(residuals, dtype=float)
+        if residual_array.ndim != 2 or not np.isfinite(residual_array).all():
+            raise ValueError("residuals must be a finite two-dimensional array")
+        residual_rows = residual_array.tolist()
+    variance_values = None
+    if variances is not None:
+        variance_array = np.asarray(variances, dtype=float).reshape(-1)
+        if not np.isfinite(variance_array).all():
+            raise ValueError("variances must be finite")
+        variance_values = variance_array.tolist()
+    payload = json.loads(
+        function(
+            [(str(node), None if parent is None else str(parent)) for node, parent in edges],
+            panel.tolist(),
+            str(method),
+            variance_values,
+            residual_rows,
+            float(shrinkage),
+            level,
+            str(backend),
+        )
+    )
+    payload["values"] = np.asarray(payload["values"], dtype=float)
+    return payload
 
 
 __all__ = [
@@ -232,6 +294,7 @@ __all__ = [
     "MinTraceReconciler",
     "RuleBasedGating",
     "WeightedEnsembleForecaster",
+    "reconcile_hierarchy",
 ]
 
 

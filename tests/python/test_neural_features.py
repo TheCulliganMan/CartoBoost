@@ -1,4 +1,6 @@
 import numpy as np
+import pytest
+from cartoboost.deep import available_deep_backends
 from cartoboost.neural import NeuralEmbeddingFeatures
 
 
@@ -73,3 +75,14 @@ def test_support_prior_strength_controls_rare_id_shrinkage():
     strong_norm = float(np.linalg.norm(strong_prior.transform([1])[0]))
 
     assert strong_norm < weak_norm
+
+
+@pytest.mark.parametrize("backend", available_deep_backends())
+def test_embedding_features_support_every_available_backend(backend):
+    ids = np.array([1, 1, 2, 2, 3, 3], dtype=np.uint64)
+    target = np.array([1.0, 1.2, 2.0, 2.2, 3.0, 3.2], dtype=np.float64)
+    expected = NeuralEmbeddingFeatures(dim=4, random_state=9).fit_transform(ids, target)
+    actual = NeuralEmbeddingFeatures(dim=4, random_state=9, backend=backend).fit_transform(
+        ids, target
+    )
+    assert np.allclose(actual, expected, rtol=2e-3, atol=2e-3)

@@ -67,7 +67,7 @@ Common failure modes in panel data:
 | Event effect persists outside its window. | The event window is standing in for missing covariates. | Lag model with explicit calendar features. |
 | One lane fits and another fails. | Local components do not transfer across panels. | CartoBoost lag or AutoForecaster. |
 
-## Example
+## Python Example
 
 ```python
 from cartoboost.forecasting import ForecastFrame, PiecewiseLinearSeasonalForecaster
@@ -197,8 +197,8 @@ Prophet-shaped `holidays` rows with `holiday`, `ds`, `lowerWindow`,
 Built-in country holiday calendars are available before fitting through
 `model.add_country_holidays("US")` or the constructor argument
 `country_holidays="US"`. This path requires the optional `holidays` package:
-install `cartoboost[holidays]` when country calendars are needed. Explicit
-`holidays` dataframes do not require that extra.
+install `holidays` when country calendars are needed. Explicit `holidays`
+dataframes do not require the third-party package.
 
 ## Prophet-Style Plotting
 
@@ -379,3 +379,16 @@ forecast run. The full plotting workflow can request forecast components and
 fitted history diagnostics, then plot trend, fitted values, residuals, built-in
 seasonalities, custom seasonalities, event windows, regressors, aggregate
 non-trend totals, fitted movement, and trend movement.
+
+## Validation
+
+Select changepoints, seasonalities, events, and regressors using training-side
+rolling origins. Compare against seasonal naive and a simpler trend model on
+identical rows. Report errors by horizon and inspect residuals around events.
+
+## Limitations
+
+- Additive components can miss interactions between location, event, and seasonality.
+- Too many changepoints or Fourier terms can overfit short histories.
+- Future regressors must be known at forecast time.
+- Irregular timestamps and missing targets require explicit handling.

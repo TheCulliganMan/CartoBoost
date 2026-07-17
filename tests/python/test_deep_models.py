@@ -5,6 +5,8 @@ import pickle
 import types
 
 import cartoboost.deep._native as native_helpers
+import cartoboost.deep.graph as graph_module
+import cartoboost.deep.temporal as temporal_module
 import numpy as np
 import pytest
 from cartoboost.config import GraphBackbone
@@ -91,6 +93,97 @@ def test_directional_pair_preserves_order_with_native_fit():
     pred = DirectionalPairForecaster().fit(frame).predict(frame)
 
     assert pred[1] > pred[0]
+
+
+def test_directional_pair_runs_on_every_available_backend():
+    frame = DirectionalPairFrame(
+        [
+            {
+                "source_id": source,
+                "target_id": target,
+                "features": [float(step), float(step % 2)],
+                "target": offset + 0.4 * step,
+            }
+            for source, target, offset in [("A", "B", 1.0), ("B", "A", -1.0)]
+            for step in range(5)
+        ]
+    )
+    expected = DirectionalPairForecaster(backend="cpu").fit(frame).predict(frame)
+    for backend in available_deep_backends():
+        model = DirectionalPairForecaster(backend=backend).fit(frame)
+        actual = model.predict(frame)
+        assert model.backend_ == backend
+        assert np.allclose(actual, expected, rtol=1.0e-4, atol=1.0e-4), backend
+
+
+def test_continuous_tanh_models_train_on_every_available_backend():
+    response_rows = [
+        {
+            "features": [x, np.sin(x)],
+            "candidate_value": 1.0 + 0.2 * x,
+            "response": 0.7 + 0.4 * x + 0.2 * np.sin(x),
+        }
+        for x in np.linspace(0.0, 3.0, 16)
+    ]
+    response_frame = ResponseCurveFrame(response_rows)
+    service_rows = [
+        {
+            "baseline_value": 10.0,
+            "actual_value": 10.0 + row["response"],
+            "features": row["features"],
+        }
+        for row in response_rows
+    ]
+    expected_response = ResponseCurveModel(response_type="continuous", backend="cpu").fit(
+        response_frame
+    )
+    expected_response_values = expected_response.predict_response(response_frame)
+    expected_service = ServiceTimeResidualModel(backend="cpu").fit(service_rows)
+    expected_service_values = expected_service.predict(service_rows)
+    for backend in available_deep_backends():
+        response = ResponseCurveModel(response_type="continuous", backend=backend).fit(
+            response_frame
+        )
+        service = ServiceTimeResidualModel(backend=backend).fit(service_rows)
+        assert response.metadata_["backend"]["selected"] == backend
+        assert service.metadata_["backend"]["selected"] == backend
+        assert np.allclose(
+            response.predict_response(response_frame),
+            expected_response_values,
+            rtol=0.02,
+            atol=0.08,
+        ), backend
+        assert np.allclose(
+            service.predict(service_rows), expected_service_values, rtol=0.02, atol=0.08
+        ), backend
+
+
+def test_binary_tanh_models_train_on_every_available_backend():
+    features = np.asarray([[x, x * x] for x in np.linspace(0.0, 1.0, 20)])
+    labels = (features[:, 0] >= 0.5).astype(float)
+    response_frame = ResponseCurveFrame(
+        [
+            {
+                "features": row.tolist(),
+                "candidate_value": float(row[0]),
+                "response": float(label),
+            }
+            for row, label in zip(features, labels, strict=True)
+        ]
+    )
+    for backend in available_deep_backends():
+        event = EventOutcomeModel(backend=backend).fit(features, labels)
+        event_probability = event.predict_proba(features)
+        response = ResponseCurveModel(
+            response_type="binary", monotone="increasing", backend=backend
+        ).fit(response_frame)
+        response_probability = np.asarray(
+            [row["response_probability"] for row in response.predict_curve(response_frame)]
+        )
+        assert event.metadata_["backend"]["selected"] == backend
+        assert response.metadata_["backend"]["selected"] == backend
+        assert event_probability[-1] > event_probability[0], backend
+        assert response_probability[-1] > response_probability[0], backend
 
 
 def test_directional_pair_embedding_mlp_public_wrapper():
@@ -234,6 +327,50 @@ def test_inverted_transformer_runs_without_removed_representation() -> None:
     assert model.predict().shape == (2, 2)
 
 
+def test_inverted_transformer_dispatches_peer_attention_to_backend(monkeypatch) -> None:
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        temporal_module,
+        "workload_decision",
+        lambda backend, operation, workload_size, minimum_accelerated_size: {
+            "requested": backend,
+            "selected": backend,
+            "executed": "cuda",
+            "operation": operation,
+            "workload_size": workload_size,
+            "minimum_accelerated_size": minimum_accelerated_size,
+            "accelerated": True,
+            "fallback_reason": None,
+        },
+    )
+
+    def accelerated_dense(features, weights, biases, backend=None):
+        calls.append(str(backend))
+        return np.asarray(features, dtype=np.float32) @ np.asarray(
+            weights, dtype=np.float32
+        ) + np.asarray(biases, dtype=np.float32)
+
+    monkeypatch.setattr(temporal_module, "dense_layer", accelerated_dense)
+    y = np.asarray(
+        [[step * 0.2 + entity for entity in range(4)] for step in range(8)],
+        dtype=float,
+    )
+    frame = EntityPanelFrame(y=y, timestamps=list(range(len(y))), entity_ids=list("abcd"))
+
+    model = InvertedTemporalTransformer(
+        lookback=6,
+        horizon=2,
+        backend="cuda",
+    ).fit(frame)
+    prediction = model.predict()
+
+    assert calls
+    assert set(calls) == {"cuda"}
+    assert prediction.shape == (2, 4)
+    assert model.metadata_["accelerated_operations"] == ["dense"]
+
+
 def test_deep_frame_builders_reject_non_finite_values():
     panel = _Frame(
         [
@@ -294,6 +431,22 @@ def test_temporal_entity_transformer_uses_native_attention_fit():
     assert model.metadata_["flow_uncertainty_head"]["consumed"] is True
     assert model.metadata_["flow_uncertainty_head"]["surface"] == "TemporalEntityTransformer"
     assert not np.allclose(pred, tiled_recent_mean)
+
+
+def test_temporal_entity_transformer_runs_on_every_available_backend():
+    y = np.asarray(
+        [[1.0 + step * 0.2, 3.0 + np.sin(step * 0.3)] for step in range(10)],
+        dtype=float,
+    )
+    frame = EntityPanelFrame(y=y, timestamps=list(range(len(y))), entity_ids=["a", "b"])
+    expected = TemporalEntityTransformer(lookback=3, horizon=2, backend="cpu").fit(frame)
+    expected_prediction = expected.predict()
+    for backend in available_deep_backends():
+        model = TemporalEntityTransformer(lookback=3, horizon=2, backend=backend).fit(frame)
+        actual = model.predict()
+        assert model.backend_ == backend
+        assert actual.shape == expected_prediction.shape
+        assert np.allclose(actual, expected_prediction, rtol=0.02, atol=0.1), backend
 
 
 def test_inverted_temporal_transformer_beats_lag_and_reports_horizon_metrics(tmp_path):
@@ -381,6 +534,55 @@ def test_spatiotemporal_graph_forecaster_rejects_removed_multi_view_representati
         )
 
 
+def test_static_graph_falsifier_dispatches_csr_backend(monkeypatch):
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        graph_module,
+        "workload_decision",
+        lambda backend, operation, workload_size, minimum_accelerated_size: {
+            "executed": "cpu" if backend == "cpu" else "cuda"
+        },
+    )
+
+    def accelerated_diffusion(
+        indptr,
+        indices,
+        weights,
+        values,
+        *,
+        channels,
+        backend=None,
+    ):
+        calls.append(str(backend))
+        output = np.zeros((len(indptr) - 1, channels), dtype=np.float32)
+        nodes = np.asarray(values, dtype=np.float32).reshape(-1, channels)
+        for row in range(len(indptr) - 1):
+            for offset in range(indptr[row], indptr[row + 1]):
+                output[row] += weights[offset] * nodes[indices[offset]]
+        return output
+
+    monkeypatch.setattr(graph_module, "csr_diffusion", accelerated_diffusion)
+    history = np.asarray([[1.0, 2.0, 3.0], [2.0, 4.0, 6.0]], dtype=float)
+    actual = graph_module._static_adjacency_forecast(
+        history,
+        [(0, 1), (1, 2)],
+        np.asarray([1.0, 0.5]),
+        3,
+        "cuda",
+    )
+    expected = graph_module._static_adjacency_forecast(
+        history,
+        [(0, 1), (1, 2)],
+        np.asarray([1.0, 0.5]),
+        3,
+        "cpu",
+    )
+
+    assert calls == ["cuda"] * 3
+    assert np.allclose(actual, expected, rtol=1e-6, atol=1e-6)
+
+
 def test_delay_aware_graph_transformer_direction_delay_and_roundtrip(tmp_path):
     steps = 90
     y = np.zeros((steps, 3), dtype=float)
@@ -439,7 +641,14 @@ def test_delay_aware_graph_transformer_direction_delay_and_roundtrip(tmp_path):
     assert falsifiers["delay_beats_static_adjacency_only"] is True
     assert model.edge_delay_sensitivity()["delay_counts"] == {"1": 1, "2": 1}
     assert model.metadata_["architecture"] == "delay_aware_graph_transformer"
-    assert model.metadata_["backend"]["supported"] == ["cpu", "cuda", "rocm", "mlx"]
+    assert model.metadata_["backend"]["supported"] == [
+        "cpu",
+        "cuda",
+        "rocm",
+        "metal",
+        "directml",
+        "webgpu",
+    ]
     assert model.metadata_["backend"]["accelerated"] is False
     assert model.metadata_["shared_representation_consumed"] is False
     assert model.metadata_["shared_representation"] is None
@@ -466,10 +675,8 @@ def test_delay_aware_graph_transformer_direction_delay_and_roundtrip(tmp_path):
     np.testing.assert_array_equal(routed_pickled.predict(), routed.predict())
     np.testing.assert_array_equal(loaded.predict(), model.predict())
 
-    with pytest.raises(RuntimeError, match="accelerator kernels are not available yet"):
-        PropagationDelayGraphForecaster(horizon=4, edge_delay_prior=[2, 1], backend="mlx").fit(
-            correct
-        )
+    with pytest.raises(ValueError, match="backend must be one of"):
+        PropagationDelayGraphForecaster(horizon=4, edge_delay_prior=[2, 1], backend="mlx")
 
 
 def test_regime_moe_reports_usage_and_beats_single_expert(tmp_path):
@@ -632,6 +839,9 @@ def test_conditional_flow_head_outputs_joint_uncertainty_metrics(tmp_path):
     assert "joint_path_calibration" in output["metrics"]
     assert "tail_event_calibration" in output["metrics"]
     assert head.metadata_["architecture"] == "conditional_residual_sampler"
+    assert head.metadata_["backend_requested"] == "cpu"
+    assert head.backend_ == "cpu"
+    assert loaded.backend_ == "cpu"
     benchmark = head.benchmark_against_baselines(
         residuals,
         model_hidden_state=hidden,
@@ -644,6 +854,23 @@ def test_conditional_flow_head_outputs_joint_uncertainty_metrics(tmp_path):
     assert "conformal_interval_wrapper" in benchmark
     assert benchmark["flow_improves_calibration_or_sharpness"] is True
     np.testing.assert_array_equal(loaded_output["marginal_quantiles"], output["marginal_quantiles"])
+
+
+def test_conditional_flow_training_and_inference_support_every_backend():
+    hidden = np.column_stack([np.linspace(0.0, 1.0, 12), np.arange(12) % 3])
+    residuals = 0.4 * hidden[:, 0] - 0.15 * hidden[:, 1]
+    expected = (
+        ConditionalFlowDistributionHead(sample_count=8)
+        .fit(residuals, model_hidden_state=hidden)
+        .predict(model_hidden_state=hidden)
+    )
+    for backend in available_deep_backends():
+        head = ConditionalFlowDistributionHead(sample_count=8, backend=backend).fit(
+            residuals, model_hidden_state=hidden
+        )
+        assert head.backend_ == backend
+        actual = head.predict(model_hidden_state=hidden)
+        np.testing.assert_allclose(actual["samples"], expected["samples"], rtol=2e-3, atol=2e-3)
 
 
 def test_diffusion_scenario_generator_reports_experimental_summaries():
@@ -674,8 +901,39 @@ def test_diffusion_scenario_generator_reports_experimental_summaries():
     assert output["metadata"]["capability_tier"] == "experimental"
     assert output["metadata"]["auto_geo_enabled"] == "false"
     assert output["metadata"]["primary_benchmark_evidence"] == "false"
+    assert output["metadata"]["backend_requested"] == "cpu"
+    assert model.backend_ == "cpu"
     assert FlowScenarioGenerator is GeoTemporalDiffusionScenarioModel
     assert ConditionalResidualDiffusion is GeoTemporalDiffusionScenarioModel
+
+
+def test_large_diffusion_scenario_mean_runs_on_every_backend():
+    nodes = 33
+    point_forecast = np.asarray(
+        [[10.0 + time * 0.2 + node * 0.03 for node in range(nodes)] for time in range(8)]
+    )
+    edges = [{"source": source, "target": source + 1, "weight": 0.8} for source in range(nodes - 1)]
+    expected = GeoTemporalDiffusionScenarioModel(
+        scenario_count=128,
+        diffusion_steps=2,
+        shock_scale=0.3,
+        backend="cpu",
+    ).generate(point_forecast, edges)
+
+    for backend in available_deep_backends():
+        actual = GeoTemporalDiffusionScenarioModel(
+            scenario_count=128,
+            diffusion_steps=2,
+            shock_scale=0.3,
+            backend=backend,
+        ).generate(point_forecast, edges)
+        np.testing.assert_allclose(
+            actual["scenario_mean"],
+            expected["scenario_mean"],
+            rtol=2.0e-4,
+            atol=2.0e-4,
+        )
+        assert actual["metadata"]["scenario_mean_backend"] == backend
 
 
 def test_graph_neural_operator_outputs_fields_and_benchmark_lift():

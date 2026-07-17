@@ -4,19 +4,19 @@ const sidebars: SidebarsConfig = {
   docs: [
     {
       type: 'category',
-      label: 'Get Started',
+      label: 'Start Here',
       collapsed: false,
       items: [
         'index',
         'installation',
         'getting-started',
-        'migration-v0.3',
         'user-guide/model-types',
+        'migration-v0.3',
       ],
     },
     {
       type: 'category',
-      label: 'Guides',
+      label: 'Modeling Guides',
       collapsed: false,
       items: [
         {
@@ -27,21 +27,9 @@ const sidebars: SidebarsConfig = {
             'user-guide/boosting-models/cartoboost-regressor',
             'user-guide/boosting-models/cartoboost-classifier',
             'user-guide/boosting-models/cartoboost-ranker',
-            'user-guide/python-estimator',
-            'user-guide/categorical-features',
-            'user-guide/spatial-cv-best-practices',
-            'user-guide/geo-evaluation-standard',
-            'user-guide/spatial-econometrics',
-            'user-guide/geostatistics-models',
-            'user-guide/geo-causal-models',
             'user-guide/parameters',
             'objectives',
             'constraints',
-            'spatial_modeling',
-            'feature_schema',
-            'sparse_features',
-            'shap',
-            'model_artifact',
           ],
         },
         {
@@ -65,16 +53,6 @@ const sidebars: SidebarsConfig = {
               type: 'doc',
               id: 'user-guide/forecasting-models/graph-spatiotemporal',
               label: 'Graph and Market Structure Forecasting',
-            },
-            {
-              type: 'doc',
-              id: 'user-guide/forecasting-models/graph-spatiotemporal',
-              label: 'STGormer / STGformer / LSTTN Graph Transformers',
-            },
-            {
-              type: 'doc',
-              id: 'user-guide/forecasting-models/graph-spatiotemporal',
-              label: 'Graph-Gated and Spatial-Shift Transformers',
             },
             'user-guide/forecasting-models/probabilistic-conformal',
             'user-guide/forecasting-models/beats-hits',
@@ -128,7 +106,38 @@ const sidebars: SidebarsConfig = {
             'user-guide/graph-models/cartoboost-hinsage',
           ],
         },
-        'general_utilities',
+      ],
+    },
+    {
+      type: 'category',
+      label: 'Data & Features',
+      items: [
+        'user-guide/python-estimator',
+        'feature_schema',
+        'user-guide/categorical-features',
+        'spatial_modeling',
+        'sparse_features',
+        'graph-features',
+        'neural-features',
+      ],
+    },
+    {
+      type: 'category',
+      label: 'Evaluation & Interpretation',
+      items: [
+        'user-guide/spatial-cv-best-practices',
+        'user-guide/geo-evaluation-standard',
+        'shap',
+        'plotting',
+      ],
+    },
+    {
+      type: 'category',
+      label: 'Spatial Analysis',
+      items: [
+        'user-guide/spatial-econometrics',
+        'user-guide/geostatistics-models',
+        'user-guide/geo-causal-models',
       ],
     },
     {
@@ -143,14 +152,15 @@ const sidebars: SidebarsConfig = {
     },
     {
       type: 'category',
-      label: 'Reference',
+      label: 'API & Reference',
       collapsed: false,
       items: [
         'reference/python-api',
         'reference/cli',
+        'model_artifact',
         'feature_catalog',
-        'graph-features',
-        'neural-features',
+        'reference/capability-matrix',
+        'general_utilities',
       ],
     },
     {

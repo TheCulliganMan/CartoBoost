@@ -1,10 +1,10 @@
-# CartoBoost Boosting Model Guides
+# Boosted Tree Models
 
 Use these guides for row-level boosted tree models. If the target is a regular
 time series, switch to the forecasting guides. If the learned ID representation
 itself is the point of the experiment, switch to the neural guides.
 
-## Use When
+## When To Use Boosting
 
 - You need a tree model for numeric, class, or grouped-ranking targets.
 - The signal may depend on time, location, membership, or residual structure.
@@ -18,7 +18,7 @@ itself is the point of the experiment, switch to the neural guides.
 - [CartoBoost Classifier](cartoboost-classifier.md): binary or multiclass labels.
 - [CartoBoost Ranker](cartoboost-ranker.md): grouped candidate ordering.
 
-## Shared Setup
+## Prepare And Validate The Data
 
 Start from dense measured features, then add specialized controls only when
 they match the question:

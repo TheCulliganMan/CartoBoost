@@ -1,4 +1,4 @@
-# CartoBoost Neural Model Guides
+# Neural Embedding Models
 
 Use neural models when stable identifiers carry repeated residual signal.
 These guides are for learned ID structure, not for graph relationships or
@@ -19,5 +19,5 @@ graph sequences, and constrained candidate selection under `cartoboost.deep`.
 | [CartoBoost NeuralEmbeddingFeatures](cartoboost-neural-embedding-features.md) | Learned ID vectors should become columns for another estimator or ablation. |
 | [CartoBoost NeuralEmbeddingRegressor](cartoboost-neural-embedding-regressor.md) | One wrapper should learn ID embeddings and fit the downstream CartoBoost regressor. |
 
-See [Neural Features](../../neural-features.md) for the artifact contract,
-fallback behavior, and failure modes.
+See [Neural Features](../../neural-features.md) for input shapes, saving and
+loading, unseen-ID behavior, and common failure modes.

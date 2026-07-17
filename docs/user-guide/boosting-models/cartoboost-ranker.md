@@ -9,7 +9,7 @@ only within-group comparisons matter.
 The CartoBoost ranker uses pairwise logistic or LambdaRank objectives and
 reports grouped metrics from predictions.
 
-## Public Contract
+## Python Example
 
 ```python
 from cartoboost import CartoBoostRanker
@@ -55,3 +55,9 @@ most. Compare against simple popularity or dense tabular baselines under the
 same group split.
 
 For workflow and method details, see [Python API Reference](../../reference/python-api.md).
+
+## Limitations
+
+- Ranking labels are meaningful only within each query group.
+- Group boundaries must remain intact during splitting and prediction.
+- Offline ranking metrics do not by themselves establish downstream decision value.

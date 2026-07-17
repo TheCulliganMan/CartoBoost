@@ -6,7 +6,7 @@ Use `ConstrainedDecisionOptimizer` when each decision group has several scored
 candidates and the output must select one feasible candidate per group. It is
 for decision selection after prediction, not for fitting the predictor itself.
 
-## Public Contract
+## Python Example
 
 ```python
 from cartoboost.deep import ConstrainedDecisionOptimizer
@@ -64,3 +64,9 @@ choice = optimizer.select(candidate_rows)
 Report constraint violation rate, selected utility, fallback rate, and the
 baseline rule it replaces. Keep the scorer validation separate from optimizer
 validation so model error and decision policy behavior are both visible.
+
+## Limitations
+
+- Optimization quality is bounded by scorer quality and candidate coverage.
+- Infeasible groups require an explicit fallback policy.
+- Offline utility may not capture operational side effects or delayed outcomes.

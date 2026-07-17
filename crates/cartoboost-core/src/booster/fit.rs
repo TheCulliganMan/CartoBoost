@@ -10,6 +10,7 @@ use crate::tree::{
     TrainingConfigMetadata, TrainingMetric, TreeBuilder, MODEL_ARTIFACT_VERSION,
 };
 use crate::{CartoBoostError, Result};
+use cartoboost_accelerator::{select_backend_for_operations, BackendOperation, BackendSelection};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -38,6 +39,7 @@ pub struct BoosterConfig {
 #[derive(Debug, Clone)]
 pub struct Booster {
     pub config: BoosterConfig,
+    backend: BackendSelection,
 }
 
 impl Default for BoosterConfig {
@@ -67,7 +69,23 @@ impl Default for BoosterConfig {
 
 impl Booster {
     pub fn new(config: BoosterConfig) -> Self {
-        Self { config }
+        let operations = required_backend_operations(&config);
+        Self {
+            config,
+            backend: select_backend_for_operations(Some("cpu"), &operations)
+                .expect("CPU booster operations are always available"),
+        }
+    }
+
+    pub fn new_with_backend(config: BoosterConfig, backend: Option<&str>) -> Result<Self> {
+        let operations = required_backend_operations(&config);
+        let backend = select_backend_for_operations(backend, &operations)
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+        Ok(Self { config, backend })
+    }
+
+    pub fn backend(&self) -> &BackendSelection {
+        &self.backend
     }
 
     pub fn fit(&self, x: &Dataset, y: &[f64], sample_weight: Option<&[f64]>) -> Result<Model> {
@@ -155,15 +173,13 @@ impl Booster {
         };
         for iteration in 0..tree_count {
             profile::timed(profile::RESIDUAL, || {
-                residuals
-                    .par_iter_mut()
-                    .zip(training_targets.par_iter())
-                    .zip(pred.par_iter())
-                    .for_each(|((residual, target), prediction)| {
-                        *residual =
-                            pseudo_residual_for_loss(&self.config.loss, *target, *prediction);
-                    });
-            });
+                parallel_pseudo_residuals(
+                    &mut residuals,
+                    training_targets,
+                    &pred,
+                    &self.config.loss,
+                )
+            })?;
             let use_leaf_updates = !self.config.fuzzy
                 && matches!(self.config.leaf_predictor, LeafPredictorKind::Constant);
             let use_leaf_updates = use_leaf_updates
@@ -175,12 +191,8 @@ impl Booster {
                     builder.fit_with_leaf_updates_in_context(x, &residuals, &weights, &fit_context)
                 });
                 profile::timed(profile::PRED_UPDATE, || {
-                    pred.par_iter_mut()
-                        .zip(updates.par_iter())
-                        .for_each(|(prediction, update)| {
-                            *prediction += self.config.learning_rate * update;
-                        });
-                });
+                    parallel_prediction_update(&mut pred, &updates, self.config.learning_rate)
+                })?;
                 tree
             } else {
                 profile::timed(profile::TREE_FIT, || {
@@ -188,17 +200,16 @@ impl Booster {
                 })
             };
             if let Some(smoothing) = &self.config.graph_leaf_smoothing {
-                apply_graph_leaf_smoothing(&mut tree, x, smoothing)?;
+                apply_graph_leaf_smoothing(&mut tree, x, smoothing, &self.backend)?;
             }
             if !use_leaf_updates || self.config.graph_leaf_smoothing.is_some() {
                 profile::timed(profile::PRED_UPDATE, || {
-                    pred.par_iter_mut()
-                        .enumerate()
-                        .for_each(|(row, prediction)| {
-                            *prediction +=
-                                self.config.learning_rate * tree.predict_dataset_row(x, row);
-                        });
-                });
+                    let updates = (0..x.n_rows())
+                        .into_par_iter()
+                        .map(|row| tree.predict_dataset_row(x, row))
+                        .collect::<Vec<_>>();
+                    parallel_prediction_update(&mut pred, &updates, self.config.learning_rate)
+                })?;
             }
             trees.push(tree);
             training_history.push(TrainingMetric {
@@ -217,6 +228,7 @@ impl Booster {
             feature_schema: Some(x.feature_schema_or_default()),
             target_name: None,
             training_config: Some(TrainingConfigMetadata {
+                backend: Some(self.backend.clone()),
                 n_estimators: self.config.n_estimators,
                 learning_rate: self.config.learning_rate,
                 max_depth: self.config.max_depth,
@@ -245,14 +257,57 @@ impl Booster {
     }
 }
 
-fn weighted_rmse(targets: &[f64], predictions: &[f64], weights: &[f64]) -> f64 {
-    let mut loss = 0.0;
-    let mut weight_sum = 0.0;
-    for ((target, prediction), weight) in targets.iter().zip(predictions).zip(weights) {
-        let residual = target - prediction;
-        loss += weight * residual * residual;
-        weight_sum += weight;
+fn required_backend_operations(config: &BoosterConfig) -> Vec<BackendOperation> {
+    let mut operations = vec![BackendOperation::Dense];
+    if config.graph_leaf_smoothing.is_some() {
+        operations.push(BackendOperation::CsrDiffusion);
     }
+    operations
+}
+
+fn parallel_pseudo_residuals(
+    residuals: &mut [f64],
+    targets: &[f64],
+    predictions: &[f64],
+    loss: &LossConfig,
+) -> Result<()> {
+    residuals
+        .par_iter_mut()
+        .zip(targets.par_iter())
+        .zip(predictions.par_iter())
+        .for_each(|((residual, target), prediction)| {
+            *residual = pseudo_residual_for_loss(loss, *target, *prediction);
+        });
+    Ok(())
+}
+
+pub(crate) fn parallel_prediction_update(
+    predictions: &mut [f64],
+    updates: &[f64],
+    learning_rate: f64,
+) -> Result<()> {
+    predictions
+        .par_iter_mut()
+        .zip(updates.par_iter())
+        .for_each(|(prediction, update)| {
+            *prediction += learning_rate * update;
+        });
+    Ok(())
+}
+
+fn weighted_rmse(targets: &[f64], predictions: &[f64], weights: &[f64]) -> f64 {
+    let (loss, weight_sum) = targets
+        .par_iter()
+        .zip(predictions.par_iter())
+        .zip(weights.par_iter())
+        .map(|((&target, &prediction), &weight)| {
+            let residual = target - prediction;
+            (weight * residual * residual, weight)
+        })
+        .reduce(
+            || (0.0, 0.0),
+            |left, right| (left.0 + right.0, left.1 + right.1),
+        );
     if weight_sum <= 0.0 {
         0.0
     } else {
@@ -369,10 +424,11 @@ fn validate_training_config(
     Ok(())
 }
 
-fn apply_graph_leaf_smoothing(
+pub(super) fn apply_graph_leaf_smoothing(
     tree: &mut crate::tree::Tree,
     x: &Dataset,
     smoothing: &GraphLeafSmoothing,
+    backend: &BackendSelection,
 ) -> Result<()> {
     smoothing.validate_row_count(x.n_rows())?;
     if smoothing.lambda == 0.0 || smoothing.iterations == 0 {
@@ -387,9 +443,11 @@ fn apply_graph_leaf_smoothing(
         .map(|row| leaf_id_for_row(&tree.root, x, row, 0))
         .collect::<Vec<_>>();
     let leaf_graph = leaf_graph_from_row_graph(&smoothing.graph, &row_leaf_ids, leaf_values.len())?;
-    let smoothed = smoothing
-        .smoother()
-        .smooth_leaf_values(&leaf_values, &GraphLaplacian::new(leaf_graph))?;
+    let smoothed = smoothing.smoother().smooth_leaf_values_with_backend(
+        &leaf_values,
+        &GraphLaplacian::new(leaf_graph),
+        Some(&backend.selected),
+    )?;
     let mut next_leaf = 0usize;
     assign_leaf_values(&mut tree.root, &smoothed, &mut next_leaf);
     Ok(())
@@ -548,6 +606,98 @@ mod tests {
 
         assert_eq!(model.artifact_version, MODEL_ARTIFACT_VERSION);
         assert_predictions_close(&model.predict(&x), &y);
+    }
+
+    #[test]
+    fn accelerated_booster_training_updates_match_cpu() {
+        let x = Dataset::from_rows(
+            (0..256)
+                .map(|row| vec![row as f64 / 32.0, (row as f64 * 0.17).sin()])
+                .collect(),
+        )
+        .unwrap();
+        let y = (0..256)
+            .map(|row| if row % 7 < 3 { 2.0 } else { -1.0 })
+            .collect::<Vec<_>>();
+        let config = BoosterConfig {
+            n_estimators: 4,
+            learning_rate: 0.1,
+            max_depth: 2,
+            min_samples_leaf: 2,
+            min_gain: 0.0,
+            splitters: vec![SplitterKind::Axis],
+            ..BoosterConfig::default()
+        };
+        let cpu = Booster::new(config.clone()).fit(&x, &y, None).unwrap();
+        for backend in cartoboost_accelerator::available_backends() {
+            if backend == "cpu"
+                || !cartoboost_accelerator::backend_supports_operation(
+                    &backend,
+                    BackendOperation::Dense,
+                )
+            {
+                continue;
+            }
+            let accelerated = Booster::new_with_backend(config.clone(), Some(&backend))
+                .unwrap()
+                .fit(&x, &y, None)
+                .unwrap();
+            for (expected, actual) in cpu.predict(&x).iter().zip(accelerated.predict(&x)) {
+                assert!(
+                    (expected - actual).abs() < 1.0e-4,
+                    "backend {backend}: {expected} != {actual}"
+                );
+            }
+            let inference = accelerated
+                .try_predict_with_backend(&x, Some(&backend))
+                .unwrap();
+            let persisted_backend_inference = accelerated.try_predict(&x).unwrap();
+            assert_eq!(persisted_backend_inference.len(), inference.len());
+            for (persisted, explicit) in persisted_backend_inference.iter().zip(&inference) {
+                assert!(
+                    (persisted - explicit).abs() < 1.0e-6,
+                    "backend {backend} persisted selection was not reused"
+                );
+            }
+            for (expected, actual) in cpu.predict(&x).iter().zip(inference) {
+                assert!(
+                    (expected - actual).abs() < 1.0e-4,
+                    "backend {backend} inference: {expected} != {actual}"
+                );
+            }
+            assert_eq!(
+                accelerated
+                    .training_config
+                    .as_ref()
+                    .unwrap()
+                    .backend
+                    .as_ref()
+                    .unwrap()
+                    .selected,
+                backend
+            );
+        }
+    }
+
+    #[test]
+    fn parallel_l2_residual_generation_matches_reference() {
+        const ROWS: usize = 16_384;
+        let targets = (0..ROWS)
+            .map(|index| (index % 19) as f64 - 4.0)
+            .collect::<Vec<_>>();
+        let predictions = (0..ROWS)
+            .map(|index| (index % 7) as f64 * 0.25)
+            .collect::<Vec<_>>();
+        let expected = targets
+            .iter()
+            .zip(&predictions)
+            .map(|(target, prediction)| target - prediction)
+            .collect::<Vec<_>>();
+        let mut actual = vec![0.0; targets.len()];
+        parallel_pseudo_residuals(&mut actual, &targets, &predictions, &LossConfig::L2).unwrap();
+        for (left, right) in actual.iter().zip(&expected) {
+            assert!((left - right).abs() < 1.0e-12, "{left} != {right}");
+        }
     }
 
     fn assert_predictions_close(actual: &[f64], expected: &[f64]) {

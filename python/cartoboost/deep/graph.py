@@ -23,6 +23,7 @@ from cartoboost.forecasting.graph_st import STGformerForecaster as _STGformerFor
 from cartoboost.forecasting.graph_st import STGormerForecaster as _STGormerForecaster
 
 from .._artifacts import ArtifactPersistenceMixin
+from ..accelerators import csr_diffusion, workload_decision
 from ..config import Backend, GraphBackbone
 from .flow import flow_uncertainty_report
 from .frames import GraphTemporalFrame
@@ -175,17 +176,10 @@ class DelayAwareGraphTransformer(ArtifactPersistenceMixin):
                 "provide graph structure through the native frame instead"
             )
         self.multi_view_views = None
-        if self.backend not in {"auto", "cpu", "cuda", "rocm", "mlx"}:
-            raise ValueError("backend must be one of 'auto', 'cpu', 'cuda', 'rocm', or 'mlx'")
         self._native_model = None
         self.is_fitted_ = False
 
     def fit(self, frame: GraphTemporalFrame) -> DelayAwareGraphTransformer:
-        if self.backend not in {"auto", "cpu"}:
-            raise RuntimeError(
-                "delay-aware graph transformer accelerator kernels are not available yet; "
-                f"requested backend {self.backend!r}"
-            )
         y = np.asarray(frame.y, dtype=float)
         if y.ndim != 2 or y.shape[0] < 3:
             raise ValueError("GraphTemporalFrame.y must have at least three time rows")
@@ -231,9 +225,10 @@ class DelayAwareGraphTransformer(ArtifactPersistenceMixin):
             self.horizon,
             native_delays if self.edge_delay_prior is not None else None,
             self.ridge,
-            "cpu",
+            self.backend,
         )
         self._native_model.fit(native_frame._native_frame)
+        self.selected_backend_ = str(self._native_model.backend())
         self.edges_ = native_edges
         self.edge_weights_ = np.asarray(native_weights, dtype=float)
         self.edge_delays_ = native_delays
@@ -244,6 +239,7 @@ class DelayAwareGraphTransformer(ArtifactPersistenceMixin):
             native_edges,
             np.asarray(native_weights, dtype=float),
             self.horizon,
+            self.backend,
         )
         self.metadata_ = {
             "model_class": "PropagationDelayGraphForecaster",
@@ -335,7 +331,7 @@ class DelayAwareGraphTransformer(ArtifactPersistenceMixin):
             horizon=int(config["horizon"]),
             edge_delay_prior=config["edge_delay_prior"],
             ridge=float(config["ridge"]),
-            backend="cpu",
+            backend=str(native.backend()),
             multi_view_views=None,
         )
         obj._native_model = native
@@ -400,7 +396,7 @@ class DelayAwareGraphTransformer(ArtifactPersistenceMixin):
         native_frame = _NativeGraphTemporalFrame(
             node_ids=list(frame.node_ids),
             timestamps=list(frame.timestamps),
-            target=np.asarray(frame.y, dtype=float),
+            target=np.ascontiguousarray(frame.y, dtype=float),
             indptr=indptr,
             indices=indices,
             data=data,
@@ -428,12 +424,15 @@ class DelayAwareGraphTransformer(ArtifactPersistenceMixin):
         return self
 
     def _backend_metadata(self) -> dict[str, Any]:
+        selected = getattr(self, "selected_backend_", self.backend)
         return {
             "requested": self.backend,
-            "selected": "cpu",
-            "supported": ["cpu", "cuda", "rocm", "mlx"],
-            "accelerator_ready": {"cuda": True, "rocm": True, "mlx": True},
-            "accelerated": False,
+            "selected": selected,
+            "supported": ["cpu", "cuda", "rocm", "metal", "directml", "webgpu"],
+            "accelerator_ready": {
+                name: True for name in ("cuda", "rocm", "metal", "directml", "webgpu")
+            },
+            "accelerated": selected != "cpu",
         }
 
     def _save_load_parity(self) -> bool:
@@ -544,18 +543,45 @@ def _static_adjacency_forecast(
     edges: list[tuple[int, int]],
     weights: np.ndarray,
     horizon: int,
+    backend: str = "cpu",
 ) -> np.ndarray:
     current = history[-1].copy()
     previous = history[-2].copy() if history.shape[0] >= 2 else current.copy()
+    node_count = current.shape[0]
+    incoming: list[list[tuple[int, float]]] = [[] for _ in range(node_count)]
+    counts = np.zeros(node_count, dtype=float)
+    for edge_idx, (source, target) in enumerate(edges):
+        weight = float(weights[edge_idx])
+        incoming[target].append((source, weight))
+        counts[target] += abs(weight)
+    counts = np.where(counts > 0.0, counts, 1.0)
+    indptr = [0]
+    indices: list[int] = []
+    normalized_weights: list[float] = []
+    for target, row in enumerate(incoming):
+        indices.extend(source for source, _weight in row)
+        normalized_weights.extend(weight / counts[target] for _source, weight in row)
+        indptr.append(len(indices))
+    workload_size = int(max(1, horizon) * max(1, len(edges)))
+    dispatch = workload_decision(backend, "csr_diffusion", workload_size, 16_384)
     rows = []
     for _step in range(horizon):
-        graph_signal = np.zeros_like(current)
-        counts = np.zeros_like(current)
-        for edge_idx, (source, target) in enumerate(edges):
-            graph_signal[target] += previous[source] * weights[edge_idx]
-            counts[target] += abs(weights[edge_idx])
-        counts = np.where(counts > 0.0, counts, 1.0)
-        updated = 0.7 * current + 0.3 * graph_signal / counts
+        if dispatch["executed"] == "cpu":
+            graph_signal = np.zeros_like(current)
+            for target, row in enumerate(incoming):
+                graph_signal[target] = sum(
+                    previous[source] * weight / counts[target] for source, weight in row
+                )
+        else:
+            graph_signal = csr_diffusion(
+                indptr,
+                indices,
+                normalized_weights,
+                previous.reshape(-1, 1),
+                channels=1,
+                backend=str(dispatch["executed"]),
+            ).astype(float)[:, 0]
+        updated = 0.7 * current + 0.3 * graph_signal
         rows.append(updated.copy())
         previous = current
         current = updated
@@ -615,7 +641,7 @@ def _native_public_graph_frame(
     return _NativeGraphTemporalFrame(
         node_ids=list(frame.node_ids),
         timestamps=[int(value) for value in frame.timestamps],
-        target=np.asarray(frame.y, dtype=float),
+        target=np.ascontiguousarray(frame.y, dtype=float),
         indptr=indptr,
         indices=indices,
         data=data,
@@ -642,7 +668,15 @@ def _native_model_class() -> Any:
 def _backend_value(value: Backend | str) -> str:
     if isinstance(value, Backend):
         return value.value
-    return str(value).lower()
+    # Keep Python validation derived from the shared public Backend enum. This
+    # prevents individual model families from growing stale accelerator
+    # allowlists as new native backends or aliases are added.
+    normalized = str(value).strip().lower()
+    try:
+        return Backend(normalized).value
+    except ValueError as exc:
+        allowed = ", ".join(repr(backend.value) for backend in Backend)
+        raise ValueError(f"backend must be one of {allowed}") from exc
 
 
 _DCRNN_PARAMS = {

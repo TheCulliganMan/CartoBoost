@@ -1,9 +1,8 @@
 import {GeostatisticsModelExample} from '@site/src/components/ModelingLabClient';
 
-# Scalable GP Geostatistics
+# Gaussian-Process Geostatistics
 
-> Supported API: import these models from `cartoboost.geostats`. They do
-> not carry the stable root-package compatibility promise in CartoBoost 0.3.
+Import these models from `cartoboost.geostats`.
 
 Use `NearestNeighborGPRegressor` when each observation has a point coordinate
 and the target should be interpolated with uncertainty. It is a scalable

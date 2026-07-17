@@ -33,11 +33,19 @@ pub fn load_json<T: DeserializeOwned>(path: impl AsRef<Path>) -> Result<T> {
 }
 
 pub fn save_weights_json(model: &Model, path: impl AsRef<Path>) -> Result<()> {
+    let backend = model
+        .training_config
+        .as_ref()
+        .and_then(|config| config.backend.as_ref())
+        .map_or_else(
+            || "rust".to_string(),
+            |selection| selection.selected.clone(),
+        );
     let artifact = WeightsArtifact {
         artifact_type: WEIGHTS_ARTIFACT_TYPE.to_string(),
         weights_artifact_version: WEIGHTS_ARTIFACT_VERSION,
         model_artifact_version: model.artifact_version,
-        backend: "rust".to_string(),
+        backend,
         model: model.clone(),
     };
     let writer = BufWriter::new(File::create(path)?);

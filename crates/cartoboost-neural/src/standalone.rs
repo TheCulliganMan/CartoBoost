@@ -8,8 +8,10 @@ use crate::graphsage::{
 };
 use crate::node2vec::{Node2VecConfig, Node2VecEncoder};
 use crate::{
-    backend_pair_sigmoid_scores_f32, fit_embedding_table_with_options, BackendSelection,
-    GraphSageEncoderArtifact, Node2VecEncoderArtifact,
+    backend_pair_sigmoid_scores_f32, backend_supports_operation,
+    fit_embedding_table_with_options_and_backend, select_backend_for,
+    select_backend_for_operations, BackendOperation, BackendSelection, GraphSageEncoderArtifact,
+    Node2VecEncoderArtifact,
 };
 use cartoboost_core::loss::LossConfig;
 use cartoboost_core::tree::{FuzzyKernel, LeafPredictorKind, SplitterKind};
@@ -27,6 +29,7 @@ const GRAPHSAGE_LINK_ARTIFACT_TYPE: &str = "cartoboost.neural.standalone_graphsa
 const HETERO_GRAPHSAGE_REGRESSOR_ARTIFACT_TYPE: &str =
     "cartoboost.neural.standalone_hetero_graphsage_regressor";
 const HINSAGE_REGRESSOR_ARTIFACT_TYPE: &str = "cartoboost.neural.standalone_hinsage_regressor";
+const LINK_PAIR_DISPATCH_MIN_VALUES: usize = 16_384;
 const HETERO_GRAPHSAGE_LINK_ARTIFACT_TYPE: &str =
     "cartoboost.neural.standalone_hetero_graphsage_link_predictor";
 const HINSAGE_LINK_ARTIFACT_TYPE: &str = "cartoboost.neural.standalone_hinsage_link_predictor";
@@ -39,6 +42,8 @@ pub struct StandaloneBoosterConfig {
     pub max_depth: usize,
     pub min_samples_leaf: usize,
     pub min_gain: f64,
+    #[serde(default = "default_standalone_backend")]
+    pub backend: String,
 }
 
 impl Default for StandaloneBoosterConfig {
@@ -49,8 +54,13 @@ impl Default for StandaloneBoosterConfig {
             max_depth: 4,
             min_samples_leaf: 2,
             min_gain: 0.0,
+            backend: default_standalone_backend(),
         }
     }
+}
+
+fn default_standalone_backend() -> String {
+    "cpu".to_string()
 }
 
 impl StandaloneBoosterConfig {
@@ -142,23 +152,32 @@ impl NeuralEmbeddingRegressor {
             ));
         }
         let target_f32 = target.iter().map(|value| *value as f32).collect::<Vec<_>>();
-        let table = fit_embedding_table_with_options(
+        let table = fit_embedding_table_with_options_and_backend(
             self.dim,
             ids,
             &target_f32,
             self.fallback.clone(),
             self.random_state,
             self.support_prior_strength,
+            Some(&self.booster_config.backend),
         )?;
         let features = embedding_rows_with_dense(&table, ids, dense)?;
         let dataset = Dataset::from_rows(features).map_err(core_to_neural)?;
-        let model = Booster::new(self.booster_config.to_booster_config())
-            .fit(&dataset, target, None)
-            .map_err(core_to_neural)?;
+        let model = Booster::new_with_backend(
+            self.booster_config.to_booster_config(),
+            Some(&self.booster_config.backend),
+        )
+        .map_err(core_to_neural)?
+        .fit(&dataset, target, None)
+        .map_err(core_to_neural)?;
         self.dense_width = dense_width(dense)?;
         self.table = Some(table);
         self.model = Some(model);
         Ok(())
+    }
+
+    pub fn backend(&self) -> &str {
+        &self.booster_config.backend
     }
 
     pub fn predict(&self, ids: &[u64], dense: Option<&[Vec<f64>]>) -> Result<Vec<f64>> {
@@ -255,7 +274,8 @@ pub struct Node2VecRegressor {
 impl Node2VecRegressor {
     pub fn new(config: Node2VecConfig, booster_config: StandaloneBoosterConfig) -> Result<Self> {
         validate_booster_config(&booster_config)?;
-        let encoder = Node2VecEncoder::new(config.clone())?;
+        let encoder =
+            Node2VecEncoder::new_with_backend(config.clone(), Some(&booster_config.backend))?;
         Ok(Self {
             config,
             booster_config,
@@ -264,6 +284,10 @@ impl Node2VecRegressor {
             encoder,
             model: None,
         })
+    }
+
+    pub fn backend(&self) -> &str {
+        &self.booster_config.backend
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -282,17 +306,54 @@ impl Node2VecRegressor {
         if let Some(row_targets) = row_targets {
             validate_row_count(row_targets.len(), target.len(), "row_targets", "target")?;
         }
-        self.encoder = Node2VecEncoder::new(self.config.clone())?;
-        let embeddings = self
-            .encoder
-            .fit(node_count, edges, edge_weights)?
-            .into_inner();
+        self.encoder = Node2VecEncoder::new_with_backend(
+            self.config.clone(),
+            Some(&self.booster_config.backend),
+        )?;
+        self.encoder.fit(node_count, edges, edge_weights)?;
+        self.fit_with_fitted_encoder(row_nodes, row_targets, dense, target)
+    }
+
+    pub fn fit_with_encoder(
+        &mut self,
+        encoder: Node2VecEncoder,
+        row_nodes: &[usize],
+        row_targets: Option<&[usize]>,
+        dense: Option<&[Vec<f64>]>,
+        target: &[f64],
+    ) -> Result<()> {
+        if encoder.output_dim() != self.config.dim {
+            return Err(NeuralError::InvalidArgument(
+                "pretrained Node2Vec encoder width does not match regressor config".to_string(),
+            ));
+        }
+        self.encoder = encoder;
+        self.fit_with_fitted_encoder(row_nodes, row_targets, dense, target)
+    }
+
+    fn fit_with_fitted_encoder(
+        &mut self,
+        row_nodes: &[usize],
+        row_targets: Option<&[usize]>,
+        dense: Option<&[Vec<f64>]>,
+        target: &[f64],
+    ) -> Result<()> {
+        validate_targets(target)?;
+        validate_row_count(row_nodes.len(), target.len(), "row_nodes", "target")?;
+        if let Some(row_targets) = row_targets {
+            validate_row_count(row_targets.len(), target.len(), "row_targets", "target")?;
+        }
+        let embeddings = self.encoder.encode()?.into_inner();
         let features = graph_rows_with_dense(&embeddings, row_nodes, row_targets, dense)?;
         let dataset = Dataset::from_rows(features).map_err(core_to_neural)?;
         self.model = Some(
-            Booster::new(self.booster_config.to_booster_config())
-                .fit(&dataset, target, None)
-                .map_err(core_to_neural)?,
+            Booster::new_with_backend(
+                self.booster_config.to_booster_config(),
+                Some(&self.booster_config.backend),
+            )
+            .map_err(core_to_neural)?
+            .fit(&dataset, target, None)
+            .map_err(core_to_neural)?,
         );
         self.mode = if row_targets.is_some() {
             GraphRegressionMode::Pair
@@ -416,6 +477,10 @@ impl GraphSageRegressor {
         })
     }
 
+    pub fn backend(&self) -> &str {
+        &self.booster_config.backend
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn fit(
         &mut self,
@@ -437,9 +502,13 @@ impl GraphSageRegressor {
         let features = graph_rows_with_dense(&embeddings, row_nodes, row_targets, dense)?;
         let dataset = Dataset::from_rows(features).map_err(core_to_neural)?;
         self.model = Some(
-            Booster::new(self.booster_config.to_booster_config())
-                .fit(&dataset, target, None)
-                .map_err(core_to_neural)?,
+            Booster::new_with_backend(
+                self.booster_config.to_booster_config(),
+                Some(&self.booster_config.backend),
+            )
+            .map_err(core_to_neural)?
+            .fit(&dataset, target, None)
+            .map_err(core_to_neural)?,
         );
         self.mode = if row_targets.is_some() {
             GraphRegressionMode::Pair
@@ -577,6 +646,10 @@ impl HeteroGraphSageRegressor {
         })
     }
 
+    pub fn backend(&self) -> &str {
+        &self.booster_config.backend
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn fit(
         &mut self,
@@ -601,9 +674,13 @@ impl HeteroGraphSageRegressor {
         let features = graph_rows_with_dense(&embeddings, row_nodes, row_targets, dense)?;
         let dataset = Dataset::from_rows(features).map_err(core_to_neural)?;
         self.model = Some(
-            Booster::new(self.booster_config.to_booster_config())
-                .fit(&dataset, target, None)
-                .map_err(core_to_neural)?,
+            Booster::new_with_backend(
+                self.booster_config.to_booster_config(),
+                Some(&self.booster_config.backend),
+            )
+            .map_err(core_to_neural)?
+            .fit(&dataset, target, None)
+            .map_err(core_to_neural)?,
         );
         self.mode = if row_targets.is_some() {
             GraphRegressionMode::Pair
@@ -757,6 +834,10 @@ impl HinSageRegressor {
         })
     }
 
+    pub fn backend(&self) -> &str {
+        &self.booster_config.backend
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn fit(
         &mut self,
@@ -790,9 +871,13 @@ impl HinSageRegressor {
         let features = graph_rows_with_dense(&embeddings, row_nodes, row_targets, dense)?;
         let dataset = Dataset::from_rows(features).map_err(core_to_neural)?;
         self.model = Some(
-            Booster::new(self.booster_config.to_booster_config())
-                .fit(&dataset, target, None)
-                .map_err(core_to_neural)?,
+            Booster::new_with_backend(
+                self.booster_config.to_booster_config(),
+                Some(&self.booster_config.backend),
+            )
+            .map_err(core_to_neural)?
+            .fit(&dataset, target, None)
+            .map_err(core_to_neural)?,
         );
         self.mode = if row_targets.is_some() {
             GraphRegressionMode::Pair
@@ -899,19 +984,37 @@ pub struct Node2VecLinkPredictorArtifact {
     pub artifact_type: String,
     pub artifact_version: u32,
     pub encoder: Node2VecEncoderArtifact,
+    #[serde(default)]
+    pub backend: BackendSelection,
 }
 
 #[derive(Clone)]
 pub struct Node2VecLinkPredictor {
     config: Node2VecConfig,
     encoder: Node2VecEncoder,
+    backend: BackendSelection,
 }
 
 impl Node2VecLinkPredictor {
     pub fn new(config: Node2VecConfig) -> Result<Self> {
+        Self::new_with_backend(config, None)
+    }
+
+    pub fn new_with_backend(config: Node2VecConfig, backend: Option<&str>) -> Result<Self> {
+        let backend = select_backend_for_operations(
+            backend,
+            &[
+                BackendOperation::PairScoring,
+                BackendOperation::ScalarGraphTraining,
+            ],
+        )?;
         Ok(Self {
-            encoder: Node2VecEncoder::new(config.clone())?,
+            encoder: Node2VecEncoder::new_with_backend(
+                config.clone(),
+                Some(backend.selected.as_str()),
+            )?,
             config,
+            backend,
         })
     }
 
@@ -921,14 +1024,21 @@ impl Node2VecLinkPredictor {
         edges: &[(usize, usize)],
         edge_weights: Option<&[f32]>,
     ) -> Result<()> {
-        self.encoder = Node2VecEncoder::new(self.config.clone())?;
+        self.encoder = Node2VecEncoder::new_with_backend(
+            self.config.clone(),
+            Some(self.backend.selected.as_str()),
+        )?;
         self.encoder.fit(node_count, edges, edge_weights)?;
         Ok(())
     }
 
     pub fn predict_scores(&self, pairs: &[(usize, usize)]) -> Result<Vec<f64>> {
         let embeddings = self.encoder.encode()?.into_inner();
-        link_scores(&embeddings, pairs)
+        link_scores_with_backend(&embeddings, pairs, &self.backend)
+    }
+
+    pub fn backend(&self) -> &BackendSelection {
+        &self.backend
     }
 
     pub fn save_artifact_json(&self, path: impl AsRef<Path>) -> Result<()> {
@@ -936,6 +1046,7 @@ impl Node2VecLinkPredictor {
             artifact_type: NODE2VEC_LINK_ARTIFACT_TYPE.to_string(),
             artifact_version: STANDALONE_ARTIFACT_VERSION,
             encoder: self.encoder.to_artifact(),
+            backend: self.backend.clone(),
         };
         fs::write(path, serde_json::to_string_pretty(&artifact)?)?;
         Ok(())
@@ -951,7 +1062,12 @@ impl Node2VecLinkPredictor {
         )?;
         let encoder = Node2VecEncoder::from_artifact(artifact.encoder)?;
         let config = encoder.config();
-        Ok(Self { config, encoder })
+        validate_pair_backend(&artifact.backend)?;
+        Ok(Self {
+            config,
+            encoder,
+            backend: artifact.backend,
+        })
     }
 }
 
@@ -974,6 +1090,7 @@ pub struct GraphSageLinkPredictor {
 
 impl GraphSageLinkPredictor {
     pub fn new(config: GraphSageConfig, input_dim: usize) -> Result<Self> {
+        validate_pair_backend(&config.backend)?;
         Ok(Self {
             encoder: GraphSageEncoder::new(config.clone(), input_dim)?,
             config,
@@ -1001,6 +1118,10 @@ impl GraphSageLinkPredictor {
             .encode_graph(&graph, node_features)?
             .into_inner();
         link_scores_with_backend(&embeddings, pairs, &self.config.backend)
+    }
+
+    pub fn backend(&self) -> &BackendSelection {
+        &self.config.backend
     }
 
     pub fn save_artifact_json(&self, path: impl AsRef<Path>) -> Result<()> {
@@ -1059,6 +1180,7 @@ impl HeteroGraphSageLinkPredictor {
         input_dim: usize,
         relation_count: usize,
     ) -> Result<Self> {
+        validate_pair_backend(&config.backend)?;
         Ok(Self {
             encoder: HeteroGraphSageEncoder::new(config.clone(), input_dim, relation_count)?,
             config,
@@ -1100,6 +1222,10 @@ impl HeteroGraphSageLinkPredictor {
             .encode_graph(&graph, node_features)?
             .into_inner();
         link_scores_with_backend(&embeddings, pairs, &self.config.backend)
+    }
+
+    pub fn backend(&self) -> &BackendSelection {
+        &self.config.backend
     }
 
     pub fn save_artifact_json(&self, path: impl AsRef<Path>) -> Result<()> {
@@ -1165,6 +1291,7 @@ impl HinSageLinkPredictor {
         node_type_count: usize,
         edge_type_triples: Vec<(usize, usize, usize)>,
     ) -> Result<Self> {
+        validate_pair_backend(&config.backend)?;
         Ok(Self {
             encoder: HinSageEncoder::new(
                 config.clone(),
@@ -1222,7 +1349,11 @@ impl HinSageLinkPredictor {
             .encoder
             .encode_graph(&graph, node_features)?
             .into_inner();
-        link_scores(&embeddings, pairs)
+        link_scores_with_backend(&embeddings, pairs, &self.config.backend)
+    }
+
+    pub fn backend(&self) -> &BackendSelection {
+        &self.config.backend
     }
 
     pub fn save_artifact_json(&self, path: impl AsRef<Path>) -> Result<()> {
@@ -1348,23 +1479,54 @@ fn append_pair_features(row: &mut Vec<f64>, source: &[f32], target: &[f32]) {
     );
 }
 
-fn link_scores(embeddings: &[Vec<f32>], pairs: &[(usize, usize)]) -> Result<Vec<f64>> {
-    link_scores_with_backend(embeddings, pairs, &BackendSelection::default())
-}
-
 fn link_scores_with_backend(
     embeddings: &[Vec<f32>],
     pairs: &[(usize, usize)],
     backend: &BackendSelection,
 ) -> Result<Vec<f64>> {
-    backend_pair_sigmoid_scores_f32(backend, embeddings, pairs).map_err(|err| match err {
-        NeuralError::InvalidArgument(message)
-            if message.contains("pair scoring node ids must be within") =>
-        {
-            NeuralError::InvalidArgument("source or target node id exceeds node count".to_string())
-        }
-        other => other,
-    })
+    let cpu_backend = if !should_accelerate_link_scores(
+        backend,
+        pairs.len(),
+        embeddings.first().map_or(0, Vec::len),
+    ) {
+        Some(select_backend_for(
+            Some("cpu"),
+            BackendOperation::PairScoring,
+        )?)
+    } else {
+        None
+    };
+    backend_pair_sigmoid_scores_f32(cpu_backend.as_ref().unwrap_or(backend), embeddings, pairs)
+        .map_err(|err| match err {
+            cartoboost_accelerator::AcceleratorError::InvalidArgument(message)
+                if message.contains("pair scoring node ids must be within") =>
+            {
+                NeuralError::InvalidArgument(
+                    "source or target node id exceeds node count".to_string(),
+                )
+            }
+            other => other.into(),
+        })
+}
+
+fn should_accelerate_link_scores(
+    backend: &BackendSelection,
+    pair_count: usize,
+    embedding_width: usize,
+) -> bool {
+    backend.selected != "cpu"
+        && pair_count.saturating_mul(embedding_width) >= LINK_PAIR_DISPATCH_MIN_VALUES
+}
+
+fn validate_pair_backend(backend: &BackendSelection) -> Result<()> {
+    if backend_supports_operation(&backend.selected, BackendOperation::PairScoring) {
+        Ok(())
+    } else {
+        Err(NeuralError::InvalidArgument(format!(
+            "backend {:?} does not implement link-prediction pair scoring",
+            backend.selected
+        )))
+    }
 }
 
 fn typed_edges(edges: &[(usize, usize, usize)]) -> Vec<HeteroTypedEdge> {
@@ -1482,4 +1644,22 @@ fn validate_artifact_header(actual_type: &str, version: u32, expected_type: &str
 
 fn core_to_neural(err: cartoboost_core::CartoBoostError) -> NeuralError {
     NeuralError::InvalidArgument(err.to_string())
+}
+
+#[cfg(test)]
+mod dispatch_tests {
+    use super::*;
+
+    #[test]
+    fn link_inference_avoids_small_device_launches() {
+        for backend_name in crate::available_backends() {
+            let backend =
+                select_backend_for(Some(&backend_name), BackendOperation::PairScoring).unwrap();
+            assert!(!should_accelerate_link_scores(&backend, 1, 16));
+            assert_eq!(
+                should_accelerate_link_scores(&backend, 1_024, 16),
+                backend_name != "cpu"
+            );
+        }
+    }
 }

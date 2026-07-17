@@ -71,6 +71,8 @@ pub struct AutoForecastConfig {
     pub max_blend_weight: f64,
     pub max_direct_horizon: usize,
     pub max_candidate_count: Option<usize>,
+    #[serde(default = "default_backend")]
+    pub backend: String,
 }
 
 impl Default for AutoForecastConfig {
@@ -107,8 +109,13 @@ impl Default for AutoForecastConfig {
             max_blend_weight: 0.85,
             max_direct_horizon: 28,
             max_candidate_count: None,
+            backend: default_backend(),
         }
     }
+}
+
+fn default_backend() -> String {
+    "cpu".to_string()
 }
 
 pub struct AutoForecastModel {
@@ -437,58 +444,69 @@ fn build_candidate_with_direct_horizon(
     direct_horizon: usize,
 ) -> Result<Box<dyn Forecaster>> {
     match name {
-        LAG_EXPERT => Ok(Box::new(CartoBoostLagForecaster::new_with_target_mode(
+        LAG_EXPERT => Ok(Box::new(CartoBoostLagForecaster::new_with_backend(
             config.lag_config.clone(),
             config.booster_config.clone(),
             config.target_mode,
+            GlobalForecastSampleWeightMode::Uniform,
+            Some(&config.backend),
         )?)),
-        RECENCY_WEIGHTED_LAG_EXPERT => Ok(Box::new(
-            CartoBoostLagForecaster::new_with_target_mode_and_sample_weight(
-                config.lag_config.clone(),
-                config.booster_config.clone(),
-                config.target_mode,
-                GlobalForecastSampleWeightMode::ExponentialRecency {
-                    half_life: recency_half_life(config),
-                },
-            )?,
-        )),
+        RECENCY_WEIGHTED_LAG_EXPERT => Ok(Box::new(CartoBoostLagForecaster::new_with_backend(
+            config.lag_config.clone(),
+            config.booster_config.clone(),
+            config.target_mode,
+            GlobalForecastSampleWeightMode::ExponentialRecency {
+                half_life: recency_half_life(config),
+            },
+            Some(&config.backend),
+        )?)),
         SCALED_LAG_EXPERT => Ok(Box::new(LocalStandardScaledForecaster::new(
-            Box::new(CartoBoostLagForecaster::new_with_target_mode(
+            Box::new(CartoBoostLagForecaster::new_with_backend(
                 config.lag_config.clone(),
                 config.booster_config.clone(),
                 config.target_mode,
+                GlobalForecastSampleWeightMode::Uniform,
+                Some(&config.backend),
             )?),
             1e-6,
             SCALED_LAG_EXPERT,
         )?)),
-        DELTA_LAG_EXPERT => Ok(Box::new(CartoBoostLagForecaster::new_with_target_mode(
+        DELTA_LAG_EXPERT => Ok(Box::new(CartoBoostLagForecaster::new_with_backend(
             config.lag_config.clone(),
             config.booster_config.clone(),
             GlobalForecastTargetMode::DeltaFromLast,
+            GlobalForecastSampleWeightMode::Uniform,
+            Some(&config.backend),
         )?)),
         SCALED_DELTA_LAG_EXPERT => Ok(Box::new(LocalStandardScaledForecaster::new(
-            Box::new(CartoBoostLagForecaster::new_with_target_mode(
+            Box::new(CartoBoostLagForecaster::new_with_backend(
                 config.lag_config.clone(),
                 config.booster_config.clone(),
                 GlobalForecastTargetMode::DeltaFromLast,
+                GlobalForecastSampleWeightMode::Uniform,
+                Some(&config.backend),
             )?),
             1e-6,
             SCALED_DELTA_LAG_EXPERT,
         )?)),
-        SEASONAL_DELTA_LAG_EXPERT => Ok(Box::new(CartoBoostLagForecaster::new_with_target_mode(
+        SEASONAL_DELTA_LAG_EXPERT => Ok(Box::new(CartoBoostLagForecaster::new_with_backend(
             config.lag_config.clone(),
             config.booster_config.clone(),
             GlobalForecastTargetMode::SeasonalDelta {
                 season_length: config.season_length,
             },
+            GlobalForecastSampleWeightMode::Uniform,
+            Some(&config.backend),
         )?)),
         SCALED_SEASONAL_DELTA_LAG_EXPERT => Ok(Box::new(LocalStandardScaledForecaster::new(
-            Box::new(CartoBoostLagForecaster::new_with_target_mode(
+            Box::new(CartoBoostLagForecaster::new_with_backend(
                 config.lag_config.clone(),
                 config.booster_config.clone(),
                 GlobalForecastTargetMode::SeasonalDelta {
                     season_length: config.season_length,
                 },
+                GlobalForecastSampleWeightMode::Uniform,
+                Some(&config.backend),
             )?),
             1e-6,
             SCALED_SEASONAL_DELTA_LAG_EXPERT,
@@ -497,34 +515,40 @@ fn build_candidate_with_direct_horizon(
             let mut lag_config = config.lag_config.clone();
             push_unique_u8(&mut lag_config.ewm_alpha_percents, 90);
             sort_dedup_u8(&mut lag_config.ewm_alpha_percents);
-            Ok(Box::new(CartoBoostLagForecaster::new_with_target_mode(
+            Ok(Box::new(CartoBoostLagForecaster::new_with_backend(
                 lag_config,
                 config.booster_config.clone(),
                 config.target_mode,
+                GlobalForecastSampleWeightMode::Uniform,
+                Some(&config.backend),
             )?))
         }
         DIRECT_EXPERT => Ok(Box::new(FixedHorizonDirectForecaster::new(
-            DirectAutoMember::Direct(Box::new(CartoBoostDirectForecaster::new(
+            DirectAutoMember::Direct(Box::new(CartoBoostDirectForecaster::new_with_backend(
                 config.lag_config.clone(),
                 config.booster_config.clone(),
+                Some(&config.backend),
             )?)),
             direct_horizon,
             DIRECT_EXPERT,
         )?)),
         RECTIFIED_RECURSIVE_EXPERT => Ok(Box::new(FixedHorizonDirectForecaster::new(
-            DirectAutoMember::Rectified(Box::new(RectifiedRecursiveForecaster::new(
+            DirectAutoMember::Rectified(Box::new(RectifiedRecursiveForecaster::new_with_backend(
                 config.lag_config.clone(),
                 config.booster_config.clone(),
+                Some(&config.backend),
             )?)),
             direct_horizon,
             RECTIFIED_RECURSIVE_EXPERT,
         )?)),
         LOG1P_SCALED_LAG_EXPERT => Ok(Box::new(Log1pForecaster::new(
             Box::new(LocalStandardScaledForecaster::new(
-                Box::new(CartoBoostLagForecaster::new_with_target_mode(
+                Box::new(CartoBoostLagForecaster::new_with_backend(
                     config.lag_config.clone(),
                     config.booster_config.clone(),
                     config.target_mode,
+                    GlobalForecastSampleWeightMode::Uniform,
+                    Some(&config.backend),
                 )?),
                 1e-6,
                 "log1p_scaled_lag_transformed",
@@ -539,6 +563,7 @@ fn build_candidate_with_direct_horizon(
             objective: config.objective,
             shrinkage_strength: 4.0,
             seasonal_bucket_period: Some(config.season_length),
+            backend: config.backend.clone(),
         })?)),
         INTERMITTENT_DEMAND_EXPERT => Ok(Box::new(IntermittentDemandForecaster::new(
             IntermittentDemandConfig {

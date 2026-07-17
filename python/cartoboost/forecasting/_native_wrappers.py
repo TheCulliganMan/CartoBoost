@@ -48,6 +48,7 @@ class NativeForecastWrapper(ArtifactPersistenceMixin):
         native_args = self._coerce_fit_args(args)
         result = fit(*native_args, **kwargs)
         self._native_model = native_model if result is None else result
+        self.selected_backend_ = _native_selected_backend(self._native_model, self._params)
         self._fit_artifact = _encode_fit_artifact(args, kwargs)
         self.is_fitted_ = True
         return self
@@ -80,6 +81,7 @@ class NativeForecastWrapper(ArtifactPersistenceMixin):
         self._params.update(params)
         self._native_model = None
         self._fit_artifact = None
+        self.__dict__.pop("selected_backend_", None)
         self.is_fitted_ = False
         return self
 
@@ -163,6 +165,7 @@ class NativeForecastWrapper(ArtifactPersistenceMixin):
         obj = cls.__new__(cls)
         NativeForecastWrapper.__init__(obj)
         obj._native_model = load(str(path))
+        obj.selected_backend_ = _native_selected_backend(obj._native_model, obj._params)
         obj._fit_artifact = None
         obj.is_fitted_ = True
         return obj
@@ -231,6 +234,25 @@ class NativeForecastWrapper(ArtifactPersistenceMixin):
         if native_model is not None and hasattr(native_model, name):
             return getattr(native_model, name)
         raise AttributeError(name)
+
+
+def _native_selected_backend(native_model: Any, params: dict[str, Any]) -> str:
+    backend = getattr(native_model, "backend", None)
+    if backend is not None:
+        value = backend() if callable(backend) else backend
+        if isinstance(value, str) and value:
+            return value
+    metadata_json = getattr(native_model, "metadata_json", None)
+    if callable(metadata_json):
+        metadata = json.loads(str(metadata_json()))
+        value = metadata.get("backend") if isinstance(metadata, dict) else None
+        if isinstance(value, dict):
+            selected = value.get("selected")
+            if isinstance(selected, str) and selected:
+                return selected
+        if isinstance(value, str) and value:
+            return value
+    return str(params.get("backend", "cpu"))
 
 
 def _native_class(name: str) -> Any | None:
@@ -377,7 +399,7 @@ def _forecast_frame_from_artifact(payload: Any) -> Any:
         import pandas as pd
     except ImportError as exc:  # pragma: no cover - pandas is an explicit forecast dependency.
         raise ImportError(
-            "loading a forecasting artifact requires pandas; install cartoboost[pandas]"
+            "loading a forecasting artifact requires pandas; install it with `pip install pandas`"
         ) from exc
     data = pd.DataFrame.from_records(records, columns=[str(column) for column in columns])
     return ForecastFrame.from_pandas(

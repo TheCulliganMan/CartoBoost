@@ -1,5 +1,10 @@
 use crate::forecasting::HierarchySpec;
 use crate::{CartoBoostError, Result};
+use cartoboost_accelerator::{
+    backend_dense_layer_f32, select_backend_for, BackendOperation, BackendSelection,
+};
+
+const RECONCILIATION_DENSE_DISPATCH_MIN_OPS: usize = 16_384;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ReconciliationMethod {
@@ -22,6 +27,7 @@ pub enum ReconciliationMethod {
 pub struct Reconciler {
     hierarchy: HierarchySpec,
     method: ReconciliationMethod,
+    backend: BackendSelection,
 }
 
 pub fn proportional_total_reconciliation(
@@ -77,7 +83,25 @@ pub fn proportional_total_reconciliation(
 
 impl Reconciler {
     pub fn new(hierarchy: HierarchySpec, method: ReconciliationMethod) -> Self {
-        Self { hierarchy, method }
+        Self::new_with_backend(hierarchy, method, Some("cpu")).expect("CPU dense backend")
+    }
+
+    pub fn new_with_backend(
+        hierarchy: HierarchySpec,
+        method: ReconciliationMethod,
+        backend: Option<&str>,
+    ) -> Result<Self> {
+        let backend = select_backend_for(backend, BackendOperation::Dense)
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+        Ok(Self {
+            hierarchy,
+            method,
+            backend,
+        })
+    }
+
+    pub fn backend(&self) -> &BackendSelection {
+        &self.backend
     }
 
     pub fn hierarchy(&self) -> &HierarchySpec {
@@ -128,8 +152,8 @@ impl Reconciler {
 
     fn bottom_up(&self, base_forecasts: &[Vec<f64>]) -> Result<Vec<Vec<f64>>> {
         let horizon = base_forecasts[0].len();
-        let mut out = vec![vec![0.0; horizon]; self.hierarchy.node_count()];
-        for h in 0..horizon {
+        let mut bottom_by_horizon = Vec::with_capacity(horizon);
+        for (h, _) in base_forecasts[0].iter().enumerate() {
             let bottom = (0..self.hierarchy.node_count())
                 .filter_map(|node_idx| {
                     self.hierarchy
@@ -143,19 +167,16 @@ impl Reconciler {
                         acc
                     },
                 );
-            let aggregated = self.hierarchy.aggregate_bottom_values(&bottom)?;
-            for (node_idx, value) in aggregated.into_iter().enumerate() {
-                out[node_idx][h] = value;
-            }
+            bottom_by_horizon.push(bottom);
         }
-        Ok(out)
+        self.aggregate_bottom_horizons(&bottom_by_horizon)
     }
 
     fn top_down(&self, base_forecasts: &[Vec<f64>]) -> Result<Vec<Vec<f64>>> {
         let horizon = base_forecasts[0].len();
         let root_idx = self.root_index()?;
-        let mut out = vec![vec![0.0; horizon]; self.hierarchy.node_count()];
-        for h in 0..horizon {
+        let mut bottom_by_horizon = Vec::with_capacity(horizon);
+        for (h, _) in base_forecasts[0].iter().enumerate() {
             let bottom_base = self.bottom_base_for_horizon(base_forecasts, h);
             let proportions = normalized_positive_proportions(&bottom_base)?;
             let top = base_forecasts[root_idx][h];
@@ -163,12 +184,9 @@ impl Reconciler {
                 .iter()
                 .map(|proportion| top * proportion)
                 .collect::<Vec<_>>();
-            let aggregated = self.hierarchy.aggregate_bottom_values(&bottom)?;
-            for (node_idx, value) in aggregated.into_iter().enumerate() {
-                out[node_idx][h] = value;
-            }
+            bottom_by_horizon.push(bottom);
         }
-        Ok(out)
+        self.aggregate_bottom_horizons(&bottom_by_horizon)
     }
 
     fn middle_out(&self, base_forecasts: &[Vec<f64>], level: usize) -> Result<Vec<Vec<f64>>> {
@@ -180,7 +198,7 @@ impl Reconciler {
             )));
         }
         let horizon = base_forecasts[0].len();
-        let mut out = vec![vec![0.0; horizon]; self.hierarchy.node_count()];
+        let mut bottom_by_horizon = Vec::with_capacity(horizon);
         for h in 0..horizon {
             let mut bottom = vec![0.0; self.hierarchy.bottom_count()];
             for middle_idx in &middle_nodes {
@@ -198,12 +216,9 @@ impl Reconciler {
                     bottom[*bottom_idx] = base_forecasts[*middle_idx][h] * proportions[offset];
                 }
             }
-            let aggregated = self.hierarchy.aggregate_bottom_values(&bottom)?;
-            for (node_idx, value) in aggregated.into_iter().enumerate() {
-                out[node_idx][h] = value;
-            }
+            bottom_by_horizon.push(bottom);
         }
-        Ok(out)
+        self.aggregate_bottom_horizons(&bottom_by_horizon)
     }
 
     fn project(&self, base_forecasts: &[Vec<f64>], variances: &[f64]) -> Result<Vec<Vec<f64>>> {
@@ -219,8 +234,8 @@ impl Reconciler {
             }
         }
 
-        let mut out = vec![vec![0.0; horizon]; self.hierarchy.node_count()];
-        for h in 0..horizon {
+        let mut bottom_by_horizon = Vec::with_capacity(horizon);
+        for (h, _) in base_forecasts[0].iter().enumerate() {
             let mut rhs = vec![0.0; bottom_count];
             for row in self.hierarchy.sparse_rows() {
                 let inv_var = 1.0 / variances[row.node_index];
@@ -229,12 +244,9 @@ impl Reconciler {
                 }
             }
             let bottom = solve_linear_system(gram.clone(), rhs)?;
-            let aggregated = self.hierarchy.aggregate_bottom_values(&bottom)?;
-            for (node_idx, value) in aggregated.into_iter().enumerate() {
-                out[node_idx][h] = value;
-            }
+            bottom_by_horizon.push(bottom);
         }
-        Ok(out)
+        self.aggregate_bottom_horizons(&bottom_by_horizon)
     }
 
     fn project_with_node_precision(
@@ -267,14 +279,45 @@ impl Reconciler {
             }
         }
 
-        let mut out = vec![vec![0.0; horizon]; node_count];
+        let weighted_panel = if self.backend.selected == "cpu"
+            || horizon
+                .saturating_mul(node_count)
+                .saturating_mul(node_count)
+                < RECONCILIATION_DENSE_DISPATCH_MIN_OPS
+        {
+            None
+        } else {
+            let features = (0..horizon)
+                .map(|h| {
+                    (0..node_count)
+                        .map(|node| base_forecasts[node][h] as f32)
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            let weights = (0..node_count)
+                .flat_map(|input| {
+                    (0..node_count).map(move |output| precision[output][input] as f32)
+                })
+                .collect::<Vec<_>>();
+            Some(
+                backend_dense_layer_f32(&self.backend, &features, &weights, &vec![0.0; node_count])
+                    .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?,
+            )
+        };
+        let mut bottom_by_horizon = Vec::with_capacity(horizon);
         for h in 0..horizon {
-            let mut weighted_nodes = vec![0.0; node_count];
-            for row in 0..node_count {
-                weighted_nodes[row] = (0..node_count)
-                    .map(|col| precision[row][col] * base_forecasts[col][h])
-                    .sum();
-            }
+            let weighted_nodes = weighted_panel
+                .as_ref()
+                .map(|panel| panel[h].iter().map(|&value| f64::from(value)).collect())
+                .unwrap_or_else(|| {
+                    (0..node_count)
+                        .map(|row| {
+                            (0..node_count)
+                                .map(|col| precision[row][col] * base_forecasts[col][h])
+                                .sum()
+                        })
+                        .collect::<Vec<_>>()
+                });
 
             let mut rhs = vec![0.0; bottom_count];
             for row in self.hierarchy.sparse_rows() {
@@ -283,9 +326,49 @@ impl Reconciler {
                 }
             }
             let bottom = solve_linear_system(gram.clone(), rhs)?;
-            let aggregated = self.hierarchy.aggregate_bottom_values(&bottom)?;
-            for (node_idx, value) in aggregated.into_iter().enumerate() {
-                out[node_idx][h] = value;
+            bottom_by_horizon.push(bottom);
+        }
+        self.aggregate_bottom_horizons(&bottom_by_horizon)
+    }
+
+    fn aggregate_bottom_horizons(&self, bottom_by_horizon: &[Vec<f64>]) -> Result<Vec<Vec<f64>>> {
+        let horizon = bottom_by_horizon.len();
+        let nodes = self.hierarchy.node_count();
+        if self.backend.selected == "cpu"
+            || horizon
+                .saturating_mul(self.hierarchy.bottom_count())
+                .saturating_mul(nodes)
+                < RECONCILIATION_DENSE_DISPATCH_MIN_OPS
+        {
+            let mut out = vec![vec![0.0; horizon]; nodes];
+            for (h, bottom) in bottom_by_horizon.iter().enumerate() {
+                for (node, value) in self
+                    .hierarchy
+                    .aggregate_bottom_values(bottom)?
+                    .into_iter()
+                    .enumerate()
+                {
+                    out[node][h] = value;
+                }
+            }
+            return Ok(out);
+        }
+        let features = bottom_by_horizon
+            .iter()
+            .map(|row| row.iter().map(|value| *value as f32).collect())
+            .collect::<Vec<Vec<_>>>();
+        let mut weights = vec![0.0_f32; self.hierarchy.bottom_count() * nodes];
+        for row in self.hierarchy.sparse_rows() {
+            for (bottom, weight) in &row.bottom_weights {
+                weights[*bottom * nodes + row.node_index] = *weight as f32;
+            }
+        }
+        let panel = backend_dense_layer_f32(&self.backend, &features, &weights, &vec![0.0; nodes])
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+        let mut out = vec![vec![0.0; horizon]; nodes];
+        for (h, row) in panel.into_iter().enumerate() {
+            for (node, value) in row.into_iter().enumerate() {
+                out[node][h] = f64::from(value);
             }
         }
         Ok(out)

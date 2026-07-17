@@ -6,26 +6,26 @@ license.workspace = true
 
 [dependencies]
 cartoboost-core = { path = "../cartoboost-core" }
+cartoboost-accelerator = { path = "../cartoboost-accelerator" }
 chrono.workspace = true
 rayon = "1.11"
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = "0.10"
 thiserror.workspace = true
-libloading = { version = "0.8", optional = true }
-wgpu = { version = "29", optional = true }
-futures-channel = { version = "0.3", optional = true }
 
-[target.'cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos", target_os = "visionos"))'.dependencies]
-metal = { version = "0.33", optional = true }
-objc = { version = "0.2.7", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
 
 [features]
 default = []
-cuda = ["dep:libloading"]
-rocm = ["dep:libloading"]
-metal = ["dep:metal", "dep:objc"]
-webgpu = ["dep:futures-channel", "dep:wgpu"]
+# `cuda` remains the public feature used by downstream crates, but its only
+# implementation is CUDA Oxide.  Do not add a driver/NVRTC fallback here.
+cuda = ["cuda-oxide"]
+cuda-oxide = ["cartoboost-accelerator/cuda-oxide"]
+rocm = ["cartoboost-accelerator/rocm"]
+hip = ["rocm"]
+metal = ["cartoboost-accelerator/metal"]
+webgpu = ["cartoboost-accelerator/webgpu"]
+directml = ["cartoboost-accelerator/directml"]

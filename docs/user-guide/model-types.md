@@ -1,15 +1,14 @@
 # Choose A CartoBoost Model
 
-Use this page as the user-guide router. CartoBoost has several first-class
-model surfaces, and the right entry point depends on the scientific structure
-in the data: row-level place/time effects, regular time series, shared panels,
-direct graph structure, or learned ID embeddings.
+Choose a model from the shape of the prediction problem: independent rows,
+regular time series, related panels, connected entities, repeated identifiers,
+spatial interpolation, or intervention effects.
 
 Use the model whose assumptions match the unit being predicted. Then compare it
 against simpler baselines under the same split before interpreting a gain.
 
-Use `cartoboost.models.ModelRegistry` to inspect supported model metadata.
-Automatic geo model selection is intentionally not shipped in v0.3; choose a
+Use `cartoboost.models.ModelRegistry` when application code needs model metadata.
+For analysis, choose a
 registered estimator explicitly and pair it with a native validation manifest.
 
 ## Start With The Scientific Unit
@@ -62,7 +61,7 @@ The executable contract for this registry example is checked by
 
 Select the estimator that matches the study design, then use
 `cartoboost.validation` native split-manifest constructors to make the
-leakage policy explicit. The v0.3 distribution does not include an automatic
+leakage policy explicit. Automatic geo model selection is intentionally not shipped. The v0.3 distribution does not include an automatic
 geo selector or a model stack; any future return requires native selection
 behavior and real-family evidence.
 

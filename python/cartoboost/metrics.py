@@ -10,6 +10,8 @@ from typing import Literal
 import numpy as np
 
 from . import _native
+from .accelerators import dense_layer, pairwise_squared_distances, workload_decision
+from .config import Backend
 
 __path__ = [str(Path(__file__).with_suffix(""))]
 
@@ -108,6 +110,7 @@ def pinball_loss(
     *,
     quantile: float,
     sample_weight: object | None = None,
+    backend: Backend | str = Backend.CPU,
 ) -> float:
     """Return mean pinball loss for a quantile prediction.
 
@@ -119,9 +122,18 @@ def pinball_loss(
     if not 0.0 < quantile < 1.0:
         raise ValueError("quantile must be between 0 and 1")
     y_true_arr, y_pred_arr = _paired_vectors(y_true, y_pred, "y_true", "y_pred")
-    residual = y_true_arr - y_pred_arr
-    losses = np.maximum(quantile * residual, (quantile - 1.0) * residual)
-    return _weighted_mean(losses, sample_weight)
+    weights = None if sample_weight is None else _as_float_vector(sample_weight, "sample_weight")
+    if weights is not None and weights.shape != y_true_arr.shape:
+        raise ValueError("sample_weight must have the same length as y_true")
+    return float(
+        _native.prob_pinball_loss_value(
+            y_true_arr.tolist(),
+            y_pred_arr.tolist(),
+            float(quantile),
+            str(backend),
+            None if weights is None else weights.tolist(),
+        )
+    )
 
 
 def interval_coverage(
@@ -130,6 +142,7 @@ def interval_coverage(
     upper: object,
     *,
     sample_weight: object | None = None,
+    backend: Backend | str = Backend.CPU,
 ) -> float:
     """Return the share of targets inside inclusive prediction intervals.
 
@@ -142,8 +155,18 @@ def interval_coverage(
     _, upper_arr = _paired_vectors(y_true_arr, upper, "y_true", "upper")
     if np.any(lower_arr > upper_arr):
         raise ValueError("lower bounds must be less than or equal to upper bounds")
-    covered = (y_true_arr >= lower_arr) & (y_true_arr <= upper_arr)
-    return _weighted_mean(covered.astype(float), sample_weight)
+    weights = None if sample_weight is None else _as_float_vector(sample_weight, "sample_weight")
+    if weights is not None and weights.shape != y_true_arr.shape:
+        raise ValueError("sample_weight must have the same length as y_true")
+    return float(
+        _native.prob_interval_coverage_value(
+            y_true_arr.tolist(),
+            lower_arr.tolist(),
+            upper_arr.tolist(),
+            str(backend),
+            None if weights is None else weights.tolist(),
+        )
+    )
 
 
 def mean_interval_width(
@@ -151,6 +174,7 @@ def mean_interval_width(
     upper: object,
     *,
     sample_weight: object | None = None,
+    backend: Backend | str = Backend.CPU,
 ) -> float:
     """Return the mean width of prediction intervals.
 
@@ -163,7 +187,17 @@ def mean_interval_width(
     widths = upper_arr - lower_arr
     if np.any(widths < 0.0):
         raise ValueError("lower bounds must be less than or equal to upper bounds")
-    return _weighted_mean(widths, sample_weight)
+    weights = None if sample_weight is None else _as_float_vector(sample_weight, "sample_weight")
+    if weights is not None and weights.shape != lower_arr.shape:
+        raise ValueError("sample_weight must have the same length as lower")
+    return float(
+        _native.prob_mean_interval_width_value(
+            lower_arr.tolist(),
+            upper_arr.tolist(),
+            str(backend),
+            None if weights is None else weights.tolist(),
+        )
+    )
 
 
 def logloss(
@@ -196,6 +230,7 @@ def brier_score(
     *,
     positive_label: object | None = None,
     sample_weight: object | None = None,
+    backend: Backend | str = Backend.CPU,
 ) -> float:
     """Return the binary Brier score for positive-class probabilities.
 
@@ -210,7 +245,17 @@ def brier_score(
         raise ValueError("y_true and y_proba must have matching row counts")
     positive = _resolve_positive_label(truth, positive_label)
     target = np.asarray([value == positive for value in truth.tolist()], dtype=float)
-    return _weighted_mean((proba - target) ** 2, sample_weight)
+    weights = None if sample_weight is None else _as_float_vector(sample_weight, "sample_weight")
+    if weights is not None and weights.shape != target.shape:
+        raise ValueError("sample_weight must have the same length as y_true")
+    return float(
+        _native.prob_brier_score_value(
+            target.tolist(),
+            proba.tolist(),
+            str(backend),
+            None if weights is None else weights.tolist(),
+        )
+    )
 
 
 def roc_auc(
@@ -576,6 +621,7 @@ def residual_morans_i(
     weights: Literal["inverse_distance", "radius"] = "inverse_distance",
     radius: float | None = None,
     distance_epsilon: float = 1e-12,
+    backend: Backend | str = Backend.CPU,
 ) -> float:
     """Return Moran's I for residual spatial autocorrelation.
 
@@ -601,7 +647,20 @@ def residual_morans_i(
     if denominator == 0.0:
         raise ValueError("residuals must have non-zero variance")
 
-    distances = _pairwise_distances(coords)
+    distance_work = int(coords.shape[0] * coords.shape[0] * coords.shape[1])
+    dispatch = workload_decision(str(backend), "pairwise_distance", distance_work, 16_384)
+    if dispatch["executed"] == "cpu":
+        distances = _pairwise_distances(coords)
+    else:
+        distances = np.sqrt(
+            np.maximum(
+                pairwise_squared_distances(
+                    coords,
+                    backend=str(dispatch["executed"]),
+                ).astype(float),
+                0.0,
+            )
+        )
     if weights == "inverse_distance":
         weight_matrix = 1.0 / np.maximum(distances, distance_epsilon)
         np.fill_diagonal(weight_matrix, 0.0)
@@ -616,7 +675,23 @@ def residual_morans_i(
     if weight_sum == 0.0:
         raise ValueError("spatial weights contain no neighbor pairs")
 
-    numerator = float(centered @ weight_matrix @ centered)
+    contraction_work = int(weight_matrix.shape[0] * weight_matrix.shape[1])
+    contraction_dispatch = workload_decision(
+        str(backend),
+        "dense",
+        contraction_work,
+        16_384,
+    )
+    if contraction_dispatch["executed"] == "cpu":
+        weighted_residuals = weight_matrix @ centered
+    else:
+        weighted_residuals = dense_layer(
+            weight_matrix,
+            centered.reshape(-1, 1),
+            np.zeros(1, dtype=np.float32),
+            backend=str(contraction_dispatch["executed"]),
+        ).astype(float)[:, 0]
+    numerator = float(np.dot(centered, weighted_residuals))
     return coords.shape[0] / weight_sum * numerator / denominator
 
 

@@ -3,6 +3,7 @@
 from .. import _forecasting_catalog as _catalog
 from .auto import AutoForecastConfig, AutoForecaster
 from .backtesting import BacktestFoldResult, BacktestResult, RollingOriginBacktester
+from .direct import CartoBoostDirectForecaster, RectifiedRecursiveForecaster
 from .global_models import CartoBoostLagForecaster
 from .lag_features import LagConfig
 from .local import NaiveForecaster, SeasonalNaiveForecaster
@@ -16,6 +17,7 @@ __all__ = [
     "BacktestFoldResult",
     "BacktestResult",
     "CartoBoostLagForecaster",
+    "CartoBoostDirectForecaster",
     "ForecastFold",
     "ForecastFrame",
     "ForecastMetricSet",
@@ -23,6 +25,7 @@ __all__ = [
     "LagConfig",
     "NaiveForecaster",
     "RollingOriginBacktester",
+    "RectifiedRecursiveForecaster",
     "RollingOriginSplitter",
     "SeasonalNaiveForecaster",
     *_catalog.__all__,

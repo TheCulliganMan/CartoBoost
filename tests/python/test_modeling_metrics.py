@@ -1,3 +1,4 @@
+import cartoboost.metrics as metrics_module
 import numpy as np
 import pytest
 from cartoboost import (
@@ -18,6 +19,7 @@ from cartoboost import (
     roc_auc,
     spatial_cv_gap,
 )
+from cartoboost.accelerators import available_backends
 
 
 def test_conformal_residual_quantile_builds_calibrated_intervals():
@@ -55,6 +57,44 @@ def test_pinball_interval_coverage_and_width_metrics():
     assert mean_interval_width(lower, upper) == pytest.approx(2.125)
 
 
+@pytest.mark.parametrize("backend", available_backends("affine"))
+def test_pinball_loss_accepts_every_affine_backend(backend):
+    assert pinball_loss(
+        [1.0, 3.0],
+        [0.5, 4.0],
+        quantile=0.8,
+        backend=backend,
+    ) == pytest.approx(0.3)
+
+
+@pytest.mark.parametrize("backend", available_backends("affine"))
+def test_weighted_pinball_loss_accepts_every_affine_backend(backend):
+    assert pinball_loss(
+        [1.0, 3.0],
+        [0.5, 4.0],
+        quantile=0.8,
+        sample_weight=[1.0, 3.0],
+        backend=backend,
+    ) == pytest.approx(0.25)
+
+
+@pytest.mark.parametrize("backend", available_backends("affine"))
+def test_weighted_interval_metrics_accept_every_affine_backend(backend):
+    assert interval_coverage(
+        [1.0, 3.0],
+        [0.0, 2.0],
+        [2.0, 2.5],
+        sample_weight=[1.0, 3.0],
+        backend=backend,
+    ) == pytest.approx(0.25)
+    assert mean_interval_width(
+        [0.0, 2.0],
+        [2.0, 5.0],
+        sample_weight=[1.0, 3.0],
+        backend=backend,
+    ) == pytest.approx(2.75)
+
+
 def test_jitter_volatility_uses_per_sample_instability():
     predictions = np.array(
         [
@@ -79,6 +119,16 @@ def test_classification_metrics_cover_probability_quality():
     assert roc_auc(y_true, y_proba) == pytest.approx(1.0)
     assert pr_auc(y_true, y_proba) == pytest.approx(1.0)
     assert ece_calibration_error(y_true, y_proba, n_bins=2) == pytest.approx(0.15)
+
+
+@pytest.mark.parametrize("backend", available_backends("affine"))
+def test_weighted_brier_score_accepts_every_affine_backend(backend):
+    assert brier_score(
+        [0, 1],
+        [0.25, 0.75],
+        sample_weight=[1.0, 3.0],
+        backend=backend,
+    ) == pytest.approx(0.0625)
 
 
 def test_classification_metrics_accept_mixed_hashable_labels():
@@ -212,6 +262,42 @@ def test_residual_morans_i_supports_inverse_distance_and_radius_weights():
 
     assert inverse_i == pytest.approx(-1.0 / 13.0)
     assert radius_i == pytest.approx(1.0 / 3.0)
+
+
+def test_residual_morans_i_dispatches_distance_and_contraction(monkeypatch):
+    calls: list[tuple[str, str]] = []
+
+    def decision(backend, operation, workload_size, minimum_accelerated_size):
+        calls.append(("decision", operation))
+        return {"executed": "cpu" if backend == "cpu" else "cuda"}
+
+    def distances(left, right=None, backend=None):
+        calls.append(("distance", str(backend)))
+        left_array = np.asarray(left, dtype=float)
+        right_array = left_array if right is None else np.asarray(right, dtype=float)
+        delta = left_array[:, None, :] - right_array[None, :, :]
+        return np.sum(delta * delta, axis=2).astype(np.float32)
+
+    def dense(features, weights, biases, backend=None):
+        calls.append(("dense", str(backend)))
+        return np.asarray(features, dtype=np.float32) @ np.asarray(
+            weights, dtype=np.float32
+        ) + np.asarray(biases, dtype=np.float32)
+
+    monkeypatch.setattr(metrics_module, "workload_decision", decision)
+    monkeypatch.setattr(metrics_module, "pairwise_squared_distances", distances)
+    monkeypatch.setattr(metrics_module, "dense_layer", dense)
+    coordinates = np.arange(256, dtype=float).reshape(-1, 1)
+    residuals = np.sin(coordinates[:, 0] * 0.1)
+
+    accelerated = residual_morans_i(coordinates, residuals, backend="cuda")
+    expected = residual_morans_i(coordinates, residuals, backend="cpu")
+
+    assert accelerated == pytest.approx(expected, rel=1e-5, abs=1e-5)
+    assert ("decision", "pairwise_distance") in calls
+    assert ("decision", "dense") in calls
+    assert ("distance", "cuda") in calls
+    assert ("dense", "cuda") in calls
 
 
 def test_metric_validation_rejects_bad_shapes_and_weights():

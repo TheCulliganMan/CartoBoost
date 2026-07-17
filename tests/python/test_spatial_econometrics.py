@@ -4,6 +4,7 @@ import pickle
 
 import numpy as np
 import pytest
+from cartoboost.accelerators import available_backends
 from cartoboost.spatial_econometrics import (
     SpatialDurbinRegressor,
     SpatialErrorRegressor,
@@ -76,10 +77,27 @@ def test_spatial_lag_predicts_and_summarizes() -> None:
     assert summary["model"] == "SpatialLagRegressor"
     assert summary["diagnostics"]["rho"] is not None
     assert np.isfinite(summary["diagnostics"]["residual_morans_i"])
-    assert model.get_params() == {"row_standardize": True}
+    assert model.get_params() == {"row_standardize": True, "backend": "cpu"}
     expected_r2 = 1.0 - np.sum((y - pred) ** 2) / np.sum((y - np.mean(y)) ** 2)
     assert model.score(x, y, spatial_weights=weights) == pytest.approx(expected_r2)
     assert model.metadata_["fitted"] is True
+    assert model.metadata_["backend"] == {"requested": "cpu", "selected": "cpu"}
+
+
+def test_spatial_lag_public_model_accepts_every_complete_backend() -> None:
+    weights, dense_weights, x, innovations = _identified_ring_fixture()
+    y = _spatial_lag_target(dense_weights, x, innovations, rho=0.35, beta=1.2)
+    expected = (
+        SpatialLagRegressor(backend="cpu")
+        .fit(x, y, spatial_weights=weights)
+        .predict(x, spatial_weights=weights)
+    )
+
+    for backend in available_backends("csr_diffusion"):
+        model = SpatialLagRegressor(backend=backend).fit(x, y, spatial_weights=weights)
+        actual = model.predict(x, spatial_weights=weights)
+        assert model.backend_ == backend
+        np.testing.assert_allclose(actual, expected, rtol=2.0e-4, atol=2.0e-4)
 
 
 def test_spatial_error_reports_lambda() -> None:
@@ -112,6 +130,7 @@ def test_spatial_durbin_effects_and_save_load(tmp_path) -> None:
     assert loaded.summary()["diagnostics"]["total_effects"] is not None
     assert model.durbin_coef_.shape == (1,)
     np.testing.assert_allclose(model.durbin_coef_, loaded.durbin_coef_)
+    assert loaded.backend_ == "cpu"
     assert model.summary()["durbin_coefficients"] == pytest.approx(model.durbin_coef_.tolist())
     with pytest.raises(ValueError, match="SpatialLagRegressor requires SpatialLag"):
         SpatialLagRegressor.load(path)

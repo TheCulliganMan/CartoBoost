@@ -102,6 +102,10 @@ def test_market_panel_graph_adapter_requires_explicit_complete_inputs(monkeypatc
             self.target_names = args[2]
 
     class NativeGraphTemporalFrame:
+        @staticmethod
+        def from_numpy(*args):
+            return NativeGraphTemporalFrame(*args[:9])
+
         def __init__(
             self,
             node_ids,
@@ -204,6 +208,10 @@ def test_graph_temporal_frame_and_dcrnn_delegate_to_native(monkeypatch):
     calls = []
 
     class NativeGraphTemporalFrame:
+        @staticmethod
+        def from_numpy(*args):
+            return NativeGraphTemporalFrame(*args[:9])
+
         def __init__(
             self,
             node_ids,
@@ -280,8 +288,50 @@ def test_graph_temporal_frame_and_dcrnn_delegate_to_native(monkeypatch):
     assert calls[2][0] == "fit"
 
 
+def test_graph_temporal_frame_requires_current_native_buffer_api(monkeypatch):
+    import cartoboost
+
+    monkeypatch.setattr(
+        cartoboost,
+        "_native",
+        SimpleNamespace(GraphTemporalFrame=object),
+        raising=False,
+    )
+    with np.testing.assert_raises_regex(RuntimeError, "from_numpy is required"):
+        GraphTemporalFrame(
+            node_ids=["a"],
+            timestamps=[0, 1],
+            target=[[1.0], [2.0]],
+            indptr=[0, 0],
+            indices=[],
+            data=[],
+            horizon=1,
+            frequency="hourly",
+        )
+
+
+def test_native_graph_frame_does_not_expose_list_constructor():
+    from cartoboost import _native
+
+    with np.testing.assert_raises(TypeError):
+        _native.GraphTemporalFrame(
+            ["a"],
+            [0, 1],
+            [[1.0], [2.0]],
+            [0, 0],
+            [],
+            [],
+            1,
+            "hourly",
+        )
+
+
 def test_dcrnn_backtest_accepts_rolling_origin_splitter(monkeypatch):
     class NativeGraphTemporalFrame:
+        @staticmethod
+        def from_numpy(*args):
+            return NativeGraphTemporalFrame(*args[:9])
+
         def __init__(
             self,
             node_ids,
@@ -472,6 +522,41 @@ def test_paper_graph_transformers_are_native_backed_and_persistent(tmp_path):
         report = model.metadata_["architecture_report"]
         assert report["direct_multi_horizon"] is True
         assert report["trainable_forecast_head"] is True
+        if model_type is LSTTNForecaster:
+            inventory = model.parameter_inventory()
+            assert inventory
+            assert all(
+                {
+                    "name",
+                    "shape",
+                    "byte_size",
+                    "ownership",
+                    "optimizer_ownership",
+                    "hash",
+                    "node_count_dependent",
+                }
+                <= entry.keys()
+                for entry in inventory
+            )
+            assert not any(
+                entry["ownership"] == "shared" and entry["node_count_dependent"]
+                for entry in inventory
+            )
+            telemetry = model.memory_telemetry()
+            assert telemetry["total_accounted_bytes"] >= telemetry["parameter_bytes"]
+            assert telemetry["activation_tape_bytes"] > 0
+            assert telemetry["frozen_patch_cache_bytes"] > 0
+            assert telemetry["prediction_buffer_bytes"] > 0
+            diagnostics = model.edge_diagnostics()
+            assert {(row["source"], row["target"]) for row in diagnostics} == {
+                (1, 0),
+                (2, 1),
+                (0, 2),
+            }
+            assert all(
+                len(row["horizon_sensitivity"]) == 3 and row["normalized_attention"] >= 0.0
+                for row in diagnostics
+            )
         path = tmp_path / f"{model_type.__name__}.json"
         model.save(path)
         np.testing.assert_allclose(model_type.load(path).predict(3), prediction, atol=1e-12)
@@ -484,6 +569,51 @@ def test_lsttn_uses_long_history_defaults():
     assert model.get_params()["periodicity"] == 24
     assert model.get_params()["recent_window"] == 24 * 7
     assert model.get_params()["horizon"] == 24 * 7
+
+
+def test_lsttn_owner_scoped_prediction_and_edge_diagnostics_exclude_halos():
+    target = np.asarray(
+        [[1.0 + t * 0.1, 2.0 + t * 0.1, 3.0 + t * 0.1] for t in range(16)],
+        dtype=float,
+    )
+    frame = GraphTemporalFrame(
+        node_ids=["owner_a", "halo", "owner_b"],
+        timestamps=list(range(16)),
+        target=target,
+        indptr=[0, 1, 2, 3],
+        indices=[1, 2, 0],
+        data=[1.0, 1.0, 1.0],
+        horizon=2,
+        frequency="hourly",
+        owner_mask=[True, False, True],
+    )
+    model = LSTTNForecaster(
+        lookback=8,
+        hidden_size=4,
+        attention_heads=2,
+        graph_order=2,
+        experts=2,
+        periodicity=1,
+        recent_window=4,
+        horizon=2,
+        epochs=1,
+    ).fit(frame)
+    assert model.predict(2).shape == (2, 3)
+    assert model.predict_owned(2).shape == (2, 2)
+    assert {row["target"] for row in model.edge_diagnostics()} == {0, 2}
+    median = model.predict_median(2)
+    np.testing.assert_allclose(median, model.predict(2))
+    calibration_median = np.stack([median, median])
+    calibration_actual = calibration_median + np.array([[[0.1, -0.2, 0.3], [0.4, -0.5, 0.6]]] * 2)
+    intervals = model.predict_conformal(
+        2,
+        calibration_actual=calibration_actual,
+        calibration_median=calibration_median,
+        alpha=0.25,
+    )
+    assert len(intervals["radius_by_horizon"]) == 2
+    assert np.all(np.asarray(intervals["lower"]) <= np.asarray(intervals["median"]))
+    assert np.all(np.asarray(intervals["median"]) <= np.asarray(intervals["upper"]))
 
 
 def test_lsttn_temporal_widths_are_configurable_in_frame_rows():

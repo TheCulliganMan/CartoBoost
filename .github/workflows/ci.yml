@@ -13,6 +13,103 @@ permissions:
   contents: read
 
 jobs:
+  browser-webgpu-contract:
+    name: Browser WebGPU contract
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust with browser target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: browser-webgpu
+
+      - name: Check complete browser dependency graph
+        run: >-
+          cargo check -p cartoboost-wasm --target wasm32-unknown-unknown
+          --no-default-features --features webgpu
+
+  accelerator-contract:
+    name: Accelerator contract (${{ matrix.backend }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            backend: webgpu
+            toolchain: stable
+          - os: ubuntu-latest
+            backend: cuda
+            toolchain: nightly-2026-04-03
+          - os: ubuntu-latest
+            backend: rocm
+            toolchain: stable
+          - os: macos-latest
+            backend: metal
+            toolchain: stable
+          - os: windows-latest
+            backend: directml
+            toolchain: stable
+          - os: windows-latest
+            backend: webgpu
+            toolchain: stable
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ matrix.toolchain }}
+
+      - name: Install CUDA toolkit
+        if: matrix.backend == 'cuda'
+        uses: Jimver/cuda-toolkit@v0.2.35
+        with:
+          cuda: "12.6.3"
+
+      - name: Install CUDA codegen prerequisites
+        if: matrix.backend == 'cuda'
+        run: >-
+          rustup component add --toolchain ${{ matrix.toolchain }}
+          rust-src rustc-dev llvm-tools
+
+      - name: Install CUDA codegen driver
+        if: matrix.backend == 'cuda'
+        run: >-
+          cargo +${{ matrix.toolchain }} install --locked
+          --git https://github.com/NVlabs/cuda-oxide.git cargo-oxide
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: accelerator-${{ matrix.os }}-${{ matrix.backend }}
+
+      - name: Test accelerator dispatch and feature propagation
+        shell: bash
+        run: |
+          if [ "${{ matrix.backend }}" = "cuda" ]; then
+            # CUDA 12.6 ships an LLVM 7-based NVVM compiler, which cannot
+            # consume the device debug metadata emitted by default profiles.
+            # GitHub's hosted Linux runners do not expose libcuda or a GPU, so
+            # compile the real device modules rather than attempting to run a
+            # binary that the host cannot load.
+            RUSTFLAGS="-Cdebuginfo=0" RUSTUP_TOOLCHAIN="${{ matrix.toolchain }}" \
+              cargo oxide build -- -p cartoboost-accelerator --lib --features cuda
+          else
+            cargo +${{ matrix.toolchain }} test -p cartoboost-accelerator --lib --features "${{ matrix.backend }}"
+          fi
+          cargo +${{ matrix.toolchain }} check -p cartoboost-neural --features "${{ matrix.backend }}"
+          cargo +${{ matrix.toolchain }} check -p cartoboost-geo-st --features "${{ matrix.backend }}"
+          cargo +${{ matrix.toolchain }} check -p cartoboost-py --features "${{ matrix.backend }}"
+
   rust:
     name: Rust
     runs-on: ubuntu-latest

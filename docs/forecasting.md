@@ -1,15 +1,15 @@
 # Forecasting
 
-CartoBoost forecasting is organized around two docs surfaces:
+Forecasting documentation is split into two practical paths:
 
-- this page, for `ForecastFrame`, validation, metrics, artifacts, CLI workflows,
-  and benchmark evidence rules;
+- this page, for preparing time-series data, backtesting, metrics, saving
+  results, and command-line workflows;
 - the [forecasting model guides](user-guide/forecasting-models/index.md), for
   choosing an individual model type such as naive, theta, ETS, ARIMA, Kalman,
   piecewise linear seasonal, kriging, spatial piecewise kriging, CartoBoost
   lag, NeuralPanel, AutoForecaster, or fixed weighted ensembles.
 
-The Python forecasting package gives users dataframe ergonomics, explicit
+The Python forecasting package provides dataframe inputs, explicit
 configuration, source-checkout script entry points, and artifact handling.
 Model behavior is shared across Python, source-checkout scripts, and interactive examples: fitting, prediction,
 backtesting, metric evaluation, leakage checks, feature generation, intervals,
@@ -305,6 +305,6 @@ When reporting a forecasting result, record:
   M6;
 - training time and prediction time when comparing models.
 
-For benchmark claims, keep the train/test split, task names, model list, metrics,
-and acceptance gates stable across reruns. Compare against serious baselines
+For benchmark comparisons, keep the train/test split, task names, model list,
+metrics, and success criteria stable across reruns. Compare against serious baselines
 with the same split and comparable estimator settings.

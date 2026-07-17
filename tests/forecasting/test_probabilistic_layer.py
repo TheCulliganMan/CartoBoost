@@ -189,6 +189,72 @@ def test_spatial_conformal_uses_group_specific_widths():
     assert interval.upper[1] - interval.lower[1] > interval.upper[0] - interval.lower[0]
 
 
+def test_spatial_conformal_routes_coordinate_local_widths_through_backend():
+    x_train = np.arange(4).reshape(-1, 1)
+    y_train = np.full(4, 10.0)
+    x_cal = np.arange(4).reshape(-1, 1)
+    y_cal = np.array([9.0, 11.0, 5.0, 15.0])
+    model = SpatialConformalRegressor(
+        MeanEstimator(),
+        alpha=0.25,
+        neighbor_count=2,
+        backend="cpu",
+    ).fit(
+        x_train,
+        y_train,
+        x_cal,
+        y_cal,
+        calibration_coordinates=[[0.0, 0.0], [0.1, 0.1], [10.0, 10.0], [10.1, 10.1]],
+        train_end_exclusive=4,
+        calibration_start=4,
+        calibration_end_exclusive=8,
+        test_start=8,
+    )
+
+    interval = model.predict_interval(
+        [[0], [1]],
+        test_start=8,
+        coordinates=[[0.0, 0.0], [10.0, 10.0]],
+    )
+
+    assert interval.metadata["method"] == "spatial_nearest_conformal"
+    assert interval.metadata["backend"] == "cpu"
+    assert interval.upper[1] - interval.lower[1] > interval.upper[0] - interval.lower[0]
+    assert model.metadata_["coordinate_calibration"] is True
+
+
+def test_spatial_conformal_coordinate_backend_round_trips(tmp_path):
+    model = SpatialConformalRegressor(
+        SerializableMeanEstimator(),
+        alpha=0.25,
+        neighbor_count=1,
+        backend="cpu",
+    ).fit(
+        [[0], [1]],
+        [10.0, 10.0],
+        [[2], [3]],
+        [9.0, 15.0],
+        calibration_coordinates=[[0.0, 0.0], [10.0, 10.0]],
+        train_end_exclusive=2,
+        calibration_start=2,
+        calibration_end_exclusive=4,
+        test_start=4,
+    )
+    path = tmp_path / "spatial-conformal.json"
+    model.save(path)
+
+    restored = SpatialConformalRegressor.load(path)
+    interval = restored.predict_interval(
+        [[4], [5]],
+        test_start=4,
+        coordinates=[[0.0, 0.0], [10.0, 10.0]],  # ty: ignore[unknown-argument]
+    )
+
+    assert restored.get_params()["backend"] == "cpu"
+    assert restored.get_params()["neighbor_count"] == 1
+    assert interval.metadata["method"] == "spatial_nearest_conformal"
+
+
 def test_forecast_conformal_uses_only_past_cutoff_residuals():
     calibrator = ForecastConformalCalibrator(alpha=0.1).fit(
         actual=[10.0, 11.0, 14.0, 50.0],
@@ -252,14 +318,83 @@ def test_distributional_metrics_score_quantile_rows():
     assert sum(pit_bins(actual, quantiles, predictions, bins=5)["counts"]) == 2
 
 
+def test_crps_accepts_every_affine_backend():
+    from cartoboost.accelerators import available_backends
+
+    actual = [1.0, 2.0]
+    quantiles = [0.1, 0.5, 0.9]
+    predictions = [[0.0, 1.0, 2.0], [1.0, 2.0, 3.0]]
+    expected = crps_approximation(actual, quantiles, predictions, backend="cpu")
+    for backend in available_backends("affine"):
+        assert crps_approximation(
+            actual,
+            quantiles,
+            predictions,
+            backend=backend,
+        ) == pytest.approx(expected)
+
+
+def test_weighted_interval_score_accepts_every_affine_backend():
+    from cartoboost.accelerators import available_backends
+
+    actual = [1.0, 2.0]
+    median = [1.0, 2.0]
+    intervals = [(0.2, [0.0, 1.0], [2.0, 3.0])]
+    expected = weighted_interval_score(actual, median, intervals, backend="cpu")
+    for backend in available_backends("affine"):
+        assert weighted_interval_score(
+            actual,
+            median,
+            intervals,
+            backend=backend,
+        ) == pytest.approx(expected)
+
+
+def test_interval_metrics_accept_every_affine_backend():
+    from cartoboost.accelerators import available_backends
+
+    for backend in available_backends("affine"):
+        assert interval_coverage(
+            [1.0, 3.0],
+            [0.0, 2.0],
+            [2.0, 2.5],
+            backend=backend,
+        ) == pytest.approx(0.5)
+        assert mean_interval_width(
+            [0.0, 2.0],
+            [2.0, 5.0],
+            backend=backend,
+        ) == pytest.approx(2.5)
+
+
+def test_pit_bins_accepts_every_affine_backend():
+    from cartoboost.accelerators import available_backends
+
+    actual = [1.0, 2.0]
+    quantiles = [0.1, 0.5, 0.9]
+    predictions = [[0.0, 1.0, 2.0], [1.0, 2.0, 3.0]]
+    expected = pit_bins(actual, quantiles, predictions, bins=5, backend="cpu")
+    for backend in available_backends("affine"):
+        assert (
+            pit_bins(
+                actual,
+                quantiles,
+                predictions,
+                bins=5,
+                backend=backend,
+            )
+            == expected
+        )
+
+
 def test_distributional_metric_helpers_delegate_to_native_when_available(monkeypatch):
     package = ModuleType("cartoboost")
     package.__path__ = []
     native = ModuleType("cartoboost._native")
     calls = []
 
-    def native_pinball(actual, prediction, quantile):
-        calls.append((actual, prediction, quantile))
+    def native_pinball(actual, prediction, quantile, backend, sample_weight):
+        calls.append((actual, prediction, quantile, backend, sample_weight))
         return 123.0
 
     native.prob_pinball_loss_value = native_pinball
@@ -267,7 +402,7 @@ def test_distributional_metric_helpers_delegate_to_native_when_available(monkeyp
     monkeypatch.setitem(sys.modules, "cartoboost._native", native)
 
     assert pinball_loss([1.0], [0.5], 0.5) == 123.0
-    assert calls == [([1.0], [0.5], 0.5)]
+    assert calls == [([1.0], [0.5], 0.5, "cpu", None)]
 
 
 def test_spatial_calibration_helpers_cover_groups_weights_and_nearest_residuals():
@@ -298,6 +433,23 @@ def test_spatial_calibration_helpers_cover_groups_weights_and_nearest_residuals(
     assert weighted == 10.0
     assert grouped == {"h3:892a": 2.0, "s2:89c25": 10.0}
     assert nearest.tolist() == [1.0, 10.0]
+
+
+def test_nearest_calibration_runs_on_every_available_backend():
+    from cartoboost.accelerators import available_backends
+
+    kwargs = {
+        "y_true": [10.0, 20.0, 30.0, 100.0],
+        "y_pred": [9.0, 18.0, 27.0, 90.0],
+        "calibration_coordinates": [[0.0, 0.0], [1.0, 1.0], [2.0, 2.0], [100.0, 100.0]],
+        "query_coordinates": [[0.1, 0.1], [1.8, 1.8], [99.0, 99.0]],
+        "neighbor_count": 2,
+        "alpha": 0.1,
+    }
+    expected = nearest_conformal_residual_quantiles(**kwargs, backend="cpu")
+    for backend in available_backends("pairwise_distance"):
+        actual = nearest_conformal_residual_quantiles(**kwargs, backend=backend)
+        np.testing.assert_allclose(actual, expected)
 
 
 def test_benchmark_calibration_report_fields_emit_required_breakdowns():

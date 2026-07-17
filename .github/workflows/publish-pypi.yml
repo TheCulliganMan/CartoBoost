@@ -98,32 +98,39 @@ jobs:
             runner: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             manylinux: "2014"
+            features: webgpu
           - name: linux-aarch64
             runner: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             manylinux: "2014"
+            features: webgpu
           - name: macos-x86_64
             runner: macos-15-intel
             target: x86_64-apple-darwin
             manylinux: auto
+            features: metal,webgpu
           - name: macos-aarch64
             runner: macos-15
             target: aarch64-apple-darwin
             manylinux: auto
+            features: metal,webgpu
           - name: windows-x86_64
             runner: windows-latest
             target: x86_64-pc-windows-msvc
             manylinux: auto
+            features: directml,webgpu
           - name: windows-aarch64
             runner: windows-11-arm
             target: aarch64-pc-windows-msvc
             manylinux: auto
+            features: directml,webgpu
         exclude:
           - platform:
               name: windows-aarch64
               runner: windows-11-arm
               target: aarch64-pc-windows-msvc
               manylinux: auto
+              features: directml,webgpu
             python-version: "3.10"
 
     steps:
@@ -159,6 +166,7 @@ jobs:
             --release
             --compatibility pypi
             --out dist
+            --features ${{ matrix.platform.features }}
             --interpreter ${{ startsWith(matrix.platform.name, 'linux-') && format('python{0}', matrix.python-version) || 'python' }}
 
       - name: Upload wheel

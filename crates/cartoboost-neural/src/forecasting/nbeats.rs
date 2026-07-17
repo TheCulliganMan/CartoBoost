@@ -7,6 +7,8 @@ use std::collections::BTreeMap;
 
 use crate::{backend_dense_layer_f32, backend_train_tanh_mlp_f32, BackendSelection};
 
+const FORECAST_DENSE_DISPATCH_MIN_OPS: usize = 16_384;
+
 use super::dataloader::WindowDataset;
 use super::scaler::StandardScaler;
 use super::validate_window_config;
@@ -128,34 +130,42 @@ impl Forecaster for NBeatsForecaster {
         let frequency = self.frequency.ok_or_else(|| {
             CartoBoostError::InvalidInput("NBeatsForecaster must be fit before predict".to_string())
         })?;
-        let mut predictions = Vec::new();
-        for (series_id, tail) in &self.tails {
-            let last_row = self.last_rows.get(series_id).ok_or_else(|| {
-                CartoBoostError::InvalidInput(format!(
-                    "missing fitted timestamp tail for series '{series_id}'"
-                ))
-            })?;
-            let mut history = tail.clone();
-            for step in 1..=horizon {
-                let scaled_input = scaler.transform_slice(&history);
-                let scaled_prediction = self
-                    .model
-                    .predict_with_backend(&scaled_input)
-                    .map_err(|err| CartoBoostError::InvalidInput(err.to_string()))?;
+        let series = self.tails.iter().collect::<Vec<_>>();
+        let mut histories = series
+            .iter()
+            .map(|(_, tail)| (*tail).clone())
+            .collect::<Vec<_>>();
+        let mut predictions = vec![Vec::with_capacity(horizon); series.len()];
+        for step in 1..=horizon {
+            let inputs = histories
+                .iter()
+                .map(|history| scaler.transform_slice(history))
+                .collect::<Vec<_>>();
+            let scaled_predictions = self
+                .model
+                .predict_batch_with_backend(&inputs)
+                .map_err(|err| CartoBoostError::InvalidInput(err.to_string()))?;
+            for (series_index, ((series_id, _), scaled_prediction)) in
+                series.iter().zip(scaled_predictions).enumerate()
+            {
+                let last_row = self.last_rows.get(*series_id).ok_or_else(|| {
+                    CartoBoostError::InvalidInput(format!(
+                        "missing fitted timestamp tail for series '{series_id}'"
+                    ))
+                })?;
                 let mean = scaler.inverse_transform(scaled_prediction);
-                let timestamp = frequency.advance(last_row.timestamp, step)?;
-                predictions.push(ForecastPrediction {
-                    series_id: series_id.clone(),
-                    timestamp,
+                predictions[series_index].push(ForecastPrediction {
+                    series_id: (*series_id).clone(),
+                    timestamp: frequency.advance(last_row.timestamp, step)?,
                     horizon: step,
                     model: self.model_name().to_string(),
                     mean,
                 });
-                history.remove(0);
-                history.push(mean);
+                histories[series_index].remove(0);
+                histories[series_index].push(mean);
             }
         }
-        ForecastResult::new(predictions)
+        ForecastResult::new(predictions.into_iter().flatten().collect())
     }
 
     fn model_name(&self) -> &'static str {
@@ -220,7 +230,7 @@ impl DeterministicMlp {
         epochs: usize,
         learning_rate: f64,
     ) -> crate::Result<()> {
-        if matches!(self.backend.selected.as_str(), "metal" | "cuda" | "rocm") {
+        if self.backend.selected != "cpu" {
             let inputs = examples
                 .iter()
                 .map(|(input, _)| {
@@ -273,6 +283,61 @@ impl DeterministicMlp {
     pub(crate) fn predict_with_backend(&self, input: &[f64]) -> crate::Result<f64> {
         let hidden = self.hidden_with_backend(input)?;
         Ok(self.output_from_hidden(&hidden))
+    }
+
+    pub(crate) fn predict_batch_with_backend(
+        &self,
+        inputs: &[Vec<f64>],
+    ) -> crate::Result<Vec<f64>> {
+        let operations = inputs
+            .len()
+            .saturating_mul(self.input_size)
+            .saturating_mul(self.hidden_size);
+        if self.backend.selected == "cpu" || operations < FORECAST_DENSE_DISPATCH_MIN_OPS {
+            return inputs
+                .iter()
+                .map(|input| self.predict_with_backend(input))
+                .collect();
+        }
+        if inputs.iter().any(|input| input.len() < self.input_size) {
+            return Err(crate::NeuralError::InvalidArgument(
+                "NBEATS input is shorter than input_size".to_string(),
+            ));
+        }
+        let features = inputs
+            .iter()
+            .map(|input| {
+                input
+                    .iter()
+                    .take(self.input_size)
+                    .map(|value| *value as f32)
+                    .collect()
+            })
+            .collect::<Vec<Vec<f32>>>();
+        let weights = (0..self.input_size)
+            .flat_map(|input| {
+                (0..self.hidden_size)
+                    .map(move |hidden| self.w1[hidden * self.input_size + input] as f32)
+            })
+            .collect::<Vec<_>>();
+        let biases = self
+            .b1
+            .iter()
+            .map(|value| *value as f32)
+            .collect::<Vec<_>>();
+        let mut hidden = backend_dense_layer_f32(&self.backend, &features, &weights, &biases)?;
+        hidden
+            .iter_mut()
+            .flatten()
+            .for_each(|value| *value = value.tanh());
+        let output_weights = self
+            .w2
+            .iter()
+            .map(|value| *value as f32)
+            .collect::<Vec<_>>();
+        let outputs =
+            backend_dense_layer_f32(&self.backend, &hidden, &output_weights, &[self.b2 as f32])?;
+        Ok(outputs.into_iter().map(|row| f64::from(row[0])).collect())
     }
 
     fn train_one(&mut self, input: &[f64], target: f64, learning_rate: f64) {
@@ -331,29 +396,45 @@ impl DeterministicMlp {
                 "NBEATS input is shorter than input_size".to_string(),
             ));
         }
-        let features = vec![input
-            .iter()
-            .take(self.input_size)
-            .map(|value| *value as f32)
-            .collect::<Vec<_>>()];
-        let weights = (0..self.input_size)
-            .flat_map(|input_idx| {
-                (0..self.hidden_size)
-                    .map(move |hidden_idx| self.w1[hidden_idx * self.input_size + input_idx] as f32)
+        // Forecasting invokes this for one origin at a time. A single-vector
+        // device dispatch costs more than the dense work it replaces; training
+        // remains batched on the selected accelerator.
+        Ok(self.hidden(input))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DeterministicMlp;
+    use crate::{available_backends, select_backend, select_backend_for, BackendOperation};
+
+    #[test]
+    fn batched_forecast_dense_inference_matches_cpu_on_available_backends() {
+        let inputs = (0..16)
+            .map(|row| {
+                (0..32)
+                    .map(|column| ((row * 32 + column) as f64 * 0.013).sin())
+                    .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
-        let biases = self
-            .b1
-            .iter()
-            .map(|value| *value as f32)
-            .collect::<Vec<_>>();
-        let linear = backend_dense_layer_f32(&self.backend, &features, &weights, &biases)?;
-        Ok(linear
+        let cpu = DeterministicMlp::new(32, 32, 0.017, select_backend(Some("cpu")).unwrap());
+        let expected = cpu.predict_batch_with_backend(&inputs).unwrap();
+
+        for backend in available_backends()
             .into_iter()
-            .next()
-            .expect("backend dense layer returns one row")
-            .into_iter()
-            .map(|value| f64::from(value).tanh())
-            .collect())
+            .filter(|backend| backend != "cpu")
+        {
+            let Ok(selection) = select_backend_for(Some(&backend), BackendOperation::Dense) else {
+                continue;
+            };
+            let model = DeterministicMlp::new(32, 32, 0.017, selection);
+            let actual = model.predict_batch_with_backend(&inputs).unwrap();
+            for (actual, expected) in actual.iter().zip(&expected) {
+                assert!(
+                    (actual - expected).abs() < 2.0e-4,
+                    "{backend} batched forecast mismatch: {actual} vs {expected}"
+                );
+            }
+        }
     }
 }

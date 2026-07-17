@@ -7,6 +7,7 @@ from typing import Any
 import numpy as np
 
 from ._artifacts import ArtifactPersistenceMixin
+from .config import Backend
 
 try:  # pragma: no cover - exercised when sklearn is installed.
     from sklearn.base import BaseEstimator, RegressorMixin
@@ -96,8 +97,14 @@ class _SpatialRegressionBase(ArtifactPersistenceMixin, RegressorMixin, BaseEstim
     _native_cls: type
     model_name: str
 
-    def __init__(self, *, row_standardize: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        row_standardize: bool = True,
+        backend: Backend | str = Backend.CPU,
+    ) -> None:
         self.row_standardize = row_standardize
+        self.backend = str(backend)
         self._model: Any | None = None
 
     def fit(self, X: Any, y: Any, *, spatial_weights: Any) -> _SpatialRegressionBase:
@@ -110,7 +117,7 @@ class _SpatialRegressionBase(ArtifactPersistenceMixin, RegressorMixin, BaseEstim
             n_rows=x_array.shape[0],
             row_standardize=bool(self.row_standardize),
         )
-        model = self._native_cls()
+        model = self._native_cls(self.backend)
         model.fit(x_array.tolist(), y_array.tolist(), weights._native)
         self._model = model
         self.n_features_in_ = x_array.shape[1]
@@ -120,6 +127,7 @@ class _SpatialRegressionBase(ArtifactPersistenceMixin, RegressorMixin, BaseEstim
         self.coef_ = np.asarray(model.coefficients(), dtype=float)
         self.durbin_coef_ = np.asarray(model.durbin_coefficients(), dtype=float)
         self.intercept_ = float(model.intercept())
+        self.backend_ = str(model.backend())
         return self
 
     def predict(self, X: Any, *, spatial_weights: Any) -> np.ndarray:
@@ -163,7 +171,7 @@ class _SpatialRegressionBase(ArtifactPersistenceMixin, RegressorMixin, BaseEstim
 
     def get_params(self, deep: bool = True) -> dict[str, Any]:
         del deep
-        return {"row_standardize": self.row_standardize}
+        return {"row_standardize": self.row_standardize, "backend": self.backend}
 
     def set_params(self, **params: Any) -> _SpatialRegressionBase:
         valid = self.get_params()
@@ -185,6 +193,7 @@ class _SpatialRegressionBase(ArtifactPersistenceMixin, RegressorMixin, BaseEstim
             "model": self.model_name,
             "params": self.get_params(),
             "fitted": True,
+            "backend": {"requested": self.backend, "selected": self.backend_},
             "diagnostics": dict(self.diagnostics_),
         }
 
@@ -197,6 +206,8 @@ class _SpatialRegressionBase(ArtifactPersistenceMixin, RegressorMixin, BaseEstim
     def load(cls, path: str | Path) -> _SpatialRegressionBase:
         obj = cls()
         obj._model = cls._native_cls.load(Path(path))
+        obj.backend_ = str(obj._model.backend())
+        obj.backend = obj.backend_
         obj.diagnostics_ = json.loads(obj._model.diagnostics_json())
         obj.coef_ = np.asarray(obj._model.coefficients(), dtype=float)
         obj.durbin_coef_ = np.asarray(obj._model.durbin_coefficients(), dtype=float)

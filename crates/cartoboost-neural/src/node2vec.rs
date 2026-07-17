@@ -1,5 +1,8 @@
 use crate::error::{NeuralError, Result};
 use crate::graphsage::GraphSageEmbedding;
+use cartoboost_accelerator::backend::{
+    backend_scalar_graph_train_step_f32, select_backend_for, BackendOperation, BackendSelection,
+};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -7,6 +10,7 @@ use std::fs;
 use std::path::Path;
 
 const NODE2VEC_ARTIFACT_TYPE: &str = "cartoboost.neural.node2vec_encoder";
+const NODE2VEC_ACCEL_MIN_SAMPLES: usize = 16_384;
 pub const NODE2VEC_ARTIFACT_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -18,6 +22,8 @@ pub struct Node2VecEncoderArtifact {
     pub config: Node2VecConfig,
     pub embeddings: Vec<Vec<f32>>,
     pub loss_curve: Vec<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<BackendSelection>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -76,6 +82,13 @@ pub struct RandomWalkGenerator {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Node2VecTrainer {
     pub config: Node2VecConfig,
+    #[serde(default = "default_node2vec_backend")]
+    pub backend: BackendSelection,
+}
+
+fn default_node2vec_backend() -> BackendSelection {
+    select_backend_for(Some("cpu"), BackendOperation::ScalarGraphTraining)
+        .expect("CPU scalar graph training is always available")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -194,8 +207,13 @@ impl RandomWalkGenerator {
 
 impl Node2VecTrainer {
     pub fn new(config: Node2VecConfig) -> Result<Self> {
+        Self::new_with_backend(config, Some("cpu"))
+    }
+
+    pub fn new_with_backend(config: Node2VecConfig, backend: Option<&str>) -> Result<Self> {
         validate_config(&config)?;
-        Ok(Self { config })
+        let backend = select_backend_for(backend, BackendOperation::ScalarGraphTraining)?;
+        Ok(Self { config, backend })
     }
 
     pub fn fit(
@@ -204,7 +222,10 @@ impl Node2VecTrainer {
         edges: &[(usize, usize)],
         edge_weights: Option<&[f32]>,
     ) -> Result<EdgeEmbeddingModel> {
-        let mut encoder = Node2VecEncoder::new(self.config.clone())?;
+        let mut encoder = Node2VecEncoder::new_with_backend(
+            self.config.clone(),
+            Some(self.backend.selected.as_str()),
+        )?;
         let embeddings = encoder.fit(node_count, edges, edge_weights)?;
         EdgeEmbeddingModel::new(embeddings.into_inner())
     }
@@ -262,7 +283,7 @@ impl EmbeddingFeatureTransformer {
     ) -> Result<EdgeEmbeddingFeatures> {
         let degrees = neighborhood_degrees(self.model.node_count, graph_edges)?;
         let values = edges
-            .iter()
+            .par_iter()
             .map(|&(origin, destination)| {
                 if origin >= self.model.node_count || destination >= self.model.node_count {
                     return Err(NeuralError::InvalidArgument(
@@ -338,16 +359,24 @@ pub struct Node2VecEncoder {
     embeddings: Vec<Vec<f32>>,
     context_embeddings: Vec<Vec<f32>>,
     losses: Vec<f32>,
+    backend: BackendSelection,
 }
 
 impl Node2VecEncoder {
     pub fn new(config: Node2VecConfig) -> Result<Self> {
+        Self::new_with_backend(config, Some("cpu"))
+    }
+
+    pub fn new_with_backend(config: Node2VecConfig, backend: Option<&str>) -> Result<Self> {
         validate_config(&config)?;
+        let backend = select_backend_for(backend, BackendOperation::ScalarGraphTraining)
+            .map_err(|error| NeuralError::InvalidArgument(error.to_string()))?;
         Ok(Self {
             config,
             embeddings: Vec::new(),
             context_embeddings: Vec::new(),
             losses: Vec::new(),
+            backend,
         })
     }
 
@@ -362,9 +391,38 @@ impl Node2VecEncoder {
         let adjacency = WeightedGraph::from_edges(node_count, edges, &weights)?;
         let walks = generate_walks(&self.config, &adjacency);
         let mut model = SkipGramState::new(node_count, &self.config);
-        self.losses = model.fit(&self.config, &walks, &adjacency);
+        self.losses = if should_accelerate_node2vec(&self.backend, &self.config, &walks) {
+            model.fit_accelerated(&self.config, &walks, &adjacency, &self.backend)?
+        } else {
+            model.fit(&self.config, &walks, &adjacency)
+        };
         self.embeddings = finalize_embeddings(model.embeddings, self.config.normalize);
         self.context_embeddings = model.context_embeddings;
+        Ok(GraphSageEmbedding::new(self.embeddings.clone()))
+    }
+
+    #[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+    pub async fn fit_webgpu(
+        &mut self,
+        node_count: usize,
+        edges: &[(usize, usize)],
+        edge_weights: Option<&[f32]>,
+    ) -> Result<GraphSageEmbedding> {
+        validate_node_count(node_count)?;
+        let weights = validate_weights(edges.len(), edge_weights)?;
+        let adjacency = WeightedGraph::from_edges(node_count, edges, &weights)?;
+        let walks = generate_walks(&self.config, &adjacency);
+        let mut model = SkipGramState::new(node_count, &self.config);
+        self.losses = model
+            .fit_accelerated_webgpu(&self.config, &walks, &adjacency)
+            .await?;
+        self.embeddings = finalize_embeddings(model.embeddings, self.config.normalize);
+        self.context_embeddings = model.context_embeddings;
+        self.backend = BackendSelection {
+            requested: "webgpu".to_string(),
+            selected: "webgpu".to_string(),
+            available: vec!["cpu".to_string(), "webgpu".to_string()],
+        };
         Ok(GraphSageEmbedding::new(self.embeddings.clone()))
     }
 
@@ -389,6 +447,10 @@ impl Node2VecEncoder {
         self.config.clone()
     }
 
+    pub fn backend(&self) -> &BackendSelection {
+        &self.backend
+    }
+
     pub fn loss_curve(&self) -> Node2VecLoss {
         Node2VecLoss {
             epoch_losses: self.losses.clone(),
@@ -404,6 +466,7 @@ impl Node2VecEncoder {
             config: self.config.clone(),
             embeddings: self.embeddings.clone(),
             loss_curve: self.losses.clone(),
+            backend: Some(self.backend.clone()),
         }
     }
 
@@ -418,11 +481,16 @@ impl Node2VecEncoder {
 
     pub fn from_artifact(artifact: Node2VecEncoderArtifact) -> Result<Self> {
         validate_artifact(&artifact)?;
+        let backend = artifact.backend.unwrap_or_else(|| {
+            select_backend_for(Some("cpu"), BackendOperation::ScalarGraphTraining)
+                .expect("CPU scalar graph training is always available")
+        });
         Ok(Self {
             config: artifact.config,
             embeddings: artifact.embeddings,
             context_embeddings: Vec::new(),
             losses: artifact.loss_curve,
+            backend,
         })
     }
 
@@ -540,6 +608,191 @@ impl SkipGramState {
         losses
     }
 
+    fn fit_accelerated(
+        &mut self,
+        config: &Node2VecConfig,
+        walks: &[Vec<usize>],
+        graph: &WeightedGraph,
+        backend: &BackendSelection,
+    ) -> Result<Vec<f32>> {
+        const BATCH_SIZE: usize = 128;
+        let pairs = context_pairs(walks, config.window_size);
+        if pairs.is_empty() {
+            return Ok(vec![0.0; config.epochs]);
+        }
+        let negative_distribution = AliasSampler::new(&negative_distribution(graph))
+            .expect("negative distribution is positive");
+        let node_count = self.embeddings.len();
+        let parameter_count = node_count * config.dim * 2;
+        let mut parameters = self
+            .embeddings
+            .iter()
+            .flatten()
+            .copied()
+            .chain(self.context_embeddings.iter().flatten().copied())
+            .collect::<Vec<_>>();
+        debug_assert_eq!(parameters.len(), parameter_count);
+        let mut first_moment = vec![0.0_f32; parameter_count];
+        let mut second_moment = vec![0.0_f32; parameter_count];
+        let mut order = (0..pairs.len()).collect::<Vec<_>>();
+        let total_batches = config
+            .epochs
+            .saturating_mul(
+                pairs
+                    .len()
+                    .saturating_mul(config.negative_samples + 1)
+                    .div_ceil(BATCH_SIZE),
+            )
+            .max(1);
+        let mut optimizer_step = 0_u64;
+        let mut losses = Vec::with_capacity(config.epochs);
+
+        for _ in 0..config.epochs {
+            shuffle(&mut order, &mut self.rng);
+            let mut samples = Vec::with_capacity(pairs.len() * (config.negative_samples + 1));
+            for &pair_index in &order {
+                let (source, target) = pairs[pair_index];
+                samples.push((source, target, 1.0_f32));
+                for _ in 0..config.negative_samples {
+                    let negative = negative_distribution.sample_with_rng(&mut self.rng);
+                    if negative != target {
+                        samples.push((source, negative, 0.0_f32));
+                    }
+                }
+            }
+            let mut epoch_loss = 0.0_f32;
+            let mut sample_count = 0_usize;
+            for batch in samples.chunks(BATCH_SIZE) {
+                optimizer_step += 1;
+                let progress = (optimizer_step - 1) as f32 / total_batches as f32;
+                let learning_rate = config
+                    .min_learning_rate
+                    .max(config.learning_rate * (1.0 - progress));
+                let graph = SkipGramScalarGraph::new(batch, node_count, config.dim);
+                epoch_loss += backend_scalar_graph_train_step_f32(
+                    backend,
+                    &graph.values,
+                    &graph.opcodes,
+                    &graph.left,
+                    &graph.right,
+                    &graph.parameter_ids,
+                    graph.loss,
+                    &mut parameters,
+                    &mut first_moment,
+                    &mut second_moment,
+                    optimizer_step,
+                    learning_rate,
+                    config.l2_regularization,
+                )? * batch.len() as f32;
+                sample_count += batch.len();
+            }
+            losses.push(epoch_loss / sample_count.max(1) as f32);
+        }
+        let embedding_values = node_count * config.dim;
+        self.embeddings = parameters[..embedding_values]
+            .chunks(config.dim)
+            .map(<[f32]>::to_vec)
+            .collect();
+        self.context_embeddings = parameters[embedding_values..]
+            .chunks(config.dim)
+            .map(<[f32]>::to_vec)
+            .collect();
+        Ok(losses)
+    }
+
+    #[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+    async fn fit_accelerated_webgpu(
+        &mut self,
+        config: &Node2VecConfig,
+        walks: &[Vec<usize>],
+        graph: &WeightedGraph,
+    ) -> Result<Vec<f32>> {
+        const BATCH_SIZE: usize = 128;
+        let pairs = context_pairs(walks, config.window_size);
+        if pairs.is_empty() {
+            return Ok(vec![0.0; config.epochs]);
+        }
+        let negative_distribution = AliasSampler::new(&negative_distribution(graph))
+            .expect("negative distribution is positive");
+        let node_count = self.embeddings.len();
+        let mut parameters = self
+            .embeddings
+            .iter()
+            .flatten()
+            .copied()
+            .chain(self.context_embeddings.iter().flatten().copied())
+            .collect::<Vec<_>>();
+        let mut first_moment = vec![0.0_f32; parameters.len()];
+        let mut second_moment = vec![0.0_f32; parameters.len()];
+        let mut order = (0..pairs.len()).collect::<Vec<_>>();
+        let total_batches = config
+            .epochs
+            .saturating_mul(
+                pairs
+                    .len()
+                    .saturating_mul(config.negative_samples + 1)
+                    .div_ceil(BATCH_SIZE),
+            )
+            .max(1);
+        let mut optimizer_step = 0_u64;
+        let mut losses = Vec::with_capacity(config.epochs);
+        for _ in 0..config.epochs {
+            shuffle(&mut order, &mut self.rng);
+            let mut samples = Vec::with_capacity(pairs.len() * (config.negative_samples + 1));
+            for &pair_index in &order {
+                let (source, target) = pairs[pair_index];
+                samples.push((source, target, 1.0_f32));
+                for _ in 0..config.negative_samples {
+                    let negative = negative_distribution.sample_with_rng(&mut self.rng);
+                    if negative != target {
+                        samples.push((source, negative, 0.0_f32));
+                    }
+                }
+            }
+            let mut epoch_loss = 0.0_f32;
+            let mut sample_count = 0_usize;
+            for batch in samples.chunks(BATCH_SIZE) {
+                optimizer_step += 1;
+                let progress = (optimizer_step - 1) as f32 / total_batches as f32;
+                let learning_rate = config
+                    .min_learning_rate
+                    .max(config.learning_rate * (1.0 - progress));
+                let scalar_graph = SkipGramScalarGraph::new(batch, node_count, config.dim);
+                let state = crate::webgpu_scalar_graph_train_step_f32_async(
+                    &scalar_graph.values,
+                    &scalar_graph.opcodes,
+                    &scalar_graph.left,
+                    &scalar_graph.right,
+                    &scalar_graph.parameter_ids,
+                    scalar_graph.loss,
+                    &parameters,
+                    &first_moment,
+                    &second_moment,
+                    optimizer_step,
+                    learning_rate,
+                    config.l2_regularization,
+                )
+                .await?;
+                epoch_loss += state.0 * batch.len() as f32;
+                parameters = state.1;
+                first_moment = state.2;
+                second_moment = state.3;
+                sample_count += batch.len();
+            }
+            losses.push(epoch_loss / sample_count.max(1) as f32);
+        }
+        let embedding_values = node_count * config.dim;
+        self.embeddings = parameters[..embedding_values]
+            .chunks(config.dim)
+            .map(<[f32]>::to_vec)
+            .collect();
+        self.context_embeddings = parameters[embedding_values..]
+            .chunks(config.dim)
+            .map(<[f32]>::to_vec)
+            .collect();
+        Ok(losses)
+    }
+
     fn update_pair(
         &mut self,
         source: usize,
@@ -568,6 +821,66 @@ impl SkipGramState {
         } else {
             -(1.0 - score).max(f32::EPSILON).ln()
         }
+    }
+}
+
+struct SkipGramScalarGraph {
+    values: Vec<f32>,
+    opcodes: Vec<u8>,
+    left: Vec<u32>,
+    right: Vec<u32>,
+    parameter_ids: Vec<u32>,
+    loss: usize,
+}
+
+impl SkipGramScalarGraph {
+    fn new(samples: &[(usize, usize, f32)], node_count: usize, dim: usize) -> Self {
+        let mut graph = Self {
+            values: Vec::new(),
+            opcodes: Vec::new(),
+            left: Vec::new(),
+            right: Vec::new(),
+            parameter_ids: Vec::new(),
+            loss: 0,
+        };
+        let zero = graph.push(0.0, 0, 0, 0, 0);
+        let mut total_loss = zero;
+        let context_offset = node_count * dim;
+        for &(source, target, label) in samples {
+            let mut score = zero;
+            for channel in 0..dim {
+                let source_value = graph.push(0.0, 1, 0, 0, source * dim + channel);
+                let target_value =
+                    graph.push(0.0, 1, 0, 0, context_offset + target * dim + channel);
+                let product = graph.push(0.0, 3, source_value, target_value, 0);
+                score = graph.push(0.0, 2, score, product, 0);
+            }
+            let probability = graph.push(0.0, 9, score, score, 0);
+            let negative_label = graph.push(-label, 0, 0, 0, 0);
+            let error = graph.push(0.0, 2, probability, negative_label, 0);
+            let squared = graph.push(0.0, 3, error, error, 0);
+            total_loss = graph.push(0.0, 2, total_loss, squared, 0);
+        }
+        let count = graph.push(samples.len() as f32, 0, 0, 0, 0);
+        graph.loss = graph.push(0.0, 4, total_loss, count, 0);
+        graph
+    }
+
+    fn push(
+        &mut self,
+        value: f32,
+        opcode: u8,
+        left: usize,
+        right: usize,
+        parameter_id: usize,
+    ) -> usize {
+        let index = self.values.len();
+        self.values.push(value);
+        self.opcodes.push(opcode);
+        self.left.push(left as u32);
+        self.right.push(right as u32);
+        self.parameter_ids.push(parameter_id as u32);
+        index
     }
 }
 
@@ -661,6 +974,32 @@ fn context_pairs(walks: &[Vec<usize>], window_size: usize) -> Vec<(usize, usize)
         }
     }
     pairs
+}
+
+fn should_accelerate_node2vec(
+    backend: &BackendSelection,
+    config: &Node2VecConfig,
+    walks: &[Vec<usize>],
+) -> bool {
+    if backend.selected == "cpu" {
+        return false;
+    }
+    let pair_count = walks
+        .iter()
+        .map(|walk| {
+            (0..walk.len())
+                .map(|index| {
+                    let left = index.saturating_sub(config.window_size);
+                    let right = (index + config.window_size + 1).min(walk.len());
+                    right.saturating_sub(left + 1)
+                })
+                .sum::<usize>()
+        })
+        .sum::<usize>();
+    pair_count
+        .saturating_mul(config.negative_samples + 1)
+        .saturating_mul(config.epochs)
+        >= NODE2VEC_ACCEL_MIN_SAMPLES
 }
 
 fn negative_distribution(graph: &WeightedGraph) -> Vec<f32> {
@@ -1254,6 +1593,101 @@ mod tests {
         let restored = Node2VecEncoder::load_artifact_json(file.path()).unwrap();
 
         assert_eq!(restored.encode().unwrap(), encoder.encode().unwrap());
+        assert_eq!(restored.backend().selected, "cpu");
+    }
+
+    #[test]
+    fn batched_skipgram_scalar_graph_updates_shared_embedding_parameters() {
+        let backend =
+            select_backend_for(Some("cpu"), BackendOperation::ScalarGraphTraining).unwrap();
+        let samples = vec![(0, 1, 1.0), (0, 2, 0.0), (1, 2, 1.0)];
+        let graph = SkipGramScalarGraph::new(&samples, 3, 2);
+        let mut parameters = vec![
+            0.1, -0.2, 0.2, 0.1, -0.1, 0.3, 0.0, 0.1, 0.2, -0.1, 0.1, 0.2,
+        ];
+        let before = parameters.clone();
+        let mut first = vec![0.0; parameters.len()];
+        let mut second = vec![0.0; parameters.len()];
+        let mut last_loss = f32::INFINITY;
+        for step in 1..=20 {
+            last_loss = backend_scalar_graph_train_step_f32(
+                &backend,
+                &graph.values,
+                &graph.opcodes,
+                &graph.left,
+                &graph.right,
+                &graph.parameter_ids,
+                graph.loss,
+                &mut parameters,
+                &mut first,
+                &mut second,
+                step,
+                0.02,
+                0.0,
+            )
+            .unwrap();
+        }
+        assert!(last_loss.is_finite());
+        assert_ne!(parameters, before);
+        assert!(parameters.iter().all(|value| value.is_finite()));
+    }
+
+    #[test]
+    fn node2vec_training_runs_on_every_available_scalar_training_backend() {
+        for backend_name in cartoboost_accelerator::backend::available_backends() {
+            if !cartoboost_accelerator::backend::backend_supports_operation(
+                &backend_name,
+                BackendOperation::ScalarGraphTraining,
+            ) {
+                continue;
+            }
+            let mut encoder = Node2VecEncoder::new_with_backend(
+                Node2VecConfig {
+                    dim: 2,
+                    walk_length: 3,
+                    walks_per_node: 1,
+                    window_size: 1,
+                    epochs: 1,
+                    negative_samples: 1,
+                    normalize: false,
+                    ..Node2VecConfig::default()
+                },
+                Some(&backend_name),
+            )
+            .unwrap_or_else(|error| panic!("{backend_name} selection failed: {error}"));
+            let embeddings = encoder
+                .fit(3, &[(0, 1), (1, 2), (2, 0)], None)
+                .unwrap_or_else(|error| panic!("{backend_name} training failed: {error}"));
+            assert_eq!(encoder.backend().selected, backend_name);
+            assert!(embeddings
+                .into_inner()
+                .iter()
+                .flatten()
+                .all(|value| value.is_finite()));
+        }
+    }
+
+    #[test]
+    fn node2vec_device_dispatch_requires_a_profitable_sample_count() {
+        let config = small_config();
+        let small_walks = vec![vec![0, 1, 2]];
+        let large_walks = vec![vec![0; 1_024]; 8];
+        for backend_name in cartoboost_accelerator::backend::available_backends() {
+            if !cartoboost_accelerator::backend::backend_supports_operation(
+                &backend_name,
+                BackendOperation::ScalarGraphTraining,
+            ) {
+                continue;
+            }
+            let backend =
+                select_backend_for(Some(&backend_name), BackendOperation::ScalarGraphTraining)
+                    .unwrap();
+            assert!(!should_accelerate_node2vec(&backend, &config, &small_walks));
+            assert_eq!(
+                should_accelerate_node2vec(&backend, &config, &large_walks),
+                backend_name != "cpu"
+            );
+        }
     }
 
     #[test]

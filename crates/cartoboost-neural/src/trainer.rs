@@ -1,11 +1,13 @@
 use crate::artifact::{build_embedding_table_artifact, ArtifactFallbackKind, EmbeddingRow};
 use crate::error::{NeuralError, Result};
+use crate::{backend_dense_layer_f32, select_backend_for, BackendOperation, BackendSelection};
 use rayon::prelude::*;
 use std::collections::HashMap;
 
 const DEFAULT_TRAINING_ITERS: usize = 24;
 const DEFAULT_HEAD_REGULARIZATION: f64 = 1e-2;
 const DEFAULT_PRIOR_STRENGTH: f64 = 1.0;
+const EMBEDDING_HEAD_DENSE_DISPATCH_MIN_OPS: usize = 16_384;
 
 struct IdState {
     id: u64,
@@ -40,6 +42,28 @@ pub fn fit_embedding_table_with_options(
     random_state: Option<u64>,
     prior_strength: f64,
 ) -> Result<crate::artifact::EmbeddingTable> {
+    fit_embedding_table_with_options_and_backend(
+        dim,
+        ids,
+        target,
+        fallback,
+        random_state,
+        prior_strength,
+        Some("cpu"),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn fit_embedding_table_with_options_and_backend(
+    dim: usize,
+    ids: &[u64],
+    target: &[f32],
+    fallback: ArtifactFallbackKind,
+    random_state: Option<u64>,
+    prior_strength: f64,
+    backend: Option<&str>,
+) -> Result<crate::artifact::EmbeddingTable> {
+    let backend = select_backend_for(backend, BackendOperation::Dense)?;
     if dim == 0 {
         return Err(NeuralError::InvalidArgument(
             "embedding dimension must be positive".to_string(),
@@ -113,7 +137,7 @@ pub fn fit_embedding_table_with_options(
             bias = bias_numerator / total_count;
         }
 
-        if let Some(next_head) = solve_head(dim, &states, bias) {
+        if let Some(next_head) = solve_head_with_backend(dim, &states, bias, &backend)? {
             head = next_head;
         }
     }
@@ -233,6 +257,55 @@ fn solve_head(dim: usize, states: &[IdState], bias: f64) -> Option<Vec<f32>> {
     Some(solution.into_iter().map(|value| value as f32).collect())
 }
 
+fn solve_head_with_backend(
+    dim: usize,
+    states: &[IdState],
+    bias: f64,
+    backend: &BackendSelection,
+) -> Result<Option<Vec<f32>>> {
+    if backend.selected == "cpu"
+        || states.len().saturating_mul(dim).saturating_mul(dim)
+            < EMBEDDING_HEAD_DENSE_DISPATCH_MIN_OPS
+    {
+        return Ok(solve_head(dim, states, bias));
+    }
+    let weighted = states
+        .iter()
+        .map(|state| {
+            let scale = state.count.sqrt() as f32;
+            state
+                .embedding
+                .iter()
+                .map(|value| value * scale)
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let transposed = (0..dim)
+        .map(|col| weighted.iter().map(|row| row[col]).collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    let right = states
+        .iter()
+        .zip(&weighted)
+        .flat_map(|(state, row)| {
+            row.iter().copied().chain(std::iter::once(
+                (state.count.sqrt() * (state.mean - bias)) as f32,
+            ))
+        })
+        .collect::<Vec<_>>();
+    let products = backend_dense_layer_f32(backend, &transposed, &right, &vec![0.0; dim + 1])?;
+    let mut a = vec![vec![0.0_f64; dim]; dim];
+    let mut b = vec![0.0_f64; dim];
+    for row in 0..dim {
+        for col in 0..dim {
+            a[row][col] = f64::from(products[row][col]);
+        }
+        a[row][row] += DEFAULT_HEAD_REGULARIZATION;
+        b[row] = f64::from(products[row][dim]);
+    }
+    Ok(solve_linear_system(a, b)
+        .map(|solution| solution.into_iter().map(|value| value as f32).collect()))
+}
+
 #[allow(clippy::needless_range_loop)]
 fn solve_linear_system(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Option<Vec<f64>> {
     let dim = b.len();
@@ -344,5 +417,44 @@ fn normalize(values: &mut [f32]) {
     let scale = 1.0_f64 / norm;
     for value in values {
         *value = (*value as f64 * scale) as f32;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn embedding_training_runs_on_every_available_backend() {
+        let ids = vec![1, 1, 2, 2, 3, 3, 4, 4];
+        let targets = vec![1.0, 1.2, -0.5, -0.2, 2.0, 2.4, 0.3, 0.6];
+        let expected = fit_embedding_table_with_options_and_backend(
+            4,
+            &ids,
+            &targets,
+            ArtifactFallbackKind::GlobalMeanVector,
+            Some(7),
+            1.0,
+            Some("cpu"),
+        )
+        .unwrap();
+        for backend in crate::available_backends() {
+            let actual = fit_embedding_table_with_options_and_backend(
+                4,
+                &ids,
+                &targets,
+                ArtifactFallbackKind::GlobalMeanVector,
+                Some(7),
+                1.0,
+                Some(&backend),
+            )
+            .unwrap_or_else(|error| panic!("{backend} embedding fit failed: {error}"));
+            for (actual, expected) in actual.rows().iter().zip(expected.rows()) {
+                assert_eq!(actual.id, expected.id);
+                for (actual, expected) in actual.values.iter().zip(&expected.values) {
+                    assert!((actual - expected).abs() <= 2.0e-3, "{backend}");
+                }
+            }
+        }
     }
 }

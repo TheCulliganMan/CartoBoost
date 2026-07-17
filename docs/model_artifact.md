@@ -1,14 +1,13 @@
-# Model Artifact
+# Saving And Loading Models
 
 CartoBoost models are stored as JSON artifacts. Use them when you need to reload
 a fitted temporal-spatial model with its split policy, sparse-feature requirements,
 feature schema, and training parameters intact.
 
-For scientific work, the artifact is part of the evidence chain. It should make
-clear which target, feature roles, sparse sets, split policy, loss, and training
-configuration produced the reported taxi fare, duration, demand, or residual
-model. Keep the artifact together with the split definition and benchmark
-metrics so another reviewer can reproduce the same prediction surface.
+For reproducible analysis, save the model together with the data split,
+package version, feature definitions, and evaluation metrics. The JSON file
+records the model configuration needed to reproduce predictions, but it does
+not contain the original training data or replace an experiment record.
 
 ## Contents
 

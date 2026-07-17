@@ -57,7 +57,7 @@ class NBeatsForecaster(NativeForecastWrapper):
         hidden_size: int = 16,
         epochs: int = 80,
         learning_rate: float = 0.01,
-        backend: Backend = Backend.CPU,
+        backend: Backend | str = Backend.CPU,
         **metadata: Any,
     ) -> None:
         _validate_common(input_size, hidden_size, epochs, learning_rate)
@@ -102,7 +102,7 @@ class NHiTSForecaster(NativeForecastWrapper):
         epochs: int = 80,
         learning_rate: float = 0.01,
         pooling_size: int = 2,
-        backend: Backend = Backend.CPU,
+        backend: Backend | str = Backend.CPU,
         **metadata: Any,
     ) -> None:
         _validate_common(input_size, hidden_size, epochs, learning_rate)
@@ -179,7 +179,7 @@ class NeuralPanelForecaster(NativeForecastWrapper):
         learning_rate: float = 0.01,
         weight_decay: float = 0.0,
         newer_sample_weight: bool = False,
-        backend: Backend = Backend.CPU,
+        backend: Backend | str = Backend.CPU,
         **metadata: Any,
     ) -> None:
         _validate_panel(

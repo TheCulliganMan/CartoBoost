@@ -76,6 +76,12 @@ docs/_build/
 .pybuilder/
 target/
 
+# CUDA-Oxide device-codegen sidecars and embedded-artifact staging output.
+cartoboost_neural.ll
+cartoboost_neural.options
+cartoboost_neural.target
+.oxide-artifacts/
+
 # Jupyter Notebook
 .ipynb_checkpoints
 

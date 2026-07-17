@@ -1,0 +1,303 @@
+crates\cartoboost-wasm\src\lib.rs:138:    backend: Option<String>,
+crates\cartoboost-wasm\src\lib.rs:499:    backend: Option<String>,
+crates\cartoboost-wasm\src\lib.rs:597:    backend: Option<String>,
+crates\cartoboost-wasm\src\lib.rs:832:    backend: String,
+crates\cartoboost-wasm\src\lib.rs:1030:    backend: String,
+crates\cartoboost-wasm\src\lib.rs:1070:    backend: String,
+crates\cartoboost-wasm\src\lib.rs:1212:    backend: Option<String>,
+crates\cartoboost-wasm\src\lib.rs:1246:    backend: Option<String>,
+crates\cartoboost-wasm\src\lib.rs:1284:    backend: Option<String>,
+crates\cartoboost-wasm\src\lib.rs:1849:    backend: Option<String>,
+crates\cartoboost-wasm\src\lib.rs:1932:    backend: Option<String>,
+crates\cartoboost-wasm\src\lib.rs:1989:    backend: Option<String>,
+crates\cartoboost-wasm\src\lib.rs:2603:            "runGeostatisticsWebgpu requires backend='webgpu' or 'auto', got {requested:?}"
+crates\cartoboost-wasm\src\lib.rs:3359:            "runNeuralForecastWebgpu requires backend='webgpu' or 'auto', got {requested:?}"
+crates\cartoboost-wasm\src\lib.rs:3942:            "runGraphDiffusionWebgpu requires backend='webgpu' or 'auto', got {requested:?}"
+crates\cartoboost-wasm\src\lib.rs:6063:        backend: Option<&str>,
+crates\cartoboost-wasm\src\lib.rs:6104:        backend: Option<&str>,
+python/cartoboost\geo_causal.py:127:        backend: Backend | str = Backend.CPU,
+python/cartoboost\geo_causal.py:270:        backend: Backend | str = Backend.CPU,
+python/cartoboost\geo_causal.py:380:        backend: Backend | str = Backend.CPU,
+python/cartoboost\classifier.py:84:        backend: Backend | str = Backend.CPU,
+python/cartoboost\classifier.py:239:            backend=self.backend,
+python/cartoboost\classifier.py:485:            backend=str(getattr(native_model, "backend", "cpu")),
+python/cartoboost\geostats.py:52:        backend: Backend | str = Backend.CPU,
+python/cartoboost\geostats.py:88:            backend=self.backend,
+python/cartoboost\geostats.py:336:    backend: Backend | str = Backend.CPU,
+python/cartoboost\geostats.py:361:    backend: Backend | str = Backend.CPU,
+python/cartoboost\geostats.py:370:        backend=backend,
+python/cartoboost\geo.py:95:    backend: Backend | str = Backend.CPU,
+python/cartoboost\geo.py:340:    backend: Backend | str = Backend.CPU,
+python/cartoboost\geo.py:358:    backend: Backend | str = Backend.CPU,
+python/cartoboost\geo.py:376:    backend: Backend | str = Backend.CPU,
+python/cartoboost\geo.py:401:    backend: Backend | str = Backend.CPU,
+python/cartoboost\models.py:410:            backend=backend,
+python/cartoboost\regressor.py:90:        backend: Backend | str = Backend.CPU,
+python/cartoboost\regressor.py:253:            backend=self.backend,
+python/cartoboost\regressor.py:663:            backend=str(getattr(native_model, "backend", "cpu")),
+python/cartoboost\ranker.py:84:        backend: Backend | str = Backend.CPU,
+python/cartoboost\ranker.py:245:            backend=self.backend,
+python/cartoboost\ranker.py:491:            backend=str(getattr(native_model, "backend", "cpu")),
+python/cartoboost\spatial_econometrics.py:104:        backend: Backend | str = Backend.CPU,
+python/cartoboost\deep\flow.py:22:        backend: Backend | str = Backend.CPU,
+python/cartoboost\deep\flow.py:110:            backend=str(payload.get("backend", {}).get("selected", "cpu")),
+python/cartoboost\deep\graph.py:161:        backend: Backend | str = Backend.CPU,
+python/cartoboost\deep\graph.py:332:            backend=str(native.backend()),
+python/cartoboost\deep\operator.py:22:        backend: Backend | str = Backend.CPU,
+crates\cartoboost-spatial-econ\src\lib.rs:110:    backend: BackendSelection,
+crates\cartoboost-spatial-econ\src\lib.rs:140:        backend: Option<&str>,
+python/cartoboost\utilities.py:311:    backend: Backend | str = Backend.CPU,
+python/cartoboost\utilities.py:427:    backend: Backend | str = Backend.CPU,
+python/cartoboost\forecasting\auto.py:51:    backend: Backend | str = Backend.CPU
+python/cartoboost\forecasting\auto.py:93:        backend: Backend | str = Backend.CPU,
+python/cartoboost\forecasting\auto.py:165:            backend=str(backend),
+python/cartoboost\forecasting\auto.py:485:        backend=Backend(payload.get("backend", Backend.CPU.value)),
+python/cartoboost\standalone.py:69:        backend: Backend | str = Backend.CPU,
+python/cartoboost\standalone.py:81:            backend=_choice_value(backend),
+python/cartoboost\standalone.py:145:        backend: Backend | str = Backend.CPU,
+python/cartoboost\standalone.py:166:            backend=_choice_value(backend),
+python/cartoboost\standalone.py:251:        backend: Backend = Backend.CPU,
+python/cartoboost\standalone.py:267:            backend=_choice_value(backend),
+python/cartoboost\standalone.py:358:        backend: Backend = Backend.CPU,
+python/cartoboost\standalone.py:374:            backend=_choice_value(backend),
+python/cartoboost\standalone.py:448:        backend: Backend = Backend.CPU,
+python/cartoboost\standalone.py:468:            backend=_choice_value(backend),
+python/cartoboost\standalone.py:526:    def __init__(self, *, backend: Backend | str = Backend.CPU, **kwargs: Any) -> None:
+python/cartoboost\standalone.py:528:        self._native = _NativeNode2VecLinkPredictor(backend=self.backend, **kwargs)
+python/cartoboost\forecasting\ensemble.py:24:        backend: Backend | str = Backend.CPU,
+python/cartoboost\forecasting\ensemble.py:40:            backend=str(backend),
+crates\cartoboost-geo-core\src\lib.rs:462:    backend: Option<&str>,
+crates\cartoboost-geo-core\src\lib.rs:823:    backend: Option<&str>,
+crates\cartoboost-geo-core\src\lib.rs:848:    backend: Option<&str>,
+crates\cartoboost-geo-core\src\lib.rs:917:    backend: Option<&str>,
+crates\cartoboost-geo-core\src\lib.rs:935:    backend: Option<&str>,
+crates\cartoboost-geostats\src\lib.rs:168:    backend: BackendSelection,
+crates\cartoboost-geostats\src\lib.rs:176:    pub fn new_with_backend(config: NngpConfig, backend: Option<&str>) -> Result<Self> {
+crates\cartoboost-geostats\src\lib.rs:467:    backend: Option<&str>,
+crates\cartoboost-geo-causal\src\lib.rs:140:    backend: BackendSelection,
+crates\cartoboost-geo-causal\src\lib.rs:150:    pub fn new_with_backend(config: SyntheticDIDConfig, backend: Option<&str>) -> Result<Self> {
+crates\cartoboost-geo-causal\src\lib.rs:268:        backend: Option<&str>,
+crates\cartoboost-geo-causal\src\lib.rs:390:        backend: Option<&str>,
+crates\cartoboost-geo-causal\src\lib.rs:411:    backend: Option<&str>,
+crates\cartoboost-geo-causal\src\lib.rs:428:    backend: Option<&str>,
+crates\cartoboost-geo-causal\src\lib.rs:726:    backend: Option<&str>,
+crates\cartoboost-geo-causal\src\lib.rs:758:    backend: Option<&str>,
+crates\cartoboost-py\src\lib.rs:485:#[pyo3(signature = (coords, n_folds, buffer_distance, dataset_fingerprint, coordinate_crs_note, model_version, dependency_versions, random_seed=None, split_id="buffered_spatial_cv", backend="cpu"))]
+crates\cartoboost-py\src\lib.rs:497:    backend: &str,
+crates\cartoboost-py\src\lib.rs:686:            backend: String,
+crates\cartoboost-py\src\lib.rs:692:            #[pyo3(signature = (backend=None))]
+crates\cartoboost-py\src\lib.rs:693:            fn new(backend: Option<&str>) -> Self {
+crates\cartoboost-py\src\lib.rs:1699:#[pyo3(signature = (observations, targets, range=1.0, nugget=1.0e-6, backend="cpu"))]
+crates\cartoboost-py\src\lib.rs:1706:    backend: &str,
+crates\cartoboost-py\src\lib.rs:1750:    backend="cpu"
+crates\cartoboost-py\src\lib.rs:1767:    backend: &str,
+crates\cartoboost-py\src\lib.rs:1880:    backend="cpu"
+crates\cartoboost-py\src\lib.rs:1889:    backend: &str,
+crates\cartoboost-py\src\lib.rs:3551:    #[pyo3(signature = (top_k=8, neural_hidden_dim=16, neural_epochs=20, head_epochs=80, head_learning_rate=0.02, huber_delta=1.0, quantile_levels=None, graph_strength=0.55, local_strength=0.35, correlation_floor=0.10, shift_zscore=2.0, calibrate_intervals=true, backend="cpu"))]
+crates\cartoboost-py\src\lib.rs:3566:        backend: &str,
+crates\cartoboost-py\src\lib.rs:3712:        backend=None
+crates\cartoboost-py\src\lib.rs:3723:        backend: Option<&str>,
+crates\cartoboost-py\src\lib.rs:3823:        backend=None
+crates\cartoboost-py\src\lib.rs:3833:        backend: Option<&str>,
+crates\cartoboost-py\src\lib.rs:3901:        backend=None
+crates\cartoboost-py\src\lib.rs:3911:        backend: Option<&str>,
+crates\cartoboost-py\src\lib.rs:3973:    #[pyo3(signature = (horizon=1, edge_delay_prior=None, ridge=0.000001, backend=None))]
+crates\cartoboost-py\src\lib.rs:3978:        backend: Option<&str>,
+crates\cartoboost-py\src\lib.rs:4042:    #[pyo3(signature = (profile, lookback=12, hidden_size=16, attention_heads=4, graph_order=2, experts=4, periodicity=24, recent_window=12, epochs=80, learning_rate=0.01, weight_decay=0.00001, backend=None))]
+crates\cartoboost-py\src\lib.rs:4056:        backend: Option<&str>,
+crates\cartoboost-py\src\lib.rs:4147:    #[pyo3(signature = (input_size=8, hidden_size=16, epochs=80, learning_rate=0.01, backend=None))]
+crates\cartoboost-py\src\lib.rs:4153:        backend: Option<&str>,
+crates\cartoboost-py\src\lib.rs:4190:    #[pyo3(signature = (input_size=12, hidden_size=16, epochs=80, learning_rate=0.01, pooling_size=2, backend=None))]
+crates\cartoboost-py\src\lib.rs:4197:        backend: Option<&str>,
+crates\cartoboost-py\src\lib.rs:4264:        backend=None
+crates\cartoboost-py\src\lib.rs:4296:        backend: Option<&str>,
+crates\cartoboost-py\src\lib.rs:4458:        backend=None,
+crates\cartoboost-py\src\lib.rs:4491:        backend: Option<&str>,
+crates\cartoboost-py\src\lib.rs:4645:    #[pyo3(signature = (lags=None, rolling_windows=None, partial_rolling_mean_windows=None, rolling_std_windows=None, rolling_min_windows=None, rolling_max_windows=None, ewm_alpha_percents=None, difference_lags=None, rolling_trend_windows=None, covariate_features=None, covariate_indicator_values=None, covariate_calendar_interactions=false, calendar_features=true, rich_calendar_features=false, elapsed_calendar_features=false, elapsed_calendar_periods=None, season_length=7, validation_window=None, validation_origin_count=2, objective="rmse_wape", baseline_displacement_gain=0.03, hard_winner_relative_gain=0.05, min_blend_weight=0.15, max_blend_weight=0.85, max_direct_horizon=28, max_candidate_count=None, recursive=true, n_estimators=None, learning_rate=None, max_depth=None, min_samples_leaf=None, min_gain=None, splitters=None, trend_features=true, target_mode="level", backend="cpu"))]
+crates\cartoboost-py\src\lib.rs:4683:        backend: &str,
+crates\cartoboost-py\src\lib.rs:4802:    #[pyo3(signature = (lags=None, rolling_windows=None, partial_rolling_mean_windows=None, rolling_std_windows=None, rolling_min_windows=None, rolling_max_windows=None, ewm_alpha_percents=None, difference_lags=None, rolling_trend_windows=None, covariate_features=None, covariate_indicator_values=None, covariate_calendar_interactions=false, calendar_features=true, rich_calendar_features=false, elapsed_calendar_features=false, elapsed_calendar_periods=None, recursive=true, prediction_interval_levels=None, n_estimators=None, learning_rate=None, max_depth=None, min_samples_leaf=None, min_gain=None, splitters=None, trend_features=true, target_mode="level", backend="cpu"))]
+crates\cartoboost-py\src\lib.rs:4831:        backend: &str,
+crates\cartoboost-py\src\lib.rs:4965:    #[pyo3(signature = (members, backend="cpu"))]
+crates\cartoboost-py\src\lib.rs:4969:        backend: &str,
+crates\cartoboost-py\src\lib.rs:5445:    #[pyo3(signature = (kernel="exponential", range=1.0, sill=1.0, nugget=1.0e-6, n_neighbors=16, anisotropy_angle_degrees=0.0, anisotropy_scaling=1.0, brute_force_threshold=2048, duplicate_tolerance=0.0, backend="cpu"))]
+crates\cartoboost-py\src\lib.rs:5457:        backend: &str,
+crates\cartoboost-py\src\lib.rs:5538:    backend: String,
+crates\cartoboost-py\src\lib.rs:5565:    #[pyo3(signature = (n_estimators=100, learning_rate=0.05, max_depth=4, min_samples_leaf=20, min_gain=1e-8, loss="l2", quantile_alpha=0.5, huber_delta=1.0, log_offset=1.0, splitters=None, leaf_predictor="constant", linear_leaf_features=None, l2_regularization=1.0, constant_l2_regularization=0.0, fuzzy=false, fuzzy_bandwidth=0.0, fuzzy_kernel="linear", n_threads=None, monotonic_constraints=None, backend="cpu"))]
+crates\cartoboost-py\src\lib.rs:5587:        backend: &str,
+crates\cartoboost-py\src\lib.rs:6183:    backend: String,
+crates\cartoboost-py\src\lib.rs:6225:        backend="cpu"
+crates\cartoboost-py\src\lib.rs:6246:        backend: &str,
+crates\cartoboost-py\src\lib.rs:6737:    backend: String,
+crates\cartoboost-py\src\lib.rs:6775:        backend="cpu"
+crates\cartoboost-py\src\lib.rs:6794:        backend: &str,
+crates\cartoboost-py\src\lib.rs:7669:    #[pyo3(signature = (input_dim, hidden_dims=None, epochs=20, learning_rate=0.05, negative_samples=4, seed=0x5A17_9A4E_7F33_C0DE, add_self_loop=true, l2_regularization=1e-5, backend=None))]
+crates\cartoboost-py\src\lib.rs:7680:        backend: Option<&str>,
+crates\cartoboost-py\src\lib.rs:7971:    #[pyo3(signature = (dim, fallback="global_mean_vector", random_state=None, support_prior_strength=1.0, n_estimators=80, learning_rate=0.07, max_depth=4, min_samples_leaf=2, min_gain=0.0, backend=None))]
+crates\cartoboost-py\src\lib.rs:7983:        backend: Option<&str>,
+crates\cartoboost-py\src\lib.rs:8054:    #[pyo3(signature = (dim=16, walk_length=16, walks_per_node=8, window_size=5, epochs=3, learning_rate=0.025, min_learning_rate=0.0001, negative_samples=5, p=1.0, q=1.0, seed=0xA2B2_C2D2_E2F2_1234, l2_regularization=0.0, normalize=true, n_estimators=80, booster_learning_rate=0.07, max_depth=4, min_samples_leaf=2, min_gain=0.0, backend=None))]
+crates\cartoboost-py\src\lib.rs:8075:        backend: Option<&str>,
+crates\cartoboost-py\src\lib.rs:8176:    #[pyo3(signature = (input_dim, hidden_dims=None, epochs=20, learning_rate=0.05, negative_samples=4, seed=0x5A17_9A4E_7F33_C0DE, add_self_loop=true, l2_regularization=1e-5, n_estimators=80, booster_learning_rate=0.07, max_depth=4, min_samples_leaf=2, min_gain=0.0, backend=None))]
+crates\cartoboost-py\src\lib.rs:8192:        backend: Option<&str>,
+crates\cartoboost-py\src\lib.rs:8293:    #[pyo3(signature = (input_dim, relation_count, hidden_dims=None, epochs=20, learning_rate=0.05, negative_samples=4, seed=0x0D1A_2A3B_4C5D_6E7F, l2_regularization=1e-5, n_estimators=80, booster_learning_rate=0.07, max_depth=4, min_samples_leaf=2, min_gain=0.0, backend=None))]
+crates\cartoboost-py\src\lib.rs:8309:        backend: Option<&str>,
+crates\cartoboost-py\src\lib.rs:8410:    #[pyo3(signature = (input_dim, node_type_count, edge_type_triples, hidden_dims=None, epochs=20, learning_rate=0.05, negative_samples=4, seed=0xA11C_E5A6_5EED_1234, l2_regularization=1e-5, neighbor_samples=None, n_estimators=80, booster_learning_rate=0.07, max_depth=4, min_samples_leaf=2, min_gain=0.0, backend=None))]
+crates\cartoboost-py\src\lib.rs:8428:        backend: Option<&str>,
+crates\cartoboost-py\src\lib.rs:8533:    #[pyo3(signature = (dim=16, walk_length=16, walks_per_node=8, window_size=5, epochs=3, learning_rate=0.025, min_learning_rate=0.0001, negative_samples=5, p=1.0, q=1.0, seed=0xA2B2_C2D2_E2F2_1234, l2_regularization=0.0, normalize=true, backend=None))]
+crates\cartoboost-py\src\lib.rs:8549:        backend: Option<&str>,
+crates\cartoboost-py\src\lib.rs:8620:    #[pyo3(signature = (input_dim, hidden_dims=None, epochs=20, learning_rate=0.05, negative_samples=4, seed=0x5A17_9A4E_7F33_C0DE, add_self_loop=true, l2_regularization=1e-5, backend=None))]
+crates\cartoboost-py\src\lib.rs:8631:        backend: Option<&str>,
+crates\cartoboost-py\src\lib.rs:8698:    #[pyo3(signature = (input_dim, relation_count, hidden_dims=None, epochs=20, learning_rate=0.05, negative_samples=4, seed=0x0D1A_2A3B_4C5D_6E7F, l2_regularization=1e-5, backend=None))]
+crates\cartoboost-py\src\lib.rs:8709:        backend: Option<&str>,
+crates\cartoboost-py\src\lib.rs:8776:    #[pyo3(signature = (input_dim, node_type_count, edge_type_triples, hidden_dims=None, epochs=20, learning_rate=0.05, negative_samples=4, seed=0xA11C_E5A6_5EED_1234, l2_regularization=1e-5, neighbor_samples=None, backend=None))]
+crates\cartoboost-py\src\lib.rs:8789:        backend: Option<&str>,
+crates\cartoboost-py\src\lib.rs:8861:    #[pyo3(signature = (input_dim, relation_count, hidden_dims=None, epochs=20, learning_rate=0.05, negative_samples=4, seed=0x0D1A_2A3B_4C5D_6E7F, l2_regularization=1e-5, backend=None))]
+crates\cartoboost-py\src\lib.rs:8872:        backend: Option<&str>,
+crates\cartoboost-py\src\lib.rs:9019:    #[pyo3(signature = (input_dim, node_type_count, edge_type_triples, hidden_dims=None, epochs=20, learning_rate=0.05, negative_samples=4, seed=0xA11C_E5A6_5EED_1234, l2_regularization=1e-5, neighbor_samples=None, backend=None))]
+crates\cartoboost-py\src\lib.rs:9032:        backend: Option<&str>,
+crates\cartoboost-py\src\lib.rs:9707:#[pyfunction(signature = (hidden, residuals, quantiles, sample_count, backend=None))]
+crates\cartoboost-py\src\lib.rs:9714:    backend: Option<&str>,
+crates\cartoboost-py\src\lib.rs:9742:#[pyfunction(signature = (point_forecast, edges, scenario_count, diffusion_steps, shock_scale, backend=None))]
+crates\cartoboost-py\src\lib.rs:9750:    backend: Option<&str>,
+crates\cartoboost-py\src\lib.rs:9866:#[pyo3(signature = (actual, prediction, calibration_x, calibration_y, query_x, query_y, neighbor_count, alpha, train_end_exclusive, calibration_start, calibration_end_exclusive, test_start, backend=None))]
+crates\cartoboost-py\src\lib.rs:9882:    backend: Option<&str>,
+crates\cartoboost-py\src\lib.rs:10520:#[pyfunction(signature = (point_x, point_y, anchors, backend="cpu"))]
+crates\cartoboost-py\src\lib.rs:10525:    backend: &str,
+crates\cartoboost-py\src\lib.rs:10536:#[pyfunction(signature = (point_x, point_y, anchors, length_scale, backend="cpu"))]
+crates\cartoboost-py\src\lib.rs:10542:    backend: &str,
+crates\cartoboost-py\src\lib.rs:10554:#[pyfunction(signature = (points, anchors, backend="cpu"))]
+crates\cartoboost-py\src\lib.rs:10559:    backend: &str,
+crates\cartoboost-py\src\lib.rs:10574:#[pyfunction(signature = (points, anchors, length_scale, backend="cpu"))]
+crates\cartoboost-py\src\lib.rs:10580:    backend: &str,
+crates\cartoboost-py\src\lib.rs:10692:    backend: Option<&str>,
+crates\cartoboost-py\src\lib.rs:11563:#[pyo3(signature = (coords, values, bin_count=12, max_distance=None, anisotropy_angle_degrees=0.0, anisotropy_scaling=1.0, backend=None))]
+crates\cartoboost-py\src\lib.rs:11572:    backend: Option<&str>,
+crates\cartoboost-py\src\lib.rs:11642:#[pyo3(signature = (rows_json, response_type, monotone=None, backend=None))]
+crates\cartoboost-py\src\lib.rs:11648:    backend: Option<&str>,
+crates\cartoboost-py\src\lib.rs:11683:#[pyo3(signature = (features_json, labels, backend=None))]
+crates\cartoboost-py\src\lib.rs:11688:    backend: Option<&str>,
+crates\cartoboost-py\src\lib.rs:11754:#[pyo3(signature = (rows_json, backend=None))]
+crates\cartoboost-py\src\lib.rs:11758:    backend: Option<&str>,
+crates\cartoboost-py\src\lib.rs:11797:#[pyo3(signature = (backend=None, len=4096))]
+crates\cartoboost-py\src\lib.rs:11798:fn deep_backend_dispatch_report_value(backend: Option<&str>, len: usize) -> PyResult<String> {
+crates\cartoboost-py\src\lib.rs:11883:#[pyfunction(signature = (field_values_json, coordinates_json, edges, exogenous_fields_json, smoothing, coordinate_scale, backend=None))]
+crates\cartoboost-py\src\lib.rs:11892:    backend: Option<&str>,
+crates\cartoboost-py\src\lib.rs:11958:    backend: Option<&str>,
+crates\cartoboost-py\src\lib.rs:12046:#[pyo3(signature = (rows, spatial_weights, intervention_time, seed, placebo_n, backend=None))]
+crates\cartoboost-py\src\lib.rs:12054:    backend: Option<&str>,
+crates\cartoboost-py\src\lib.rs:12084:#[pyo3(signature = (rows, spatial_weights, intervention_time, seed, candidate_count, placebo_n, backend=None))]
+crates\cartoboost-py\src\lib.rs:12093:    backend: Option<&str>,
+crates\cartoboost-py\src\lib.rs:12111:#[pyo3(signature = (rows, spatial_weights, intervention_time, seed, n, backend=None))]
+crates\cartoboost-py\src\lib.rs:12119:    backend: Option<&str>,
+crates\cartoboost-py\src\lib.rs:12134:#[pyo3(signature = (rows, spatial_weights, backend=None))]
+crates\cartoboost-py\src\lib.rs:12138:    backend: Option<&str>,
+crates\cartoboost-py\src\lib.rs:12148:#[pyo3(signature = (features, outcomes, regions, heldout_region, backend=None))]
+crates\cartoboost-py\src\lib.rs:12155:    backend: Option<&str>,
+python/cartoboost\deep\scenario.py:23:        backend: Backend | str = Backend.CPU,
+crates\cartoboost-geo-st\src\market.rs:250:    pub backend: String,
+crates\cartoboost-geo-st\src\market.rs:1146:    backend: &str,
+python/cartoboost\forecasting\global_models\cartoboost_lag.py:83:        backend: Backend | str = Backend.CPU,
+python/cartoboost\graph\encoders.py:175:    backend: Backend = Backend.CPU
+python/cartoboost\graph\encoders.py:207:            backend=config.backend.value,
+python/cartoboost\graph\encoders.py:280:                backend=Backend(str(config.get("backend", "cpu"))),
+python/cartoboost\graph\encoders.py:294:    backend: Backend = Backend.CPU
+python/cartoboost\graph\encoders.py:309:    backend: Backend = Backend.CPU
+python/cartoboost\graph\encoders.py:445:            backend=config.backend.value,
+python/cartoboost\graph\encoders.py:531:                backend=Backend(str(config.get("backend", "cpu"))),
+python/cartoboost\graph\encoders.py:550:            backend=config.backend.value,
+python/cartoboost\graph\encoders.py:591:                backend=self.config.backend.value,
+python/cartoboost\graph\encoders.py:652:                backend=Backend(str(config.get("backend", "cpu"))),
+crates\cartoboost-prob\src\lib.rs:68:    pub backend: BackendSelection,
+crates\cartoboost-prob\src\lib.rs:108:    pub backend: BackendSelection,
+crates\cartoboost-prob\src\lib.rs:260:    backend: Option<&str>,
+crates\cartoboost-prob\src\lib.rs:306:    backend: Option<&str>,
+crates\cartoboost-prob\src\lib.rs:333:        backend: Option<&str>,
+crates\cartoboost-prob\src\lib.rs:534:        backend: Option<&str>,
+crates\cartoboost-prob\src\lib.rs:850:    backend: Option<&str>,
+crates\cartoboost-core\src\booster\ranker.rs:45:    backend: BackendSelection,
+crates\cartoboost-core\src\booster\ranker.rs:51:    pub backend: Option<BackendSelection>,
+crates\cartoboost-core\src\booster\ranker.rs:125:    pub fn new_with_backend(config: RankerConfig, backend: Option<&str>) -> Result<Self> {
+crates\cartoboost-core\src\booster\ranker.rs:267:    pub fn predict_with_backend(&self, x: &Dataset, backend: Option<&str>) -> Result<Vec<f64>> {
+python/cartoboost\forecasting\probabilistic.py:569:    backend: Backend | str = Backend.CPU,
+crates\cartoboost-accelerator\src\backend.rs:181:pub fn backend_supports_operation(backend: &str, _operation: BackendOperation) -> bool {
+crates\cartoboost-accelerator\src\backend.rs:239:    let supports_all = |backend: &str| {
+python/cartoboost\graph\config.py:289:            backend=GraphBackend(str(_enum_value(root.get("backend", GraphBackend.NATIVE)))),
+python/cartoboost\graph\config.py:354:            backend=graph_embeddings.backend,
+crates\cartoboost-neural\src\deep.rs:36:    pub backend: BackendSelection,
+crates\cartoboost-neural\src\deep.rs:66:    pub backend: BackendSelection,
+crates\cartoboost-neural\src\deep.rs:230:    pub backend: BackendSelection,
+crates\cartoboost-neural\src\deep.rs:319:    backend: Option<&str>,
+crates\cartoboost-neural\src\deep.rs:429:    backend: Option<&str>,
+crates\cartoboost-neural\src\deep.rs:1188:    backend: Option<&str>,
+crates\cartoboost-neural\src\standalone.rs:44:    pub backend: String,
+crates\cartoboost-neural\src\standalone.rs:931:    pub backend: BackendSelection,
+crates\cartoboost-neural\src\standalone.rs:938:    backend: BackendSelection,
+crates\cartoboost-neural\src\standalone.rs:946:    pub fn new_with_backend(config: Node2VecConfig, backend: Option<&str>) -> Result<Self> {
+crates\cartoboost-core\src\utilities.rs:194:    backend: BackendSelection,
+crates\cartoboost-core\src\utilities.rs:364:        backend: Option<&str>,
+crates\cartoboost-core\src\utilities.rs:1118:    backend: Option<&str>,
+crates\cartoboost-core\src\utilities.rs:1271:    backend: Option<&str>,
+python/cartoboost\deep\response.py:23:        backend: Backend = Backend.CPU,
+python/cartoboost\deep\response.py:140:        backend: Backend = Backend.CPU,
+python/cartoboost\deep\response.py:209:        backend: Backend = Backend.CPU,
+crates\cartoboost-neural\src\graphsage.rs:72:    pub backend: BackendSelection,
+crates\cartoboost-neural\src\graphsage.rs:85:            backend: BackendSelection::default(),
+crates\cartoboost-neural\src\graphsage.rs:100:    pub backend: BackendSelection,
+crates\cartoboost-neural\src\graphsage.rs:112:            backend: BackendSelection::default(),
+crates\cartoboost-neural\src\graphsage.rs:128:    pub backend: BackendSelection,
+crates\cartoboost-neural\src\graphsage.rs:141:            backend: BackendSelection::default(),
+crates\cartoboost-core\src\booster\fit.rs:44:    backend: BackendSelection,
+crates\cartoboost-core\src\booster\fit.rs:81:    pub fn new_with_backend(config: BoosterConfig, backend: Option<&str>) -> Result<Self> {
+python/cartoboost\forecasting\graph_st.py:230:        backend: Backend | str = Backend.CPU,
+python/cartoboost\forecasting\graph_st.py:351:        backend: Backend = Backend.CPU,
+python/cartoboost\forecasting\graph_st.py:540:        backend: Backend = Backend.CPU,
+python/cartoboost\forecasting\graph_st.py:656:        backend: Backend = Backend.CPU,
+python/cartoboost\forecasting\graph_st.py:771:        backend: Backend = Backend.CPU,
+python/cartoboost\forecasting\neural.py:60:        backend: Backend = Backend.CPU,
+python/cartoboost\forecasting\neural.py:69:            backend=_choice_value(backend),
+python/cartoboost\forecasting\neural.py:88:            backend=self._params["backend"],
+python/cartoboost\forecasting\neural.py:105:        backend: Backend = Backend.CPU,
+python/cartoboost\forecasting\neural.py:117:            backend=_choice_value(backend),
+python/cartoboost\forecasting\neural.py:135:            backend=self._params["backend"],
+python/cartoboost\forecasting\neural.py:182:        backend: Backend = Backend.CPU,
+python/cartoboost\forecasting\neural.py:241:            backend=_choice_value(backend),
+crates\cartoboost-core\src\booster\classifier.rs:49:    backend: BackendSelection,
+crates\cartoboost-core\src\booster\classifier.rs:55:    pub backend: Option<BackendSelection>,
+crates\cartoboost-core\src\booster\classifier.rs:128:    pub fn new_with_backend(config: ClassifierConfig, backend: Option<&str>) -> Result<Self> {
+crates\cartoboost-core\src\booster\classifier.rs:305:        backend: Option<&str>,
+crates\cartoboost-core\src\booster\classifier.rs:351:        backend: Option<&str>,
+crates\cartoboost-core\src\booster\classifier.rs:373:    pub fn predict_with_backend(&self, x: &Dataset, backend: Option<&str>) -> Result<Vec<f64>> {
+crates\cartoboost-neural\src\operator.rs:36:    pub backend: BackendSelection,
+crates\cartoboost-neural\src\operator.rs:49:    backend: Option<&str>,
+crates\cartoboost-neural\src\operator.rs:133:        backend: Option<&str>,
+crates\cartoboost-core\src\forecasting\auto.rs:75:    pub backend: String,
+crates\cartoboost-core\src\tree\node.rs:338:    pub fn try_predict_with_backend(&self, x: &Dataset, backend: Option<&str>) -> Result<Vec<f64>> {
+crates\cartoboost-neural\src\forecasting\nbeats.rs:20:    pub backend: BackendSelection,
+crates\cartoboost-neural\src\forecasting\nbeats.rs:30:            backend: BackendSelection::default(),
+crates\cartoboost-neural\src\forecasting\nbeats.rs:185:    backend: BackendSelection,
+crates\cartoboost-neural\src\forecasting\nbeats.rs:193:        backend: BackendSelection,
+crates\cartoboost-core\src\graph_regularization.rs:288:        backend: Option<&str>,
+crates\cartoboost-core\src\graph_regularization.rs:382:        backend: Option<&str>,
+crates\cartoboost-core\src\graph_regularization.rs:399:        backend: Option<&str>,
+crates\cartoboost-core\src\graph_regularization.rs:431:    pub fn predict_with_backend(&self, backend: Option<&str>) -> Result<Vec<f64>> {
+crates\cartoboost-core\src\forecasting\direct.rs:33:    backend: BackendSelection,
+crates\cartoboost-core\src\forecasting\direct.rs:50:    backend: BackendSelection,
+crates\cartoboost-core\src\forecasting\direct.rs:69:        backend: Option<&str>,
+crates\cartoboost-core\src\forecasting\direct.rs:237:        backend: Option<&str>,
+crates\cartoboost-core\src\forecasting\direct.rs:513:    backend: Option<&str>,
+crates\cartoboost-core\src\forecasting\direct.rs:602:    backend: Option<&str>,
+crates\cartoboost-neural\src\forecasting\neural_panel.rs:84:    pub backend: BackendSelection,
+crates\cartoboost-neural\src\forecasting\neural_panel.rs:119:            backend: BackendSelection::default(),
+crates\cartoboost-neural\src\forecasting\neural_panel.rs:2679:    backend: Option<&str>,
+crates\cartoboost-core\src\forecasting\ensemble.rs:15:    backend: BackendSelection,
+crates\cartoboost-core\src\forecasting\ensemble.rs:30:    backend: BackendSelection,
+crates\cartoboost-core\src\forecasting\ensemble.rs:77:        backend: Option<&str>,
+crates\cartoboost-core\src\forecasting\ensemble.rs:160:        backend: Option<&str>,
+crates\cartoboost-neural\src\forecasting\nhits.rs:21:    pub backend: BackendSelection,
+crates\cartoboost-neural\src\forecasting\nhits.rs:32:            backend: BackendSelection::default(),
+crates\cartoboost-core\src\serialize\mod.rs:20:    pub backend: String,
+crates\cartoboost-core\src\forecasting\global.rs:35:    backend: BackendSelection,
+crates\cartoboost-core\src\forecasting\global.rs:85:        backend: Option<&str>,
+crates\cartoboost-core\src\forecasting\lag_plus.rs:23:    pub backend: String,
+crates\cartoboost-core\src\forecasting\probabilistic.rs:84:        backend: Option<&str>,
+crates\cartoboost-core\src\forecasting\reconciliation.rs:28:    backend: BackendSelection,
+crates\cartoboost-core\src\forecasting\reconciliation.rs:90:        backend: Option<&str>,

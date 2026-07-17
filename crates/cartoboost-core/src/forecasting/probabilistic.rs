@@ -3,6 +3,10 @@ use crate::data::Dataset;
 use crate::loss::{LossConfig, QuantileLossConfig};
 use crate::tree::Model;
 use crate::{CartoBoostError, Result};
+use cartoboost_accelerator::backend::{
+    backend_dense_layer_f32, select_backend_for, BackendOperation, BackendSelection,
+};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use super::quantiles::{
@@ -49,7 +53,11 @@ impl ProbabilisticDirectForecaster {
 pub struct QuantileRegressorSet {
     quantiles: Vec<f64>,
     models: Vec<Model>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    backend: Option<BackendSelection>,
 }
+
+const QUANTILE_DENSE_DISPATCH_MIN_OPS: usize = 16_384;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuantileRegressorSetConfig {
@@ -73,6 +81,16 @@ impl QuantileRegressorSet {
         sample_weight: Option<&[f64]>,
         config: QuantileRegressorSetConfig,
     ) -> Result<Self> {
+        Self::fit_with_backend(x, y, sample_weight, config, Some("cpu"))
+    }
+
+    pub fn fit_with_backend(
+        x: &Dataset,
+        y: &[f64],
+        sample_weight: Option<&[f64]>,
+        config: QuantileRegressorSetConfig,
+        backend: Option<&str>,
+    ) -> Result<Self> {
         validate_quantile_grid(&config.quantiles)?;
         if x.n_rows() != y.len() {
             return Err(CartoBoostError::InvalidInput(
@@ -84,17 +102,37 @@ impl QuantileRegressorSet {
                 "targets must be finite".to_string(),
             ));
         }
-        let mut models = Vec::with_capacity(config.quantiles.len());
-        for &quantile in &config.quantiles {
-            let mut booster_config = config.booster_config.clone();
-            booster_config.loss = LossConfig::Quantile(QuantileLossConfig { alpha: quantile });
-            let mut model = Booster::new(booster_config).fit(x, y, sample_weight)?;
-            model.target_name = Some(format!("quantile_{quantile:.3}"));
-            models.push(model);
-        }
+        let selection = select_backend_for(backend, BackendOperation::Dense)
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+        let fit_quantile =
+            |quantile: f64| {
+                let mut booster_config = config.booster_config.clone();
+                booster_config.loss = LossConfig::Quantile(QuantileLossConfig { alpha: quantile });
+                let mut model =
+                    Booster::new_with_backend(booster_config, Some(selection.selected.as_str()))?
+                        .fit(x, y, sample_weight)?;
+                model.target_name = Some(format!("quantile_{quantile:.3}"));
+                Ok(model)
+            };
+        let models = if selection.selected == "cpu" {
+            config
+                .quantiles
+                .par_iter()
+                .copied()
+                .map(fit_quantile)
+                .collect::<Result<Vec<_>>>()?
+        } else {
+            config
+                .quantiles
+                .iter()
+                .copied()
+                .map(fit_quantile)
+                .collect::<Result<Vec<_>>>()?
+        };
         Ok(Self {
             quantiles: config.quantiles,
             models,
+            backend: Some(selection),
         })
     }
 
@@ -105,7 +143,15 @@ impl QuantileRegressorSet {
                 "quantiles and models must have the same length".to_string(),
             ));
         }
-        Ok(Self { quantiles, models })
+        let backend = models
+            .first()
+            .and_then(|model| model.training_config.as_ref())
+            .and_then(|config| config.backend.clone());
+        Ok(Self {
+            quantiles,
+            models,
+            backend,
+        })
     }
 
     pub fn quantiles(&self) -> &[f64] {
@@ -116,7 +162,96 @@ impl QuantileRegressorSet {
         &self.models
     }
 
+    pub fn backend(&self) -> Option<&BackendSelection> {
+        self.backend.as_ref()
+    }
+
     pub fn predict(&self, x: &Dataset) -> Result<Vec<QuantileForecast>> {
+        if let Some(selection) = self.backend.as_ref() {
+            return self.predict_with_selection(x, selection);
+        }
+        self.predict_cpu(x)
+    }
+
+    pub fn predict_with_backend(
+        &self,
+        x: &Dataset,
+        backend: Option<&str>,
+    ) -> Result<Vec<QuantileForecast>> {
+        let selection = select_backend_for(backend, BackendOperation::Dense)
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+        self.predict_with_selection(x, &selection)
+    }
+
+    fn predict_with_selection(
+        &self,
+        x: &Dataset,
+        selection: &BackendSelection,
+    ) -> Result<Vec<QuantileForecast>> {
+        if self.models.is_empty() {
+            return Err(CartoBoostError::InvalidInput(
+                "quantile regressor set must contain at least one model".to_string(),
+            ));
+        }
+        let total_width = self
+            .models
+            .iter()
+            .map(|model| model.trees.len() + 1)
+            .sum::<usize>();
+        let output_count = self.models.len();
+        if selection.selected == "cpu"
+            || self.models.iter().any(|model| {
+                model.prediction_transform != crate::tree::PredictionTransform::Identity
+            })
+            || x.n_rows()
+                .saturating_mul(total_width)
+                .saturating_mul(output_count)
+                < QUANTILE_DENSE_DISPATCH_MIN_OPS
+        {
+            return self.predict_cpu(x);
+        }
+
+        let additive_columns = self
+            .models
+            .iter()
+            .map(|model| model.try_predict_additive(x))
+            .collect::<Result<Vec<_>>>()?;
+        let input = (0..x.n_rows())
+            .into_par_iter()
+            .map(|row| {
+                additive_columns
+                    .iter()
+                    .flat_map(|column| column[row].iter().copied())
+                    .map(|value| value as f32)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let mut weights = vec![0.0_f32; total_width * output_count];
+        let mut offset = 0;
+        for (output, model) in self.models.iter().enumerate() {
+            let width = model.trees.len() + 1;
+            for input_column in offset..offset + width {
+                weights[input_column * output_count + output] = 1.0;
+            }
+            offset += width;
+        }
+        let values =
+            backend_dense_layer_f32(selection, &input, &weights, &vec![0.0_f32; output_count])
+                .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+        values
+            .into_iter()
+            .map(|row| {
+                QuantileForecast::new(
+                    self.quantiles.clone(),
+                    repair_non_crossing_quantiles(
+                        &row.into_iter().map(f64::from).collect::<Vec<_>>(),
+                    )?,
+                )
+            })
+            .collect()
+    }
+
+    fn predict_cpu(&self, x: &Dataset) -> Result<Vec<QuantileForecast>> {
         if self.models.is_empty() {
             return Err(CartoBoostError::InvalidInput(
                 "quantile regressor set must contain at least one model".to_string(),
@@ -124,7 +259,7 @@ impl QuantileRegressorSet {
         }
         let mut columns = Vec::with_capacity(self.models.len());
         for model in &self.models {
-            columns.push(model.try_predict(x)?);
+            columns.push(model.try_predict_with_backend(x, Some("cpu"))?);
         }
         (0..x.n_rows())
             .map(|row| {
@@ -235,6 +370,14 @@ mod tests {
             assert_eq!(forecast.quantiles, vec![0.1, 0.5, 0.9]);
             assert!(forecast.values.windows(2).all(|pair| pair[0] <= pair[1]));
         }
+        assert_eq!(
+            model.backend().map(|selection| selection.selected.as_str()),
+            Some("cpu")
+        );
+        let explicit = model
+            .predict_with_backend(&x, Some("cpu"))
+            .expect("explicit cpu prediction");
+        assert_eq!(explicit.len(), x.n_rows());
     }
 
     #[test]

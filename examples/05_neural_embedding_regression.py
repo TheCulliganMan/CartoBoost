@@ -14,8 +14,7 @@ import json
 from typing import Any
 
 import numpy as np
-from cartoboost import CartoBoostRegressor
-from cartoboost import NeuralEmbeddingRegressor
+from cartoboost import CartoBoostRegressor, NeuralEmbeddingRegressor
 
 SPLITTERS = ["axis_histogram:256"]
 

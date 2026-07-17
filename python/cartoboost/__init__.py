@@ -10,6 +10,7 @@ __version__ = "0.3.10"
 # Every shipped family is reachable directly from ``cartoboost`` and through
 # its named module. There is deliberately no secondary namespace.
 _MODULES = (
+    "accelerators",
     "causal",
     "deep",
     "evaluation",

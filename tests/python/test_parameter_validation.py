@@ -1,6 +1,18 @@
 import pytest
-from cartoboost import CartoBoostRegressor, FeatureKind
+from cartoboost import Backend, CartoBoostRegressor, FeatureKind
 from cartoboost import regressor as regressor_module
+
+
+def test_backend_enum_covers_native_accelerator_contract():
+    assert {backend.value for backend in Backend} >= {
+        "auto",
+        "cpu",
+        "cuda",
+        "directml",
+        "rocm",
+        "metal",
+        "webgpu",
+    }
 
 
 def test_unknown_splitter_is_rejected_before_native_training():

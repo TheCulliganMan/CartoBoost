@@ -14,9 +14,9 @@
 ## Testing instructions
 - Run `uv run ruff format --check python`.
 - Run relevant pytest files after Python package changes.
-- For optional dependency adapters, run both targeted tests and a smoke command with the extra enabled, for example `uv run --extra duckdb python ...`, `--extra h3`, or `--extra s2`.
+- For optional dependency adapters, run both targeted tests and a smoke command after installing the package directly, for example `uv add --dev duckdb`, `uv add --dev h3`, or `uv add --dev s2sphere`.
 
 ## PR instructions
 - Summarize changed Python API surface.
 - Mention whether native binding rebuilds are required.
-- Mention any optional extras added or changed and whether `uv.lock` was refreshed.
+- Mention any optional dependencies added or changed and whether `uv.lock` was refreshed.

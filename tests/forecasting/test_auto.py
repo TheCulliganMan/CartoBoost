@@ -54,6 +54,7 @@ def test_auto_forecaster_delegates_to_native_auto_model(install_fake_native):
     assert native.calls[0] == (
         "init",
         {
+            "backend": "cpu",
             "lags": [1, 2, 3, 7, 14, 28],
             "rolling_windows": [7, 14, 28],
             "partial_rolling_mean_windows": [],

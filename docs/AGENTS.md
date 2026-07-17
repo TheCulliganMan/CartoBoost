@@ -10,7 +10,7 @@
   sensor, location, entity id, hour, day of week, and series id. Taxi examples
   are allowed as one concrete framing device, but do not make the package or a
   model page feel taxi-specific.
-- Keep optional dependency docs split by extra. For example, document `cartoboost[h3]`, `cartoboost[s2]`, `cartoboost[duckdb]`, and `cartoboost[polars]` separately instead of implying one bundled geo/table extra.
+- Document optional third-party dependencies as direct installs such as `uv add h3`, `uv add s2sphere`, `uv add duckdb`, and `uv add polars`; CartoBoost does not publish package extras.
 - When documenting benchmark results, distinguish real NYC taxi runs from synthetic smoke or acceptance fixtures. Avoid broad superiority language unless the documented command and metrics support it.
 - Keep forecast benchmark tables reader-facing: one ranked model-comparison table per dataset family when possible. If a family includes multiple artifacts, use a `Run` column instead of scattering several small tables.
 - Avoid vague public table headers such as `Scope`. Use plain, concrete headers such as `Model`, `RMSE`, `MAE`, `WAPE`, `Read`, `Artifact`, `Details`, and `Result`.
@@ -32,13 +32,13 @@
   family. If the page should not exist, remove the listing instead of leaving a
   dangling or aggregate-only mention.
 - Every model guide page linked from a user-guide index or sidebar must exist
-  in the current tree and have a `## Public Contract`, `## Use When`, and
-  `## Validation` section unless the page is explicitly a router/index page.
+  in the current tree and have a clear Python example, model-selection guidance,
+  validation guidance, and limitations unless the page is explicitly a router/index page.
 - Use `## Interactive Example` for embedded browser examples. Explain the
   browser run as a quick shape and behavior check, not as benchmark evidence.
   Do not document raw Wasm or JavaScript payloads in user model guides unless
   the page is specifically about the browser API.
-- Use `## Public Contract` for the primary Python example. Examples should be
+- Use `## Python Example` for the primary Python example. Examples should be
   complete enough to show required inputs and output shape, but should not
   expose internal Rust, PyO3, artifact, or benchmark-harness details.
 - Keep "Use When" sections. They should help users decide between adjacent

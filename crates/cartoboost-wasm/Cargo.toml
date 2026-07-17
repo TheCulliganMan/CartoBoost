@@ -32,7 +32,18 @@ wasm-bindgen-test = "0.3"
 [features]
 default = ["webgpu"]
 webgpu = [
+    "cartoboost-core/webgpu",
+    "cartoboost-geo-causal/webgpu",
+    "cartoboost-geo-core/webgpu",
+    "cartoboost-geostats/webgpu",
     "cartoboost-geo-st/webgpu",
     "cartoboost-neural/webgpu",
+    "cartoboost-prob/webgpu",
     "dep:wasm-bindgen-futures",
 ]
+metal = ["cartoboost-core/metal", "cartoboost-geo-causal/metal", "cartoboost-geo-core/metal", "cartoboost-geostats/metal", "cartoboost-geo-st/metal", "cartoboost-neural/metal", "cartoboost-prob/metal"]
+rocm = ["cartoboost-core/rocm", "cartoboost-geo-causal/rocm", "cartoboost-geo-core/rocm", "cartoboost-geostats/rocm", "cartoboost-geo-st/rocm", "cartoboost-neural/rocm", "cartoboost-prob/rocm"]
+hip = ["cartoboost-core/hip", "cartoboost-geo-causal/hip", "cartoboost-geo-core/hip", "cartoboost-geostats/hip", "cartoboost-geo-st/hip", "cartoboost-neural/hip", "cartoboost-prob/hip"]
+directml = ["cartoboost-core/directml", "cartoboost-geo-causal/directml", "cartoboost-geo-core/directml", "cartoboost-geostats/directml", "cartoboost-geo-st/directml", "cartoboost-neural/directml", "cartoboost-prob/directml"]
+cuda = ["cartoboost-core/cuda", "cartoboost-geo-causal/cuda", "cartoboost-geo-core/cuda", "cartoboost-geostats/cuda", "cartoboost-geo-st/cuda", "cartoboost-neural/cuda", "cartoboost-prob/cuda"]
+cuda-oxide = ["cartoboost-core/cuda-oxide", "cartoboost-geo-causal/cuda-oxide", "cartoboost-geo-core/cuda-oxide", "cartoboost-geostats/cuda-oxide", "cartoboost-geo-st/cuda-oxide", "cartoboost-neural/cuda-oxide", "cartoboost-prob/cuda-oxide"]

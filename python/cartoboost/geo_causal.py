@@ -17,6 +17,7 @@ from ._native import (
     geo_causal_spillover_diagnostics,
     geo_causal_synthetic_did_summary,
 )
+from .config import Backend
 
 __all__ = [
     "GeoCausalPanel",
@@ -70,6 +71,9 @@ class InvariantRiskEncoder:
         "supplement to an identified design."
     )
 
+    def __init__(self, *, backend: str = "cpu") -> None:
+        self.backend = str(backend)
+
     def fit_report(
         self,
         features: Any,
@@ -87,6 +91,7 @@ class InvariantRiskEncoder:
                 y,
                 region_values,
                 str(heldout_region),
+                self.backend,
             )
         )
 
@@ -114,9 +119,16 @@ TreatmentEffectRepresentationHead = InvariantRiskEncoder
 class SyntheticDIDEstimator(ArtifactPersistenceMixin):
     """Synthetic difference-in-differences estimator for geographic interventions."""
 
-    def __init__(self, *, intervention_time: str, seed: int = 13) -> None:
+    def __init__(
+        self,
+        *,
+        intervention_time: str,
+        seed: int = 13,
+        backend: Backend | str = Backend.CPU,
+    ) -> None:
         self.intervention_time = str(intervention_time)
         self.seed = int(seed)
+        self.backend = str(backend)
         self._panel: GeoCausalPanel | None = None
         self._summary: dict[str, Any] | None = None
 
@@ -132,8 +144,10 @@ class SyntheticDIDEstimator(ArtifactPersistenceMixin):
                 self.intervention_time,
                 self.seed,
                 0,
+                self.backend,
             )
         )
+        self.backend_ = str(self._summary["backend_selected"])
         return self
 
     def estimate_effect(self) -> float:
@@ -148,7 +162,11 @@ class SyntheticDIDEstimator(ArtifactPersistenceMixin):
 
     def get_params(self, deep: bool = True) -> dict[str, Any]:
         del deep
-        return {"intervention_time": self.intervention_time, "seed": self.seed}
+        return {
+            "intervention_time": self.intervention_time,
+            "seed": self.seed,
+            "backend": self.backend,
+        }
 
     def set_params(self, **params: Any) -> SyntheticDIDEstimator:
         valid = self.get_params()
@@ -158,6 +176,7 @@ class SyntheticDIDEstimator(ArtifactPersistenceMixin):
             setattr(self, key, value)
         self.seed = int(self.seed)
         self.intervention_time = str(self.intervention_time)
+        self.backend = str(self.backend)
         self._panel = None
         self._summary = None
         return self
@@ -197,6 +216,7 @@ class SyntheticDIDEstimator(ArtifactPersistenceMixin):
             self.intervention_time,
             self.seed,
             int(n),
+            self.backend,
         )
         summary = self._require_summary()
         summary["placebo_estimates"] = list(values)
@@ -210,7 +230,7 @@ class SyntheticDIDEstimator(ArtifactPersistenceMixin):
         try:
             import matplotlib.pyplot as plt
         except ImportError as exc:
-            raise ImportError("Install cartoboost[visualization] to use geo-causal plots") from exc
+            raise ImportError("Install matplotlib to use geo-causal plots") from exc
         ax = ax or plt.subplots()[1]
         if kind == "placebo":
             values = summary.get("placebo_estimates") or []
@@ -242,9 +262,16 @@ class SyntheticDIDEstimator(ArtifactPersistenceMixin):
 class GeoExperimentDesigner(ArtifactPersistenceMixin):
     """GeoLift-style helper for choosing balanced candidate test geos."""
 
-    def __init__(self, *, intervention_time: str, seed: int = 13) -> None:
+    def __init__(
+        self,
+        *,
+        intervention_time: str,
+        seed: int = 13,
+        backend: Backend | str = Backend.CPU,
+    ) -> None:
         self.intervention_time = str(intervention_time)
         self.seed = int(seed)
+        self.backend = str(backend)
 
     def fit(
         self,
@@ -265,6 +292,7 @@ class GeoExperimentDesigner(ArtifactPersistenceMixin):
                 self.seed,
                 int(candidate_count),
                 int(placebo_n),
+                self.backend,
             )
         )
 
@@ -280,7 +308,11 @@ class GeoExperimentDesigner(ArtifactPersistenceMixin):
 
     def get_params(self, deep: bool = True) -> dict[str, Any]:
         del deep
-        return {"intervention_time": self.intervention_time, "seed": self.seed}
+        return {
+            "intervention_time": self.intervention_time,
+            "seed": self.seed,
+            "backend": self.backend,
+        }
 
     def set_params(self, **params: Any) -> GeoExperimentDesigner:
         valid = self.get_params()
@@ -324,7 +356,7 @@ class GeoExperimentDesigner(ArtifactPersistenceMixin):
         try:
             import matplotlib.pyplot as plt
         except ImportError as exc:
-            raise ImportError("Install cartoboost[visualization] to use geo-causal plots") from exc
+            raise ImportError("Install matplotlib to use geo-causal plots") from exc
         ax = ax or plt.subplots()[1]
         values = design.get("placebo_estimates") or []
         ax.hist(values, bins=min(20, max(1, len(values))), color="#4c78a8", alpha=0.75)
@@ -340,9 +372,16 @@ GeoLiftEstimator = GeoExperimentDesigner
 class SpatialPlaceboTester(ArtifactPersistenceMixin):
     """Deterministic spatial placebo runner for geographic panel experiments."""
 
-    def __init__(self, *, intervention_time: str, seed: int = 13) -> None:
+    def __init__(
+        self,
+        *,
+        intervention_time: str,
+        seed: int = 13,
+        backend: Backend | str = Backend.CPU,
+    ) -> None:
         self.intervention_time = str(intervention_time)
         self.seed = int(seed)
+        self.backend = str(backend)
 
     def fit(
         self,
@@ -362,6 +401,7 @@ class SpatialPlaceboTester(ArtifactPersistenceMixin):
                 self.intervention_time,
                 self.seed,
                 int(n),
+                self.backend,
             )
         )
 
@@ -369,7 +409,9 @@ class SpatialPlaceboTester(ArtifactPersistenceMixin):
         panel = getattr(self, "panel", None)
         if panel is None:
             raise ValueError("fit(panel) must be called first")
-        return json.loads(geo_causal_spillover_diagnostics(panel.rows, panel.spatial_weights))
+        return json.loads(
+            geo_causal_spillover_diagnostics(panel.rows, panel.spatial_weights, self.backend)
+        )
 
     def predict(self) -> dict[str, Any]:
         return self.summary()
@@ -379,7 +421,11 @@ class SpatialPlaceboTester(ArtifactPersistenceMixin):
 
     def get_params(self, deep: bool = True) -> dict[str, Any]:
         del deep
-        return {"intervention_time": self.intervention_time, "seed": self.seed}
+        return {
+            "intervention_time": self.intervention_time,
+            "seed": self.seed,
+            "backend": self.backend,
+        }
 
     def set_params(self, **params: Any) -> SpatialPlaceboTester:
         valid = self.get_params()
@@ -389,6 +435,8 @@ class SpatialPlaceboTester(ArtifactPersistenceMixin):
             setattr(self, key, value)
         self.seed = int(self.seed)
         self.intervention_time = str(self.intervention_time)
+        self.backend = str(self.backend)
+        self.backend = str(self.backend)
         return self
 
     @property

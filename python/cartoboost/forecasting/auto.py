@@ -11,7 +11,7 @@ from .._artifacts import (
     library_version,
     stable_forecast_artifact_payload,
 )
-from ..config import BoosterConfig, Objective
+from ..config import Backend, BoosterConfig, Objective
 from ._native_wrappers import (
     _forecast_frame_from_artifact,
     _forecast_frame_to_artifact,
@@ -48,6 +48,7 @@ class AutoForecasterConfig:
     partial_rolling_mean_windows: tuple[int, ...] = ()
     booster_config: BoosterConfig = BoosterConfig()
     n_estimators: int | None = None
+    backend: Backend | str = Backend.CPU
 
 
 @dataclass(frozen=True)
@@ -89,6 +90,7 @@ class AutoForecaster(BaseForecaster):
         partial_rolling_mean_windows: Sequence[int] | None = None,
         booster_config: BoosterConfig | None = None,
         n_estimators: int | None = None,
+        backend: Backend | str = Backend.CPU,
     ) -> None:
         if config is not None:
             if not isinstance(config, AutoForecasterConfig):
@@ -115,6 +117,7 @@ class AutoForecaster(BaseForecaster):
             partial_rolling_mean_windows = config.partial_rolling_mean_windows
             booster_config = config.booster_config
             n_estimators = config.n_estimators
+            backend = config.backend
         if n_estimators is not None:
             if int(n_estimators) <= 0:
                 raise ValueError("n_estimators must be positive when provided")
@@ -159,6 +162,7 @@ class AutoForecaster(BaseForecaster):
             ),
             booster_config=booster_config or BoosterConfig(),
             n_estimators=None if n_estimators is None else int(n_estimators),
+            backend=str(backend),
         )
         if self.config.validation_origin_count <= 0:
             raise ValueError("validation_origin_count must be positive")
@@ -217,6 +221,7 @@ class AutoForecaster(BaseForecaster):
             "max_blend_weight": self.config.max_blend_weight,
             "max_direct_horizon": self.config.max_direct_horizon,
             "max_candidate_count": self.config.max_candidate_count,
+            "backend": str(self.config.backend),
         }
         if self.config.n_estimators is not None:
             params["n_estimators"] = self.config.n_estimators
@@ -432,6 +437,7 @@ def _auto_config_payload(config: AutoForecasterConfig) -> dict[str, Any]:
         "partial_rolling_mean_windows": list(config.partial_rolling_mean_windows),
         "booster_config": config.booster_config.to_dict(),
         "n_estimators": config.n_estimators,
+        "backend": str(config.backend),
     }
 
 
@@ -476,4 +482,5 @@ def _auto_config_from_payload(payload: dict[str, Any]) -> AutoForecastConfig:
         partial_rolling_mean_windows=tuple(payload.get("partial_rolling_mean_windows", ())),
         booster_config=booster,
         n_estimators=payload.get("n_estimators"),
+        backend=Backend(payload.get("backend", Backend.CPU.value)),
     )

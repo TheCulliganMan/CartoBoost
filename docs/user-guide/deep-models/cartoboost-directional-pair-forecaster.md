@@ -7,7 +7,7 @@ and reversing the pair changes the meaning. Good examples include origin-to-
 destination flows, sender-to-receiver activity, upstream-to-downstream sensors,
 or account-to-account interactions.
 
-## Public Contract
+## Python Example
 
 ```python
 from cartoboost.deep import DirectionalPairForecaster, DirectionalPairFrame
@@ -65,3 +65,9 @@ ids use the learned unknown embedding row.
 Report temporal splits and cold-pair splits separately. If the holdout contains
 source-target pairs not seen during training, describe that as cold-pair
 generalization rather than repeated-pair scoring.
+
+## Limitations
+
+- Pair embeddings can memorize frequently repeated routes.
+- Cold sources, targets, and pairs need separate evaluation.
+- Directional identity does not replace measured route and time covariates.

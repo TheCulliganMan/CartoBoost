@@ -192,6 +192,7 @@ def test_kriging_normalizes_mapping_coordinates_and_delegates_to_native(install_
             "max_neighbors": None,
             "min_neighbors": 1,
             "max_distance": None,
+            "backend": "cpu",
         },
     )
 
@@ -240,6 +241,7 @@ def test_kriging_accepts_coordinate_triples(install_fake_native):
             "max_neighbors": None,
             "min_neighbors": 1,
             "max_distance": None,
+            "backend": "cpu",
         },
     )
 
@@ -259,6 +261,7 @@ def test_kriging_passes_extended_native_parameters(install_fake_native):
         max_neighbors=2,
         min_neighbors=2,
         max_distance=5.0,
+        backend="cuda",
     ).fit({"pickup_1": [10, 11], "pickup_2": [20, 21], "pickup_3": [30, 31]})
 
     assert native.calls[0] == (
@@ -279,6 +282,7 @@ def test_kriging_passes_extended_native_parameters(install_fake_native):
             "max_neighbors": 2,
             "min_neighbors": 2,
             "max_distance": 5.0,
+            "backend": "cuda",
         },
     )
 
@@ -326,6 +330,7 @@ def test_spatial_piecewise_kriging_delegates_to_native(install_fake_native):
             "residual_shrinkage": 0.8,
             "allow_neighbor_fallback": False,
             "piecewise_config_json": None,
+            "backend": "cpu",
         },
     )
 

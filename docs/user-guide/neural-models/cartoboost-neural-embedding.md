@@ -13,7 +13,7 @@ IDs, route pairs, account buckets, item IDs, or recurring operational groups.
 - Stable ids recur in both training and prediction data.
 - You want a direct model, not embedding features for another estimator.
 
-## Public Contract
+## Python Example
 
 ```python
 from cartoboost.neural import NeuralEmbeddingStandaloneRegressor
@@ -61,3 +61,9 @@ Report random, temporal, and cold-ID splits separately when they support
 different claims. Under cold-ID or cold-route holdouts, report fallback
 behavior explicitly because unseen IDs cannot recover learned ID-specific
 effects.
+
+## Limitations
+
+- Learned ID effects do not generalize naturally to unseen identifiers.
+- Embeddings can memorize frequent entities under random splits.
+- Inspect temporal and cold-ID results before treating embeddings as structural signal.

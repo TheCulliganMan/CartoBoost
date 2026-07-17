@@ -10,7 +10,18 @@ serde_json.workspace = true
 chrono.workspace = true
 thiserror.workspace = true
 rayon = "1.11"
+cartoboost-accelerator = { path = "../cartoboost-accelerator" }
 toml.workspace = true
+
+[features]
+default = []
+cuda = ["cartoboost-accelerator/cuda"]
+cuda-oxide = ["cartoboost-accelerator/cuda-oxide"]
+rocm = ["cartoboost-accelerator/rocm"]
+hip = ["cartoboost-accelerator/hip"]
+metal = ["cartoboost-accelerator/metal"]
+directml = ["cartoboost-accelerator/directml"]
+webgpu = ["cartoboost-accelerator/webgpu"]
 
 [dev-dependencies]
 criterion.workspace = true

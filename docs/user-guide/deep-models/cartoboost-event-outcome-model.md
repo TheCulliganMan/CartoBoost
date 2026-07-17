@@ -6,7 +6,7 @@ Use `EventOutcomeModel` when the target is a binary event and the output should
 be a calibrated probability. It is for event risk, conversion, failure,
 completion, or acceptance probability when calibration matters.
 
-## Public Contract
+## Python Example
 
 ```python
 from cartoboost.deep import EventOutcomeModel
@@ -44,3 +44,9 @@ model.save("event-outcome.json")
 Report Brier score, log loss, ROC-AUC or PR-AUC when appropriate, and
 calibration by probability bucket. Use a time, group, or entity split when
 deployment will face new periods or entities.
+
+## Limitations
+
+- Calibration can drift when the event rate changes.
+- A good ranking metric does not guarantee calibrated probabilities.
+- Binary outcomes do not represent competing risks or time-to-event behavior.

@@ -7,7 +7,7 @@ local neighborhoods drive the target. Examples include demand by hour and zone,
 adjustments by location, and operational metrics grouped by source/target
 pairs.
 
-## When It Is A Good Scientific Choice
+## When To Use Structured Spatial Features
 
 Use `CartoBoostRegressor` when the modeling question depends on structured
 place/time effects that should remain visible in the fitted workflow:
@@ -144,7 +144,7 @@ along_corridor, cross_corridor = local_frame_features(
 ## Encoded Route And Grid Cells
 
 CartoBoost can encode latitude/longitude points and decoded route geometries
-into optional H3 or S2 sparse-set columns when the matching extra is installed.
+into optional H3 or S2 sparse-set columns when the matching package is installed.
 If you already have H3, S2, grid, zone, or corridor IDs, encode them as
 non-negative integers and pass them through a sparse-set column:
 

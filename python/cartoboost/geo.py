@@ -21,6 +21,7 @@ from ._native import (
     geo_spatial_block_cv,
     geo_spatial_temporal_blocked_split,
 )
+from .config import Backend
 
 __all__ = [
     "CoordinateMatrix",
@@ -91,6 +92,7 @@ def buffered_spatial_cv_manifest(
     dependency_versions: Mapping[str, str],
     random_seed: int | None = None,
     split_id: str = "buffered_spatial_cv",
+    backend: Backend | str = Backend.CPU,
 ) -> SplitManifest:
     """Create a spatial block manifest with training rows buffered away from each test block."""
     return geo_buffered_spatial_cv(
@@ -103,6 +105,7 @@ def buffered_spatial_cv_manifest(
         dict(dependency_versions),
         random_seed,
         split_id,
+        str(backend),
     )
 
 
@@ -227,6 +230,8 @@ def clockwise_bearing_unit_vector(
 def clockwise_bearing_unit_vectors(
     origins: Sequence[tuple[Any, Any]],
     destinations: Sequence[tuple[Any, Any]],
+    *,
+    backend: Backend | str = Backend.CPU,
 ) -> list[tuple[float, float] | None]:
     """Vectorized planar clockwise bearing unit features for paired coordinates."""
 
@@ -234,9 +239,20 @@ def clockwise_bearing_unit_vectors(
     destination_values = list(destinations)
     if len(origin_values) != len(destination_values):
         raise ValueError("origins and destinations must have the same number of rows")
+    normalized_origins = [
+        _coordinate_pair(origin, f"origins[{idx}]") for idx, origin in enumerate(origin_values)
+    ]
+    normalized_destinations = [
+        _coordinate_pair(destination, f"destinations[{idx}]")
+        for idx, destination in enumerate(destination_values)
+    ]
     return [
-        clockwise_bearing_unit_vector(origin, destination)
-        for origin, destination in zip(origin_values, destination_values, strict=True)
+        None if row is None else (float(row[0]), float(row[1]))
+        for row in _native_geo_feature("geo_clockwise_bearing_unit_vector_rows_value")(
+            normalized_origins,
+            normalized_destinations,
+            str(backend),
+        )
     ]
 
 
@@ -264,6 +280,8 @@ def initial_bearing_unit_vector_latlng(
 def initial_bearing_unit_vectors_latlng(
     origins: Sequence[tuple[Any, Any]],
     destinations: Sequence[tuple[Any, Any]],
+    *,
+    backend: Backend | str = Backend.CPU,
 ) -> list[tuple[float, float] | None]:
     """Vectorized great-circle initial bearing unit features for lat/lng pairs."""
 
@@ -271,9 +289,20 @@ def initial_bearing_unit_vectors_latlng(
     destination_values = list(destinations)
     if len(origin_values) != len(destination_values):
         raise ValueError("origins and destinations must have the same number of rows")
+    normalized_origins = [
+        _coordinate_pair(origin, f"origins[{idx}]") for idx, origin in enumerate(origin_values)
+    ]
+    normalized_destinations = [
+        _coordinate_pair(destination, f"destinations[{idx}]")
+        for idx, destination in enumerate(destination_values)
+    ]
     return [
-        initial_bearing_unit_vector_latlng(origin, destination)
-        for origin, destination in zip(origin_values, destination_values, strict=True)
+        None if row is None else (float(row[0]), float(row[1]))
+        for row in _native_geo_feature("geo_initial_bearing_unit_vector_rows_latlng_value")(
+            normalized_origins,
+            normalized_destinations,
+            str(backend),
+        )
     ]
 
 
@@ -296,6 +325,8 @@ def route_feature_vector(
 def route_feature_rows(
     origins: Sequence[tuple[Any, Any]],
     destinations: Sequence[tuple[Any, Any]],
+    *,
+    backend: Backend | str = Backend.CPU,
 ) -> list[tuple[float, float, float, float, float] | None]:
     """Vectorized route midpoint, distance, and bearing features."""
 
@@ -303,9 +334,20 @@ def route_feature_rows(
     destination_values = list(destinations)
     if len(origin_values) != len(destination_values):
         raise ValueError("origins and destinations must have the same number of rows")
+    normalized_origins = [
+        _coordinate_pair(origin, f"origins[{idx}]") for idx, origin in enumerate(origin_values)
+    ]
+    normalized_destinations = [
+        _coordinate_pair(destination, f"destinations[{idx}]")
+        for idx, destination in enumerate(destination_values)
+    ]
     return [
-        route_feature_vector(origin, destination)
-        for origin, destination in zip(origin_values, destination_values, strict=True)
+        None if row is None else tuple(float(value) for value in row)
+        for row in _native_geo_feature("geo_route_feature_rows_value")(
+            normalized_origins,
+            normalized_destinations,
+            str(backend),
+        )
     ]
 
 
@@ -333,6 +375,8 @@ def route_latlng_points(route: Any) -> list[tuple[float, float]]:
 def radial_anchor_distances(
     point: tuple[Any, Any],
     anchors: Sequence[tuple[Any, Any]],
+    *,
+    backend: Backend | str = Backend.CPU,
 ) -> list[float]:
     """Return distances from one point to each anchor."""
 
@@ -342,13 +386,17 @@ def radial_anchor_distances(
     ]
     return [
         float(value)
-        for value in _native_geo_feature("geo_radial_anchor_distances_value")(px, py, anchor_values)
+        for value in _native_geo_feature("geo_radial_anchor_distances_value")(
+            px, py, anchor_values, str(backend)
+        )
     ]
 
 
 def radial_anchor_distance_rows(
     points: Sequence[tuple[Any, Any]],
     anchors: Sequence[tuple[Any, Any]],
+    *,
+    backend: Backend | str = Backend.CPU,
 ) -> list[list[float]]:
     """Return one radial-distance feature row per point."""
 
@@ -356,7 +404,18 @@ def radial_anchor_distance_rows(
     anchor_values = list(anchors)
     if not anchor_values:
         raise ValueError("anchors must contain at least one coordinate pair")
-    return [radial_anchor_distances(point, anchor_values) for point in point_values]
+    normalized_points = [
+        _coordinate_pair(point, f"points[{idx}]") for idx, point in enumerate(point_values)
+    ]
+    normalized_anchors = [
+        _coordinate_pair(anchor, f"anchors[{idx}]") for idx, anchor in enumerate(anchor_values)
+    ]
+    return [
+        [float(value) for value in row]
+        for row in _native_geo_feature("geo_radial_anchor_distance_rows_value")(
+            normalized_points, normalized_anchors, str(backend)
+        )
+    ]
 
 
 def rbf_anchor_features(
@@ -364,6 +423,7 @@ def rbf_anchor_features(
     anchors: Sequence[tuple[Any, Any]],
     *,
     length_scale: float,
+    backend: Backend | str = Backend.CPU,
 ) -> list[float]:
     """Return Gaussian radial-basis features from one point to each anchor."""
 
@@ -378,6 +438,7 @@ def rbf_anchor_features(
             py,
             anchor_values,
             _finite_float(length_scale, "length_scale"),
+            str(backend),
         )
     ]
 
@@ -387,6 +448,7 @@ def rbf_anchor_feature_rows(
     anchors: Sequence[tuple[Any, Any]],
     *,
     length_scale: float,
+    backend: Backend | str = Backend.CPU,
 ) -> list[list[float]]:
     """Return one Gaussian radial-basis feature row per point."""
 
@@ -394,9 +456,20 @@ def rbf_anchor_feature_rows(
     anchor_values = list(anchors)
     if not anchor_values:
         raise ValueError("anchors must contain at least one coordinate pair")
+    normalized_points = [
+        _coordinate_pair(point, f"points[{idx}]") for idx, point in enumerate(point_values)
+    ]
+    normalized_anchors = [
+        _coordinate_pair(anchor, f"anchors[{idx}]") for idx, anchor in enumerate(anchor_values)
+    ]
     return [
-        rbf_anchor_features(point, anchor_values, length_scale=length_scale)
-        for point in point_values
+        [float(value) for value in row]
+        for row in _native_geo_feature("geo_rbf_anchor_feature_rows_value")(
+            normalized_points,
+            normalized_anchors,
+            _finite_float(length_scale, "length_scale"),
+            str(backend),
+        )
     ]
 
 
@@ -418,10 +491,25 @@ def local_frame_feature_rows(
     points: Sequence[tuple[Any, Any]],
     origin: tuple[Any, Any],
     axis: tuple[Any, Any],
-) -> list[tuple[float, float] | None]:
+    *,
+    backend: Backend | str = Backend.CPU,
+) -> list[tuple[float, float]]:
     """Vectorized local-frame projection features."""
 
-    return [local_frame_features(point, origin, axis) for point in points]
+    normalized_points = [
+        _coordinate_pair(point, f"points[{idx}]") for idx, point in enumerate(points)
+    ]
+    normalized_origin = _coordinate_pair(origin, "origin")
+    normalized_axis = _coordinate_pair(axis, "axis")
+    return [
+        (float(row[0]), float(row[1]))
+        for row in _native_geo_feature("geo_local_frame_feature_rows_value")(
+            normalized_points,
+            normalized_origin,
+            normalized_axis,
+            str(backend),
+        )
+    ]
 
 
 def build_zip_sparse_sets(

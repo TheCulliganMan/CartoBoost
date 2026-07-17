@@ -18,6 +18,7 @@ from cartoboost._artifacts import (
 )
 
 from .._artifacts import ArtifactPersistenceMixin
+from ..config import Backend
 
 
 @dataclass(frozen=True)
@@ -221,6 +222,21 @@ class ConformalIntervalRegressor(ArtifactPersistenceMixin):
         )
         if isinstance(self, SpatialConformalRegressor):
             payload["group_residual_quantiles"] = dict(self.group_residual_quantiles_)
+            payload["backend"] = self.backend
+            payload["neighbor_count"] = self.neighbor_count
+            payload["calibration_actual"] = (
+                None if self.calibration_actual_ is None else self.calibration_actual_.tolist()
+            )
+            payload["calibration_prediction"] = (
+                None
+                if self.calibration_prediction_ is None
+                else self.calibration_prediction_.tolist()
+            )
+            payload["calibration_coordinates"] = (
+                None
+                if self.calibration_coordinates_ is None
+                else self.calibration_coordinates_.tolist()
+            )
         Path(path).write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
 
     @classmethod
@@ -233,7 +249,18 @@ class ConformalIntervalRegressor(ArtifactPersistenceMixin):
         target_cls: type[ConformalIntervalRegressor] = (
             SpatialConformalRegressor if artifact_type == "SpatialConformalRegressor" else cls
         )
-        obj = target_cls(load_model_artifact(payload["estimator"]), alpha=float(payload["alpha"]))
+        if target_cls is SpatialConformalRegressor:
+            obj = target_cls(
+                load_model_artifact(payload["estimator"]),
+                alpha=float(payload["alpha"]),
+                neighbor_count=int(payload.get("neighbor_count", 16)),
+                backend=str(payload.get("backend", Backend.CPU.value)),
+            )
+        else:
+            obj = target_cls(
+                load_model_artifact(payload["estimator"]),
+                alpha=float(payload["alpha"]),
+            )
         obj.calibrator_.residual_quantile_ = float(payload["residual_quantile"])
         obj.calibrator_._test_start = int(payload["test_start"])
         if isinstance(obj, SpatialConformalRegressor):
@@ -241,26 +268,88 @@ class ConformalIntervalRegressor(ArtifactPersistenceMixin):
                 str(key): float(value)
                 for key, value in payload.get("group_residual_quantiles", {}).items()
             }
+            obj.calibration_actual_ = _optional_vector(payload.get("calibration_actual"))
+            obj.calibration_prediction_ = _optional_vector(payload.get("calibration_prediction"))
+            coordinates = payload.get("calibration_coordinates")
+            obj.calibration_coordinates_ = (
+                None
+                if coordinates is None
+                else _coordinate_matrix(coordinates, "calibration_coordinates")
+            )
         return obj
 
 
 class QuantileCartoBoostRegressor(ArtifactPersistenceMixin):
     """Train one CartoBoost quantile regressor per requested level."""
 
-    def __init__(self, *, quantiles: tuple[float, ...] = (0.1, 0.5, 0.9), **kwargs: Any) -> None:
-        from cartoboost import CartoBoostRegressor
-
+    def __init__(
+        self,
+        *,
+        quantiles: tuple[float, ...] = (0.1, 0.5, 0.9),
+        backend: Backend | str = Backend.CPU,
+        **kwargs: Any,
+    ) -> None:
         self.quantiles = tuple(float(q) for q in quantiles)
         _validate_quantile_grid(self.quantiles)
+        self.backend = str(backend)
         self.kwargs = dict(kwargs)
+        self.models_: dict[float, Any] = {}
+        self._native_model: Any | None = None
+        from cartoboost import CartoBoostRegressor
+
+        if (
+            CartoBoostRegressor.__module__ != "cartoboost.regressor"
+            or _native_quantile_regressor_class() is None
+        ):
+            self._build_models()
+
+    def _build_models(self) -> None:
+        from cartoboost import CartoBoostRegressor
+
         self.models_ = {
-            q: CartoBoostRegressor(loss="quantile", quantile_alpha=q, **self.kwargs)
+            q: CartoBoostRegressor(
+                loss="quantile",
+                quantile_alpha=q,
+                backend=self.backend,
+                **self.kwargs,
+            )
             for q in self.quantiles
         }
 
     def fit(self, x: Any, y: Any) -> QuantileCartoBoostRegressor:
+        native_class = _native_quantile_regressor_class()
+        native_params = _native_quantile_params(self.kwargs)
+        if not self.models_ and native_class is not None and native_params is not None:
+            try:
+                dense = np.ascontiguousarray(np.asarray(x, dtype=np.float64))
+                targets = np.ascontiguousarray(_vector(y, "y"), dtype=np.float64)
+                if dense.ndim != 2:
+                    raise ValueError("X must be a two-dimensional numeric matrix")
+                if dense.shape[0] != targets.shape[0]:
+                    raise ValueError("X and y must contain the same number of rows")
+                native = native_class(
+                    quantiles=list(self.quantiles),
+                    backend=self.backend,
+                    **native_params,
+                )
+                native.fit(dense, targets)
+                self._native_model = native
+                self.models_ = {}
+                self.selected_backend_ = str(getattr(native, "selected_backend", self.backend))
+                return self
+            except (TypeError, ValueError):
+                # Categorical/mixed inputs and options outside the native set's
+                # contract retain the full per-estimator compatibility path.
+                self._native_model = None
+        if not self.models_:
+            self._build_models()
         for model in self.models_.values():
             model.fit(x, y)
+        selected = {
+            str(getattr(model, "selected_backend_", self.backend))
+            for model in self.models_.values()
+        }
+        self.selected_backend_ = next(iter(selected)) if len(selected) == 1 else self.backend
         return self
 
     def predict(self, x: Any) -> np.ndarray:
@@ -270,6 +359,11 @@ class QuantileCartoBoostRegressor(ArtifactPersistenceMixin):
         return columns[:, len(self.quantiles) // 2]
 
     def predict_quantiles(self, x: Any) -> np.ndarray:
+        if self._native_model is not None:
+            dense = np.ascontiguousarray(np.asarray(x, dtype=np.float64))
+            if dense.ndim != 2:
+                raise ValueError("X must be a two-dimensional numeric matrix")
+            return np.asarray(self._native_model.predict_quantiles(dense), dtype=float)
         columns = [_vector(self.models_[q].predict(x), "prediction") for q in self.quantiles]
         return np.maximum.accumulate(np.column_stack(columns), axis=1)
 
@@ -295,11 +389,16 @@ class QuantileCartoBoostRegressor(ArtifactPersistenceMixin):
 
     def get_params(self, deep: bool = True) -> dict[str, Any]:
         del deep
-        return {"quantiles": self.quantiles, **dict(self.kwargs)}
+        return {
+            "quantiles": self.quantiles,
+            "backend": self.backend,
+            **dict(self.kwargs),
+        }
 
     def set_params(self, **params: Any) -> QuantileCartoBoostRegressor:
         quantiles = params.pop("quantiles", self.quantiles)
-        self.__init__(quantiles=quantiles, **{**self.kwargs, **params})
+        backend = params.pop("backend", self.backend)
+        self.__init__(quantiles=quantiles, backend=backend, **{**self.kwargs, **params})
         return self
 
     @property
@@ -307,6 +406,26 @@ class QuantileCartoBoostRegressor(ArtifactPersistenceMixin):
         return {
             "model": "QuantileCartoBoostRegressor",
             "quantiles": list(self.quantiles),
+            "backend": {
+                "requested": self.backend,
+                "selected": (
+                    {
+                        str(q): str(getattr(self._native_model, "selected_backend", self.backend))
+                        for q in self.quantiles
+                    }
+                    if self._native_model is not None
+                    else {
+                        str(q): str(
+                            getattr(
+                                getattr(model, "_model", None),
+                                "selected_backend_",
+                                getattr(model, "backend", self.backend),
+                            )
+                        )
+                        for q, model in self.models_.items()
+                    }
+                ),
+            },
             "params": dict(self.kwargs),
         }
 
@@ -314,11 +433,17 @@ class QuantileCartoBoostRegressor(ArtifactPersistenceMixin):
         payload = versioned_artifact_payload(
             "QuantileCartoBoostRegressor",
             quantiles=list(self.quantiles),
+            backend=self.backend,
             kwargs=dict(self.kwargs),
-            models={
-                str(q): dump_model_artifact(model, purpose="quantile artifacts")
-                for q, model in self.models_.items()
-            },
+            native_model=(None if self._native_model is None else str(self._native_model.dumps())),
+            models=(
+                {
+                    str(q): dump_model_artifact(model, purpose="quantile artifacts")
+                    for q, model in self.models_.items()
+                }
+                if self._native_model is None
+                else {}
+            ),
         )
         Path(path).write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
 
@@ -327,16 +452,49 @@ class QuantileCartoBoostRegressor(ArtifactPersistenceMixin):
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
         require_artifact_payload(payload, "QuantileCartoBoostRegressor")
         obj = cls(
-            quantiles=tuple(float(q) for q in payload["quantiles"]), **dict(payload["kwargs"])
+            quantiles=tuple(float(q) for q in payload["quantiles"]),
+            backend=str(payload.get("backend", Backend.CPU.value)),
+            **dict(payload["kwargs"]),
         )
-        obj.models_ = {
-            float(level): load_model_artifact(model_payload)
-            for level, model_payload in payload["models"].items()
-        }
+        native_payload = payload.get("native_model")
+        native_class = _native_quantile_regressor_class()
+        if native_payload is not None and native_class is not None:
+            obj._native_model = native_class.loads(str(native_payload))
+            obj.models_ = {}
+            obj.selected_backend_ = str(getattr(obj._native_model, "selected_backend", obj.backend))
+        else:
+            obj._native_model = None
+            obj.models_ = {
+                float(level): load_model_artifact(model_payload)
+                for level, model_payload in payload["models"].items()
+            }
+            selected = {
+                str(getattr(model, "selected_backend_", obj.backend))
+                for model in obj.models_.values()
+            }
+            obj.selected_backend_ = next(iter(selected)) if len(selected) == 1 else obj.backend
         return obj
 
 
 class SpatialConformalRegressor(ConformalIntervalRegressor):
+    def __init__(
+        self,
+        estimator: Any,
+        *,
+        alpha: float = 0.1,
+        neighbor_count: int = 16,
+        backend: Backend | str = Backend.CPU,
+    ) -> None:
+        super().__init__(estimator, alpha=alpha)
+        if int(neighbor_count) <= 0:
+            raise ValueError("neighbor_count must be positive")
+        self.neighbor_count = int(neighbor_count)
+        self.backend = str(backend)
+        self.group_residual_quantiles_: dict[str, float] = {}
+        self.calibration_actual_: np.ndarray | None = None
+        self.calibration_prediction_: np.ndarray | None = None
+        self.calibration_coordinates_: np.ndarray | None = None
+
     def fit(
         self,
         x_train: Any,
@@ -345,6 +503,7 @@ class SpatialConformalRegressor(ConformalIntervalRegressor):
         y_calibration: Any,
         *,
         groups: Any | None = None,
+        calibration_coordinates: Any | None = None,
         train_end_exclusive: int,
         calibration_start: int,
         calibration_end_exclusive: int,
@@ -360,19 +519,31 @@ class SpatialConformalRegressor(ConformalIntervalRegressor):
             calibration_end_exclusive=calibration_end_exclusive,
             test_start=test_start,
         )
-        if groups is None:
-            raise ValueError("groups are required for spatial conformal calibration")
-        group_arr = np.asarray(groups)
-        if group_arr.shape[0] != _vector(y_calibration, "y_calibration").shape[0]:
-            raise ValueError("groups length must match calibration rows")
-        residuals = np.abs(
-            _vector(y_calibration, "y_calibration")
-            - _vector(self.estimator.predict(x_calibration), "calibration_prediction")
-        )
-        self.group_residual_quantiles_ = {
-            str(group): _conformal_quantile(residuals[group_arr == group], self.alpha)
-            for group in np.unique(group_arr)
-        }
+        actual = _vector(y_calibration, "y_calibration")
+        prediction = _vector(self.estimator.predict(x_calibration), "calibration_prediction")
+        if groups is None and calibration_coordinates is None:
+            raise ValueError(
+                "groups or calibration_coordinates are required for spatial conformal calibration"
+            )
+        if groups is not None:
+            group_arr = np.asarray(groups)
+            if group_arr.shape[0] != actual.shape[0]:
+                raise ValueError("groups length must match calibration rows")
+            residuals = np.abs(actual - prediction)
+            self.group_residual_quantiles_ = {
+                str(group): _conformal_quantile(residuals[group_arr == group], self.alpha)
+                for group in np.unique(group_arr)
+            }
+        if calibration_coordinates is not None:
+            coordinates = _coordinate_matrix(
+                calibration_coordinates,
+                "calibration_coordinates",
+            )
+            if coordinates.shape[0] != actual.shape[0]:
+                raise ValueError("calibration_coordinates row count must match calibration rows")
+            self.calibration_actual_ = actual
+            self.calibration_prediction_ = prediction
+            self.calibration_coordinates_ = coordinates
         return self
 
     def predict_interval(
@@ -381,8 +552,42 @@ class SpatialConformalRegressor(ConformalIntervalRegressor):
         *,
         test_start: int,
         groups: Any | None = None,
+        coordinates: Any | None = None,
     ) -> ConformalInterval:
         base = super().predict_interval(x, test_start=test_start)
+        if coordinates is not None:
+            if (
+                self.calibration_actual_ is None
+                or self.calibration_prediction_ is None
+                or self.calibration_coordinates_ is None
+            ):
+                raise ValueError(
+                    "fit with calibration_coordinates before coordinate-local prediction"
+                )
+            prediction = self.predict(x)
+            quantiles = nearest_conformal_residual_quantiles(
+                self.calibration_actual_,
+                self.calibration_prediction_,
+                self.calibration_coordinates_,
+                coordinates,
+                neighbor_count=self.neighbor_count,
+                alpha=self.alpha,
+                backend=self.backend,
+            )
+            if quantiles.shape[0] != prediction.shape[0]:
+                raise ValueError("coordinates length must match prediction rows")
+            return ConformalInterval(
+                lower=prediction - quantiles,
+                upper=prediction + quantiles,
+                residual_quantile=base.residual_quantile,
+                alpha=base.alpha,
+                metadata={
+                    **base.metadata,
+                    "method": "spatial_nearest_conformal",
+                    "backend": self.backend,
+                    "neighbor_count": self.neighbor_count,
+                },
+            )
         if groups is None:
             return base
         group_arr = np.asarray(groups)
@@ -402,6 +607,25 @@ class SpatialConformalRegressor(ConformalIntervalRegressor):
             alpha=base.alpha,
             metadata={**base.metadata, "method": "spatial_group_conformal"},
         )
+
+    def get_params(self, deep: bool = True) -> dict[str, Any]:
+        del deep
+        return {
+            "estimator": self.estimator,
+            "alpha": self.alpha,
+            "neighbor_count": self.neighbor_count,
+            "backend": self.backend,
+        }
+
+    @property
+    def metadata_(self) -> dict[str, Any]:
+        return {
+            **super().metadata_,
+            "backend": self.backend,
+            "neighbor_count": self.neighbor_count,
+            "coordinate_calibration": self.calibration_coordinates_ is not None,
+            "group_calibration": bool(self.group_residual_quantiles_),
+        }
 
 
 class ForecastConformalCalibrator:
@@ -451,7 +675,13 @@ class ForecastConformalCalibrator:
         )
 
 
-def pinball_loss(y_true: Any, y_pred: Any, quantile: float) -> float:
+def pinball_loss(
+    y_true: Any,
+    y_pred: Any,
+    quantile: float,
+    *,
+    backend: Backend | str = Backend.CPU,
+) -> float:
     _validate_quantile(quantile, "quantile")
     truth, pred = _paired(y_true, y_pred, "y_true", "y_pred")
     native = _native_prob_call(
@@ -459,6 +689,8 @@ def pinball_loss(y_true: Any, y_pred: Any, quantile: float) -> float:
         truth.tolist(),
         pred.tolist(),
         float(quantile),
+        str(backend),
+        None,
     )
     if native is not None:
         return float(native)
@@ -466,32 +698,57 @@ def pinball_loss(y_true: Any, y_pred: Any, quantile: float) -> float:
     return float(np.mean(np.maximum(quantile * residual, (quantile - 1.0) * residual)))
 
 
-def interval_coverage(y_true: Any, lower: Any, upper: Any) -> float:
+def interval_coverage(
+    y_true: Any,
+    lower: Any,
+    upper: Any,
+    *,
+    sample_weight: Any | None = None,
+    backend: Backend | str = Backend.CPU,
+) -> float:
     truth, lower_arr = _paired(y_true, lower, "y_true", "lower")
     _, upper_arr = _paired(y_true, upper, "y_true", "upper")
     _validate_interval_bounds(lower_arr, upper_arr)
+    weights = _optional_vector(sample_weight)
+    if weights is not None and weights.shape != truth.shape:
+        raise ValueError("sample_weight must have the same length as y_true")
     native = _native_prob_call(
         "prob_interval_coverage_value",
         truth.tolist(),
         lower_arr.tolist(),
         upper_arr.tolist(),
+        str(backend),
+        None if weights is None else weights.tolist(),
     )
     if native is not None:
         return float(native)
-    return float(np.mean((truth >= lower_arr) & (truth <= upper_arr)))
+    covered = ((truth >= lower_arr) & (truth <= upper_arr)).astype(float)
+    return float(np.mean(covered) if weights is None else np.average(covered, weights=weights))
 
 
-def mean_interval_width(lower: Any, upper: Any) -> float:
+def mean_interval_width(
+    lower: Any,
+    upper: Any,
+    *,
+    sample_weight: Any | None = None,
+    backend: Backend | str = Backend.CPU,
+) -> float:
     lower_arr, upper_arr = _paired(lower, upper, "lower", "upper")
     _validate_interval_bounds(lower_arr, upper_arr)
+    weights = _optional_vector(sample_weight)
+    if weights is not None and weights.shape != lower_arr.shape:
+        raise ValueError("sample_weight must have the same length as lower")
     native = _native_prob_call(
         "prob_mean_interval_width_value",
         lower_arr.tolist(),
         upper_arr.tolist(),
+        str(backend),
+        None if weights is None else weights.tolist(),
     )
     if native is not None:
         return float(native)
-    return float(np.mean(upper_arr - lower_arr))
+    widths = upper_arr - lower_arr
+    return float(np.mean(widths) if weights is None else np.average(widths, weights=weights))
 
 
 def weighted_conformal_residual_quantile(
@@ -565,6 +822,7 @@ def nearest_conformal_residual_quantiles(
     *,
     neighbor_count: int,
     alpha: float,
+    backend: Backend | str = Backend.CPU,
 ) -> np.ndarray:
     _validate_quantile(alpha, "alpha")
     if int(neighbor_count) <= 0:
@@ -588,6 +846,7 @@ def nearest_conformal_residual_quantiles(
         1,
         int(truth.shape[0] + 1),
         int(truth.shape[0] + 1),
+        str(backend),
     )
     if native is not None:
         return np.asarray(native, dtype=float)
@@ -682,19 +941,31 @@ def benchmark_calibration_report_fields(
     }
 
 
-def crps_approximation(y_true: Any, quantiles: Any, predictions: Any) -> float:
+def crps_approximation(
+    y_true: Any,
+    quantiles: Any,
+    predictions: Any,
+    *,
+    backend: Backend | str = Backend.CPU,
+) -> float:
     truth, levels, matrix = _quantile_matrix(y_true, quantiles, predictions)
     native = _native_prob_call(
         "prob_crps_approximation_value",
         truth.tolist(),
         levels.tolist(),
         matrix.tolist(),
+        str(backend),
     )
     if native is not None:
         return float(native)
     total = 0.0
     for idx, level in enumerate(levels):
-        total += 2.0 * pinball_loss(truth, matrix[:, idx], float(level))
+        total += 2.0 * pinball_loss(
+            truth,
+            matrix[:, idx],
+            float(level),
+            backend=backend,
+        )
     return float(total / len(levels))
 
 
@@ -702,6 +973,8 @@ def weighted_interval_score(
     y_true: Any,
     median: Any,
     intervals: list[tuple[float, Any, Any]],
+    *,
+    backend: Backend | str = Backend.CPU,
 ) -> float:
     truth, med = _paired(y_true, median, "y_true", "median")
     if not intervals:
@@ -724,13 +997,21 @@ def weighted_interval_score(
         truth.tolist(),
         med.tolist(),
         native_intervals,
+        str(backend),
     )
     if native is not None:
         return float(native)
     return float(np.mean(total / weight_sum))
 
 
-def pit_bins(y_true: Any, quantiles: Any, predictions: Any, *, bins: int = 10) -> dict[str, Any]:
+def pit_bins(
+    y_true: Any,
+    quantiles: Any,
+    predictions: Any,
+    *,
+    bins: int = 10,
+    backend: Backend | str = Backend.CPU,
+) -> dict[str, Any]:
     if int(bins) <= 0:
         raise ValueError("bins must be positive")
     truth, levels, matrix = _quantile_matrix(y_true, quantiles, predictions)
@@ -740,6 +1021,7 @@ def pit_bins(y_true: Any, quantiles: Any, predictions: Any, *, bins: int = 10) -
         levels.tolist(),
         matrix.tolist(),
         int(bins),
+        str(backend),
     )
     if native is not None:
         return json.loads(str(native))
@@ -823,6 +1105,10 @@ def _vector(values: Any, name: str) -> np.ndarray:
     return arr
 
 
+def _optional_vector(values: Any) -> np.ndarray | None:
+    return None if values is None else _vector(values, "artifact_vector")
+
+
 def _coordinate_matrix(values: Any, name: str) -> np.ndarray:
     arr = np.asarray(values, dtype=float)
     if arr.ndim != 2 or arr.shape[1] != 2:
@@ -884,3 +1170,63 @@ def _native_prob_call(name: str, *args: Any) -> Any | None:
     except (AttributeError, ImportError, ModuleNotFoundError):
         return None
     return function(*args)
+
+
+def _native_quantile_regressor_class() -> Any | None:
+    try:
+        native = importlib.import_module("cartoboost._native")
+        return native.QuantileRegressorSet
+    except (AttributeError, ImportError, ModuleNotFoundError):
+        return None
+
+
+def _native_quantile_params(kwargs: dict[str, Any]) -> dict[str, Any] | None:
+    unsupported = {
+        "random_state",
+        "tensorboard_log_dir",
+        "tensorboard_run_name",
+        "loss",
+        "quantile_alpha",
+        "loss_params",
+        "huber_delta",
+        "log_offset",
+    }
+    if any(key in kwargs and kwargs[key] is not None for key in unsupported):
+        return None
+    supported = {
+        "n_estimators",
+        "learning_rate",
+        "max_depth",
+        "min_samples_leaf",
+        "min_gain",
+        "leaf_predictor",
+        "linear_leaf_features",
+        "l2_regularization",
+        "constant_l2_regularization",
+        "fuzzy",
+        "fuzzy_bandwidth",
+        "fuzzy_kernel",
+        "n_threads",
+        "monotonic_constraints",
+    }
+    if any(key not in supported | {"split_policy", "splitters"} for key in kwargs):
+        return None
+    params = {key: value for key, value in kwargs.items() if key in supported}
+    linear_features = params.get("linear_leaf_features")
+    if linear_features is not None and any(
+        not isinstance(value, (int, np.integer)) for value in linear_features
+    ):
+        return None
+    if linear_features is not None:
+        params["linear_leaf_features"] = [int(value) for value in linear_features]
+    for enum_name in ("leaf_predictor", "fuzzy_kernel"):
+        value = params.get(enum_name)
+        if value is not None:
+            params[enum_name] = getattr(value, "value", str(value))
+    splitters = kwargs.get("splitters")
+    if splitters is None and "split_policy" in kwargs:
+        policy = getattr(kwargs["split_policy"], "value", str(kwargs["split_policy"]))
+        splitters = [str(policy)]
+    if splitters is not None:
+        params["splitters"] = [str(getattr(value, "value", value)) for value in splitters]
+    return params

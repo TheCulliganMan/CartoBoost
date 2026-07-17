@@ -211,8 +211,7 @@ def _load_h3() -> Any:
         return importlib.import_module("h3")
     except ImportError as exc:
         raise ImportError(
-            "H3 auto-encoding requires the optional 'h3' package. "
-            "Install with `pip install cartoboost[h3]` or `pip install h3`."
+            "H3 auto-encoding requires the optional 'h3' package. Install it with `pip install h3`."
         ) from exc
 
 

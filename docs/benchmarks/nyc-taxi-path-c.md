@@ -1,12 +1,10 @@
-# NYC Taxi Path C Claims
+# NYC Taxi Geo-Temporal Tests
 
-Path C is bounded real-data evidence on NYC TLC 2024 yellow taxi tasks. It
-validates real-data `cartoboost` geo-temporal tree behavior and benchmark
-discipline on this dataset, not universal market superiority. It does not
-validate `cartoboost.deep` models unless those models are explicitly added as
-Path C rows later.
+These experiments use 2024 NYC TLC yellow taxi data to test five concrete
+geo-temporal modeling questions. Results apply to the documented sample and
+splits; they do not establish universal superiority or evaluate deep models.
 
-## Evidence Contract
+## Data And Outputs
 
 Path C uses the maintained 2024 yellow taxi benchmark frame from
 `scripts/run_nyc_taxi_quality_benchmarks.py` and writes claim artifacts under
@@ -19,7 +17,7 @@ Path C uses the maintained 2024 yellow taxi benchmark frame from
 | Period | 2024 |
 | Tasks | Duration, fare, pickup demand |
 | Claim runner | `scripts/run_nyc_taxi_path_c_claims.py` |
-| Gate checker | `scripts/check_nyc_taxi_path_c_gates.py` |
+| Result checker | `scripts/check_nyc_taxi_path_c_gates.py` |
 | JSON artifact | `docs/assets/nyc_taxi_benchmarks/path_c_claims.json` |
 | JSONL rows | `docs/assets/nyc_taxi_benchmarks/path_c_claims.jsonl` |
 | Markdown artifact | `docs/assets/nyc_taxi_benchmarks/path_c_claims.md` |
@@ -38,13 +36,13 @@ PYTHONPATH=python uv run --group dev --group bench python \
 uv run --group dev python scripts/check_nyc_taxi_path_c_gates.py
 ```
 
-The runner hard-fails when real TLC inputs or required taxi-zone geometry are
-missing. Synthetic smoke output is allowed only for development and is rejected
-by the gate checker as Path C evidence.
+The runner stops when real TLC inputs or required taxi-zone geometry are
+missing. Synthetic smoke output is for development only and is not included in
+these real-data results.
 
-## Claim Gates
+## Questions And Success Criteria
 
-| Claim | Unit | Required split | Falsifier baselines | Pass condition |
+| Question | Prediction unit | Evaluation split | Baselines | Success criterion |
 | --- | --- | --- | --- | --- |
 | Directional structure | Pickup zone to dropoff zone by time bucket | Pickup-zone spatial holdout | Unordered pair, source+target additive | Ordered model has at least 2% lower duration and fare RMSE. |
 | Temporal structure | Pickup zone x real hourly timestamp | Rolling-origin zone-time by actual pickup timestamp | Trailing mean, seasonal naive, pooled Ridge | Temporal model has at least 2% lower pickup-demand RMSE than seasonal naive. Trailing mean and pooled Ridge remain reported falsifier rows. |
@@ -52,8 +50,8 @@ by the gate checker as Path C evidence.
 | Spatial transfer | Completed trips from held-out pickup zones | Pickup-zone spatial holdout | Target-encoded zone-only, mean | Trip-level route/geometry features improve duration and fare RMSE by at least 1% over trip-level falsifiers. |
 | Residual correction | Completed trip with baseline estimate | Pickup-zone spatial holdout | Raw baseline, global residual mean, linear residual model | Nonlinear correction has at least 1% lower duration and fare RMSE. |
 
-Each claim row records the claim id, task, split kind, train/test index hashes,
-dataset hash, model, architecture, capability tier, falsifier baseline, primary
+Each result row records the question id, task, split kind, train/test index hashes,
+dataset hash, model, architecture, capability tier, comparison baseline, primary
 metric, nonzero materiality threshold, percent improvement, prediction-unit
 metadata, rolling-origin cutoff timestamp where applicable, RMSE, MAE, WAPE, R2,
 fit and predict time, peak memory, save/load parity, feature access policy,

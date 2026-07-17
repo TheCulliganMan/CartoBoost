@@ -41,7 +41,7 @@ Missing coordinates are input errors by default. Set `allow_neighbor_fallback`
 only when you explicitly accept falling back to a documented neighbor-based
 behavior for incomplete coordinate coverage.
 
-## ForecastFrame Example
+## Python Example
 
 ```python
 from cartoboost.forecasting import ForecastFrame, SpatialPiecewiseKrigingForecaster
@@ -111,7 +111,7 @@ uses `residual_kriging`.
 For a quick interactive check, run the embedded forecast and inspect whether the
 spatial correction is small, directional, or dominated by high kriging variance.
 
-## Benchmark Check
+## Validation
 
 The maintained synthetic panel diagnostic compares this model against
 naive, seasonal naive, piecewise linear seasonal, and kriging under the same
@@ -130,3 +130,10 @@ Use [Forecasting Benchmarks](../../benchmarks/forecasting.md) for the maintained
 metric table and interpretation. Keep benchmark-specific labels in benchmark
 artifacts; reusable model code and public APIs should describe the generic
 spatial-temporal behavior.
+
+## Limitations
+
+- The temporal and spatial stages can each be misspecified; inspect both residuals.
+- Coordinates, CRS units, and cutoff-safe neighbor data are required.
+- Sparse panels may not support stable variogram or neighbor estimates.
+- Retain spatial correction only when it improves an external holdout.

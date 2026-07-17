@@ -25,13 +25,20 @@ class GraphTemporalFrame:
         horizon: int,
         frequency: str,
         covariates: Any | None = None,
+        owner_mask: list[bool] | None = None,
+        target_mask: Any | None = None,
+        imputed_mask: Any | None = None,
+        target_weights: Any | None = None,
+        covariate_roles: list[str] | None = None,
     ) -> None:
         native_class = _native_class("GraphTemporalFrame")
         if native_class is None:
             raise NotImplementedError("Rust binding for GraphTemporalFrame is not available.")
-        target_rows = np.asarray(target, dtype=float).tolist()
+        target_rows = np.ascontiguousarray(np.asarray(target, dtype=float))
         covariate_rows = (
-            None if covariates is None else np.asarray(covariates, dtype=float).tolist()
+            None
+            if covariates is None
+            else np.ascontiguousarray(np.asarray(covariates, dtype=float))
         )
         self._node_ids = list(map(str, node_ids))
         self._timestamps = list(map(int, timestamps))
@@ -42,7 +49,24 @@ class GraphTemporalFrame:
         self._horizon = int(horizon)
         self._frequency = str(frequency)
         self._covariates = covariate_rows
-        self._native_frame = native_class(
+        self._owner_mask = None if owner_mask is None else list(map(bool, owner_mask))
+        self._target_mask = (
+            None
+            if target_mask is None
+            else np.ascontiguousarray(np.asarray(target_mask, dtype=bool))
+        )
+        self._imputed_mask = (
+            None
+            if imputed_mask is None
+            else np.ascontiguousarray(np.asarray(imputed_mask, dtype=bool))
+        )
+        self._target_weights = (
+            None
+            if target_weights is None
+            else np.ascontiguousarray(np.asarray(target_weights, dtype=float))
+        )
+        self._covariate_roles = None if covariate_roles is None else list(map(str, covariate_roles))
+        native_args = (
             self._node_ids,
             self._timestamps,
             self._target,
@@ -52,7 +76,18 @@ class GraphTemporalFrame:
             self._horizon,
             self._frequency,
             covariate_rows,
+            self._owner_mask,
+            self._target_mask,
+            self._imputed_mask,
+            self._target_weights,
+            self._covariate_roles,
         )
+        if not hasattr(native_class, "from_numpy"):
+            raise RuntimeError(
+                "CartoBoost native extension is incompatible: "
+                "GraphTemporalFrame.from_numpy is required"
+            )
+        self._native_frame = native_class.from_numpy(*native_args)
 
     @property
     def node_ids(self) -> list[str]:
@@ -80,6 +115,11 @@ class GraphTemporalFrame:
             horizon=self._horizon,
             frequency=self._frequency,
             covariates=covariates,
+            owner_mask=self._owner_mask,
+            target_mask=None if self._target_mask is None else self._target_mask[:size],
+            imputed_mask=None if self._imputed_mask is None else self._imputed_mask[:size],
+            target_weights=None if self._target_weights is None else self._target_weights[:size],
+            covariate_roles=self._covariate_roles,
         )
 
     def splitter_data(self) -> dict[str, list[int]]:
@@ -227,6 +267,7 @@ class MarketStructureForecaster(ArtifactPersistenceMixin):
         correlation_floor: float = 0.10,
         shift_zscore: float = 2.0,
         calibrate_intervals: bool = True,
+        backend: Backend | str = Backend.CPU,
     ) -> None:
         native_class = _native_class("MarketStructureForecaster")
         if native_class is None:
@@ -246,6 +287,7 @@ class MarketStructureForecaster(ArtifactPersistenceMixin):
             "correlation_floor": float(correlation_floor),
             "shift_zscore": float(shift_zscore),
             "calibrate_intervals": bool(calibrate_intervals),
+            "backend": _choice_value(backend),
         }
         self._native_model = native_class(**self._params)
         self.is_fitted_ = False
@@ -301,7 +343,7 @@ class MarketStructureForecaster(ArtifactPersistenceMixin):
             )
         obj = cls.__new__(cls)
         obj._native_model = native_class.load(str(path))
-        obj._params = {}
+        obj._params = {"backend": obj.selected_backend_}
         obj.is_fitted_ = True
         return obj
 
@@ -318,13 +360,18 @@ class MarketStructureForecaster(ArtifactPersistenceMixin):
             )
         obj = cls.__new__(cls)
         obj._native_model = native_class.from_json(value)
-        obj._params = {}
+        obj._params = {"backend": obj.selected_backend_}
         obj.is_fitted_ = True
         return obj
 
     def get_params(self, deep: bool = True) -> dict[str, Any]:
         del deep
         return dict(self._params)
+
+    @property
+    def selected_backend_(self) -> str:
+        backend = getattr(self._native_model, "backend", None)
+        return str(backend()) if callable(backend) else str(self._params.get("backend", "cpu"))
 
     def _check_is_fitted(self) -> None:
         if not self.is_fitted_:
@@ -346,7 +393,7 @@ class DCRNNForecaster(ArtifactPersistenceMixin):
         teacher_forcing_start: float = 1.0,
         teacher_forcing_end: float = 0.2,
         ridge: float = 0.0001,
-        backend: Backend = Backend.CPU,
+        backend: Backend | str = Backend.CPU,
     ) -> None:
         native_class = _native_class(self.native_class_name)
         if native_class is None:
@@ -499,6 +546,10 @@ class DCRNNForecaster(ArtifactPersistenceMixin):
     def _clone_unfit(self) -> DCRNNForecaster:
         return DCRNNForecaster(**self._params)
 
+    @property
+    def selected_backend_(self) -> str:
+        return self._backend_selected()
+
     def _backend_selected(self) -> str:
         backend = getattr(self._native_model, "backend", None)
         if backend is None:
@@ -535,7 +586,7 @@ class STAEformerForecaster(ArtifactPersistenceMixin):
         epochs: int = 120,
         learning_rate: float = 0.02,
         ridge: float = 0.0001,
-        backend: Backend = Backend.CPU,
+        backend: Backend | str = Backend.CPU,
     ) -> None:
         native_class = _native_class("STAEformerForecaster")
         if native_class is None:
@@ -632,6 +683,10 @@ class STAEformerForecaster(ArtifactPersistenceMixin):
         if not self.is_fitted_:
             raise RuntimeError("STAEformerForecaster must be fitted before predict")
 
+    @property
+    def selected_backend_(self) -> str:
+        return self._backend_selected()
+
     def _backend_selected(self) -> str:
         backend = getattr(self._native_model, "backend", None)
         if backend is None:
@@ -651,7 +706,7 @@ class GraphWaveNetForecaster(ArtifactPersistenceMixin):
         epochs: int = 120,
         learning_rate: float = 0.02,
         ridge: float = 0.0001,
-        backend: Backend = Backend.CPU,
+        backend: Backend | str = Backend.CPU,
     ) -> None:
         native_class = _native_class("GraphWaveNetForecaster")
         if native_class is None:
@@ -740,6 +795,10 @@ class GraphWaveNetForecaster(ArtifactPersistenceMixin):
         if not self.is_fitted_:
             raise RuntimeError("GraphWaveNetForecaster must be fitted before predict")
 
+    @property
+    def selected_backend_(self) -> str:
+        return self._backend_selected()
+
     def _backend_selected(self) -> str:
         backend = getattr(self._native_model, "backend", None)
         if backend is None:
@@ -766,7 +825,8 @@ class _PaperGraphTransformerForecaster(ArtifactPersistenceMixin):
         epochs: int = 80,
         learning_rate: float = 0.01,
         weight_decay: float = 0.00001,
-        backend: Backend = Backend.CPU,
+        batch_size: int = 32,
+        backend: Backend | str = Backend.CPU,
         horizon: int = 1,
     ) -> None:
         native_class = _native_class("PaperGraphTransformerForecaster")
@@ -784,11 +844,14 @@ class _PaperGraphTransformerForecaster(ArtifactPersistenceMixin):
             "epochs": int(epochs),
             "learning_rate": float(learning_rate),
             "weight_decay": float(weight_decay),
+            "batch_size": int(batch_size),
             "backend": _choice_value(backend),
             "horizon": int(horizon),
         }
         if self._params["horizon"] <= 0:
             raise ValueError("horizon must be positive")
+        if not 1 <= self._params["batch_size"] <= 32:
+            raise ValueError("batch_size must be between 1 and 32")
         self._native_model = native_class(
             **{key: value for key, value in self._params.items() if key != "horizon"}
         )
@@ -802,9 +865,99 @@ class _PaperGraphTransformerForecaster(ArtifactPersistenceMixin):
         self.is_fitted_ = True
         return self
 
+    def fit_shard_round(
+        self,
+        frame: GraphTemporalFrame,
+        *,
+        shared_state_path: str | Path,
+        checkpoint_path: str | Path,
+        identity: dict[str, Any] | str,
+        objective_weight: float,
+        phase: str = "supervised",
+        normalization: tuple[float, float] | None = None,
+    ) -> str:
+        """Emit a frozen-base shared proposal without mutating shared state."""
+        if phase not in {"pretrain", "supervised", "local_adaptation"}:
+            raise ValueError("phase must be pretrain, supervised, or local_adaptation")
+        mean, scale = (None, None) if normalization is None else normalization
+        identity_json = (
+            identity if isinstance(identity, str) else json.dumps(identity, sort_keys=True)
+        )
+        proposal = self._native_model.fit_shard_round(
+            _native_frame(frame),
+            str(Path(shared_state_path)),
+            str(Path(checkpoint_path)),
+            identity_json,
+            float(objective_weight),
+            phase,
+            mean,
+            scale,
+        )
+        self.is_fitted_ = True
+        return str(proposal)
+
+    def prepare_shard_warm_start(self, identity: dict[str, Any] | str):
+        """Reset cutoff-bound optimizer state after strict policy validation."""
+        identity_json = (
+            identity if isinstance(identity, str) else json.dumps(identity, sort_keys=True)
+        )
+        self._native_model.prepare_shard_warm_start(identity_json)
+        return self
+
+    @staticmethod
+    def reduce_shard_rounds(rounds: list[str], expected_base_hash: int) -> str:
+        native_class = _native_class("PaperGraphTransformerForecaster")
+        if native_class is None:
+            raise NotImplementedError("Rust binding for paper graph transformers is not available.")
+        return str(native_class.reduce_shard_rounds(list(rounds), int(expected_base_hash)))
+
     def predict(self, horizon: int) -> np.ndarray:
         self._check_is_fitted()
         return np.asarray(self._native_model.predict(int(horizon)), dtype=float)
+
+    def predict_owned(self, horizon: int) -> np.ndarray:
+        """Return only owner-node forecasts from a sharded graph frame."""
+        self._check_is_fitted()
+        return np.asarray(self._native_model.predict_owned(int(horizon)), dtype=float)
+
+    def predict_median(self, horizon: int) -> np.ndarray:
+        """Return the stable native direct-decoder median."""
+        self._check_is_fitted()
+        return np.asarray(self._native_model.predict_median(int(horizon)), dtype=float)
+
+    def predict_conformal(
+        self,
+        horizon: int,
+        *,
+        calibration_actual: Any,
+        calibration_median: Any,
+        alpha: float = 0.1,
+    ) -> dict[str, Any]:
+        """Build noncrossing horizon-wise intervals from raw held-out pairs."""
+        self._check_is_fitted()
+        actual = np.asarray(calibration_actual, dtype=float)
+        median = np.asarray(calibration_median, dtype=float)
+        if actual.ndim != 3 or median.shape != actual.shape:
+            raise ValueError(
+                "calibration_actual and calibration_median must match shape "
+                "(origins, horizon, nodes)"
+            )
+        return dict(
+            json.loads(
+                self._native_model.predict_conformal_json(
+                    int(horizon),
+                    actual.tolist(),
+                    median.tolist(),
+                    float(alpha),
+                )
+            )
+        )
+
+    def historical_fits(self) -> tuple[int, np.ndarray]:
+        """Return frozen-state one-step fits and their first history index."""
+        self._check_is_fitted()
+        start, values = self._native_model.historical_fits()
+        return int(start), np.asarray(values, dtype=float)
 
     def score(self, actual: Any) -> float:
         self._check_is_fitted()
@@ -817,6 +970,41 @@ class _PaperGraphTransformerForecaster(ArtifactPersistenceMixin):
         self._check_is_fitted()
         self._native_model.save(str(path))
 
+    def save_local(self, path: str | Path) -> None:
+        """Persist only shard-local parameters; pair with :meth:`load_shard`."""
+        self._check_is_fitted()
+        self._native_model.save_local(str(path))
+
+    def save_shard_pair(
+        self,
+        local_path: str | Path,
+        shared_path: str | Path,
+        manifest_path: str | Path,
+    ) -> None:
+        """Atomically commit compatible local/shared state via a manifest."""
+        self._check_is_fitted()
+        self._native_model.save_shard_pair(
+            str(Path(local_path)), str(Path(shared_path)), str(Path(manifest_path))
+        )
+
+    def parameter_inventory(self) -> list[dict[str, Any]]:
+        """Return ownership, optimizer ownership, size, and hashes by state segment."""
+        self._check_is_fitted()
+        return list(json.loads(self._native_model.parameter_inventory_json()))
+
+    def memory_telemetry(self) -> dict[str, int]:
+        """Return component-level native persistent-memory accounting in bytes."""
+        self._check_is_fitted()
+        return {
+            key: int(value)
+            for key, value in json.loads(self._native_model.memory_telemetry_json()).items()
+        }
+
+    def edge_diagnostics(self) -> list[dict[str, Any]]:
+        """Expose per-edge structural, diffusion, learned-attention, and horizon evidence."""
+        self._check_is_fitted()
+        return list(json.loads(self._native_model.edge_diagnostics_json()))
+
     @classmethod
     def load(cls, path: str | Path):
         native_class = _native_class("PaperGraphTransformerForecaster")
@@ -824,6 +1012,34 @@ class _PaperGraphTransformerForecaster(ArtifactPersistenceMixin):
             raise NotImplementedError("Rust binding for paper graph transformers is not available.")
         obj = cls.__new__(cls)
         obj._native_model = native_class.load(str(path))
+        obj.is_fitted_ = True
+        obj._params = {"profile": cls._profile, "backend": obj._backend_selected(), "horizon": 1}
+        return obj
+
+    @classmethod
+    def load_shard(cls, local_path: str | Path, shared_state_path: str | Path):
+        """Combine a shard-local state with its compatible shared backbone."""
+        native_class = _native_class("PaperGraphTransformerForecaster")
+        if native_class is None:
+            raise NotImplementedError("Rust binding for paper graph transformers is not available.")
+        obj = cls.__new__(cls)
+        obj._native_model = native_class.load_shard(str(local_path), str(shared_state_path))
+        obj.is_fitted_ = True
+        obj._params = {"profile": cls._profile, "backend": obj._backend_selected(), "horizon": 1}
+        return obj
+
+    @classmethod
+    def load_shard_pair(
+        cls, local_path: str | Path, shared_path: str | Path, manifest_path: str | Path
+    ):
+        """Load only a complete local/shared transaction committed by ``save_shard_pair``."""
+        native_class = _native_class("PaperGraphTransformerForecaster")
+        if native_class is None:
+            raise NotImplementedError("Rust binding for paper graph transformers is not available.")
+        obj = cls.__new__(cls)
+        obj._native_model = native_class.load_shard_pair(
+            str(Path(local_path)), str(Path(shared_path)), str(Path(manifest_path))
+        )
         obj.is_fitted_ = True
         obj._params = {"profile": cls._profile, "backend": obj._backend_selected(), "horizon": 1}
         return obj
@@ -866,6 +1082,10 @@ class _PaperGraphTransformerForecaster(ArtifactPersistenceMixin):
     def _check_is_fitted(self) -> None:
         if not self.is_fitted_:
             raise RuntimeError(f"{type(self).__name__} must be fitted before predict")
+
+    @property
+    def selected_backend_(self) -> str:
+        return self._backend_selected()
 
     def _backend_selected(self) -> str:
         return str(self._native_model.backend())

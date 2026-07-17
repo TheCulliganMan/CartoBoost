@@ -1,6 +1,11 @@
 use crate::{CartoBoostError, Result};
+use cartoboost_accelerator::backend::{
+    backend_pairwise_squared_distances_f32, select_backend_for, BackendOperation, BackendSelection,
+};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+
+const KRIGING_PAIRWISE_DISPATCH_MIN_PAIRS: usize = 16_384;
 
 #[derive(Debug, Clone, Copy)]
 pub struct LocalLinearKalmanConfig {
@@ -188,6 +193,7 @@ pub struct OrdinaryKrigingSystem {
     config: OrdinaryKrigingConfig,
     factorization: LinearSystemFactorization,
     drift_terms: usize,
+    backend: BackendSelection,
 }
 
 #[derive(Debug, Clone)]
@@ -351,6 +357,14 @@ impl OrdinaryKrigingConfig {
 
 impl OrdinaryKrigingSystem {
     pub fn new(observations: &[KrigingObservation], config: OrdinaryKrigingConfig) -> Result<Self> {
+        Self::new_with_backend(observations, config, Some("cpu"))
+    }
+
+    pub fn new_with_backend(
+        observations: &[KrigingObservation],
+        config: OrdinaryKrigingConfig,
+        backend: Option<&str>,
+    ) -> Result<Self> {
         let config = config.validate()?;
         validate_kriging_observations(observations)?;
         if uses_local_neighbors(config) {
@@ -373,7 +387,9 @@ impl OrdinaryKrigingSystem {
                 observations.len()
             )));
         }
-        let matrix = build_kriging_system_matrix(observations, config);
+        let backend = select_backend_for(backend, BackendOperation::PairwiseDistance)
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+        let matrix = build_kriging_system_matrix_with_backend(observations, config, &backend)?;
         let factorization = LinearSystemFactorization::factor(matrix).ok_or_else(|| {
             CartoBoostError::InvalidInput(
                 "kriging system is singular or numerically ill-conditioned; adjust coordinates, variogram scale, or nugget".to_string(),
@@ -384,6 +400,7 @@ impl OrdinaryKrigingSystem {
             config,
             factorization,
             drift_terms,
+            backend,
         })
     }
 
@@ -409,9 +426,39 @@ impl OrdinaryKrigingSystem {
                 "kriging targets must not be empty".to_string(),
             ));
         }
+        if self.backend.selected == "cpu"
+            || targets.len().saturating_mul(self.observations.len())
+                < KRIGING_PAIRWISE_DISPATCH_MIN_PAIRS
+        {
+            return targets
+                .par_iter()
+                .map(|target| self.predict(*target))
+                .collect();
+        }
+        let rhs_rows = build_kriging_rhs_many_with_backend(
+            &self.observations,
+            targets,
+            self.config,
+            &self.backend,
+        )?;
         targets
             .par_iter()
-            .map(|target| self.predict(*target))
+            .zip(rhs_rows.into_par_iter())
+            .map(|(&target, rhs)| {
+                let solution = self.factorization.solve(&rhs).ok_or_else(|| {
+                    CartoBoostError::InvalidInput(
+                        "kriging solve produced a non-finite result".to_string(),
+                    )
+                })?;
+                kriging_prediction_from_solution(
+                    &self.observations,
+                    target,
+                    self.config,
+                    &rhs,
+                    &solution,
+                    (0..self.observations.len()).collect(),
+                )
+            })
             .collect()
     }
 
@@ -421,6 +468,10 @@ impl OrdinaryKrigingSystem {
 
     pub fn drift_terms(&self) -> usize {
         self.drift_terms
+    }
+
+    pub fn backend(&self) -> &BackendSelection {
+        &self.backend
     }
 }
 
@@ -1062,6 +1113,15 @@ pub fn ordinary_kriging_predict_many(
     targets: &[(f64, f64)],
     config: OrdinaryKrigingConfig,
 ) -> Result<Vec<KrigingPrediction>> {
+    ordinary_kriging_predict_many_with_backend(observations, targets, config, Some("cpu"))
+}
+
+pub fn ordinary_kriging_predict_many_with_backend(
+    observations: &[KrigingObservation],
+    targets: &[(f64, f64)],
+    config: OrdinaryKrigingConfig,
+    backend: Option<&str>,
+) -> Result<Vec<KrigingPrediction>> {
     let config = config.validate()?;
     validate_kriging_observations(observations)?;
     if targets.is_empty() {
@@ -1070,8 +1130,13 @@ pub fn ordinary_kriging_predict_many(
         ));
     }
     if !uses_local_neighbors(config) {
-        return OrdinaryKrigingSystem::new(observations, config)?.predict_many(targets);
+        return OrdinaryKrigingSystem::new_with_backend(observations, config, backend)?
+            .predict_many(targets);
     }
+    // Local neighborhoods have a different factorization per target. Validate
+    // explicit selection even though these small, branch-heavy solves remain on CPU.
+    select_backend_for(backend, BackendOperation::PairwiseDistance)
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
     targets
         .par_iter()
         .map(|target| ordinary_kriging_predict_unchecked(observations, *target, config))
@@ -1143,6 +1208,14 @@ pub fn ordinary_kriging_leave_one_out(
     observations: &[KrigingObservation],
     config: OrdinaryKrigingConfig,
 ) -> Result<Vec<KrigingPrediction>> {
+    ordinary_kriging_leave_one_out_with_backend(observations, config, Some("cpu"))
+}
+
+pub fn ordinary_kriging_leave_one_out_with_backend(
+    observations: &[KrigingObservation],
+    config: OrdinaryKrigingConfig,
+    backend: Option<&str>,
+) -> Result<Vec<KrigingPrediction>> {
     let config = config.validate()?;
     validate_kriging_observations(observations)?;
     if observations.len() < 2 {
@@ -1150,6 +1223,72 @@ pub fn ordinary_kriging_leave_one_out(
             "kriging leave-one-out requires at least two observations".to_string(),
         ));
     }
+    if !uses_local_neighbors(config) {
+        let backend = select_backend_for(backend, BackendOperation::PairwiseDistance)
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+        let full_matrix = build_kriging_system_matrix_with_backend(observations, config, &backend)?;
+        let observation_count = observations.len();
+        let drift_terms = drift_term_count(config.drift);
+        return observations
+            .par_iter()
+            .enumerate()
+            .map(|(held_out_idx, held_out)| {
+                let training_indices = (0..observation_count)
+                    .filter(|idx| *idx != held_out_idx)
+                    .collect::<Vec<_>>();
+                let training = training_indices
+                    .iter()
+                    .map(|idx| observations[*idx])
+                    .collect::<Vec<_>>();
+                let system_indices = training_indices
+                    .iter()
+                    .copied()
+                    .chain(observation_count..observation_count + drift_terms)
+                    .collect::<Vec<_>>();
+                let matrix = system_indices
+                    .iter()
+                    .map(|row| {
+                        system_indices
+                            .iter()
+                            .map(|col| full_matrix[*row][*col])
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>();
+                let mut rhs = training_indices
+                    .iter()
+                    .map(|idx| full_matrix[held_out_idx][*idx])
+                    .collect::<Vec<_>>();
+                rhs.extend(
+                    drift_basis((held_out.x, held_out.y), config.drift)
+                        .into_iter()
+                        .take(drift_terms),
+                );
+                let factorization = LinearSystemFactorization::factor(matrix).ok_or_else(|| {
+                    CartoBoostError::InvalidInput(
+                        "kriging system is singular or numerically ill-conditioned; adjust coordinates, variogram scale, or nugget".to_string(),
+                    )
+                })?;
+                let solution = factorization.solve(&rhs).ok_or_else(|| {
+                    CartoBoostError::InvalidInput(
+                        "kriging solve produced a non-finite result".to_string(),
+                    )
+                })?;
+                kriging_prediction_from_solution(
+                    &training,
+                    (held_out.x, held_out.y),
+                    config,
+                    &rhs,
+                    &solution,
+                    training_indices,
+                )
+            })
+            .collect();
+    }
+    // Local-neighborhood selection and its small, branch-heavy factorization
+    // stay on CPU. Validate an explicit device once instead of once per held-out
+    // row; the latter needlessly repeated runtime/device probing during inference.
+    select_backend_for(backend, BackendOperation::PairwiseDistance)
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
     observations
         .par_iter()
         .enumerate()
@@ -1180,7 +1319,15 @@ pub fn ordinary_kriging_leave_one_out_diagnostics(
     observations: &[KrigingObservation],
     config: OrdinaryKrigingConfig,
 ) -> Result<(Vec<KrigingPrediction>, KrigingLooDiagnostics)> {
-    let predictions = ordinary_kriging_leave_one_out(observations, config)?;
+    ordinary_kriging_leave_one_out_diagnostics_with_backend(observations, config, Some("cpu"))
+}
+
+pub fn ordinary_kriging_leave_one_out_diagnostics_with_backend(
+    observations: &[KrigingObservation],
+    config: OrdinaryKrigingConfig,
+    backend: Option<&str>,
+) -> Result<(Vec<KrigingPrediction>, KrigingLooDiagnostics)> {
+    let predictions = ordinary_kriging_leave_one_out_with_backend(observations, config, backend)?;
     let diagnostics = kriging_loo_diagnostics(observations, &predictions)?;
     Ok((predictions, diagnostics))
 }
@@ -1191,6 +1338,24 @@ pub fn empirical_variogram(
     max_distance: Option<f64>,
     anisotropy_angle_degrees: f64,
     anisotropy_scaling: f64,
+) -> Result<Vec<EmpiricalVariogramBin>> {
+    empirical_variogram_with_backend(
+        observations,
+        bin_count,
+        max_distance,
+        anisotropy_angle_degrees,
+        anisotropy_scaling,
+        Some("cpu"),
+    )
+}
+
+pub fn empirical_variogram_with_backend(
+    observations: &[KrigingObservation],
+    bin_count: usize,
+    max_distance: Option<f64>,
+    anisotropy_angle_degrees: f64,
+    anisotropy_scaling: f64,
+    backend: Option<&str>,
 ) -> Result<Vec<EmpiricalVariogramBin>> {
     validate_kriging_observations(observations)?;
     if observations.len() < 2 {
@@ -1205,7 +1370,10 @@ pub fn empirical_variogram(
     }
     let distance_config = OrdinaryKrigingConfig::new(1.0, 0.0)?
         .with_anisotropy(anisotropy_angle_degrees, anisotropy_scaling)?;
-    let pairs = variogram_pairs(observations, distance_config, max_distance)?;
+    let selection = select_backend_for(backend, BackendOperation::PairwiseDistance)
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    let pairs =
+        variogram_pairs_with_backend(observations, distance_config, max_distance, &selection)?;
     if pairs.is_empty() {
         return Err(CartoBoostError::InvalidInput(
             "empirical variogram has no coordinate pairs within max_distance".to_string(),
@@ -1266,12 +1434,38 @@ pub fn fit_ordinary_kriging_variogram(
     anisotropy_angle_degrees: f64,
     anisotropy_scaling: f64,
 ) -> Result<KrigingVariogramFit> {
-    let bins = empirical_variogram(
+    fit_ordinary_kriging_variogram_with_backend(
+        observations,
+        variogram_models,
+        range_candidates,
+        nugget_candidates,
+        sill_candidates,
+        bin_count,
+        anisotropy_angle_degrees,
+        anisotropy_scaling,
+        Some("cpu"),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn fit_ordinary_kriging_variogram_with_backend(
+    observations: &[KrigingObservation],
+    variogram_models: &[KrigingVariogramModel],
+    range_candidates: &[f64],
+    nugget_candidates: &[f64],
+    sill_candidates: &[f64],
+    bin_count: usize,
+    anisotropy_angle_degrees: f64,
+    anisotropy_scaling: f64,
+    backend: Option<&str>,
+) -> Result<KrigingVariogramFit> {
+    let bins = empirical_variogram_with_backend(
         observations,
         bin_count,
         None,
         anisotropy_angle_degrees,
         anisotropy_scaling,
+        backend,
     )?;
     let models = if variogram_models.is_empty() {
         vec![
@@ -1448,6 +1642,57 @@ fn variogram_pairs(
         .collect())
 }
 
+fn variogram_pairs_with_backend(
+    observations: &[KrigingObservation],
+    distance_config: OrdinaryKrigingConfig,
+    max_distance: Option<f64>,
+    backend: &BackendSelection,
+) -> Result<Vec<(f64, f64)>> {
+    if backend.selected == "cpu"
+        || observations.len().saturating_mul(observations.len())
+            < KRIGING_PAIRWISE_DISPATCH_MIN_PAIRS
+    {
+        return variogram_pairs(observations, distance_config, max_distance);
+    }
+    if let Some(max_distance) = max_distance {
+        validate_positive_finite(max_distance, "max_distance")?;
+    }
+    let points = observations
+        .iter()
+        .map(|observation| {
+            transformed_kriging_point((observation.x, observation.y), distance_config)
+        })
+        .collect::<Vec<_>>();
+    let value_rows = observations
+        .iter()
+        .map(|observation| vec![observation.value as f32])
+        .collect::<Vec<_>>();
+    let squared_distances = backend_pairwise_squared_distances_f32(backend, &points, &points)
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    let squared_value_differences =
+        backend_pairwise_squared_distances_f32(backend, &value_rows, &value_rows)
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    Ok((0..observations.len())
+        .into_par_iter()
+        .flat_map_iter(|left_idx| {
+            let squared_distances = &squared_distances;
+            let squared_value_differences = &squared_value_differences;
+            ((left_idx + 1)..observations.len()).filter_map(move |right_idx| {
+                let distance = f64::from(squared_distances[left_idx][right_idx])
+                    .max(0.0)
+                    .sqrt();
+                if max_distance.is_some_and(|max_distance| distance > max_distance) {
+                    return None;
+                }
+                Some((
+                    distance,
+                    0.5 * f64::from(squared_value_differences[left_idx][right_idx]),
+                ))
+            })
+        })
+        .collect())
+}
+
 fn validate_variogram_candidates(values: &[f64], name: &str) -> Result<()> {
     if values.is_empty() {
         return Err(CartoBoostError::InvalidInput(format!(
@@ -1581,6 +1826,45 @@ fn build_kriging_system_matrix(
         .collect()
 }
 
+fn build_kriging_system_matrix_with_backend(
+    observations: &[KrigingObservation],
+    config: OrdinaryKrigingConfig,
+    backend: &BackendSelection,
+) -> Result<Vec<Vec<f64>>> {
+    if backend.selected == "cpu"
+        || observations.len().saturating_mul(observations.len())
+            < KRIGING_PAIRWISE_DISPATCH_MIN_PAIRS
+    {
+        return Ok(build_kriging_system_matrix(observations, config));
+    }
+    let points = observations
+        .iter()
+        .map(|observation| transformed_kriging_point((observation.x, observation.y), config))
+        .collect::<Vec<_>>();
+    let squared = backend_pairwise_squared_distances_f32(backend, &points, &points)
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    let n = observations.len();
+    let drift_terms = drift_term_count(config.drift);
+    let mut matrix = vec![vec![0.0; n + drift_terms]; n + drift_terms];
+    for row in 0..n {
+        for col in 0..n {
+            if row != col {
+                matrix[row][col] =
+                    theoretical_semivariogram(f64::from(squared[row][col]).max(0.0).sqrt(), config);
+            }
+        }
+        for (basis_idx, value) in
+            drift_basis((observations[row].x, observations[row].y), config.drift)
+                .into_iter()
+                .enumerate()
+        {
+            matrix[row][n + basis_idx] = value;
+            matrix[n + basis_idx][row] = value;
+        }
+    }
+    Ok(matrix)
+}
+
 fn build_kriging_rhs(
     observations: &[KrigingObservation],
     target: (f64, f64),
@@ -1602,6 +1886,46 @@ fn build_kriging_rhs(
             .take(drift_terms),
     );
     rhs
+}
+
+fn build_kriging_rhs_many_with_backend(
+    observations: &[KrigingObservation],
+    targets: &[(f64, f64)],
+    config: OrdinaryKrigingConfig,
+    backend: &BackendSelection,
+) -> Result<Vec<Vec<f64>>> {
+    for &target in targets {
+        validate_kriging_target(target)?;
+    }
+    let observation_points = observations
+        .iter()
+        .map(|observation| transformed_kriging_point((observation.x, observation.y), config))
+        .collect::<Vec<_>>();
+    let target_points = targets
+        .iter()
+        .map(|&target| transformed_kriging_point(target, config))
+        .collect::<Vec<_>>();
+    let squared =
+        backend_pairwise_squared_distances_f32(backend, &target_points, &observation_points)
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+    Ok(targets
+        .iter()
+        .zip(squared)
+        .map(|(&target, distances)| {
+            let mut rhs = distances
+                .into_iter()
+                .map(|distance| {
+                    theoretical_semivariogram(f64::from(distance).max(0.0).sqrt(), config)
+                })
+                .collect::<Vec<_>>();
+            rhs.extend(
+                drift_basis(target, config.drift)
+                    .into_iter()
+                    .take(drift_term_count(config.drift)),
+            );
+            rhs
+        })
+        .collect())
 }
 
 fn kriging_prediction_from_solution(
@@ -1801,6 +2125,16 @@ fn transformed_distance(left: (f64, f64), right: (f64, f64), config: OrdinaryKri
     (rotated_x * rotated_x + (rotated_y / config.anisotropy_scaling).powi(2)).sqrt()
 }
 
+fn transformed_kriging_point(point: (f64, f64), config: OrdinaryKrigingConfig) -> Vec<f32> {
+    let angle = config.anisotropy_angle_degrees.to_radians();
+    let cos = angle.cos();
+    let sin = angle.sin();
+    vec![
+        (cos * point.0 + sin * point.1) as f32,
+        ((-sin * point.0 + cos * point.1) / config.anisotropy_scaling) as f32,
+    ]
+}
+
 fn drift_term_count(drift: KrigingDrift) -> usize {
     match drift {
         KrigingDrift::Ordinary => 1,
@@ -1924,6 +2258,7 @@ impl LinearSystemFactorization {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cartoboost_accelerator::backend::available_backends;
 
     #[test]
     fn kalman_filter_tracks_linear_trend_and_forecasts() {
@@ -2342,6 +2677,57 @@ mod tests {
     }
 
     #[test]
+    fn available_accelerators_match_cpu_kriging_batch() {
+        let observations = vec![
+            KrigingObservation {
+                x: 0.0,
+                y: 0.0,
+                value: 12.0,
+            },
+            KrigingObservation {
+                x: 10.0,
+                y: 0.0,
+                value: 42.0,
+            },
+            KrigingObservation {
+                x: 20.0,
+                y: 5.0,
+                value: 55.0,
+            },
+            KrigingObservation {
+                x: 4.0,
+                y: 9.0,
+                value: 31.0,
+            },
+        ];
+        let targets = vec![(1.0, 0.5), (5.0, 2.0), (17.0, 4.0)];
+        let config = OrdinaryKrigingConfig::new(8.0, 1.0e-5)
+            .unwrap()
+            .with_anisotropy(23.0, 1.7)
+            .unwrap();
+        let expected = OrdinaryKrigingSystem::new(&observations, config)
+            .unwrap()
+            .predict_many(&targets)
+            .unwrap();
+        for backend in available_backends()
+            .into_iter()
+            .filter(|name| name != "cpu")
+        {
+            let system =
+                OrdinaryKrigingSystem::new_with_backend(&observations, config, Some(&backend))
+                    .unwrap_or_else(|error| panic!("{backend} kriging setup failed: {error}"));
+            let actual = system
+                .predict_many(&targets)
+                .unwrap_or_else(|error| panic!("{backend} kriging prediction failed: {error}"));
+            assert_eq!(system.backend().selected, backend);
+            for (actual, expected) in actual.iter().zip(&expected) {
+                assert!((actual.mean - expected.mean).abs() <= 2.0e-3);
+                assert!((actual.variance - expected.variance).abs() <= 2.0e-3);
+            }
+        }
+    }
+
+    #[test]
     fn ordinary_kriging_system_rejects_local_neighbor_config() {
         let observations = vec![
             KrigingObservation {
@@ -2390,6 +2776,45 @@ mod tests {
         assert!(diagnostics
             .iter()
             .all(|prediction| prediction.variance >= 0.0));
+    }
+
+    #[test]
+    fn cached_leave_one_out_matrix_matches_independent_global_solves() {
+        let observations = (0..8)
+            .map(|idx| {
+                let x = idx as f64;
+                KrigingObservation {
+                    x,
+                    y: (x * 0.37).sin(),
+                    value: 3.0 + 1.25 * x - 0.5 * (x * 0.37).sin(),
+                }
+            })
+            .collect::<Vec<_>>();
+        let config = OrdinaryKrigingConfig::new(4.0, 1.0e-5)
+            .expect("config")
+            .with_sill(2.5)
+            .expect("sill")
+            .with_drift(KrigingDrift::Linear);
+        let cached =
+            ordinary_kriging_leave_one_out_with_backend(&observations, config, Some("cpu"))
+                .expect("cached leave-one-out");
+        for (held_out_idx, actual) in cached.iter().enumerate() {
+            let training = observations
+                .iter()
+                .enumerate()
+                .filter(|(idx, _)| *idx != held_out_idx)
+                .map(|(_, observation)| *observation)
+                .collect::<Vec<_>>();
+            let held_out = observations[held_out_idx];
+            let expected = ordinary_kriging_predict(&training, (held_out.x, held_out.y), config)
+                .expect("independent prediction");
+            assert!((actual.mean - expected.mean).abs() < 1.0e-10);
+            assert!((actual.variance - expected.variance).abs() < 1.0e-10);
+            assert_eq!(
+                actual.neighbor_indices.len(),
+                expected.neighbor_indices.len()
+            );
+        }
     }
 
     #[test]
@@ -2448,6 +2873,31 @@ mod tests {
         assert!(!bins.is_empty());
         assert_eq!(bins.iter().map(|bin| bin.pair_count).sum::<usize>(), 3);
         assert!(bins.iter().all(|bin| bin.semivariance >= 0.0));
+    }
+
+    #[test]
+    fn empirical_variogram_runs_on_every_available_backend() {
+        let observations = (0..128)
+            .map(|index| KrigingObservation {
+                x: index as f64 * 0.17,
+                y: (index as f64 * 0.11).sin() * 2.0,
+                value: (index as f64 * 0.07).cos() + index as f64 * 0.01,
+            })
+            .collect::<Vec<_>>();
+        let expected =
+            empirical_variogram_with_backend(&observations, 8, None, 17.0, 1.4, Some("cpu"))
+                .unwrap();
+        for backend in available_backends() {
+            let actual =
+                empirical_variogram_with_backend(&observations, 8, None, 17.0, 1.4, Some(&backend))
+                    .unwrap_or_else(|error| panic!("{backend} variogram failed: {error}"));
+            assert_eq!(actual.len(), expected.len(), "{backend}");
+            for (actual, expected) in actual.iter().zip(&expected) {
+                assert_eq!(actual.pair_count, expected.pair_count, "{backend}");
+                assert!((actual.mean_distance - expected.mean_distance).abs() <= 2.0e-5);
+                assert!((actual.semivariance - expected.semivariance).abs() <= 2.0e-5);
+            }
+        }
     }
 
     #[test]

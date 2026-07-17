@@ -19,6 +19,8 @@ pub struct LagPlusConfig {
     pub objective: ForecastObjective,
     pub shrinkage_strength: f64,
     pub seasonal_bucket_period: Option<usize>,
+    #[serde(default = "default_backend")]
+    pub backend: String,
 }
 
 impl LagPlusConfig {
@@ -31,8 +33,13 @@ impl LagPlusConfig {
             objective: ForecastObjective::Rmse,
             shrinkage_strength: 4.0,
             seasonal_bucket_period: None,
+            backend: default_backend(),
         }
     }
+}
+
+fn default_backend() -> String {
+    "cpu".to_string()
 }
 
 #[derive(Debug, Clone)]
@@ -166,6 +173,7 @@ impl Forecaster for LagPlusForecaster {
             "seasonal_bucket_period": self.config.seasonal_bucket_period,
             "shrinkage_strength": self.config.shrinkage_strength,
             "base_metadata": self.base.metadata(),
+            "backend": self.config.backend,
         })
     }
 }
@@ -176,10 +184,12 @@ struct ValidationSplit {
 }
 
 fn build_base(config: &LagPlusConfig) -> Result<CartoBoostLagForecaster> {
-    CartoBoostLagForecaster::new_with_target_mode(
+    CartoBoostLagForecaster::new_with_backend(
         config.lag_config.clone(),
         config.booster_config.clone(),
         config.target_mode,
+        crate::forecasting::GlobalForecastSampleWeightMode::Uniform,
+        Some(&config.backend),
     )
 }
 

@@ -1,8 +1,10 @@
 # CartoBoost
 
 CartoBoost is a Python toolkit for structured regression, classification,
-ranking, and forecasting. Use the docs to choose the right model family, then
-compare it against strong baselines on the same split.
+ranking, and forecasting. The human documentation is organized for developers
+and data scientists around installation, model selection, validation,
+reproducible artifacts, and benchmark evidence. This file is a machine-readable
+index of those maintained guides.
 
 ## Primary Docs
 
@@ -242,4 +244,4 @@ Representation, foundation, geo, causal, and probabilistic model surfaces:
 - Keep benchmark claims tied to maintained artifacts, exact commands, and
   comparable baselines.
 - TensorBoard scalar logging is optional on the boosting estimators via
-  `tensorboard_log_dir`; install `cartoboost[tensorboard]` for event writing.
+  `tensorboard_log_dir`; install `tensorboardX` for event writing.

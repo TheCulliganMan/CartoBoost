@@ -1,8 +1,8 @@
-# Deep Claim Benchmarks
+# Deep Model Mechanism Checks
 
-These results are deterministic synthetic claim checks for exported deep model
-surfaces. They are not real-data evidence. The purpose is to prevent API guide
-claims from outrunning the current implementation.
+These deterministic synthetic experiments test whether each deep model can
+recover the specific mechanism it was designed for. They are implementation
+checks, not evidence of accuracy on real taxi, traffic, or spatial data.
 
 Command:
 
@@ -25,7 +25,7 @@ Artifacts:
 | `inverted_transformer_cross_entity_panel` | `inverted_transformer` | holdout RMSE | 0.557217 | 1.461201 | 61.87% | passed |
 | `delay_aware_graph_transformer_directional_delay` | `delay_aware_graph_transformer` | holdout RMSE | 0.486446 | 0.545256 | 10.79% | passed |
 | `regime_moe_mixed_regime_data` | `regime_moe` | RMSE | 0.000003 | 0.583261 | 100.00% | passed |
-| `conditional_flow_distribution_head_calibration_sharpness` | `conditional_residual_sampler` | calibration/sharpness gate | 0.000000 | 0.269389 | 100.00% | passed |
+| `conditional_flow_distribution_head_calibration_sharpness` | `conditional_residual_sampler` | calibration/sharpness score | 0.000000 | 0.269389 | 100.00% | passed |
 | `choice_set_utility_softmax_candidate_competition` | `choice_set_utility_softmax` | choice log loss | 0.022234 | 0.693147 | 96.79% | passed |
 
 Each JSON/JSONL row records `claim_id`, `architecture`, `capability_tier`,
@@ -34,9 +34,9 @@ Each JSON/JSONL row records `claim_id`, `architecture`, `capability_tier`,
 `fit_seconds`, `predict_seconds`, `peak_memory_mb`, `save_load_max_abs_diff`,
 `leakage_policy`, and `experimental_status`.
 
-Interpretation: the passing synthetic gates support the listed synthetic claim
-evidence labels in the deep model guide and capability matrix. They do not
-promote experimental surfaces to real-data evidence.
+Interpretation: every listed model recovered its controlled synthetic pattern
+better than the named baseline. This does not establish real-data accuracy or
+make experimental models suitable for production.
 
 Limitations: these fixtures are small, deterministic, and designed to isolate
 the advertised mechanism. Real deployment claims still require a dataset-specific

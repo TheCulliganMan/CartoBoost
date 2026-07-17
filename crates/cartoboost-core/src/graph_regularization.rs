@@ -1,6 +1,20 @@
 use crate::{CartoBoostError, Result};
+use cartoboost_accelerator::backend::{
+    backend_csr_diffusion_f32, select_backend_for, BackendOperation,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+
+const GRAPH_SMOOTHING_DISPATCH_MIN_VALUES: usize = 16_384;
+
+fn should_accelerate_graph_smoothing(
+    selected_backend: &str,
+    edge_count: usize,
+    iterations: usize,
+) -> bool {
+    selected_backend != "cpu"
+        && edge_count.saturating_mul(iterations) >= GRAPH_SMOOTHING_DISPATCH_MIN_VALUES
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum SymbolicRelationKind {
@@ -275,6 +289,15 @@ impl GraphLaplacian {
 
 impl GraphSmoother {
     pub fn smooth(&self, values: &[f64], laplacian: &GraphLaplacian) -> Result<Vec<f64>> {
+        self.smooth_with_backend(values, laplacian, Some("cpu"))
+    }
+
+    pub fn smooth_with_backend(
+        &self,
+        values: &[f64],
+        laplacian: &GraphLaplacian,
+        backend: Option<&str>,
+    ) -> Result<Vec<f64>> {
         laplacian.validate_values(values)?;
         if !self.lambda.is_finite() || self.lambda < 0.0 {
             return Err(CartoBoostError::InvalidInput(
@@ -284,20 +307,74 @@ impl GraphSmoother {
         if self.lambda == 0.0 || self.iterations == 0 {
             return Ok(values.to_vec());
         }
+        let backend = select_backend_for(backend, BackendOperation::CsrDiffusion)
+            .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
+        let use_accelerator = should_accelerate_graph_smoothing(
+            &backend.selected,
+            laplacian.graph.indices.len(),
+            self.iterations,
+        );
+        let accelerator_csr = if !use_accelerator {
+            None
+        } else {
+            let too_large = || {
+                CartoBoostError::InvalidInput(
+                    "graph is too large for accelerator CSR indices".to_string(),
+                )
+            };
+            Some((
+                laplacian
+                    .graph
+                    .indptr
+                    .iter()
+                    .map(|&value| u32::try_from(value).map_err(|_| too_large()))
+                    .collect::<Result<Vec<_>>>()?,
+                laplacian
+                    .graph
+                    .indices
+                    .iter()
+                    .map(|&value| u32::try_from(value).map_err(|_| too_large()))
+                    .collect::<Result<Vec<_>>>()?,
+                laplacian
+                    .graph
+                    .weights
+                    .iter()
+                    .map(|&value| value as f32)
+                    .collect::<Vec<_>>(),
+            ))
+        };
         let mut current = values.to_vec();
         let mut next = current.clone();
         for _ in 0..self.iterations {
+            let neighbor_sums = if !use_accelerator {
+                None
+            } else {
+                let (indptr, indices, weights) = accelerator_csr.as_ref().expect("accelerator CSR");
+                let current_f32 = current
+                    .iter()
+                    .map(|&value| value as f32)
+                    .collect::<Vec<_>>();
+                Some(
+                    backend_csr_diffusion_f32(&backend, indptr, indices, weights, 1, &current_f32)
+                        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?,
+                )
+            };
             for node in 0..laplacian.graph.node_count {
                 let degree = laplacian.degree[node];
                 if degree <= 0.0 {
                     next[node] = current[node];
                     continue;
                 }
-                let neighbor_sum = laplacian
-                    .graph
-                    .neighbors(node)?
-                    .map(|(neighbor, weight)| weight * current[neighbor])
-                    .sum::<f64>();
+                let neighbor_sum = neighbor_sums.as_ref().map_or_else(
+                    || {
+                        laplacian.graph.neighbors(node).map(|neighbors| {
+                            neighbors
+                                .map(|(neighbor, weight)| weight * current[neighbor])
+                                .sum::<f64>()
+                        })
+                    },
+                    |sums| Ok(f64::from(sums[node])),
+                )?;
                 next[node] =
                     (values[node] + self.lambda * neighbor_sum) / (1.0 + self.lambda * degree);
             }
@@ -314,12 +391,30 @@ impl GraphSmoother {
         self.smooth(residuals, laplacian)
     }
 
+    pub fn smooth_residuals_with_backend(
+        &self,
+        residuals: &[f64],
+        laplacian: &GraphLaplacian,
+        backend: Option<&str>,
+    ) -> Result<Vec<f64>> {
+        self.smooth_with_backend(residuals, laplacian, backend)
+    }
+
     pub fn smooth_leaf_values(
         &self,
         leaf_values: &[f64],
         laplacian: &GraphLaplacian,
     ) -> Result<Vec<f64>> {
         self.smooth(leaf_values, laplacian)
+    }
+
+    pub fn smooth_leaf_values_with_backend(
+        &self,
+        leaf_values: &[f64],
+        laplacian: &GraphLaplacian,
+        backend: Option<&str>,
+    ) -> Result<Vec<f64>> {
+        self.smooth_with_backend(leaf_values, laplacian, backend)
     }
 }
 
@@ -346,11 +441,15 @@ impl GraphRegularizedBooster {
     }
 
     pub fn predict(&self) -> Result<Vec<f64>> {
+        self.predict_with_backend(Some("cpu"))
+    }
+
+    pub fn predict_with_backend(&self, backend: Option<&str>) -> Result<Vec<f64>> {
         GraphSmoother {
             lambda: self.lambda,
             iterations: self.iterations,
         }
-        .smooth(&self.baseline_predictions, &self.laplacian)
+        .smooth_with_backend(&self.baseline_predictions, &self.laplacian, backend)
     }
 
     pub fn objective_value(&self, targets: &[f64], predictions: &[f64]) -> Result<f64> {
@@ -829,6 +928,7 @@ fn validate_feature_matrix(feature_values: &[Vec<f64>], row_count: usize) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cartoboost_accelerator::backend::available_backends;
 
     fn chain_graph() -> CsrGraph {
         CsrGraph::from_edges(3, &[(0, 1, 1.0), (1, 0, 1.0), (1, 2, 1.0), (2, 1, 1.0)]).unwrap()
@@ -881,6 +981,42 @@ mod tests {
 
         assert!(after < before);
         assert!(smoothed.iter().all(|value| value.is_finite()));
+    }
+
+    #[test]
+    fn available_accelerators_match_cpu_graph_smoothing() {
+        let laplacian = GraphLaplacian::new(chain_graph());
+        let values = [0.0, 10.0, 2.0];
+        let smoother = GraphSmoother {
+            lambda: 0.75,
+            iterations: 5,
+        };
+        let expected = smoother.smooth(&values, &laplacian).unwrap();
+        for backend in available_backends()
+            .into_iter()
+            .filter(|name| name != "cpu")
+        {
+            let actual = smoother
+                .smooth_with_backend(&values, &laplacian, Some(&backend))
+                .unwrap_or_else(|error| panic!("{backend} graph smoothing failed: {error}"));
+            for (actual, expected) in actual.iter().zip(&expected) {
+                assert!(
+                    (actual - expected).abs() <= 1.0e-4,
+                    "{backend} produced {actual}, expected {expected}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn graph_smoothing_dispatch_avoids_small_device_launches() {
+        for backend in available_backends() {
+            assert!(!should_accelerate_graph_smoothing(&backend, 4, 5));
+            assert_eq!(
+                should_accelerate_graph_smoothing(&backend, 4_096, 4),
+                backend != "cpu"
+            );
+        }
     }
 
     #[test]

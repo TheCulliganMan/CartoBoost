@@ -66,7 +66,9 @@ class NeuralEmbeddingStandaloneRegressor(ArtifactPersistenceMixin):
         max_depth: int = 4,
         min_samples_leaf: int = 2,
         min_gain: float = 0.0,
+        backend: Backend | str = Backend.CPU,
     ) -> None:
+        self.backend = _choice_value(backend)
         self._native = _NativeNeuralEmbeddingRegressor(
             dim=int(dim),
             fallback=str(fallback),
@@ -77,6 +79,7 @@ class NeuralEmbeddingStandaloneRegressor(ArtifactPersistenceMixin):
             max_depth=int(max_depth),
             min_samples_leaf=int(min_samples_leaf),
             min_gain=float(min_gain),
+            backend=self.backend,
         )
 
     def fit(
@@ -113,6 +116,7 @@ class NeuralEmbeddingStandaloneRegressor(ArtifactPersistenceMixin):
     def load(cls, path: str | Path) -> NeuralEmbeddingStandaloneRegressor:
         instance = cls(dim=1)
         instance._native = _NativeNeuralEmbeddingRegressor.load_artifact_json(str(path))
+        instance.backend = str(instance._native.backend)
         return instance
 
 
@@ -140,7 +144,9 @@ class Node2VecStandaloneRegressor(ArtifactPersistenceMixin):
         max_depth: int = 4,
         min_samples_leaf: int = 2,
         min_gain: float = 0.0,
+        backend: Backend | str = Backend.CPU,
     ) -> None:
+        self.backend = _choice_value(backend)
         self._native = _NativeNode2VecRegressor(
             dim=int(dim),
             walk_length=int(walk_length),
@@ -160,6 +166,7 @@ class Node2VecStandaloneRegressor(ArtifactPersistenceMixin):
             max_depth=int(max_depth),
             min_samples_leaf=int(min_samples_leaf),
             min_gain=float(min_gain),
+            backend=self.backend,
         )
 
     def fit(
@@ -222,6 +229,7 @@ class Node2VecStandaloneRegressor(ArtifactPersistenceMixin):
     def load(cls, path: str | Path) -> Node2VecStandaloneRegressor:
         instance = cls(dim=1)
         instance._native = _NativeNode2VecRegressor.load_artifact_json(str(path))
+        instance.backend = str(instance._native.backend)
         return instance
 
 
@@ -244,8 +252,9 @@ class GraphSageStandaloneRegressor(ArtifactPersistenceMixin):
         max_depth: int = 4,
         min_samples_leaf: int = 2,
         min_gain: float = 0.0,
-        backend: Backend = Backend.CPU,
+        backend: Backend | str = Backend.CPU,
     ) -> None:
+        self.backend = _choice_value(backend)
         self._native = _NativeGraphSageRegressor(
             input_dim=int(input_dim),
             hidden_dims=[int(value) for value in hidden_dims],
@@ -260,7 +269,7 @@ class GraphSageStandaloneRegressor(ArtifactPersistenceMixin):
             max_depth=int(max_depth),
             min_samples_leaf=int(min_samples_leaf),
             min_gain=float(min_gain),
-            backend=_choice_value(backend),
+            backend=self.backend,
         )
 
     def fit(
@@ -329,6 +338,7 @@ class GraphSageStandaloneRegressor(ArtifactPersistenceMixin):
     def load(cls, path: str | Path) -> GraphSageStandaloneRegressor:
         instance = cls(input_dim=1)
         instance._native = _NativeGraphSageRegressor.load_artifact_json(str(path))
+        instance.backend = str(instance._native.backend)
         return instance
 
 
@@ -351,8 +361,9 @@ class HeteroGraphSageStandaloneRegressor(ArtifactPersistenceMixin):
         max_depth: int = 4,
         min_samples_leaf: int = 2,
         min_gain: float = 0.0,
-        backend: Backend = Backend.CPU,
+        backend: Backend | str = Backend.CPU,
     ) -> None:
+        self.backend = _choice_value(backend)
         self._native = _NativeHeteroGraphSageRegressor(
             input_dim=int(input_dim),
             relation_count=int(relation_count),
@@ -367,7 +378,7 @@ class HeteroGraphSageStandaloneRegressor(ArtifactPersistenceMixin):
             max_depth=int(max_depth),
             min_samples_leaf=int(min_samples_leaf),
             min_gain=float(min_gain),
-            backend=_choice_value(backend),
+            backend=self.backend,
         )
 
     def fit(
@@ -417,6 +428,7 @@ class HeteroGraphSageStandaloneRegressor(ArtifactPersistenceMixin):
     def load(cls, path: str | Path) -> HeteroGraphSageStandaloneRegressor:
         instance = cls(input_dim=1, relation_count=1)
         instance._native = _NativeHeteroGraphSageRegressor.load_artifact_json(str(path))
+        instance.backend = str(instance._native.backend)
         return instance
 
 
@@ -441,8 +453,9 @@ class HinSageStandaloneRegressor(ArtifactPersistenceMixin):
         max_depth: int = 4,
         min_samples_leaf: int = 2,
         min_gain: float = 0.0,
-        backend: Backend = Backend.CPU,
+        backend: Backend | str = Backend.CPU,
     ) -> None:
+        self.backend = _choice_value(backend)
         self._native = _NativeHinSageRegressor(
             input_dim=int(input_dim),
             node_type_count=int(node_type_count),
@@ -461,7 +474,7 @@ class HinSageStandaloneRegressor(ArtifactPersistenceMixin):
             max_depth=int(max_depth),
             min_samples_leaf=int(min_samples_leaf),
             min_gain=float(min_gain),
-            backend=_choice_value(backend),
+            backend=self.backend,
         )
 
     def fit(
@@ -513,14 +526,16 @@ class HinSageStandaloneRegressor(ArtifactPersistenceMixin):
     def load(cls, path: str | Path) -> HinSageStandaloneRegressor:
         instance = cls(input_dim=1, node_type_count=1, edge_type_triples=[(0, 0, 0)])
         instance._native = _NativeHinSageRegressor.load_artifact_json(str(path))
+        instance.backend = str(instance._native.backend)
         return instance
 
 
 class Node2VecLinkPredictor(ArtifactPersistenceMixin):
     """Standalone Node2Vec edge scorer."""
 
-    def __init__(self, **kwargs: Any) -> None:
-        self._native = _NativeNode2VecLinkPredictor(**kwargs)
+    def __init__(self, *, backend: Backend | str = Backend.CPU, **kwargs: Any) -> None:
+        self.backend = _choice_value(backend)
+        self._native = _NativeNode2VecLinkPredictor(backend=self.backend, **kwargs)
 
     def fit(
         self,
@@ -558,14 +573,26 @@ class Node2VecLinkPredictor(ArtifactPersistenceMixin):
     def load(cls, path: str | Path) -> Node2VecLinkPredictor:
         instance = cls()
         instance._native = _NativeNode2VecLinkPredictor.load_artifact_json(str(path))
+        instance.backend = str(instance._native.backend)
         return instance
 
 
 class GraphSageLinkPredictor(ArtifactPersistenceMixin):
     """Standalone GraphSAGE edge scorer."""
 
-    def __init__(self, *, input_dim: int, **kwargs: Any) -> None:
-        self._native = _NativeGraphSageLinkPredictor(input_dim=int(input_dim), **kwargs)
+    def __init__(
+        self,
+        *,
+        input_dim: int,
+        backend: Backend | str = Backend.CPU,
+        **kwargs: Any,
+    ) -> None:
+        self.backend = _choice_value(backend)
+        self._native = _NativeGraphSageLinkPredictor(
+            input_dim=int(input_dim),
+            backend=self.backend,
+            **kwargs,
+        )
 
     def fit(self, *, node_features: Any, edges: Any) -> GraphSageLinkPredictor:
         self._native.fit(_f32_matrix(node_features, "node_features"), _edge_pairs(edges))
@@ -605,16 +632,26 @@ class GraphSageLinkPredictor(ArtifactPersistenceMixin):
     def load(cls, path: str | Path) -> GraphSageLinkPredictor:
         instance = cls(input_dim=1)
         instance._native = _NativeGraphSageLinkPredictor.load_artifact_json(str(path))
+        instance.backend = str(instance._native.backend)
         return instance
 
 
 class HeteroGraphSageLinkPredictor(ArtifactPersistenceMixin):
     """Standalone heterogeneous GraphSAGE edge scorer."""
 
-    def __init__(self, *, input_dim: int, relation_count: int, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *,
+        input_dim: int,
+        relation_count: int,
+        backend: Backend | str = Backend.CPU,
+        **kwargs: Any,
+    ) -> None:
+        self.backend = _choice_value(backend)
         self._native = _NativeHeteroGraphSageLinkPredictor(
             input_dim=int(input_dim),
             relation_count=int(relation_count),
+            backend=self.backend,
             **kwargs,
         )
 
@@ -656,6 +693,7 @@ class HeteroGraphSageLinkPredictor(ArtifactPersistenceMixin):
     def load(cls, path: str | Path) -> HeteroGraphSageLinkPredictor:
         instance = cls(input_dim=1, relation_count=1)
         instance._native = _NativeHeteroGraphSageLinkPredictor.load_artifact_json(str(path))
+        instance.backend = str(instance._native.backend)
         return instance
 
 
@@ -668,12 +706,15 @@ class HinSageLinkPredictor(ArtifactPersistenceMixin):
         input_dim: int,
         node_type_count: int,
         edge_type_triples: Any,
+        backend: Backend | str = Backend.CPU,
         **kwargs: Any,
     ) -> None:
+        self.backend = _choice_value(backend)
         self._native = _NativeHinSageLinkPredictor(
             input_dim=int(input_dim),
             node_type_count=int(node_type_count),
             edge_type_triples=_typed_edges(edge_type_triples),
+            backend=self.backend,
             **kwargs,
         )
 
@@ -719,6 +760,7 @@ class HinSageLinkPredictor(ArtifactPersistenceMixin):
     def load(cls, path: str | Path) -> HinSageLinkPredictor:
         instance = cls(input_dim=1, node_type_count=1, edge_type_triples=[(0, 0, 0)])
         instance._native = _NativeHinSageLinkPredictor.load_artifact_json(str(path))
+        instance.backend = str(instance._native.backend)
         return instance
 
 

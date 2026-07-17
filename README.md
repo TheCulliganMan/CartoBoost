@@ -86,16 +86,18 @@ CartoBoost 0.3 keeps the root import surface intentionally small. Read the
 forecasting and validation use named modules, while advanced model families
 are explicitly under `cartoboost.supported`.
 
-Optional integrations stay optional:
+CartoBoost does not publish package extras. The base install contains only the
+runtime dependencies needed by the core Python API. Install each third-party
+integration directly when your workflow needs it:
 
 ```sh
-uv add "cartoboost[explain]"  # SHAP support
-uv add "cartoboost[h3]"       # H3 point and decoded-route encoder
-uv add "cartoboost[s2]"       # S2 point and decoded-route encoder
-uv add "cartoboost[duckdb]"   # DuckDB relation inputs
-uv add "cartoboost[optuna]"   # Optuna tuning
-uv add "cartoboost[polars]"   # Polars inputs
-uv add "cartoboost[onnx]"     # ONNX export subset
+uv add shap          # SHAP support
+uv add h3            # H3 point and decoded-route encoder
+uv add s2sphere      # S2 point and decoded-route encoder
+uv add duckdb        # DuckDB relation inputs
+uv add optuna        # Optuna tuning
+uv add polars        # Polars inputs
+uv add onnx          # ONNX export subset
 ```
 
 Verify the install:
@@ -107,11 +109,11 @@ python examples/quickstart.py
 
 The five-minute [NumPy quickstart](examples/quickstart.py) creates a complete
 place/time dataset, performs an out-of-time split, compares axis-only and
-structured models, and checks save/load prediction parity. The optional
-`pandas` extra enables `ForecastFrame.from_pandas` and other pandas adapters:
+structured models, and checks save/load prediction parity. Install `pandas`
+to enable `ForecastFrame.from_pandas` and other pandas adapters:
 
 ```sh
-uv add "cartoboost[pandas]"
+uv add pandas
 ```
 
 ## Structured Regression Workflow

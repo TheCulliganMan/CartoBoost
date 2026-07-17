@@ -58,7 +58,7 @@ metrics without component metrics. Compare against the best individual member
 and inspect horizon-specific errors before claiming that averaging adds
 scientific value.
 
-## Example
+## Python Example
 
 ```python
 from cartoboost.forecasting import (
@@ -225,7 +225,7 @@ patterns:
 | All members miss the same rush-hour turn. | The ensemble cannot create a signal no member learned. | Add a model with the missing calendar, lag, or event behavior. |
 | Ensemble is smoother but less accurate. | Averaging reduced variance but added bias. | Compare by horizon and by lane before keeping the blend. |
 
-## Validation Notes
+## Validation
 
 Report every component model and its weight. Compare the ensemble against the
 best individual component, not only against the weakest baseline.
@@ -242,3 +242,10 @@ For taxi benchmarks, include:
 Use rolling-origin splits and keep the exact train/test rows fixed across all
 members. If the ensemble only passes one horizon but misses most others,
 document that horizon-specific behavior instead of presenting it as general.
+
+## Limitations
+
+- An ensemble cannot add information absent from every component.
+- Weights selected on the final holdout leak evaluation information.
+- Correlated members may add runtime without improving robustness.
+- Version every component artifact together with the ensemble weights.

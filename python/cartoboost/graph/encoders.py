@@ -42,6 +42,15 @@ DEFAULT_HINSAGE_SEED = 0xA11C_E5A6_5EED_1234
 DEFAULT_NODE2VEC_SEED = 0xA2B2_C2D2_E2F2_1234
 
 
+def _backend_value(backend: Backend | str) -> str:
+    value = backend.value if hasattr(backend, "value") else str(backend)
+    normalized = str(value).strip().lower()
+    return {"native": "cpu", "hip": "rocm", "dml": "directml"}.get(
+        normalized,
+        normalized,
+    )
+
+
 def _graph_embeddings_mapping(
     cfg: Mapping[str, Any] | GraphEmbeddingsConfig | GraphFeatureConfig,
 ) -> Mapping[str, Any]:
@@ -67,12 +76,13 @@ def _compute_homogeneous_directional_features(
     feature_prefix: str = "graph",
     edge_weights: Sequence[float] | None = None,
     edge_timestamps: Sequence[float] | None = None,
+    backend: str = "cpu",
 ) -> tuple[np.ndarray, list[str]]:
     directionality_cfg = DirectionalityConfig.from_config(directionality)
     if not directionality_cfg.compute_asymmetry_features:
         return np.empty((node_count, 0), dtype=np.float32), []
 
-    values, names = _native_compute_directional_features(
+    args = (
         int(node_count),
         [(int(source), int(target)) for source, target in edges],
         np.asarray(embeddings, dtype=np.float32).tolist(),
@@ -81,6 +91,7 @@ def _compute_homogeneous_directional_features(
         str(feature_prefix),
         list(directionality_cfg.directional_features),
     )
+    values, names = _native_compute_directional_features(*args, backend)
     return np.asarray(values, dtype=np.float32), list(names)
 
 
@@ -92,6 +103,7 @@ def _compute_hetero_directional_features(
     feature_prefix: str = "graph",
     edge_weights: Sequence[float] | None = None,
     edge_timestamps: Sequence[float] | None = None,
+    backend: str = "cpu",
 ) -> tuple[np.ndarray, list[str]]:
     return _compute_homogeneous_directional_features(
         directionality,
@@ -101,6 +113,7 @@ def _compute_hetero_directional_features(
         feature_prefix=feature_prefix,
         edge_weights=edge_weights,
         edge_timestamps=edge_timestamps,
+        backend=backend,
     )
 
 
@@ -172,7 +185,7 @@ class GraphSageConfig:
     seed: int = DEFAULT_GRAPHSAGE_SEED
     add_self_loop: bool = True
     l2_regularization: float = 1e-5
-    backend: Backend = Backend.CPU
+    backend: Backend | str = Backend.CPU
 
 
 def _coerce_dim(value: int, name: str) -> int:
@@ -204,7 +217,7 @@ class GraphSageFeatureEncoder:
             seed=int(config.seed),
             add_self_loop=bool(config.add_self_loop),
             l2_regularization=float(config.l2_regularization),
-            backend=config.backend.value,
+            backend=_backend_value(config.backend),
         )
         self.graph: HomogeneousGraph | None = None
 
@@ -291,7 +304,7 @@ class HeteroGraphSageConfig:
     negative_samples: int = 4
     seed: int = DEFAULT_HETEROGRAPHSAGE_SEED
     l2_regularization: float = 1e-5
-    backend: Backend = Backend.CPU
+    backend: Backend | str = Backend.CPU
 
 
 @dataclass(frozen=True)
@@ -306,7 +319,7 @@ class HinSageConfig:
     seed: int = DEFAULT_HINSAGE_SEED
     l2_regularization: float = 1e-5
     neighbor_samples: list[int] = field(default_factory=list)
-    backend: Backend = Backend.CPU
+    backend: Backend | str = Backend.CPU
 
 
 @dataclass(frozen=True)
@@ -324,6 +337,7 @@ class Node2VecConfig:
     seed: int = DEFAULT_NODE2VEC_SEED
     l2_regularization: float = 0.0
     normalize: bool = True
+    backend: Backend | str = Backend.CPU
 
 
 class Node2VecFeatureEncoder:
@@ -331,7 +345,7 @@ class Node2VecFeatureEncoder:
 
     def __init__(self, config: Node2VecConfig) -> None:
         self.config = config
-        self._encoder = _NativeNode2VecEncoder(
+        kwargs = dict(
             dim=config.dim,
             walk_length=config.walk_length,
             walks_per_node=config.walks_per_node,
@@ -345,7 +359,9 @@ class Node2VecFeatureEncoder:
             seed=int(config.seed),
             l2_regularization=float(config.l2_regularization),
             normalize=bool(config.normalize),
+            backend=_backend_value(config.backend),
         )
+        self._encoder = _NativeNode2VecEncoder(**kwargs)
         self.graph: HomogeneousGraph | None = None
 
     def fit(
@@ -385,6 +401,7 @@ class Node2VecFeatureEncoder:
                 "window_size": int(self.config.window_size),
                 "epochs": int(self.config.epochs),
                 "native": "rust",
+                "backend": _backend_value(self.config.backend),
             },
         )
 
@@ -422,6 +439,7 @@ class Node2VecFeatureEncoder:
                 seed=int(config.get("seed", DEFAULT_NODE2VEC_SEED)),
                 l2_regularization=float(config.get("l2_regularization", 0.0)),
                 normalize=bool(config.get("normalize", True)),
+                backend=Backend(str(config.get("backend", "cpu"))),
             )
         )
 
@@ -442,7 +460,7 @@ class HinSageFeatureEncoder:
             seed=int(config.seed),
             l2_regularization=float(config.l2_regularization),
             neighbor_samples=list(config.neighbor_samples),
-            backend=config.backend.value,
+            backend=_backend_value(config.backend),
         )
 
     def fit(
@@ -547,7 +565,7 @@ class HeteroGraphSageFeatureEncoder:
             negative_samples=int(config.negative_samples),
             seed=int(config.seed),
             l2_regularization=float(config.l2_regularization),
-            backend=config.backend.value,
+            backend=_backend_value(config.backend),
         )
         self.graph: HeterogeneousGraph | None = None
 
@@ -588,7 +606,7 @@ class HeteroGraphSageFeatureEncoder:
                 negative_samples=int(self.config.negative_samples),
                 seed=int(self.config.seed),
                 l2_regularization=float(self.config.l2_regularization),
-                backend=self.config.backend.value,
+                backend=_backend_value(self.config.backend),
             )
 
         feature_rows = ensure_node_features_shape(node_features, graph.node_count)
@@ -668,6 +686,7 @@ class GraphFeatureTransformer:
         hinsage_kwargs: Mapping[str, Any] | None = None,
         node2vec_kwargs: Mapping[str, Any] | None = None,
         directionality: Mapping[str, Any] | None = None,
+        backend: str = "cpu",
     ) -> None:
         self.use_hetero = bool(use_hetero)
         self.use_hinsage = bool(use_hinsage)
@@ -677,6 +696,7 @@ class GraphFeatureTransformer:
         self.hinsage_kwargs = dict(hinsage_kwargs or {})
         self.node2vec_kwargs = dict(node2vec_kwargs or {})
         self.directionality = DirectionalityConfig.from_config(directionality)
+        self.backend = str(backend)
         self.encoder: (
             GraphSageFeatureEncoder
             | HeteroGraphSageFeatureEncoder
@@ -701,6 +721,9 @@ class GraphFeatureTransformer:
         if family not in {"graphsage", "hinsage", "sage", "node2vec"}:
             raise ValueError(f"unsupported graph family {family!r}")
 
+        accelerator_backend = _backend_value(graph_cfg.get("backend", "native"))
+        encoder_options = dict(encoder_cfg)
+        encoder_options.setdefault("backend", accelerator_backend)
         use_hetero = bool(encoder_cfg.get("hetero", graph_cfg.get("hetero", False)))
         directionality = _directionality_from_graph_config(graph_cfg, encoder_cfg)
         use_hinsage = family == "hinsage" and {
@@ -710,26 +733,30 @@ class GraphFeatureTransformer:
         if family == "node2vec":
             return cls(
                 use_node2vec=True,
-                node2vec_kwargs=dict(encoder_cfg),
+                node2vec_kwargs=encoder_options,
                 directionality=directionality,
+                backend=accelerator_backend,
             )
         if use_hinsage:
             return cls(
                 use_hetero=True,
                 use_hinsage=True,
-                hinsage_kwargs=dict(encoder_cfg),
+                hinsage_kwargs=encoder_options,
                 directionality=directionality,
+                backend=accelerator_backend,
             )
         if use_hetero:
             return cls(
                 use_hetero=True,
-                hetero_kwargs=dict(encoder_cfg),
+                hetero_kwargs=encoder_options,
                 directionality=directionality,
+                backend=accelerator_backend,
             )
         return cls(
             use_hetero=False,
-            sage_kwargs=dict(encoder_cfg),
+            sage_kwargs=encoder_options,
             directionality=directionality,
+            backend=accelerator_backend,
         )
 
     def fit_transform(
@@ -892,6 +919,7 @@ class GraphFeatureTransformer:
             feature_prefix=directionality.directional_feature_prefix,
             edge_weights=_align_edge_values(edge_weights, len(edges), len(graph.edges)),
             edge_timestamps=_align_edge_values(edge_timestamps, len(edges), len(graph.edges)),
+            backend=self.backend,
         )
         if directional_features.size == 0:
             return bundle
@@ -936,6 +964,7 @@ class GraphFeatureTransformer:
             feature_prefix=directional_feature_prefix,
             edge_weights=_align_edge_values(edge_weights, len(edges), len(graph.edges)),
             edge_timestamps=_align_edge_values(edge_timestamps, len(edges), len(graph.edges)),
+            backend=self.backend,
         )
         if directional_features.size == 0:
             return bundle
@@ -970,6 +999,7 @@ class GraphFeatureTransformer:
             feature_prefix=directionality.directional_feature_prefix,
             edge_weights=edge_weights,
             edge_timestamps=edge_timestamps,
+            backend=self.backend,
         )
         if directional_features.size == 0:
             return bundle
@@ -1057,6 +1087,7 @@ class GraphFeatureTransformer:
                 len(resolved_edges),
                 len(graph.edges),
             ),
+            backend=self.backend,
         )
         if directional_features.size == 0:
             return bundle

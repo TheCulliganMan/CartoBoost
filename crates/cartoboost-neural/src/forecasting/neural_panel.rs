@@ -8,13 +8,18 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::scaler::StandardScaler;
-use crate::{backend_dense_layer_f32, BackendSelection, NeuralError, Result};
+use crate::{
+    backend_dense_layer_f32, select_backend_for, BackendOperation, BackendSelection, NeuralError,
+    Result,
+};
 
 type KnownFutureCovariates = BTreeMap<(String, NaiveDateTime), BTreeMap<String, f64>>;
 type KnownFutureCovariateIndex<'a> =
     BTreeMap<&'a str, BTreeMap<NaiveDateTime, &'a BTreeMap<String, f64>>>;
 type FeatureComponentBreakdown = (f64, f64, BTreeMap<String, f64>, BTreeMap<String, f64>);
 type ForwardTrace = (Vec<Vec<f64>>, Vec<Vec<f64>>);
+
+const PANEL_DENSE_INFERENCE_DISPATCH_MIN_OPS: usize = 16_384;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TrendMode {
@@ -616,14 +621,15 @@ impl NeuralPanelForecaster {
             )
         })?;
         let known_future_index = known_future_covariates.map(index_known_future_covariates);
+        let stationary_by_series = self.stationary_network_effects_batch(&self.series_ids)?;
         let mut by_series = BTreeMap::new();
-        for series_id in &self.series_ids {
+        for (series_index, series_id) in self.series_ids.iter().enumerate() {
             let last_row = self.last_rows.get(series_id).ok_or_else(|| {
                 CartoBoostError::InvalidInput(format!(
                     "missing fitted timestamp tail for series '{series_id}'"
                 ))
             })?;
-            let stationary_effects = self.stationary_network_effects(series_id)?;
+            let stationary_effects = &stationary_by_series[series_index];
             let mut rows = Vec::with_capacity(horizon);
             for step in 1..=horizon {
                 let timestamp = frequency.advance(last_row.timestamp, step)?;
@@ -700,29 +706,59 @@ impl NeuralPanelForecaster {
         ForecastResult::new(predictions)
     }
 
-    fn stationary_network_effects(&self, series_id: &str) -> CoreResult<Vec<f64>> {
-        let mut output = vec![0.0; self.config.n_forecasts];
-        if let (Some(net), Some(tail)) = (&self.ar_net, self.target_tails.get(series_id)) {
-            let start_index = tail.len().saturating_sub(self.config.n_lags);
-            let input = tail[start_index..]
+    fn stationary_network_effects_batch(&self, series_ids: &[String]) -> CoreResult<Vec<Vec<f64>>> {
+        let mut outputs = vec![vec![0.0; self.config.n_forecasts]; series_ids.len()];
+        if let Some(net) = &self.ar_net {
+            let indexed_inputs = series_ids
                 .iter()
                 .enumerate()
-                .map(|(idx, value)| {
-                    let baseline = self.trend_baseline(series_id, idx + start_index + 1);
-                    value - baseline
+                .filter_map(|(index, series_id)| {
+                    self.target_tails.get(series_id).map(|tail| {
+                        let start = tail.len().saturating_sub(self.config.n_lags);
+                        let input = tail[start..]
+                            .iter()
+                            .enumerate()
+                            .map(|(offset, value)| {
+                                value - self.trend_baseline(series_id, offset + start + 1)
+                            })
+                            .collect::<Vec<_>>();
+                        (index, input)
+                    })
                 })
                 .collect::<Vec<_>>();
-            let forward = self.forward_net(net, &input)?;
-            add_median_outputs(&mut output, &forward, &self.config.quantiles);
+            let inputs = indexed_inputs
+                .iter()
+                .map(|(_, input)| input.clone())
+                .collect::<Vec<_>>();
+            for ((index, _), forward) in indexed_inputs.into_iter().zip(
+                net.forward_batch(&inputs, &self.config.backend)
+                    .map_err(|err| CartoBoostError::InvalidInput(err.to_string()))?,
+            ) {
+                add_median_outputs(&mut outputs[index], &forward, &self.config.quantiles);
+            }
         }
-        if let (Some(net), Some(tails)) =
-            (&self.covar_net, self.lagged_covariate_tails.get(series_id))
-        {
-            let input = lagged_covariate_input(&self.config, tails);
-            let forward = self.forward_net(net, &input)?;
-            add_median_outputs(&mut output, &forward, &self.config.quantiles);
+        if let Some(net) = &self.covar_net {
+            let indexed_inputs = series_ids
+                .iter()
+                .enumerate()
+                .filter_map(|(index, series_id)| {
+                    self.lagged_covariate_tails
+                        .get(series_id)
+                        .map(|tails| (index, lagged_covariate_input(&self.config, tails)))
+                })
+                .collect::<Vec<_>>();
+            let inputs = indexed_inputs
+                .iter()
+                .map(|(_, input)| input.clone())
+                .collect::<Vec<_>>();
+            for ((index, _), forward) in indexed_inputs.into_iter().zip(
+                net.forward_batch(&inputs, &self.config.backend)
+                    .map_err(|err| CartoBoostError::InvalidInput(err.to_string()))?,
+            ) {
+                add_median_outputs(&mut outputs[index], &forward, &self.config.quantiles);
+            }
         }
-        Ok(output)
+        Ok(outputs)
     }
 
     fn forward_net(&self, net: &MlpState, input: &[f64]) -> CoreResult<Vec<f64>> {
@@ -1303,7 +1339,9 @@ impl Forecaster for NeuralPanelForecaster {
             &self.series_lengths,
             &self.trend_changepoints,
             &self.config,
-        );
+            &self.config.backend,
+        )
+        .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))?;
         self.global_trend_coefficients = global_trend_coefficients;
         self.local_trend_coefficients = local_trend_coefficients;
         self.global_level = self
@@ -2289,13 +2327,16 @@ fn collect_static_future_covariates(
     by_series
 }
 
+type PiecewiseTrendFit = (Vec<f64>, BTreeMap<String, Vec<f64>>);
+
 fn fit_piecewise_trend(
     frame: &ForecastFrame,
     scaler: &StandardScaler,
     series_lengths: &BTreeMap<String, usize>,
     changepoints: &[f64],
     config: &NeuralPanelConfig,
-) -> (Vec<f64>, BTreeMap<String, Vec<f64>>) {
+    backend: &BackendSelection,
+) -> Result<PiecewiseTrendFit> {
     let basis_width = 2 + changepoints.len();
     let mut global_features = Vec::new();
     let mut global_targets = Vec::new();
@@ -2314,8 +2355,13 @@ fn fit_piecewise_trend(
             global_weights.push(recency_weight(idx, rows.len(), config));
         }
     }
-    let mut global_trend_coefficients =
-        ridge_fit(&global_features, &global_targets, &global_weights, 1.0e-6);
+    let mut global_trend_coefficients = ridge_fit_with_backend(
+        &global_features,
+        &global_targets,
+        &global_weights,
+        1.0e-6,
+        backend,
+    )?;
     if global_trend_coefficients.len() != basis_width {
         global_trend_coefficients.resize(basis_width, 0.0);
     }
@@ -2339,18 +2385,19 @@ fn fit_piecewise_trend(
                     .push(scaler.transform(row.target) - dot(&global_trend_coefficients, &basis));
                 local_weights.push(recency_weight(idx, rows.len(), config));
             }
-            let coefficients = ridge_fit(
+            let coefficients = ridge_fit_with_backend(
                 &local_features,
                 &local_targets,
                 &local_weights,
                 config.local_l2.max(1.0e-6),
-            );
+                backend,
+            )?;
             if coefficients.iter().any(|value| value.abs() > 0.0) {
                 local_trend_coefficients.insert(series_id, coefficients);
             }
         }
     }
-    (global_trend_coefficients, local_trend_coefficients)
+    Ok((global_trend_coefficients, local_trend_coefficients))
 }
 
 fn trend_changepoints(n_changepoints: usize, changepoints_range: f64) -> Vec<f64> {
@@ -2591,6 +2638,8 @@ impl MlpState {
     }
 
     fn forward(&self, input: &[f64], backend: &BackendSelection) -> Result<Vec<f64>> {
+        let cpu_backend = panel_dense_cpu_fallback(backend, self.max_layer_ops())?;
+        let execution_backend = cpu_backend.as_ref().unwrap_or(backend);
         let mut activation = padded_input(input, self.input_width);
         for (layer_idx, layer) in self.layers.iter().enumerate() {
             let is_last = layer_idx + 1 == self.layers.len();
@@ -2606,7 +2655,7 @@ impl MlpState {
                 .iter()
                 .map(|value| *value as f32)
                 .collect::<Vec<_>>();
-            let rows = backend_dense_layer_f32(backend, &features, &weights, &biases)?;
+            let rows = backend_dense_layer_f32(execution_backend, &features, &weights, &biases)?;
             activation = rows
                 .into_iter()
                 .next()
@@ -2623,6 +2672,76 @@ impl MlpState {
                 .collect();
         }
         Ok(activation)
+    }
+
+    fn forward_batch(
+        &self,
+        inputs: &[Vec<f64>],
+        backend: &BackendSelection,
+    ) -> Result<Vec<Vec<f64>>> {
+        if inputs.is_empty() {
+            return Ok(Vec::new());
+        }
+        let operations = self.max_layer_ops().saturating_mul(inputs.len());
+        let cpu_backend = panel_dense_cpu_fallback(backend, operations)?;
+        let execution_backend = cpu_backend.as_ref().unwrap_or(backend);
+        if execution_backend.selected == "cpu" {
+            return inputs
+                .iter()
+                .map(|input| self.forward(input, execution_backend))
+                .collect();
+        }
+        let mut activations = inputs
+            .iter()
+            .map(|input| padded_input(input, self.input_width))
+            .collect::<Vec<_>>();
+        for (layer_index, layer) in self.layers.iter().enumerate() {
+            let weights = (0..activations[0].len())
+                .flat_map(|input_index| {
+                    layer.weights.iter().map(move |row| row[input_index] as f32)
+                })
+                .collect::<Vec<_>>();
+            let features = activations
+                .iter()
+                .map(|row| row.iter().map(|value| *value as f32).collect())
+                .collect::<Vec<Vec<f32>>>();
+            let biases = layer
+                .biases
+                .iter()
+                .map(|value| *value as f32)
+                .collect::<Vec<_>>();
+            let is_last = layer_index + 1 == self.layers.len();
+            activations = backend_dense_layer_f32(execution_backend, &features, &weights, &biases)?
+                .into_iter()
+                .map(|row| {
+                    row.into_iter()
+                        .map(|value| {
+                            let value = f64::from(value);
+                            if is_last {
+                                value
+                            } else {
+                                value.max(0.0)
+                            }
+                        })
+                        .collect()
+                })
+                .collect();
+        }
+        Ok(activations)
+    }
+
+    fn max_layer_ops(&self) -> usize {
+        self.layers
+            .iter()
+            .map(|layer| {
+                layer
+                    .weights
+                    .first()
+                    .map_or(0, Vec::len)
+                    .saturating_mul(layer.weights.len())
+            })
+            .max()
+            .unwrap_or(0)
     }
 
     /// Evaluate the fitted dense network on CPU. This is intentionally public
@@ -2667,6 +2786,61 @@ pub fn fit_dense_regressor(
     config: &DenseRegressorConfig,
     examples: Vec<(Vec<f64>, Vec<f64>)>,
 ) -> Result<MlpState> {
+    fit_dense_regressor_with_backend(config, examples, Some("cpu"))
+}
+
+fn ridge_fit_with_backend(
+    features: &[Vec<f64>],
+    targets: &[f64],
+    weights: &[f64],
+    ridge: f64,
+    backend: &BackendSelection,
+) -> Result<Vec<f64>> {
+    if features.is_empty() || backend.selected == "cpu" {
+        return Ok(ridge_fit(features, targets, weights, ridge));
+    }
+    let width = features[0].len();
+    let weighted = features
+        .iter()
+        .zip(weights)
+        .map(|(row, &weight)| {
+            let scale = weight.max(0.0).sqrt() as f32;
+            row.iter()
+                .map(|&value| value as f32 * scale)
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let transposed = (0..width)
+        .map(|col| weighted.iter().map(|row| row[col]).collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    let flattened = weighted.iter().flatten().copied().collect::<Vec<_>>();
+    let mut xtwx = backend_dense_layer_f32(backend, &transposed, &flattened, &vec![0.0; width])?
+        .into_iter()
+        .map(|row| row.into_iter().map(f64::from).collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    let weighted_targets = targets
+        .iter()
+        .zip(weights)
+        .map(|(&target, &weight)| (target * weight.max(0.0).sqrt()) as f32)
+        .collect::<Vec<_>>();
+    let xtwy = backend_dense_layer_f32(backend, &transposed, &weighted_targets, &[0.0])?
+        .into_iter()
+        .map(|row| f64::from(row[0]))
+        .collect::<Vec<_>>();
+    for (idx, row) in xtwx.iter_mut().enumerate() {
+        row[idx] += ridge;
+    }
+    Ok(solve_linear_system(xtwx, xtwy).unwrap_or_else(|| vec![0.0; width]))
+}
+
+/// Fit the reusable dense regressor on an explicitly selected accelerator.
+/// Selection happens once before training; inference reuses the concrete
+/// backend persisted by the owning model rather than probing per call.
+pub fn fit_dense_regressor_with_backend(
+    config: &DenseRegressorConfig,
+    examples: Vec<(Vec<f64>, Vec<f64>)>,
+    backend: Option<&str>,
+) -> Result<MlpState> {
     if config.input_width == 0 || config.output_width == 0 || config.hidden_layers.contains(&0) {
         return Err(NeuralError::InvalidArgument(
             "dense regressor widths must be positive".to_string(),
@@ -2682,11 +2856,13 @@ pub fn fit_dense_regressor(
             "dense regressor weight_decay must be finite and non-negative".to_string(),
         ));
     }
+    let backend = select_backend_for(backend, BackendOperation::Dense)?;
     let panel_config = NeuralPanelConfig {
         epochs: config.epochs,
         learning_rate: config.learning_rate,
         weight_decay: config.weight_decay,
         loss: NeuralPanelLoss::Mse,
+        backend: backend.clone(),
         ..NeuralPanelConfig::default()
     };
     train_mlp(
@@ -2703,7 +2879,7 @@ pub fn fit_dense_regressor(
             .collect(),
         &panel_config,
         config.seed,
-        &BackendSelection::default(),
+        &backend,
     )
 }
 
@@ -3036,7 +3212,21 @@ fn forward_trace_with_backend(
     input: &[f64],
     backend: &BackendSelection,
 ) -> Result<ForwardTrace> {
-    if backend.selected == "cpu" {
+    let max_layer_ops = net
+        .layers
+        .iter()
+        .map(|layer| {
+            layer
+                .weights
+                .first()
+                .map_or(0, Vec::len)
+                .saturating_mul(layer.weights.len())
+        })
+        .max()
+        .unwrap_or(0);
+    let cpu_backend = panel_dense_cpu_fallback(backend, max_layer_ops)?;
+    let execution_backend = cpu_backend.as_ref().unwrap_or(backend);
+    if execution_backend.selected == "cpu" {
         return Ok(forward_trace(net, input));
     }
     let mut activations = vec![padded_input(input, net.input_width)];
@@ -3052,7 +3242,7 @@ fn forward_trace_with_backend(
             .iter()
             .map(|value| *value as f32)
             .collect::<Vec<_>>();
-        let linear = backend_dense_layer_f32(backend, &features, &weights, &biases)?
+        let linear = backend_dense_layer_f32(execution_backend, &features, &weights, &biases)?
             .into_iter()
             .next()
             .expect("backend dense layer returns one row")
@@ -3068,6 +3258,19 @@ fn forward_trace_with_backend(
         activations.push(next);
     }
     Ok((activations, preactivations))
+}
+
+fn panel_dense_cpu_fallback(
+    backend: &BackendSelection,
+    operations: usize,
+) -> Result<Option<BackendSelection>> {
+    if backend.selected != "cpu" && operations < PANEL_DENSE_INFERENCE_DISPATCH_MIN_OPS {
+        return Ok(Some(select_backend_for(
+            Some("cpu"),
+            BackendOperation::Dense,
+        )?));
+    }
+    Ok(None)
 }
 
 fn clone_zero_layers(layers: &[DenseLayer]) -> Vec<DenseLayer> {
@@ -3288,4 +3491,78 @@ fn split_lane(series_id: &str) -> (Option<&str>, Option<&str>) {
         return (Some(origin), Some(destination));
     }
     (None, None)
+}
+
+#[cfg(test)]
+mod dispatch_tests {
+    use super::*;
+
+    #[test]
+    fn panel_dense_inference_avoids_small_device_launches() {
+        for backend_name in crate::available_backends() {
+            let backend = select_backend_for(Some(&backend_name), BackendOperation::Dense).unwrap();
+            assert_eq!(
+                panel_dense_cpu_fallback(&backend, 16).unwrap().is_some(),
+                backend_name != "cpu"
+            );
+            assert!(
+                panel_dense_cpu_fallback(&backend, PANEL_DENSE_INFERENCE_DISPATCH_MIN_OPS)
+                    .unwrap()
+                    .is_none(),
+                "{backend_name}"
+            );
+        }
+    }
+
+    #[test]
+    fn reusable_dense_regressor_requires_dense_capability() {
+        let config = DenseRegressorConfig {
+            input_width: 2,
+            output_width: 1,
+            hidden_layers: vec![2],
+            epochs: 1,
+            learning_rate: 0.01,
+            weight_decay: 0.0,
+            seed: 7,
+        };
+        let examples = vec![(vec![0.0, 1.0], vec![1.0]), (vec![1.0, 0.0], vec![1.0])];
+        for backend_name in crate::available_backends() {
+            if !crate::backend_supports_operation(&backend_name, BackendOperation::Dense) {
+                continue;
+            }
+            fit_dense_regressor_with_backend(&config, examples.clone(), Some(&backend_name))
+                .unwrap_or_else(|error| panic!("{backend_name} dense regressor failed: {error}"));
+        }
+    }
+
+    #[test]
+    fn panel_batched_inference_matches_cpu_on_available_backends() {
+        let inputs = (0..64)
+            .map(|row| {
+                (0..16)
+                    .map(|column| ((row * 16 + column) as f64 * 0.019).cos())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let net = MlpState::initialized(16, 4, &[16], 41);
+        let cpu = select_backend_for(Some("cpu"), BackendOperation::Dense).unwrap();
+        let expected = net.forward_batch(&inputs, &cpu).unwrap();
+        for backend_name in crate::available_backends() {
+            if backend_name == "cpu"
+                || !crate::backend_supports_operation(&backend_name, BackendOperation::Dense)
+            {
+                continue;
+            }
+            let backend = select_backend_for(Some(&backend_name), BackendOperation::Dense).unwrap();
+            let actual = net.forward_batch(&inputs, &backend).unwrap();
+            for (actual_row, expected_row) in actual.iter().zip(&expected) {
+                for (actual, expected) in actual_row.iter().zip(expected_row) {
+                    assert!(
+                        (actual - expected).abs() < 2.0e-4,
+                        "{backend_name} panel batch mismatch: {actual} vs {expected}"
+                    );
+                }
+            }
+        }
+    }
 }

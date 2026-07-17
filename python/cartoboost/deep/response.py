@@ -20,7 +20,7 @@ class ResponseCurveModel(ArtifactPersistenceMixin):
         response_type: str = "binary",
         monotone: str | None = None,
         calibration: str | None = None,
-        backend: Backend = Backend.CPU,
+        backend: Backend | str = Backend.CPU,
     ) -> None:
         self.response_type = response_type
         self.monotone = monotone
@@ -137,7 +137,7 @@ class EventOutcomeModel(ArtifactPersistenceMixin):
         *,
         event_type: str = "binary",
         calibration: str = "temperature",
-        backend: Backend = Backend.CPU,
+        backend: Backend | str = Backend.CPU,
     ) -> None:
         self.event_type = event_type
         self.calibration = calibration
@@ -206,7 +206,7 @@ class ServiceTimeResidualModel:
         self,
         *,
         baseline_col: str = "baseline_value",
-        backend: Backend = Backend.CPU,
+        backend: Backend | str = Backend.CPU,
     ) -> None:
         self.baseline_col = baseline_col
         self.backend = backend

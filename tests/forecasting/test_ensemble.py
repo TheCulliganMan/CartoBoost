@@ -85,11 +85,16 @@ def test_weighted_ensemble_accepts_kalman_member():
 
 
 def test_backtest_weighted_ensemble_fit_requires_rust_binding():
+    model = BacktestWeightedEnsembleForecaster(
+        models={"last": NaiveForecaster()},
+        backend="cuda",
+    )
+    assert model.get_params()["backend"] == "cuda"
     with pytest.raises(
         NotImplementedError,
         match="Rust binding.*BacktestWeightedEnsembleForecaster",
     ):
-        BacktestWeightedEnsembleForecaster(models={"last": NaiveForecaster()}).fit([1.0, 2.0])
+        model.fit([1.0, 2.0])
 
 
 def test_bottom_up_reconciler_requires_hierarchy_surface():
@@ -103,6 +108,7 @@ def test_bottom_up_reconciler_passes_hierarchy_to_native_binding(install_fake_na
         hierarchy={"all": ["PU1", "PU2"]},
         series_id_column="PULocationID",
         non_negative=True,
+        backend="cuda",
     )
 
     model.fit([1.0, 2.0]).predict(1)
@@ -117,6 +123,7 @@ def test_bottom_up_reconciler_passes_hierarchy_to_native_binding(install_fake_na
             "child_column": None,
             "non_negative": True,
             "metadata": {},
+            "backend": "cuda",
         },
     )
 
@@ -129,6 +136,7 @@ def test_min_trace_reconciler_passes_covariance_config_to_native_binding(
         parent_column="borough",
         child_column="PULocationID",
         covariance_method="sample",
+        backend="webgpu",
     )
 
     model.fit([1.0, 2.0]).predict(1)
@@ -136,3 +144,4 @@ def test_min_trace_reconciler_passes_covariance_config_to_native_binding(
     assert native.calls[0][1]["parent_column"] == "borough"
     assert native.calls[0][1]["child_column"] == "PULocationID"
     assert native.calls[0][1]["covariance_method"] == "sample"
+    assert native.calls[0][1]["backend"] == "webgpu"

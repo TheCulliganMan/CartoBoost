@@ -10,3 +10,15 @@ chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+rayon = "1.11"
+cartoboost-accelerator = { path = "../cartoboost-accelerator" }
+
+[features]
+default = []
+cuda = ["cartoboost-accelerator/cuda"]
+cuda-oxide = ["cartoboost-accelerator/cuda-oxide"]
+rocm = ["cartoboost-accelerator/rocm"]
+hip = ["rocm", "cartoboost-accelerator/hip"]
+metal = ["cartoboost-accelerator/metal"]
+directml = ["cartoboost-accelerator/directml"]
+webgpu = ["cartoboost-accelerator/webgpu"]

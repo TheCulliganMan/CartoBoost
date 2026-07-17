@@ -46,7 +46,7 @@ stiff filter can miss real pickup-demand shifts. Use standardized innovations,
 forecast intervals, and rolling-origin error to decide whether the variance
 settings match the series.
 
-## Example
+## Python Example
 
 ```python
 from cartoboost.forecasting import AutoKalmanForecaster
@@ -183,7 +183,7 @@ When the window is omitted, CartoBoost uses a deterministic tail window based on
 one fifth of the series length, bounded to 1--12 rows and by the available
 fitting history.
 
-## Validation Notes
+## Validation
 
 Kalman models do not encode hour-of-day wraparound or zone geography. If those
 effects matter, compare Kalman against seasonal naive and a lag model with
@@ -352,3 +352,10 @@ print(min(scores, key=lambda item: (item[0], item[1])))
 
 Use the diagnostic plots after picking the best validation candidate; do not
 choose variance settings by making the in-sample line look smooth.
+
+## Limitations
+
+- The documented state-space forms capture local level and trend, not arbitrary nonlinear effects.
+- Process and observation variances are weakly identified on short histories.
+- Local fits do not pool information across related series.
+- Tune variance settings on training-side origins, never on the final holdout.

@@ -7,7 +7,7 @@ from typing import Any
 
 import numpy as np
 
-from .config import Kernel
+from .config import Backend, Kernel
 
 try:  # pragma: no cover - exercised when sklearn is installed.
     from sklearn.base import BaseEstimator, RegressorMixin, clone
@@ -31,12 +31,15 @@ from ._artifacts import (
     versioned_artifact_payload,
 )
 from ._native import NearestNeighborGPRegressor as _NativeNearestNeighborGPRegressor
+from ._native import (
+    geostats_directional_lane_distance_matrix_value as _native_directional_lane_distance_matrix,
+)
 from ._native import geostats_empirical_semivariogram_value as _native_empirical_semivariogram
 from ._native import geostats_fit_variogram_wls_value as _native_fit_variogram_wls
 
 
 class NearestNeighborGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseEstimator):
-    """Nearest-neighbor Gaussian process regressor for point coordinates."""
+    """Nearest-neighbor Gaussian process for coordinates or a supplied metric."""
 
     def __init__(
         self,
@@ -49,6 +52,7 @@ class NearestNeighborGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseE
         anisotropy_scaling: float = 1.0,
         brute_force_threshold: int = 2048,
         duplicate_tolerance: float = 0.0,
+        backend: Backend | str = Backend.CPU,
     ) -> None:
         self.kernel = kernel
         self.range = range
@@ -59,8 +63,10 @@ class NearestNeighborGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseE
         self.anisotropy_scaling = anisotropy_scaling
         self.brute_force_threshold = brute_force_threshold
         self.duplicate_tolerance = duplicate_tolerance
+        self.backend = str(backend)
         self._model: Any | None = None
         self._fit_coords: np.ndarray | None = None
+        self._fit_distance_matrix: np.ndarray | None = None
         self._fit_y: np.ndarray | None = None
 
     def fit(
@@ -68,11 +74,19 @@ class NearestNeighborGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseE
         X: Iterable[Iterable[float]] | None,
         y: Iterable[float],
         *,
-        coords: Iterable[Iterable[float]],
+        coords: Iterable[Iterable[float]] | None = None,
+        distance_matrix: Iterable[Iterable[float]] | None = None,
     ) -> NearestNeighborGPRegressor:
         n_features = 0 if X is None else np.asarray(X).shape[1]
-        coords_array = _as_coords(coords)
         y_array = _as_vector(y, "y")
+        if (coords is None) == (distance_matrix is None):
+            raise ValueError("provide exactly one of coords or distance_matrix")
+        coords_array = None if coords is None else _as_coords(coords)
+        distance_array = (
+            None
+            if distance_matrix is None
+            else _as_symmetric_distance_matrix(distance_matrix, y_array.shape[0], "distance_matrix")
+        )
         self._model = _NativeNearestNeighborGPRegressor(
             kernel=str(self.kernel),
             range=float(self.range),
@@ -83,10 +97,17 @@ class NearestNeighborGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseE
             anisotropy_scaling=float(self.anisotropy_scaling),
             brute_force_threshold=int(self.brute_force_threshold),
             duplicate_tolerance=float(self.duplicate_tolerance),
+            backend=self.backend,
         )
-        self._model.fit(coords_array, y_array)
+        if coords_array is not None:
+            self._model.fit(coords_array, y_array)
+        else:
+            assert distance_array is not None
+            self._model.fit_from_distance_matrix(distance_array, y_array)
+        self.backend_ = str(self._model.backend())
         self.n_features_in_ = n_features
         self._fit_coords = coords_array
+        self._fit_distance_matrix = distance_array
         self._fit_y = y_array
         return self
 
@@ -94,13 +115,22 @@ class NearestNeighborGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseE
         self,
         X: Iterable[Iterable[float]] | None,
         *,
-        coords: Iterable[Iterable[float]],
+        coords: Iterable[Iterable[float]] | None = None,
+        distance_matrix: Iterable[Iterable[float]] | None = None,
         return_std: bool = False,
         return_var: bool = False,
     ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
         del X
         model = self._require_model()
-        means, variances, _neighbors = model.predict(_as_coords(coords))
+        if bool(model.uses_precomputed_distances()):
+            if coords is not None or distance_matrix is None:
+                raise ValueError("distance-matrix model prediction requires distance_matrix only")
+            distances = _as_distance_queries(distance_matrix, self._fit_y_length())
+            means, variances, _neighbors = model.predict_from_distance_matrix(distances)
+        else:
+            if distance_matrix is not None or coords is None:
+                raise ValueError("coordinate model prediction requires coords only")
+            means, variances, _neighbors = model.predict(_as_coords(coords))
         mean_array = np.asarray(means, dtype=float)
         var_array = np.maximum(np.asarray(variances, dtype=float), 0.0)
         if return_var:
@@ -113,10 +143,11 @@ class NearestNeighborGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseE
         self,
         X: Iterable[Iterable[float]] | None,
         *,
-        coords: Iterable[Iterable[float]],
+        coords: Iterable[Iterable[float]] | None = None,
+        distance_matrix: Iterable[Iterable[float]] | None = None,
         coverage: float = 0.9,
     ) -> tuple[np.ndarray, np.ndarray]:
-        mean, std = self.predict(X, coords=coords, return_std=True)
+        mean, std = self.predict(X, coords=coords, distance_matrix=distance_matrix, return_std=True)
         z = _normal_z_for_coverage(coverage)
         return mean - z * std, mean + z * std
 
@@ -125,9 +156,12 @@ class NearestNeighborGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseE
         X: Iterable[Iterable[float]] | None,
         y: Iterable[float],
         *,
-        coords: Iterable[Iterable[float]],
+        coords: Iterable[Iterable[float]] | None = None,
+        distance_matrix: Iterable[Iterable[float]] | None = None,
     ) -> float:
-        pred = np.asarray(self.predict(X, coords=coords), dtype=float)
+        pred = np.asarray(
+            self.predict(X, coords=coords, distance_matrix=distance_matrix), dtype=float
+        )
         truth = _as_vector(y, "y")
         if pred.shape[0] != truth.shape[0]:
             raise ValueError("prediction and y must have the same length")
@@ -145,6 +179,7 @@ class NearestNeighborGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseE
             "anisotropy_scaling": self.anisotropy_scaling,
             "brute_force_threshold": self.brute_force_threshold,
             "duplicate_tolerance": self.duplicate_tolerance,
+            "backend": self.backend,
         }
 
     def set_params(self, **params: Any) -> NearestNeighborGPRegressor:
@@ -155,18 +190,25 @@ class NearestNeighborGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseE
             setattr(self, key, value)
         self._model = None
         self._fit_coords = None
+        self._fit_distance_matrix = None
         self._fit_y = None
         return self
 
     def save(self, path: str | Path) -> None:
         self._require_model()
-        if self._fit_coords is None or self._fit_y is None:
+        if self._fit_y is None:
             raise ValueError("fitted training data are unavailable for artifact serialization")
+        if self._fit_coords is None and self._fit_distance_matrix is None:
+            raise ValueError("fitted metric data are unavailable for artifact serialization")
         payload = versioned_artifact_payload(
             self.__class__.__name__,
             params=self.get_params(),
-            coords=self._fit_coords.tolist(),
             y=self._fit_y.tolist(),
+            **(
+                {"coords": self._fit_coords.tolist()}
+                if self._fit_coords is not None
+                else {"distance_matrix": self._fit_distance_matrix.tolist()}
+            ),
         )
         Path(path).write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
 
@@ -186,7 +228,10 @@ class NearestNeighborGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseE
         }:
             raise ValueError("artifact is not a NearestNeighborGPRegressor")
         obj = cls(**dict(payload["params"]))
-        obj.fit(None, payload["y"], coords=payload["coords"])
+        if "distance_matrix" in payload:
+            obj.fit(None, payload["y"], distance_matrix=payload["distance_matrix"])
+        else:
+            obj.fit(None, payload["y"], coords=payload["coords"])
         return obj
 
     def config_(self) -> dict[str, Any]:
@@ -197,6 +242,11 @@ class NearestNeighborGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseE
             raise ValueError("NearestNeighborGPRegressor is not fitted")
         return self._model
 
+    def _fit_y_length(self) -> int:
+        if self._fit_y is None:
+            raise ValueError("NearestNeighborGPRegressor is not fitted")
+        return int(self._fit_y.shape[0])
+
 
 class ResidualNNGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseEstimator):
     """Fit any base estimator, then model spatial residuals with an NNGP."""
@@ -206,9 +256,11 @@ class ResidualNNGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseEstima
         base_estimator: Any,
         *,
         gp: NearestNeighborGPRegressor | None = None,
+        backend: Backend | str = Backend.CPU,
     ) -> None:
         self.base_estimator = base_estimator
         self.gp = gp
+        self.backend = str(backend)
 
     def fit(
         self,
@@ -226,7 +278,12 @@ class ResidualNNGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseEstima
         self.base_estimator_.fit(x_array, y_array)
         base_pred = np.asarray(self.base_estimator_.predict(x_array), dtype=float)
         residuals = y_array - base_pred
-        self.gp_ = self.gp or NearestNeighborGPRegressor()
+        if self.gp is None:
+            self.gp_ = NearestNeighborGPRegressor(backend=self.backend)
+        else:
+            gp_params = self.gp.get_params()
+            gp_params["backend"] = self.backend
+            self.gp_ = type(self.gp)(**gp_params)
         self.gp_.fit(None, residuals, coords=coords)
         self.n_features_in_ = x_array.shape[1]
         return self
@@ -278,7 +335,11 @@ class ResidualNNGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseEstima
 
     def get_params(self, deep: bool = True) -> dict[str, Any]:
         del deep
-        return {"base_estimator": self.base_estimator, "gp": self.gp}
+        return {
+            "base_estimator": self.base_estimator,
+            "gp": self.gp,
+            "backend": self.backend,
+        }
 
     def set_params(self, **params: Any) -> ResidualNNGPRegressor:
         valid = self.get_params()
@@ -286,6 +347,7 @@ class ResidualNNGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseEstima
             if key not in valid:
                 raise ValueError(f"unknown parameter {key!r}")
             setattr(self, key, value)
+        self.backend = str(self.backend)
         return self
 
     def save(self, path: str | Path) -> None:
@@ -298,6 +360,7 @@ class ResidualNNGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseEstima
                 purpose="residual NNGP artifacts",
             ),
             gp=dump_model_artifact(self.gp_, purpose="residual NNGP artifacts"),
+            backend=self.backend,
             n_features_in=int(self.n_features_in_),
         )
         Path(path).write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
@@ -306,9 +369,11 @@ class ResidualNNGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseEstima
     def load(cls, path: str | Path) -> ResidualNNGPRegressor:
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
         require_artifact_payload(payload, "ResidualNNGPRegressor")
+        gp = load_model_artifact(payload["gp"])
         obj = cls(
             load_model_artifact(payload["base_estimator"]),
-            gp=load_model_artifact(payload["gp"]),
+            gp=gp,
+            backend=str(payload.get("backend", getattr(gp, "backend", "cpu"))),
         )
         obj.base_estimator_ = obj.base_estimator
         obj.gp_ = obj.gp
@@ -320,6 +385,36 @@ class SpatialGaussianProcessRegressor(NearestNeighborGPRegressor):
     """Facade for scalable spatial Gaussian process regression."""
 
 
+def directional_lane_distance_matrix(
+    lanes: Iterable[Iterable[float]],
+    *,
+    mode: str = "forward",
+    origin_weight: float = 1.0,
+    destination_weight: float = 1.0,
+) -> np.ndarray:
+    """Return a native directed-lane distance matrix.
+
+    Each row is ``[O_LAT, O_LNG, D_LAT, D_LNG]``.  ``forward`` compares
+    matching endpoints and therefore keeps A→B separate from B→A; ``crossed``
+    compares origin-to-destination endpoints; ``minimum`` selects the smaller
+    of the two for callers explicitly requesting direction-insensitive search.
+    """
+    array = np.asarray(lanes, dtype=float)
+    if array.ndim != 2 or array.shape[1] != 4:
+        raise ValueError("lanes must have shape (n, 4): [O_LAT, O_LNG, D_LAT, D_LNG]")
+    if not np.isfinite(array).all():
+        raise ValueError("lanes must contain only finite values")
+    return np.asarray(
+        _native_directional_lane_distance_matrix(
+            np.ascontiguousarray(array, dtype=float),
+            str(mode),
+            float(origin_weight),
+            float(destination_weight),
+        ),
+        dtype=float,
+    )
+
+
 def empirical_semivariogram(
     coords: Iterable[Iterable[float]],
     values: Iterable[float],
@@ -328,6 +423,7 @@ def empirical_semivariogram(
     max_distance: float | None = None,
     anisotropy_angle_degrees: float = 0.0,
     anisotropy_scaling: float = 1.0,
+    backend: Backend | str = Backend.CPU,
 ) -> list[dict[str, Any]]:
     return list(
         json.loads(
@@ -338,6 +434,7 @@ def empirical_semivariogram(
                 max_distance,
                 float(anisotropy_angle_degrees),
                 float(anisotropy_scaling),
+                str(backend),
             )
         )
     )
@@ -351,6 +448,7 @@ def binned_variogram(
     max_distance: float | None = None,
     anisotropy_angle_degrees: float = 0.0,
     anisotropy_scaling: float = 1.0,
+    backend: Backend | str = Backend.CPU,
 ) -> list[dict[str, Any]]:
     return empirical_semivariogram(
         coords,
@@ -359,7 +457,32 @@ def binned_variogram(
         max_distance=max_distance,
         anisotropy_angle_degrees=anisotropy_angle_degrees,
         anisotropy_scaling=anisotropy_scaling,
+        backend=backend,
     )
+
+
+def deterministic_neighbors(
+    coords: Iterable[Iterable[float]],
+    targets: Iterable[Iterable[float]],
+    *,
+    k: int,
+    backend: Backend | str = Backend.CPU,
+) -> list[list[int]]:
+    """Return deterministic nearest-neighbor indices for a batch of targets."""
+
+    if k < 0:
+        raise ValueError("k must be nonnegative")
+    from ._native import geostats_deterministic_neighbors_value as native_neighbors
+
+    return [
+        [int(index) for index in row]
+        for row in native_neighbors(
+            _as_coords(coords),
+            _as_coords(targets),
+            int(k),
+            str(backend),
+        )
+    ]
 
 
 def fit_variogram_wls(
@@ -369,6 +492,7 @@ def fit_variogram_wls(
     range_candidates: Iterable[float],
     sill_candidates: Iterable[float],
     nugget_candidates: Iterable[float] = (0.0, 1.0e-6, 1.0e-4),
+    backend: Backend | str = Backend.CPU,
 ) -> dict[str, Any]:
     numeric_bins = [
         {
@@ -388,6 +512,7 @@ def fit_variogram_wls(
                 [float(value) for value in range_candidates],
                 [float(value) for value in sill_candidates],
                 [float(value) for value in nugget_candidates],
+                str(backend),
             )
         )
     )
@@ -399,6 +524,30 @@ def _as_coords(coords: Iterable[Iterable[float]]) -> np.ndarray:
         raise ValueError("coords must have shape (n, 2)")
     if not np.isfinite(array).all():
         raise ValueError("coords must contain only finite values")
+    return np.ascontiguousarray(array, dtype=float)
+
+
+def _as_symmetric_distance_matrix(
+    distances: Iterable[Iterable[float]], expected_size: int, name: str
+) -> np.ndarray:
+    array = np.asarray(distances, dtype=float)
+    if array.shape != (expected_size, expected_size):
+        raise ValueError(f"{name} must have shape ({expected_size}, {expected_size})")
+    if not np.isfinite(array).all() or np.any(array < 0.0):
+        raise ValueError(f"{name} must contain finite non-negative values")
+    if not np.allclose(array, array.T, rtol=0.0, atol=1.0e-10):
+        raise ValueError(f"{name} must be symmetric")
+    if not np.allclose(np.diag(array), 0.0, rtol=0.0, atol=1.0e-10):
+        raise ValueError(f"{name} diagonal must be zero")
+    return np.ascontiguousarray(array, dtype=float)
+
+
+def _as_distance_queries(distances: Iterable[Iterable[float]], training_size: int) -> np.ndarray:
+    array = np.asarray(distances, dtype=float)
+    if array.ndim != 2 or array.shape[1] != training_size:
+        raise ValueError(f"distance_matrix must have shape (n_queries, {training_size})")
+    if not np.isfinite(array).all() or np.any(array < 0.0):
+        raise ValueError("distance_matrix must contain finite non-negative values")
     return np.ascontiguousarray(array, dtype=float)
 
 

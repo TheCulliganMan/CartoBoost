@@ -13,7 +13,7 @@ from ..._artifacts import (
     library_version,
     stable_forecast_artifact_payload,
 )
-from ...config import BoosterConfig, SplitPolicy
+from ...config import Backend, BoosterConfig, SplitPolicy
 from .._native_wrappers import (
     NativeForecastWrapper,
     _forecast_frame_from_artifact,
@@ -80,6 +80,7 @@ class CartoBoostLagForecaster(NativeForecastWrapper):
         min_gain: float | None = None,
         n_threads: int | None = None,
         regressor_params: dict[str, Any] | None = None,
+        backend: Backend | str = Backend.CPU,
     ) -> None:
         params = {
             key: value
@@ -88,6 +89,7 @@ class CartoBoostLagForecaster(NativeForecastWrapper):
                 "split_policy": split_policy,
                 "allow_irregular": allow_irregular,
                 "regressor_params": regressor_params,
+                "backend": str(backend),
                 "lag_config": lag_config,
                 "rolling_config": rolling_config,
                 "calendar_config": calendar_config,
@@ -348,6 +350,7 @@ class CartoBoostLagForecaster(NativeForecastWrapper):
                 "min_samples_leaf",
                 "min_gain",
                 "splitters",
+                "backend",
             }
         )
         if unsupported:

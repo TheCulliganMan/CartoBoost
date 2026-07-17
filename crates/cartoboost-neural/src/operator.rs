@@ -1,6 +1,11 @@
-use crate::{NeuralError, Result};
+use crate::{
+    backend_csr_diffusion_f32, select_backend_for, BackendOperation, BackendSelection, NeuralError,
+    Result,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+
+const OPERATOR_CSR_DISPATCH_MIN_VALUES: usize = 16_384;
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SpatialOperatorEdge {
@@ -30,6 +35,7 @@ pub struct GraphNeuralOperator {
     pub smoothing: f64,
     pub coordinate_scale: f64,
     pub capability_tier: String,
+    pub backend: BackendSelection,
 }
 
 pub type FourierGeoOperator = GraphNeuralOperator;
@@ -42,8 +48,9 @@ pub fn graph_neural_operator_predict_json(
     exogenous_fields: &[Vec<f64>],
     smoothing: f64,
     coordinate_scale: f64,
+    backend: Option<&str>,
 ) -> Result<String> {
-    let operator = GraphNeuralOperator::new(smoothing, coordinate_scale)?;
+    let operator = GraphNeuralOperator::new_with_backend(smoothing, coordinate_scale, backend)?;
     let prediction = operator.predict(field_values, coordinates, edges, exogenous_fields)?;
     serde_json::to_string(&prediction).map_err(NeuralError::from)
 }
@@ -119,16 +126,26 @@ pub fn neural_operator_synthetic_benchmark_json() -> Result<String> {
 
 impl GraphNeuralOperator {
     pub fn new(smoothing: f64, coordinate_scale: f64) -> Result<Self> {
+        Self::new_with_backend(smoothing, coordinate_scale, Some("cpu"))
+    }
+
+    pub fn new_with_backend(
+        smoothing: f64,
+        coordinate_scale: f64,
+        backend: Option<&str>,
+    ) -> Result<Self> {
         if !smoothing.is_finite() || !(0.0..=1.0).contains(&smoothing) {
             return invalid("smoothing must be finite and between 0 and 1");
         }
         if !coordinate_scale.is_finite() {
             return invalid("coordinate_scale must be finite");
         }
+        let backend = select_operator_backend(backend)?;
         Ok(Self {
             smoothing,
             coordinate_scale,
             capability_tier: "advanced_experimental".to_string(),
+            backend,
         })
     }
 
@@ -149,11 +166,65 @@ impl GraphNeuralOperator {
                 return invalid("exogenous_fields node width must match field_values");
             }
         }
+        let graph_contexts = graph_average_panel(field_values, edges, nodes, &self.backend)?;
+        self.predict_from_graph_context(
+            field_values,
+            coordinates,
+            exogenous_fields,
+            &graph_contexts,
+        )
+    }
+
+    /// Browser WebGPU requires asynchronous adapter discovery and command
+    /// completion, so model-level callers must use this route instead of the
+    /// synchronous native dispatcher.
+    #[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+    pub async fn predict_webgpu(
+        &self,
+        field_values: &[Vec<f64>],
+        coordinates: &[Vec<f64>],
+        edges: &[SpatialOperatorEdge],
+        exogenous_fields: &[Vec<f64>],
+    ) -> Result<NeuralOperatorPrediction> {
+        validate_panel(field_values, "field_values")?;
+        let nodes = field_values[0].len();
+        validate_coordinates(coordinates, nodes)?;
+        validate_edges(edges, nodes)?;
+        if !exogenous_fields.is_empty() {
+            validate_panel(exogenous_fields, "exogenous_fields")?;
+            if exogenous_fields[0].len() != nodes {
+                return invalid("exogenous_fields node width must match field_values");
+            }
+        }
+        let (indptr, indices, weights, values) =
+            graph_diffusion_inputs(field_values, edges, nodes)?;
+        let output =
+            crate::webgpu_csr_diffusion_f32_async(&indptr, &indices, &weights, 1, &values).await?;
+        let graph_contexts = output
+            .chunks_exact(nodes)
+            .map(|row| row.iter().map(|value| f64::from(*value)).collect())
+            .collect::<Vec<_>>();
+        self.predict_from_graph_context(
+            field_values,
+            coordinates,
+            exogenous_fields,
+            &graph_contexts,
+        )
+    }
+
+    fn predict_from_graph_context(
+        &self,
+        field_values: &[Vec<f64>],
+        coordinates: &[Vec<f64>],
+        exogenous_fields: &[Vec<f64>],
+        graph_contexts: &[Vec<f64>],
+    ) -> Result<NeuralOperatorPrediction> {
+        let nodes = field_values[0].len();
         let mut future_field = Vec::with_capacity(field_values.len());
         let mut residual_field = Vec::with_capacity(field_values.len());
         let mut uncertainty_field = Vec::with_capacity(field_values.len());
         for (t, row) in field_values.iter().enumerate() {
-            let graph_context = graph_average(row, edges, nodes)?;
+            let graph_context = &graph_contexts[t];
             let previous = if t == 0 { row } else { &field_values[t - 1] };
             let exogenous = exogenous_fields.get(t);
             let mut future_row = Vec::with_capacity(nodes);
@@ -182,6 +253,14 @@ impl GraphNeuralOperator {
             "spatiotemporal_operator".to_string(),
         );
         metadata.insert("capability_tier".to_string(), self.capability_tier.clone());
+        metadata.insert(
+            "backend_requested".to_string(),
+            self.backend.requested.clone(),
+        );
+        metadata.insert(
+            "backend_selected".to_string(),
+            self.backend.selected.clone(),
+        );
         metadata.insert(
             "outputs".to_string(),
             "future_field,residual_field,uncertainty_field".to_string(),
@@ -238,6 +317,82 @@ fn validate_edges(edges: &[SpatialOperatorEdge], nodes: usize) -> Result<()> {
     Ok(())
 }
 
+fn select_operator_backend(requested: Option<&str>) -> Result<BackendSelection> {
+    Ok(select_backend_for(
+        requested.or(Some("cpu")),
+        BackendOperation::CsrDiffusion,
+    )?)
+}
+
+fn graph_average_panel(
+    panel: &[Vec<f64>],
+    edges: &[SpatialOperatorEdge],
+    nodes: usize,
+    backend: &BackendSelection,
+) -> Result<Vec<Vec<f64>>> {
+    if !should_accelerate_operator_diffusion(backend, panel.len(), edges.len()) {
+        return panel
+            .iter()
+            .map(|row| graph_average(row, edges, nodes))
+            .collect();
+    }
+    let (indptr, indices, weights, values) = graph_diffusion_inputs(panel, edges, nodes)?;
+    let output = backend_csr_diffusion_f32(backend, &indptr, &indices, &weights, 1, &values)?;
+    Ok(output
+        .chunks_exact(nodes)
+        .map(|row| row.iter().map(|value| f64::from(*value)).collect())
+        .collect())
+}
+
+fn should_accelerate_operator_diffusion(
+    backend: &BackendSelection,
+    time_steps: usize,
+    edge_count: usize,
+) -> bool {
+    backend.selected != "cpu"
+        && time_steps.saturating_mul(edge_count) >= OPERATOR_CSR_DISPATCH_MIN_VALUES
+}
+
+type GraphDiffusionInputs = (Vec<u32>, Vec<u32>, Vec<f32>, Vec<f32>);
+
+fn graph_diffusion_inputs(
+    panel: &[Vec<f64>],
+    edges: &[SpatialOperatorEdge],
+    nodes: usize,
+) -> Result<GraphDiffusionInputs> {
+    let mut rows = (0..nodes)
+        .map(|node| vec![(node as u32, 1.0_f64)])
+        .collect::<Vec<_>>();
+    let mut totals = vec![1.0_f64; nodes];
+    for edge in edges {
+        totals[edge.target] += edge.weight.abs();
+        rows[edge.target].push((
+            u32::try_from(edge.source).map_err(|_| {
+                NeuralError::InvalidArgument("operator node index exceeds u32".to_string())
+            })?,
+            edge.weight,
+        ));
+    }
+    let mut indptr = Vec::with_capacity(nodes + 1);
+    let mut indices = Vec::new();
+    let mut weights = Vec::new();
+    indptr.push(0_u32);
+    for (target, row) in rows.into_iter().enumerate() {
+        for (source, weight) in row {
+            indices.push(source);
+            weights.push((weight / totals[target].max(1.0)) as f32);
+        }
+        indptr.push(u32::try_from(indices.len()).map_err(|_| {
+            NeuralError::InvalidArgument("operator edge count exceeds u32".to_string())
+        })?);
+    }
+    let values = panel
+        .iter()
+        .flat_map(|row| row.iter().map(|value| *value as f32))
+        .collect::<Vec<_>>();
+    Ok((indptr, indices, weights, values))
+}
+
 fn graph_average(row: &[f64], edges: &[SpatialOperatorEdge], nodes: usize) -> Result<Vec<f64>> {
     let mut accum = row.to_vec();
     let mut weights = vec![1.0; nodes];
@@ -284,6 +439,19 @@ fn invalid<T>(message: &str) -> Result<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn operator_diffusion_avoids_small_device_launches() {
+        for backend_name in crate::available_backends() {
+            let backend =
+                select_backend_for(Some(&backend_name), BackendOperation::CsrDiffusion).unwrap();
+            assert!(!should_accelerate_operator_diffusion(&backend, 1, 16));
+            assert_eq!(
+                should_accelerate_operator_diffusion(&backend, 1_024, 16),
+                backend_name != "cpu"
+            );
+        }
+    }
 
     #[test]
     fn graph_neural_operator_predicts_fields_and_uncertainty() {

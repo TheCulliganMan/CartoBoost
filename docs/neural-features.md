@@ -1,14 +1,15 @@
-# CartoBoost Neural Embedding Models And Features
+# Neural Embeddings
 
-> Supported API: neural embedding models and feature generators are imported
-> from `cartoboost.neural` in CartoBoost 0.3.
+Neural embeddings turn repeated identifiers into learned numeric features. For
+example, pickup zones, route pairs, or zone-hour IDs can learn residual effects
+that remain after distance, time, and other measured features are included.
+Import these tools from `cartoboost.neural`.
 
-This is the contract page for learned ID embeddings. Use the
-[neural model guides](user-guide/neural-models/index.md) for examples and model
-selection. Use this page when you need the artifact, fallback, and feature
-generation details.
+Start with the [neural model guides](user-guide/neural-models/index.md) to
+choose a workflow. Return here for input shapes, unseen-ID behavior, generated
+features, and saved-model details.
 
-Neural support has two entry points:
+Choose between two entry points:
 
 - `NeuralEmbeddingStandaloneRegressor` for direct supervised ID embedding
   regression;

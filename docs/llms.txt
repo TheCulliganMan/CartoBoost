@@ -1,6 +1,8 @@
 # CartoBoost Docs
 
-Use this directory as the navigation map for the user-facing docs site.
+This is a machine-readable index of the user-facing documentation. Developers
+and data scientists should begin with the docs home and getting-started guide;
+the website navigation remains the canonical human reading order.
 
 ## Main Entry Points
 

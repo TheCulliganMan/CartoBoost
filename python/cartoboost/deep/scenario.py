@@ -5,6 +5,7 @@ from typing import Any
 
 import numpy as np
 
+from ..config import Backend
 from ._native import require_native
 
 
@@ -19,10 +20,12 @@ class GeoTemporalDiffusionScenarioModel:
         scenario_count: int = 64,
         diffusion_steps: int = 2,
         shock_scale: float = 1.0,
+        backend: Backend | str = Backend.CPU,
     ) -> None:
         self.scenario_count = int(scenario_count)
         self.diffusion_steps = int(diffusion_steps)
         self.shock_scale = float(shock_scale)
+        self.backend = str(backend)
         self.metadata_ = {
             "capability_tier": self.capability_tier,
             "auto_geo_enabled": "false",
@@ -40,9 +43,11 @@ class GeoTemporalDiffusionScenarioModel:
                 self.scenario_count,
                 self.diffusion_steps,
                 self.shock_scale,
+                self.backend,
             )
         )
         self.metadata_ = dict(output["metadata"])
+        self.backend_ = str(self.metadata_["backend_selected"])
         return {
             "scenarios": np.asarray(output["scenarios"], dtype=float),
             "scenario_mean": np.asarray(output["scenario_mean"], dtype=float),

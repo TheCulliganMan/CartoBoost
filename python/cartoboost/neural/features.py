@@ -9,6 +9,7 @@ from typing import Any
 import numpy as np
 
 from .._native import NeuralEmbeddingFeatures as _NativeNeuralEmbeddingFeatures
+from ..config import Backend
 
 
 class ArtifactFallback(str):
@@ -28,18 +29,21 @@ class NeuralEmbeddingFeatures:
         random_state: int | None = 42,
         parent_resolution: int | None = None,
         support_prior_strength: float = 1.0,
+        backend: Backend | str = Backend.CPU,
     ) -> None:
         self.dim = int(dim)
         self.fallback = str(fallback)
         self.random_state = random_state
         self.parent_resolution = parent_resolution
         self.support_prior_strength = float(support_prior_strength)
+        self.backend = str(backend)
         self._backend = _NativeNeuralEmbeddingFeatures(
             dim=self.dim,
             fallback=self.fallback,
             random_state=None if random_state is None else int(random_state),
             parent_resolution=parent_resolution,
             support_prior_strength=self.support_prior_strength,
+            backend=self.backend,
         )
         self._row_cache: dict[int, np.ndarray] | None = None
 

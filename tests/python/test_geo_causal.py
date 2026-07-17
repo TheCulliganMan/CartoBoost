@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import pytest
+from cartoboost.accelerators import available_backends
 from cartoboost.geo_causal import (
     CounterfactualRepresentationNet,
     DomainAdversarialGeoEncoder,
     GeoCausalPanel,
+    GeoExperimentDesigner,
     InvariantRiskEncoder,
     SpatialPlaceboTester,
     SyntheticDIDEstimator,
@@ -54,6 +57,25 @@ def test_synthetic_did_recovers_known_effect() -> None:
     assert estimator.summary()["assumptions"]
 
 
+def test_synthetic_did_and_placebos_run_on_every_available_backend() -> None:
+    expected_effect = None
+    expected_placebos = None
+    for backend in available_backends("affine"):
+        estimator = SyntheticDIDEstimator(
+            intervention_time="2026-01-04", seed=7, backend=backend
+        ).fit(_panel(5.0))
+        effect = estimator.estimate_effect()
+        placebos = estimator.placebo_test(n=2)
+        assert estimator.backend_ == backend
+        assert estimator.summary()["backend_selected"] == backend
+        if expected_effect is None:
+            expected_effect = effect
+            expected_placebos = placebos
+        else:
+            assert effect == pytest.approx(expected_effect, abs=1.0e-4)
+            assert placebos == pytest.approx(expected_placebos, abs=1.0e-4)
+
+
 def test_synthetic_did_save_load_preserves_effect(tmp_path) -> None:
     estimator = SyntheticDIDEstimator(intervention_time="2026-01-04", seed=7).fit(_panel(5.0))
     path = tmp_path / "synthetic-did.json"
@@ -76,6 +98,46 @@ def test_spillover_warnings_fire_for_adjacent_units() -> None:
     summary = SpatialPlaceboTester(intervention_time="2026-01-04", seed=3).fit(_panel()).summary()
     assert summary["warnings"]
     assert summary["adjacent_treated_control_pairs"] == [["treated", "control_a", 1.0]]
+
+
+def test_geo_experiment_design_runs_on_every_available_backend() -> None:
+    expected = None
+    for backend in available_backends("affine"):
+        model = GeoExperimentDesigner(intervention_time="2026-01-04", seed=9, backend=backend).fit(
+            _panel(0.0)
+        )
+        design = model.summary(candidate_count=1, placebo_n=2)
+        assert model.get_params()["backend"] == backend
+        assert design["metadata"]["backend_selected"] == backend
+        comparable = (
+            design["candidate_test_geos"],
+            design["balance_score"],
+            design["placebo_estimates"],
+        )
+        if expected is None:
+            expected = comparable
+        else:
+            assert comparable[0] == expected[0]
+            assert comparable[1] == pytest.approx(expected[1], abs=1.0e-4)
+            assert comparable[2] == pytest.approx(expected[2], abs=1.0e-4)
+
+
+def test_spillover_diagnostics_run_on_every_available_backend() -> None:
+    expected = None
+    for backend in available_backends("pairwise_distance"):
+        model = SpatialPlaceboTester(intervention_time="2026-01-04", seed=3, backend=backend).fit(
+            _panel()
+        )
+        summary = model.summary()
+        assert model.get_params()["backend"] == backend
+        distances = (
+            summary["min_treated_control_distance"],
+            summary["mean_treated_control_distance"],
+        )
+        if expected is None:
+            expected = distances
+        else:
+            assert distances == pytest.approx(expected, abs=0.02)
 
 
 def test_invariant_risk_encoder_improves_heldout_region_and_warns() -> None:

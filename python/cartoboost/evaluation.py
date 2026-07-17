@@ -6,6 +6,9 @@ from collections.abc import Iterator
 
 import numpy as np
 
+from .accelerators import pairwise_squared_distances, workload_decision
+from .config import Backend
+
 __all__ = [
     "environmental_blocked_cv",
     "grouped_blocked_cv",
@@ -68,6 +71,7 @@ def spatial_buffered_cv(
     random_state: int | None = None,
     coordinate_units: str = "projected",
     allow_degree_buffer: bool = False,
+    backend: Backend | str = Backend.CPU,
 ) -> Iterator[tuple[np.ndarray, np.ndarray]]:
     """Yield spatial blocked folds with a distance buffer around each test block.
 
@@ -90,7 +94,7 @@ def spatial_buffered_cv(
         rng.shuffle(block_splits)
 
     for train_idx, test_idx in block_splits:
-        yield _apply_spatial_buffer(coords, train_idx, test_idx, radius)
+        yield _apply_spatial_buffer(coords, train_idx, test_idx, radius, str(backend))
 
 
 def spatial_grouped_cv(
@@ -103,6 +107,7 @@ def spatial_grouped_cv(
     random_state: int | None = None,
     coordinate_units: str = "projected",
     allow_degree_buffer: bool = False,
+    backend: Backend | str = Backend.CPU,
 ) -> Iterator[tuple[np.ndarray, np.ndarray]]:
     """Yield grouped folds with optional spatial buffering around test rows.
 
@@ -128,7 +133,7 @@ def spatial_grouped_cv(
         rng.shuffle(group_splits)
 
     for train_idx, test_idx in group_splits:
-        yield _apply_spatial_buffer(coords, train_idx, test_idx, radius)
+        yield _apply_spatial_buffer(coords, train_idx, test_idx, radius, str(backend))
 
 
 def environmental_blocked_cv(
@@ -157,10 +162,10 @@ def environmental_blocked_cv(
     if use_sklearn:
         try:
             from sklearn.cluster import KMeans
-        except ImportError as exc:  # pragma: no cover - depends on optional extra
+        except ImportError as exc:  # pragma: no cover - depends on optional dependency
             raise ImportError(
                 "environmental_blocked_cv requires scikit-learn; install cartoboost with "
-                "the sklearn extra or pass use_sklearn=False"
+                "scikit-learn or pass use_sklearn=False"
             ) from exc
         labels = KMeans(
             n_clusters=int(n_splits),
@@ -438,6 +443,7 @@ def _apply_spatial_buffer(
     train_idx: np.ndarray,
     test_idx: np.ndarray,
     radius: float,
+    backend: str = "cpu",
 ) -> tuple[np.ndarray, np.ndarray]:
     train_idx = np.asarray(train_idx, dtype=int)
     test_idx = np.asarray(test_idx, dtype=int)
@@ -446,7 +452,7 @@ def _apply_spatial_buffer(
     if radius == 0.0:
         return train_idx, test_idx
     all_indices = np.arange(coords.shape[0])
-    distances = _min_distances_to_test(coords, test_idx)
+    distances = _min_distances_to_test(coords, test_idx, backend)
     safe_train = all_indices[distances > radius]
     safe_train = np.intersect1d(safe_train, train_idx, assume_unique=True)
     if safe_train.size == 0:
@@ -454,8 +460,21 @@ def _apply_spatial_buffer(
     return safe_train, test_idx
 
 
-def _min_distances_to_test(coords: np.ndarray, test_idx: np.ndarray) -> np.ndarray:
+def _min_distances_to_test(
+    coords: np.ndarray,
+    test_idx: np.ndarray,
+    backend: str = "cpu",
+) -> np.ndarray:
     test_coords = coords[np.asarray(test_idx, dtype=int)]
+    distance_work = int(coords.shape[0] * test_coords.shape[0] * coords.shape[1])
+    dispatch = workload_decision(backend, "pairwise_distance", distance_work, 16_384)
+    if dispatch["executed"] != "cpu":
+        squared = pairwise_squared_distances(
+            coords,
+            test_coords,
+            backend=str(dispatch["executed"]),
+        ).astype(float)
+        return np.sqrt(np.maximum(np.min(squared, axis=1), 0.0))
     deltas = coords[:, None, :] - test_coords[None, :, :]
     distances = np.sqrt(np.sum(deltas * deltas, axis=2))
     return np.min(distances, axis=1)

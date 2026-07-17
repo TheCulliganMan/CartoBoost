@@ -1,3 +1,4 @@
+import builtins
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -352,11 +353,22 @@ def test_plot_report_writes_named_diagnostic_bundle(tmp_path: Path) -> None:
         assert Path(path).stat().st_size > 0
 
 
-def test_map_visualization_helpers_have_clear_optional_extra_errors(tmp_path: Path) -> None:
-    with pytest.raises(ImportError, match=r"cartoboost\[visualization\]"):
+def test_map_visualization_helpers_have_clear_optional_dependency_errors(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    real_import = builtins.__import__
+
+    def import_without_map_dependencies(name, *args, **kwargs):
+        if name in {"geopandas", "shapely.geometry", "pydeck"}:
+            raise ImportError(name)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", import_without_map_dependencies)
+
+    with pytest.raises(ImportError, match=r"geopandas shapely"):
         plot_spatial_points([{"latitude": 40.7, "longitude": -73.9, "value": 12.0}])
 
-    with pytest.raises(ImportError, match=r"cartoboost\[visualization\]"):
+    with pytest.raises(ImportError, match=r"geopandas shapely"):
         plot_route_segments(
             [
                 {
@@ -368,7 +380,7 @@ def test_map_visualization_helpers_have_clear_optional_extra_errors(tmp_path: Pa
             ]
         )
 
-    with pytest.raises(ImportError, match=r"cartoboost\[visualization\]"):
+    with pytest.raises(ImportError, match=r"pydeck"):
         write_pydeck_point_map(
             [{"latitude": 40.7, "longitude": -73.9}],
             tmp_path / "points.html",

@@ -5,7 +5,7 @@ from typing import Any
 
 import numpy as np
 
-from ..config import FallbackMode
+from ..config import Backend, FallbackMode
 from ..regressor import CartoBoostRegressor, _rust_feature_schema_payload
 from .features import NeuralEmbeddingFeatures
 
@@ -29,6 +29,7 @@ class NeuralEmbeddingRegressor:
         drop_id_column: bool = True,
         id_column: int | str | None = None,
         support_prior_strength: float = 1.0,
+        backend: Backend | str = Backend.CPU,
         base_model_kwargs: dict[str, Any] | None = None,
         final_model_kwargs: dict[str, Any] | None = None,
     ) -> None:
@@ -45,11 +46,13 @@ class NeuralEmbeddingRegressor:
         self.drop_id_column = drop_id_column
         self.id_column = id_column
         self.support_prior_strength = float(support_prior_strength)
+        self.backend = str(backend)
         self.neural_transformer = neural_transformer or NeuralEmbeddingFeatures(
             dim=dim,
             fallback=str(fallback),
             random_state=random_state,
             support_prior_strength=support_prior_strength,
+            backend=self.backend,
         )
         self.neural_transformers: list[NeuralEmbeddingFeatures] = []
         self.base_model_kwargs = dict(base_model_kwargs or {})
@@ -271,6 +274,7 @@ class NeuralEmbeddingRegressor:
             "drop_id_column": self.drop_id_column,
             "id_column": self.id_column,
             "support_prior_strength": self.support_prior_strength,
+            "backend": self.backend,
             "base_model_kwargs": dict(self.base_model_kwargs),
             "final_model_kwargs": dict(self.final_model_kwargs),
         }
@@ -406,6 +410,7 @@ class NeuralEmbeddingRegressor:
             fallback=self.fallback,
             random_state=random_state,
             support_prior_strength=self.support_prior_strength,
+            backend=self.backend,
         )
 
     def _prepare_dense_and_ids(

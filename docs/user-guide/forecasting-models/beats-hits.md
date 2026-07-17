@@ -19,7 +19,7 @@ Use `NBeatsForecaster` first when recent history should be projected directly.
 Use `NHiTSForecaster` when pooled history windows may be useful for smoother or
 longer-horizon structure.
 
-## Public Contract
+## Python Example
 
 ```python
 from cartoboost.forecasting import ForecastFrame, NBeatsForecaster, NHiTSForecaster
@@ -105,3 +105,10 @@ nhits_result = backtester.evaluate(NHiTSForecaster(input_size=48, pooling_size=2
 Report RMSE, MAE, WAPE, horizon metrics, train time, prediction time, and the
 same seasonal naive and `CartoBoostLagForecaster` comparison used for the rest
 of the forecasting family.
+
+## Limitations
+
+- Neural basis models need more history and tuning than local statistical baselines.
+- Small panels can produce unstable rankings across seeds and cutoffs.
+- Spatial or graph structure is used only when supplied through documented inputs.
+- Report compute backend and resource use with timing results.

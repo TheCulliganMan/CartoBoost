@@ -17,7 +17,6 @@ class FoundationAdapterUnavailable(ImportError):
 class _FoundationAdapter:
     adapter_name = "foundation"
     dependency_name: str | None = None
-    package_extra = "foundation"
 
     def __init__(
         self,
@@ -56,7 +55,7 @@ class _FoundationAdapter:
             return None
         return (
             f"{self.adapter_name} requires optional dependency {self.dependency_name!r}; "
-            f"install cartoboost[{self.package_extra}] or provide a backend."
+            f"install {self.dependency_name} or provide a backend."
         )
 
     def predict(self, inputs: Any) -> np.ndarray:

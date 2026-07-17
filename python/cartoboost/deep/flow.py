@@ -7,6 +7,7 @@ from typing import Any
 import numpy as np
 
 from .._artifacts import ArtifactPersistenceMixin
+from ..config import Backend
 from ._native import require_native
 
 
@@ -18,9 +19,11 @@ class ConditionalFlowDistributionHead(ArtifactPersistenceMixin):
         *,
         quantiles: tuple[float, ...] = (0.05, 0.5, 0.95),
         sample_count: int = 64,
+        backend: Backend | str = Backend.CPU,
     ) -> None:
         self.quantiles = tuple(float(q) for q in quantiles)
         self.sample_count = int(sample_count)
+        self.backend = str(backend)
         self.is_fitted_ = False
 
     def fit(
@@ -45,8 +48,10 @@ class ConditionalFlowDistributionHead(ArtifactPersistenceMixin):
             residual_arr.tolist(),
             list(self.quantiles),
             self.sample_count,
+            self.backend,
         )
         self.metadata_ = json.loads(self._artifact_json)["metadata"]
+        self.backend_ = str(self.metadata_["backend_selected"])
         self.hidden_dim_ = int(hidden.shape[1])
         self.is_fitted_ = True
         return self
@@ -102,9 +107,11 @@ class ConditionalFlowDistributionHead(ArtifactPersistenceMixin):
         obj = cls(
             quantiles=tuple(payload["quantiles"]),
             sample_count=int(payload["sample_count"]),
+            backend=str(payload.get("backend", {}).get("selected", "cpu")),
         )
         obj._artifact_json = artifact
         obj.metadata_ = dict(payload["metadata"])
+        obj.backend_ = str(obj.metadata_.get("backend_selected", obj.backend))
         obj.hidden_dim_ = len(payload["location_weights"]) - 1
         obj.is_fitted_ = True
         return obj

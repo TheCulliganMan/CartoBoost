@@ -124,7 +124,7 @@ construction remain deterministic Rust code. Requested accelerators that are
 not available in the installed build fail clearly instead of silently changing
 the run contract.
 
-## Public Contract
+## Python Example
 
 ```python
 from cartoboost.forecasting import ForecastFrame, LaneNeuralPanelForecaster
@@ -208,3 +208,10 @@ uv run --group dev python scripts/forecasting_library_benchmark.py \
 The JSON artifact records the command, split definitions, model settings,
 RMSE/MAE/WAPE metrics, timing, resource usage, and output path for
 rolling-origin, cold-lane, cold-origin, and sparse-tail checks.
+
+## Limitations
+
+- Neural panel models need enough synchronized history and repeated entities to learn stable embeddings.
+- Cold lanes and origins cannot use learned identity effects like repeated entities.
+- Report accelerator availability and seed sensitivity with performance results.
+- Missing or irregular panel rows require explicit preprocessing.

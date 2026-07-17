@@ -1,4 +1,7 @@
-use crate::backend::{backend_dense_layer_f32, BackendSelection};
+use crate::backend::{
+    backend_csr_diffusion_backward_f32, backend_csr_diffusion_f32, backend_dense_layer_f32,
+    backend_supports_operation, select_backend_for, BackendOperation, BackendSelection,
+};
 use crate::error::{NeuralError, Result};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -7,6 +10,8 @@ use std::fs;
 use std::path::Path;
 
 const GRAPH_SAGE_ARTIFACT_TYPE: &str = "cartoboost.neural.graphsage_encoder";
+const GRAPH_SAGE_CSR_DISPATCH_MIN_OPS: usize = 16_384;
+const GRAPH_SAGE_DENSE_DISPATCH_MIN_OPS: usize = 16_384;
 pub const GRAPH_SAGE_ARTIFACT_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -420,6 +425,7 @@ impl GraphSageEncoder {
     pub fn new(config: GraphSageConfig, input_dim: usize) -> Result<Self> {
         validate_input_dim(input_dim)?;
         validate_dimensions(&config.hidden_dims)?;
+        validate_homogeneous_backend(&config.backend)?;
 
         let mut dims = Vec::with_capacity(config.hidden_dims.len() + 1);
         dims.push(input_dim);
@@ -564,6 +570,7 @@ impl GraphSageEncoder {
                     &grad,
                     self.config.learning_rate,
                     self.config.l2_regularization,
+                    &self.config.backend,
                 )?;
             }
         }
@@ -668,6 +675,7 @@ impl HeteroGraphSageEncoder {
         validate_input_dim(input_dim)?;
         validate_relation_count(relation_count)?;
         validate_dimensions(&config.hidden_dims)?;
+        validate_homogeneous_backend(&config.backend)?;
 
         let mut dims = Vec::with_capacity(config.hidden_dims.len() + 1);
         dims.push(input_dim);
@@ -815,6 +823,7 @@ impl HeteroGraphSageEncoder {
                     &grad,
                     self.config.learning_rate,
                     self.config.l2_regularization,
+                    &self.config.backend,
                 )?;
             }
         }
@@ -1234,22 +1243,7 @@ fn forward_homogeneous(
         let current = representations
             .last()
             .expect("layer activation should exist before running forward");
-        let means = neighbors
-            .par_iter()
-            .map(|neighbor_ids| {
-                let mut mean = vec![0.0_f32; layer.in_dim];
-                if neighbor_ids.is_empty() {
-                    return mean;
-                }
-                let inv = 1.0 / (neighbor_ids.len() as f32);
-                for &neighbor in neighbor_ids {
-                    for (slot, value) in mean.iter_mut().zip(current[neighbor].iter()) {
-                        *slot += *value * inv;
-                    }
-                }
-                mean
-            })
-            .collect::<Vec<_>>();
+        let means = homogeneous_neighbor_means(current, neighbors, layer.in_dim, backend)?;
 
         let combined = current
             .iter()
@@ -1264,7 +1258,18 @@ fn forward_homogeneous(
         let mut weights = Vec::with_capacity(layer.in_dim * layer.out_dim * 2);
         weights.extend_from_slice(&layer.self_weight);
         weights.extend_from_slice(&layer.neigh_weight);
-        let preactivations = backend_dense_layer_f32(backend, &combined, &weights, &layer.bias)?;
+        let cpu_backend = graph_dense_cpu_fallback(
+            backend,
+            combined.len(),
+            layer.in_dim.saturating_mul(2),
+            layer.out_dim,
+        )?;
+        let preactivations = backend_dense_layer_f32(
+            cpu_backend.as_ref().unwrap_or(backend),
+            &combined,
+            &weights,
+            &layer.bias,
+        )?;
         let next = preactivations
             .par_iter()
             .map(|row| row.iter().map(|value| value.max(0.0)).collect::<Vec<_>>())
@@ -1283,6 +1288,51 @@ fn forward_homogeneous(
         representations,
         layers: cache_layers,
     })
+}
+
+fn homogeneous_neighbor_means(
+    current: &[Vec<f32>],
+    neighbors: &[Vec<usize>],
+    width: usize,
+    backend: &BackendSelection,
+) -> Result<Vec<Vec<f32>>> {
+    let operations = current.len().saturating_mul(width);
+    if backend.selected != "cpu" && operations >= GRAPH_SAGE_CSR_DISPATCH_MIN_OPS {
+        let mut indptr = Vec::with_capacity(neighbors.len() + 1);
+        let mut indices = Vec::new();
+        let mut weights = Vec::new();
+        indptr.push(0_u32);
+        for neighbor_ids in neighbors {
+            let weight = if neighbor_ids.is_empty() {
+                0.0
+            } else {
+                1.0 / neighbor_ids.len() as f32
+            };
+            indices.extend(neighbor_ids.iter().map(|neighbor| *neighbor as u32));
+            weights.extend(std::iter::repeat_n(weight, neighbor_ids.len()));
+            indptr.push(indices.len() as u32);
+        }
+        let values = current.iter().flatten().copied().collect::<Vec<_>>();
+        let output =
+            backend_csr_diffusion_f32(backend, &indptr, &indices, &weights, width, &values)?;
+        return Ok(output.chunks(width).map(|row| row.to_vec()).collect());
+    }
+    Ok(neighbors
+        .par_iter()
+        .map(|neighbor_ids| {
+            let mut mean = vec![0.0_f32; width];
+            if neighbor_ids.is_empty() {
+                return mean;
+            }
+            let inv = 1.0 / (neighbor_ids.len() as f32);
+            for &neighbor in neighbor_ids {
+                for (slot, value) in mean.iter_mut().zip(current[neighbor].iter()) {
+                    *slot += *value * inv;
+                }
+            }
+            mean
+        })
+        .collect())
 }
 
 fn forward_hetero(
@@ -1315,31 +1365,13 @@ fn forward_hetero(
             .last()
             .expect("layer activation should exist before running forward");
         let relation_count = neighbors.first().map_or(0, |row| row.len());
-        let mut relation_means =
-            vec![vec![vec![0.0_f32; layer.in_dim]; relation_count]; node_features.len()];
-
-        relation_means
-            .par_iter_mut()
-            .zip(neighbors.par_iter())
-            .take(current.len())
-            .for_each(|(relation_slots, node_neighbors)| {
-                for (relation_means_row, neighbor_ids) in relation_slots
-                    .iter_mut()
-                    .zip(node_neighbors.iter().take(relation_count))
-                {
-                    if neighbor_ids.is_empty() {
-                        continue;
-                    }
-                    let inv = 1.0 / (neighbor_ids.len() as f32);
-                    for &neighbor in neighbor_ids {
-                        for (relation_mean, input_value) in
-                            relation_means_row.iter_mut().zip(current[neighbor].iter())
-                        {
-                            *relation_mean += *input_value * inv;
-                        }
-                    }
-                }
-            });
+        let relation_means = heterogeneous_neighbor_means(
+            current,
+            neighbors,
+            relation_count,
+            layer.in_dim,
+            backend,
+        )?;
 
         let combined = current
             .iter()
@@ -1358,7 +1390,18 @@ fn forward_hetero(
         for relation_weight in layer.relation_weights.iter().take(relation_count) {
             weights.extend_from_slice(relation_weight);
         }
-        let preactivations = backend_dense_layer_f32(backend, &combined, &weights, &layer.bias)?;
+        let cpu_backend = graph_dense_cpu_fallback(
+            backend,
+            combined.len(),
+            layer.in_dim.saturating_mul(relation_count + 1),
+            layer.out_dim,
+        )?;
+        let preactivations = backend_dense_layer_f32(
+            cpu_backend.as_ref().unwrap_or(backend),
+            &combined,
+            &weights,
+            &layer.bias,
+        )?;
         let next = preactivations
             .par_iter()
             .map(|row| row.iter().map(|value| value.max(0.0)).collect::<Vec<_>>())
@@ -1379,6 +1422,186 @@ fn forward_hetero(
     })
 }
 
+fn heterogeneous_neighbor_means(
+    current: &[Vec<f32>],
+    neighbors: &[Vec<Vec<usize>>],
+    relation_count: usize,
+    width: usize,
+    backend: &BackendSelection,
+) -> Result<Vec<Vec<Vec<f32>>>> {
+    let operations = current
+        .len()
+        .saturating_mul(relation_count)
+        .saturating_mul(width);
+    if backend.selected != "cpu" && operations >= GRAPH_SAGE_CSR_DISPATCH_MIN_OPS {
+        let row_count = current.len().saturating_mul(relation_count);
+        let mut indptr = Vec::with_capacity(row_count + 1);
+        let mut indices = Vec::new();
+        let mut weights = Vec::new();
+        indptr.push(0_u32);
+        for relation in 0..relation_count {
+            let relation_offset = relation.saturating_mul(current.len());
+            for node_neighbors in neighbors.iter().take(current.len()) {
+                let neighbor_ids = &node_neighbors[relation];
+                let weight = if neighbor_ids.is_empty() {
+                    0.0
+                } else {
+                    1.0 / neighbor_ids.len() as f32
+                };
+                indices.extend(
+                    neighbor_ids
+                        .iter()
+                        .map(|neighbor| (relation_offset + *neighbor) as u32),
+                );
+                weights.extend(std::iter::repeat_n(weight, neighbor_ids.len()));
+                indptr.push(indices.len() as u32);
+            }
+        }
+        let values = (0..relation_count)
+            .flat_map(|_| current.iter().flatten().copied())
+            .collect::<Vec<_>>();
+        let output =
+            backend_csr_diffusion_f32(backend, &indptr, &indices, &weights, width, &values)?;
+        let mut relation_means = vec![vec![vec![0.0_f32; width]; relation_count]; current.len()];
+        for (relation, relation_output) in output
+            .chunks_exact(current.len() * width)
+            .take(relation_count)
+            .enumerate()
+        {
+            for (node, row) in relation_output.chunks_exact(width).enumerate() {
+                relation_means[node][relation].copy_from_slice(row);
+            }
+        }
+        return Ok(relation_means);
+    }
+
+    let mut relation_means = vec![vec![vec![0.0_f32; width]; relation_count]; current.len()];
+    relation_means
+        .par_iter_mut()
+        .zip(neighbors.par_iter())
+        .for_each(|(relation_slots, node_neighbors)| {
+            for (relation_mean, neighbor_ids) in relation_slots
+                .iter_mut()
+                .zip(node_neighbors.iter().take(relation_count))
+            {
+                if neighbor_ids.is_empty() {
+                    continue;
+                }
+                let inv = 1.0 / neighbor_ids.len() as f32;
+                for &neighbor in neighbor_ids {
+                    for (slot, input_value) in relation_mean.iter_mut().zip(&current[neighbor]) {
+                        *slot += *input_value * inv;
+                    }
+                }
+            }
+        });
+    Ok(relation_means)
+}
+
+fn homogeneous_neighbor_mean_backward(
+    current: &[Vec<f32>],
+    neighbors: &[Vec<usize>],
+    width: usize,
+    output_grad: &[Vec<f32>],
+    backend: &BackendSelection,
+) -> Result<Vec<Vec<f32>>> {
+    let mut indptr = Vec::with_capacity(neighbors.len() + 1);
+    let mut indices = Vec::new();
+    let mut weights = Vec::new();
+    indptr.push(0_u32);
+    for neighbor_ids in neighbors {
+        let weight = if neighbor_ids.is_empty() {
+            0.0
+        } else {
+            1.0 / neighbor_ids.len() as f32
+        };
+        indices.extend(neighbor_ids.iter().map(|neighbor| *neighbor as u32));
+        weights.extend(std::iter::repeat_n(weight, neighbor_ids.len()));
+        indptr.push(indices.len() as u32);
+    }
+    let values = current.iter().flatten().copied().collect::<Vec<_>>();
+    let output_grad = output_grad.iter().flatten().copied().collect::<Vec<_>>();
+    let backward = backend_csr_diffusion_backward_f32(
+        backend,
+        &indptr,
+        &indices,
+        &weights,
+        width,
+        &values,
+        &output_grad,
+    )?;
+    Ok(backward
+        .input_grad
+        .chunks_exact(width)
+        .map(|row| row.to_vec())
+        .collect())
+}
+
+fn heterogeneous_neighbor_mean_backward(
+    current: &[Vec<f32>],
+    neighbors: &[Vec<Vec<usize>>],
+    relation_count: usize,
+    width: usize,
+    output_grad: &[Vec<Vec<f32>>],
+    backend: &BackendSelection,
+) -> Result<Vec<Vec<f32>>> {
+    let row_count = current.len().saturating_mul(relation_count);
+    let mut indptr = Vec::with_capacity(row_count + 1);
+    let mut indices = Vec::new();
+    let mut weights = Vec::new();
+    indptr.push(0_u32);
+    for relation in 0..relation_count {
+        let relation_offset = relation.saturating_mul(current.len());
+        for node_neighbors in neighbors.iter().take(current.len()) {
+            let neighbor_ids = &node_neighbors[relation];
+            let weight = if neighbor_ids.is_empty() {
+                0.0
+            } else {
+                1.0 / neighbor_ids.len() as f32
+            };
+            indices.extend(
+                neighbor_ids
+                    .iter()
+                    .map(|neighbor| (relation_offset + *neighbor) as u32),
+            );
+            weights.extend(std::iter::repeat_n(weight, neighbor_ids.len()));
+            indptr.push(indices.len() as u32);
+        }
+    }
+    let values = (0..relation_count)
+        .flat_map(|_| current.iter().flatten().copied())
+        .collect::<Vec<_>>();
+    let output_grad = (0..relation_count)
+        .flat_map(|relation| {
+            output_grad
+                .iter()
+                .flat_map(move |node_grad| node_grad[relation].iter().copied())
+        })
+        .collect::<Vec<_>>();
+    let backward = backend_csr_diffusion_backward_f32(
+        backend,
+        &indptr,
+        &indices,
+        &weights,
+        width,
+        &values,
+        &output_grad,
+    )?;
+    let mut input_grad = vec![vec![0.0_f32; width]; current.len()];
+    for relation in 0..relation_count {
+        let start = relation * current.len() * width;
+        for (node, row) in backward.input_grad[start..start + current.len() * width]
+            .chunks_exact(width)
+            .enumerate()
+        {
+            for (target, value) in input_grad[node].iter_mut().zip(row) {
+                *target += *value;
+            }
+        }
+    }
+    Ok(input_grad)
+}
+
 #[allow(clippy::needless_range_loop)]
 fn apply_homogeneous_backward(
     layers: &mut [GraphSageLayer],
@@ -1387,6 +1610,7 @@ fn apply_homogeneous_backward(
     grad_output: &[Vec<f32>],
     learning_rate: f32,
     l2_regularization: f32,
+    backend: &BackendSelection,
 ) -> Result<()> {
     if cache.layers.is_empty() {
         return Ok(());
@@ -1407,6 +1631,9 @@ fn apply_homogeneous_backward(
         let mut self_grad = vec![0.0_f32; layer.self_weight.len()];
         let mut neigh_grad = vec![0.0_f32; layer.neigh_weight.len()];
         let mut bias_grad = vec![0.0_f32; layer.bias.len()];
+        let use_device_csr = backend.selected != "cpu"
+            && input.len().saturating_mul(in_dim) >= GRAPH_SAGE_CSR_DISPATCH_MIN_OPS;
+        let mut mean_output_grad = use_device_csr.then(|| vec![vec![0.0_f32; in_dim]; input.len()]);
 
         for node in 0..input.len() {
             for out in 0..out_dim {
@@ -1426,9 +1653,12 @@ fn apply_homogeneous_backward(
                     self_grad[idx] += self_value * g;
                     neigh_grad[idx] += neigh_value * g;
                     next_grad[node][index] += layer.self_weight[idx] * g;
+                    if let Some(mean_grad) = mean_output_grad.as_mut() {
+                        mean_grad[node][index] += layer.neigh_weight[idx] * g;
+                    }
                 }
 
-                if !neighbors[node].is_empty() {
+                if !use_device_csr && !neighbors[node].is_empty() {
                     let inv = 1.0 / neighbors[node].len() as f32;
                     for &neighbor in &neighbors[node] {
                         for index in 0..in_dim {
@@ -1436,6 +1666,16 @@ fn apply_homogeneous_backward(
                             next_grad[neighbor][index] += layer.neigh_weight[idx] * grad * inv;
                         }
                     }
+                }
+            }
+        }
+
+        if let Some(mean_grad) = mean_output_grad {
+            let message_grad =
+                homogeneous_neighbor_mean_backward(input, neighbors, in_dim, &mean_grad, backend)?;
+            for (next_row, message_row) in next_grad.iter_mut().zip(message_grad) {
+                for (next, message) in next_row.iter_mut().zip(message_row) {
+                    *next += message;
                 }
             }
         }
@@ -1464,6 +1704,7 @@ fn apply_hetero_backward(
     grad_output: &[Vec<f32>],
     learning_rate: f32,
     l2_regularization: f32,
+    backend: &BackendSelection,
 ) -> Result<()> {
     if cache.layers.is_empty() {
         return Ok(());
@@ -1485,6 +1726,14 @@ fn apply_hetero_backward(
         let mut self_grad = vec![0.0_f32; layer.self_weight.len()];
         let mut relation_grad = vec![vec![0.0_f32; layer.in_dim * out_dim]; relation_count];
         let mut bias_grad = vec![0.0_f32; layer.bias.len()];
+        let use_device_csr = backend.selected != "cpu"
+            && input
+                .len()
+                .saturating_mul(relation_count)
+                .saturating_mul(in_dim)
+                >= GRAPH_SAGE_CSR_DISPATCH_MIN_OPS;
+        let mut relation_output_grad =
+            use_device_csr.then(|| vec![vec![vec![0.0_f32; in_dim]; relation_count]; input.len()]);
 
         for node in 0..input.len() {
             for out in 0..out_dim {
@@ -1514,10 +1763,30 @@ fn apply_hetero_backward(
                         relation_grad[relation][weight_index] +=
                             means[node][relation][index] * grad;
                         let relation_weight = layer.relation_weights[relation][weight_index];
-                        for &neighbor in neighbors_for_relation {
-                            next_grad[neighbor][index] += relation_weight * grad * inv;
+                        if let Some(mean_grad) = relation_output_grad.as_mut() {
+                            mean_grad[node][relation][index] += relation_weight * grad;
+                        } else {
+                            for &neighbor in neighbors_for_relation {
+                                next_grad[neighbor][index] += relation_weight * grad * inv;
+                            }
                         }
                     }
+                }
+            }
+        }
+
+        if let Some(mean_grad) = relation_output_grad {
+            let message_grad = heterogeneous_neighbor_mean_backward(
+                input,
+                neighbors,
+                relation_count,
+                in_dim,
+                &mean_grad,
+                backend,
+            )?;
+            for (next_row, message_row) in next_grad.iter_mut().zip(message_grad) {
+                for (next, message) in next_row.iter_mut().zip(message_row) {
+                    *next += message;
                 }
             }
         }
@@ -1788,6 +2057,51 @@ fn validate_input_dim(input_dim: usize) -> Result<()> {
     Ok(())
 }
 
+fn graph_dense_cpu_fallback(
+    backend: &BackendSelection,
+    row_count: usize,
+    input_width: usize,
+    output_width: usize,
+) -> Result<Option<BackendSelection>> {
+    if backend.selected != "cpu"
+        && row_count
+            .saturating_mul(input_width)
+            .saturating_mul(output_width)
+            < GRAPH_SAGE_DENSE_DISPATCH_MIN_OPS
+    {
+        return Ok(Some(select_backend_for(
+            Some("cpu"),
+            BackendOperation::Dense,
+        )?));
+    }
+    Ok(None)
+}
+
+fn validate_dense_backend(backend: &BackendSelection) -> Result<()> {
+    if backend_supports_operation(&backend.selected, BackendOperation::Dense) {
+        Ok(())
+    } else {
+        Err(NeuralError::InvalidArgument(format!(
+            "backend {:?} does not implement GraphSAGE dense propagation",
+            backend.selected
+        )))
+    }
+}
+
+fn validate_homogeneous_backend(backend: &BackendSelection) -> Result<()> {
+    validate_dense_backend(backend)?;
+    if backend_supports_operation(&backend.selected, BackendOperation::CsrDiffusion)
+        && backend_supports_operation(&backend.selected, BackendOperation::CsrDiffusionBackward)
+    {
+        Ok(())
+    } else {
+        Err(NeuralError::InvalidArgument(format!(
+            "backend {:?} does not implement GraphSAGE CSR aggregation and backward propagation",
+            backend.selected
+        )))
+    }
+}
+
 fn validate_dimensions(hidden_dims: &[usize]) -> Result<()> {
     if hidden_dims.contains(&0) {
         return Err(NeuralError::InvalidArgument(
@@ -1955,7 +2269,224 @@ impl SplitMix64 {
 
 #[cfg(test)]
 mod tests {
-    use super::source_observed_targets;
+    use super::*;
+
+    #[test]
+    fn graphsage_dense_dispatch_avoids_small_device_launches() {
+        for backend_name in crate::available_backends() {
+            let backend = select_backend_for(Some(&backend_name), BackendOperation::Dense).unwrap();
+            assert_eq!(
+                graph_dense_cpu_fallback(&backend, 1, 8, 8)
+                    .unwrap()
+                    .is_some(),
+                backend_name != "cpu"
+            );
+            assert!(
+                graph_dense_cpu_fallback(&backend, 256, 8, 8)
+                    .unwrap()
+                    .is_none(),
+                "{backend_name}"
+            );
+        }
+    }
+
+    #[test]
+    fn graphsage_csr_means_match_cpu_on_available_backends() {
+        let nodes = 1_024;
+        let width = 16;
+        let current = (0..nodes)
+            .map(|node| {
+                (0..width)
+                    .map(|feature| ((node * width + feature) as f32 * 0.007).sin())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let neighbors = (0..nodes)
+            .map(|node| vec![(node + 1) % nodes, (node + 7) % nodes])
+            .collect::<Vec<_>>();
+        let operations = [BackendOperation::Dense, BackendOperation::CsrDiffusion];
+        let cpu = crate::select_backend_for_operations(Some("cpu"), &operations).unwrap();
+        let expected = homogeneous_neighbor_means(&current, &neighbors, width, &cpu).unwrap();
+        for backend_name in crate::available_backends() {
+            if backend_name == "cpu" {
+                continue;
+            }
+            let Ok(backend) =
+                crate::select_backend_for_operations(Some(&backend_name), &operations)
+            else {
+                continue;
+            };
+            let actual = homogeneous_neighbor_means(&current, &neighbors, width, &backend)
+                .unwrap_or_else(|error| panic!("{backend_name} GraphSAGE CSR: {error}"));
+            for (actual_row, expected_row) in actual.iter().zip(&expected) {
+                for (actual, expected) in actual_row.iter().zip(expected_row) {
+                    assert!(
+                        (actual - expected).abs() < 2.0e-4,
+                        "{backend_name} GraphSAGE mean mismatch: {actual} vs {expected}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn hetero_graphsage_csr_means_match_cpu_on_available_backends() {
+        let nodes = 512;
+        let relations = 2;
+        let width = 16;
+        let current = (0..nodes)
+            .map(|node| {
+                (0..width)
+                    .map(|feature| ((node * width + feature) as f32 * 0.011).cos())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let neighbors = (0..nodes)
+            .map(|node| {
+                vec![
+                    vec![(node + 1) % nodes, (node + 5) % nodes],
+                    vec![(node + 11) % nodes],
+                ]
+            })
+            .collect::<Vec<_>>();
+        let operations = [BackendOperation::Dense, BackendOperation::CsrDiffusion];
+        let cpu = crate::select_backend_for_operations(Some("cpu"), &operations).unwrap();
+        let expected =
+            heterogeneous_neighbor_means(&current, &neighbors, relations, width, &cpu).unwrap();
+        for backend_name in crate::available_backends() {
+            if backend_name == "cpu" {
+                continue;
+            }
+            let Ok(backend) =
+                crate::select_backend_for_operations(Some(&backend_name), &operations)
+            else {
+                continue;
+            };
+            let actual =
+                heterogeneous_neighbor_means(&current, &neighbors, relations, width, &backend)
+                    .unwrap_or_else(|error| panic!("{backend_name} hetero GraphSAGE CSR: {error}"));
+            for (actual_node, expected_node) in actual.iter().zip(&expected) {
+                for (actual_relation, expected_relation) in actual_node.iter().zip(expected_node) {
+                    for (actual, expected) in actual_relation.iter().zip(expected_relation) {
+                        assert!(
+                            (actual - expected).abs() < 2.0e-4,
+                            "{backend_name} hetero GraphSAGE mean mismatch: {actual} vs {expected}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn graphsage_csr_backward_matches_cpu_on_available_backends() {
+        let nodes = 512;
+        let relations = 2;
+        let width = 16;
+        let current = (0..nodes)
+            .map(|node| {
+                (0..width)
+                    .map(|feature| ((node * width + feature) as f32 * 0.013).sin())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let homogeneous_neighbors = (0..nodes)
+            .map(|node| vec![(node + 1) % nodes, (node + 9) % nodes])
+            .collect::<Vec<_>>();
+        let hetero_neighbors = (0..nodes)
+            .map(|node| {
+                vec![
+                    vec![(node + 1) % nodes, (node + 9) % nodes],
+                    vec![(node + 17) % nodes],
+                ]
+            })
+            .collect::<Vec<_>>();
+        let homogeneous_grad = (0..nodes)
+            .map(|node| {
+                (0..width)
+                    .map(|feature| ((node + feature) as f32 * 0.017).cos())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let hetero_grad = (0..nodes)
+            .map(|node| {
+                (0..relations)
+                    .map(|relation| {
+                        (0..width)
+                            .map(|feature| {
+                                ((node + relation * width + feature) as f32 * 0.019).sin()
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let operations = [
+            BackendOperation::Dense,
+            BackendOperation::CsrDiffusion,
+            BackendOperation::CsrDiffusionBackward,
+        ];
+        let cpu = crate::select_backend_for_operations(Some("cpu"), &operations).unwrap();
+        let expected_homogeneous = homogeneous_neighbor_mean_backward(
+            &current,
+            &homogeneous_neighbors,
+            width,
+            &homogeneous_grad,
+            &cpu,
+        )
+        .unwrap();
+        let expected_hetero = heterogeneous_neighbor_mean_backward(
+            &current,
+            &hetero_neighbors,
+            relations,
+            width,
+            &hetero_grad,
+            &cpu,
+        )
+        .unwrap();
+        for backend_name in crate::available_backends() {
+            if backend_name == "cpu" {
+                continue;
+            }
+            let Ok(backend) =
+                crate::select_backend_for_operations(Some(&backend_name), &operations)
+            else {
+                continue;
+            };
+            let actual_homogeneous = homogeneous_neighbor_mean_backward(
+                &current,
+                &homogeneous_neighbors,
+                width,
+                &homogeneous_grad,
+                &backend,
+            )
+            .unwrap_or_else(|error| panic!("{backend_name} GraphSAGE CSR backward: {error}"));
+            let actual_hetero = heterogeneous_neighbor_mean_backward(
+                &current,
+                &hetero_neighbors,
+                relations,
+                width,
+                &hetero_grad,
+                &backend,
+            )
+            .unwrap_or_else(|error| {
+                panic!("{backend_name} hetero GraphSAGE CSR backward: {error}")
+            });
+            for (actual_rows, expected_rows) in [
+                (&actual_homogeneous, &expected_homogeneous),
+                (&actual_hetero, &expected_hetero),
+            ] {
+                for (actual_row, expected_row) in actual_rows.iter().zip(expected_rows) {
+                    for (actual, expected) in actual_row.iter().zip(expected_row) {
+                        assert!(
+                            (actual - expected).abs() < 2.0e-4,
+                            "{backend_name} GraphSAGE backward mismatch: {actual} vs {expected}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn observed_targets_capture_edges_without_quadratic_negative_cache() {

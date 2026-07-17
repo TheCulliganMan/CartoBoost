@@ -41,7 +41,7 @@ def _summary_writer_class() -> Any:
     except ImportError as exc:
         raise ImportError(
             "TensorBoard logging requires an optional writer. Install with "
-            "`pip install cartoboost[tensorboard]` or install `tensorboardX`."
+            "Install it with `pip install tensorboardX`."
         ) from exc
 
 

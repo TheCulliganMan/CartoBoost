@@ -292,3 +292,37 @@ def test_rust_backend_quantile_and_monotonic_roundtrip(tmp_path: Path):
     assert loaded.quantile_alpha == pytest.approx(0.8)
     assert loaded.monotonic_constraints == [1]
     assert loaded.predict([[0.0], [3.0]]) == pytest.approx(predictions)
+
+
+def test_graph_smoothed_boosting_roundtrip(tmp_path: Path):
+    model = CartoBoostRegressor(
+        n_estimators=2,
+        learning_rate=0.5,
+        max_depth=1,
+        min_samples_leaf=1,
+        graph_indptr=[0, 1, 2, 3, 4],
+        graph_indices=[1, 0, 3, 2],
+        graph_weights=[1.0, 1.0, 1.0, 1.0],
+        graph_smoothing=0.75,
+        graph_smoothing_iterations=3,
+        backend="cpu",
+    ).fit([[0.0], [1.0], [2.0], [3.0]], [0.0, 0.0, 10.0, 10.0])
+
+    predictions = model.predict([[0.0], [1.0], [2.0], [3.0]])
+    path = tmp_path / "graph-smoothed.json"
+    model.save(path)
+    loaded = CartoBoostRegressor.load(path)
+
+    assert loaded.graph_indptr == [0, 1, 2, 3, 4]
+    assert loaded.graph_indices == [1, 0, 3, 2]
+    assert loaded.graph_weights == pytest.approx([1.0, 1.0, 1.0, 1.0])
+    assert loaded.graph_smoothing == pytest.approx(0.75)
+    assert loaded.graph_smoothing_iterations == 3
+    assert model.selected_backend_ == "cpu"
+    assert loaded.selected_backend_ == "cpu"
+    assert loaded.predict([[0.0], [1.0], [2.0], [3.0]]) == pytest.approx(predictions)
+
+
+def test_graph_smoothing_requires_complete_csr():
+    with pytest.raises(ValueError, match="must be provided together"):
+        CartoBoostRegressor(graph_indptr=[0, 0]).fit([[0.0]], [0.0])

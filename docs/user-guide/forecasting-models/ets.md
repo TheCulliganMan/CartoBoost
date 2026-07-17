@@ -57,7 +57,7 @@ from the model, such as holidays, weather, airport operations, or event
 schedules. If residuals cluster by hour, zone, or route, compare against
 CartoBoost lag/calendar features or a spatial model where appropriate.
 
-## Example
+## Python Example
 
 ```python
 from cartoboost.forecasting import ETSForecaster
@@ -263,9 +263,16 @@ Prefer the simplest setting selected by validation. If ETS and seasonal naive
 are close, keep the seasonal naive baseline in reporting; it is a useful guard
 against overclaiming smoothing behavior on strongly repeating series.
 
-## Validation Notes
+## Validation
 
 Compare ETS against seasonal naive at the same season length. For hourly taxi
 demand, try daily (`24`) and weekly (`168`) season lengths when the data window
 is long enough for stable validation. Record RMSE, MAE, the train/test split,
 the horizon, and the smoothing parameters used for any benchmark claim.
+
+## Limitations
+
+- ETS is local and does not share information across zones or lanes.
+- One seasonal specification may miss simultaneous daily and weekly cycles.
+- Structural breaks can dominate smoothed level and trend estimates.
+- Covariates and spatial relationships require another model or residual layer.

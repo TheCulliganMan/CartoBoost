@@ -10,7 +10,7 @@ from typing import Any
 
 import numpy as np
 
-try:  # pragma: no cover - exercised when the optional sklearn extra is installed.
+try:  # pragma: no cover - exercised when the sklearn dependency is installed.
     from sklearn.base import BaseEstimator, RegressorMixin
 except ImportError:  # pragma: no cover - lightweight fallback for core installs.
 
@@ -37,6 +37,7 @@ from ._native import (
     categorical_transform as _native_categorical_transform,
 )
 from .config import (
+    Backend,
     ExplanationAlgorithm,
     ExplanationDecomposition,
     FuzzyKernel,
@@ -84,8 +85,14 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
         random_state: int | None = None,
         n_threads: int | None = None,
         monotonic_constraints: list[int] | None = None,
+        graph_indptr: list[int] | None = None,
+        graph_indices: list[int] | None = None,
+        graph_weights: list[float] | None = None,
+        graph_smoothing: float = 0.0,
+        graph_smoothing_iterations: int = 4,
         tensorboard_log_dir: str | Path | None = None,
         tensorboard_run_name: str | None = None,
+        backend: Backend | str = Backend.CPU,
     ) -> None:
         self.n_estimators = n_estimators
         self.learning_rate = learning_rate
@@ -108,8 +115,14 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
         self.random_state = random_state
         self.n_threads = n_threads
         self.monotonic_constraints = monotonic_constraints
+        self.graph_indptr = graph_indptr
+        self.graph_indices = graph_indices
+        self.graph_weights = graph_weights
+        self.graph_smoothing = graph_smoothing
+        self.graph_smoothing_iterations = graph_smoothing_iterations
         self.tensorboard_log_dir = tensorboard_log_dir
         self.tensorboard_run_name = tensorboard_run_name
+        self.backend = str(backend)
         self._model: Any | None = None
         self._backend_used: str | None = None
 
@@ -136,8 +149,14 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
             "random_state": self.random_state,
             "n_threads": self.n_threads,
             "monotonic_constraints": self.monotonic_constraints,
+            "graph_indptr": self.graph_indptr,
+            "graph_indices": self.graph_indices,
+            "graph_weights": self.graph_weights,
+            "graph_smoothing": self.graph_smoothing,
+            "graph_smoothing_iterations": self.graph_smoothing_iterations,
             "tensorboard_log_dir": self.tensorboard_log_dir,
             "tensorboard_run_name": self.tensorboard_run_name,
+            "backend": self.backend,
         }
 
     def set_params(self, **params: Any) -> CartoBoostRegressor:
@@ -246,6 +265,20 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
                 if self.monotonic_constraints is None
                 else [int(value) for value in self.monotonic_constraints]
             ),
+            graph_indptr=(
+                None if self.graph_indptr is None else [int(value) for value in self.graph_indptr]
+            ),
+            graph_indices=(
+                None if self.graph_indices is None else [int(value) for value in self.graph_indices]
+            ),
+            graph_weights=(
+                None
+                if self.graph_weights is None
+                else [float(value) for value in self.graph_weights]
+            ),
+            graph_smoothing=float(self.graph_smoothing),
+            graph_smoothing_iterations=int(self.graph_smoothing_iterations),
+            backend=self.backend,
         )
         _fit_native(
             model,
@@ -264,6 +297,7 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
         )
         self.metadata_ = _json_attr(model, "metadata_json")
         self.training_config_ = _json_attr(model, "training_config_json")
+        self.selected_backend_ = str(getattr(model, "selected_backend", self.backend))
         self.training_history_ = _json_attr(model, "training_history_json") or []
         write_training_history(
             model,
@@ -655,6 +689,12 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
                 getattr(native_model, "constant_l2_regularization", 0.0)
             ),
             monotonic_constraints=list(getattr(native_model, "monotonic_constraints", [])) or None,
+            graph_indptr=getattr(native_model, "graph_indptr", None),
+            graph_indices=getattr(native_model, "graph_indices", None),
+            graph_weights=getattr(native_model, "graph_weights", None),
+            graph_smoothing=float(getattr(native_model, "graph_smoothing", 0.0)),
+            graph_smoothing_iterations=int(getattr(native_model, "graph_smoothing_iterations", 4)),
+            backend=str(getattr(native_model, "backend", "cpu")),
         )
         estimator._model = native_model
         estimator._backend_used = "rust"
@@ -666,6 +706,9 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
         estimator.n_sparse_sets_in_ = len(estimator.sparse_set_names_)
         estimator.metadata_ = _json_attr(native_model, "metadata_json")
         estimator.training_config_ = _json_attr(native_model, "training_config_json")
+        estimator.selected_backend_ = str(
+            getattr(native_model, "selected_backend", estimator.backend)
+        )
         estimator.training_history_ = _json_attr(native_model, "training_history_json") or []
         estimator.requires_sparse_sets_ = bool(getattr(native_model, "requires_sparse_sets", False))
         estimator.is_fitted_ = True
@@ -680,6 +723,18 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
         raise NotImplementedError("native model does not support save_weights")
 
     def _validate_params(self) -> None:
+        graph_parts = (self.graph_indptr, self.graph_indices, self.graph_weights)
+        if any(part is not None for part in graph_parts) and not all(
+            part is not None for part in graph_parts
+        ):
+            raise ValueError(
+                "graph_indptr, graph_indices, and graph_weights must be provided together"
+            )
+        graph_smoothing = float(self.graph_smoothing)
+        if not math.isfinite(graph_smoothing) or graph_smoothing < 0.0:
+            raise ValueError("graph_smoothing must be finite and non-negative")
+        if self.graph_indptr is not None and int(self.graph_smoothing_iterations) <= 0:
+            raise ValueError("graph_smoothing_iterations must be positive when a graph is provided")
         if int(self.n_estimators) <= 0:
             raise ValueError("n_estimators must be positive")
         learning_rate = float(self.learning_rate)
@@ -1656,7 +1711,7 @@ def _save_weights_onnx(artifact: dict[str, Any], path: Path) -> None:
     try:
         import onnx
         from onnx import TensorProto, helper
-    except ImportError as exc:  # pragma: no cover - depends on optional extra
+    except ImportError as exc:  # pragma: no cover - depends on optional dependency
         raise ImportError("ONNX export requires installing the optional 'onnx' package") from exc
 
     model_payload = _onnx_model_payload(artifact)

@@ -1,19 +1,23 @@
 # Python API Reference
 
-> CartoBoost 0.3 keeps the root package intentionally small: the stable
-> estimators are `CartoBoostRegressor`, `CartoBoostClassifier`,
-> `CartoBoostRanker`, and `BoosterConfig`. Forecasting and validation use their
-> named stable modules; graph, geostatistical, causal, neural, probabilistic,
-> plotting, and deep surfaces are supported APIs under `cartoboost.supported`.
-> See [Migrating to 0.3](../migration-v0.3.md) before updating imports.
+Use this page to find CartoBoost classes, methods, input shapes, return values,
+and import paths. If you are choosing a model or learning the workflow, begin
+with [Getting Started](../getting-started.md) or
+[Choose A Model](../user-guide/model-types.md).
+
+The most common estimators—`CartoBoostRegressor`, `CartoBoostClassifier`, and
+`CartoBoostRanker`—are imported from `cartoboost`. Forecasting, validation,
+graph, neural, geostatistical, causal, probabilistic, plotting, and deep tools
+live in their named modules. See [Migrating to 0.3](../migration-v0.3.md) when
+updating older imports.
 
 This page lists the public Python entry points used to fit, evaluate, explain,
 and save CartoBoost regression, classification, ranking, forecasting,
 CartoBoost graph, and CartoBoost neural models.
 
-The API is organized around scientific model choice: fit the same train split
-as the baselines, predict the same validation rows, compute the same metrics,
-and keep artifacts that make the comparison reproducible.
+Examples assume that data preparation and train/validation splitting are
+already complete. Fit competing models on the same training rows and evaluate
+them on the same validation rows.
 
 ## Model-Choice Map
 
@@ -79,10 +83,10 @@ CartoBoostRegressor(
 | `set_params(**params)` | `self` | Validates known parameter names. |
 
 `X`, `y`, `sample_weight`, and sparse-set tables may be NumPy arrays or
-dataframe-style objects. Install `cartoboost[duckdb]` to pass DuckDB relations
-directly, or `cartoboost[polars]` for Polars inputs.
+dataframe-style objects. Install `duckdb` to pass DuckDB relations directly,
+or `polars` for Polars inputs.
 Set `tensorboard_log_dir` to write native per-iteration training scalars to
-TensorBoard event files; install `cartoboost[tensorboard]` for the optional
+TensorBoard event files; install `tensorboardX` for the optional
 writer dependency.
 
 Numeric model inputs must be finite. CartoBoost does not impute `NaN`, `None`,
@@ -169,7 +173,7 @@ SpatialPlaceboTester(intervention_time="2026-03-08", seed=13)
 | `SyntheticDIDEstimator.estimate_effect()` | `float` | Returns the average treatment effect estimate. |
 | `SyntheticDIDEstimator.placebo_test(n=100)` | `list[float]` | Runs deterministic pseudo-treated placebo assignments. |
 | `SyntheticDIDEstimator.summary()` | `dict` | Includes effect, weights, placebos, warnings, and assumptions. |
-| `SyntheticDIDEstimator.plot(kind="placebo")` | matplotlib axes | Python-only helper; requires `cartoboost[visualization]`. |
+| `SyntheticDIDEstimator.plot(kind="placebo")` | matplotlib axes | Python-only helper; requires `matplotlib`. |
 | `GeoExperimentDesigner.fit(panel).summary(candidate_count, placebo_n)` | `dict` | Chooses balanced candidate test geos and estimates detectable lift. |
 | `SpatialPlaceboTester.fit(panel).summary()` | `dict` | Reports neighbor contamination, distances, and spatial exposure. |
 | `InvariantRiskEncoder.fit_report(features, outcomes, regions, heldout_region=...)` | `dict` | Native-backed domain-shift representation diagnostic with supervised, domain-adversarial, invariant-risk, treatment-balance, and smoothness losses. It supplements, but does not replace, `SyntheticDIDEstimator` and `GeoExperimentDesigner`. |
@@ -195,7 +199,7 @@ build_s2_route_sparse_sets(valhalla_routes, name="route_s2", level=12)
 encode_s2_route_cells(route, level=12)
 ```
 
-H3 helpers require `cartoboost[h3]`; S2 helpers require `cartoboost[s2]`.
+H3 helpers require `h3`; S2 helpers require `s2sphere`.
 Route encoders accept decoded route coordinate sequences, OSRM GeoJSON-style
 route mappings, or Valhalla-style decoded shape mappings. Encoded polyline
 strings raise `ValueError`; request decoded geometry from the routing engine
@@ -438,7 +442,7 @@ Forecasters:
 changepoint controls including `n_changepoints`, `changepoint_prior_scale`,
 and explicit `changepoints` date lists, yearly/weekly/daily Fourier orders,
 custom conditional seasonalities, event windows, `holidays`
-tables, optional `add_country_holidays()` calendars via `cartoboost[holidays]`,
+tables, optional `add_country_holidays()` calendars via `holidays`,
 additive or multiplicative regressor modes,
 dynamic cap/floor regressors, prediction interval levels, quantile levels,
 trend/coefficient uncertainty controls, `trend_adjustments`,
@@ -506,7 +510,7 @@ Delay-aware graph transformer:
 
 | Entry point | Notes |
 | --- | --- |
-| `cartoboost.deep.DelayAwareGraphTransformer` / `PropagationDelayGraphForecaster` | Directed graph propagation forecaster with explicit per-edge delay priors, edge-delay sensitivity, save/load parity, and a future CUDA/ROCm/MLX backend contract that hard-fails until native kernels exist. |
+| `cartoboost.deep.DelayAwareGraphTransformer` / `PropagationDelayGraphForecaster` | Directed graph propagation forecaster with explicit per-edge delay priors, edge-delay sensitivity, save/load parity, and CPU/CUDA/ROCm/Metal/DirectML/WebGPU backend selection through the native accelerator contract. |
 | `cartoboost.deep.DynamicAdjacencyTransformer` | Alias for the delay-aware graph transformer surface. |
 | `cartoboost.deep.SpatioTemporalGraphForecaster(backbone="delay_aware_graph_transformer")` | Routes the generic graph sequence facade to the delay-aware graph implementation. |
 
@@ -562,8 +566,8 @@ Python-owned JSON model artifacts include `artifact_type` and
 verify nested version markers, save/load prediction drift, and explicit failure
 for unsupported artifact versions.
 
-`ForecastRegistry.defaults()` is an internal supported/demo registry. The stable
-Python forecasting surface is intentionally limited to `NaiveForecaster`,
+`ForecastRegistry.defaults()` lists additional forecasting implementations used
+by examples and browser workflows. The stable Python forecasting API includes `NaiveForecaster`,
 `SeasonalNaiveForecaster`, `CartoBoostLagForecaster`, `AutoForecaster`,
 `ForecastFrame`, and `ForecastResult`; other registry entries are supported
 implementations and are not part of the v0.3 source contract.
@@ -598,7 +602,7 @@ Plotting:
 | `cartoboost.plotting.write_plot_report` | Writes a named bundle of provided diagnostics and returns output paths. |
 
 See [Plotting](../plotting.md) for full examples. Install
-`cartoboost[visualization]` when visualization dependencies are not already
+`geopandas`, `matplotlib`, `pydeck`, and `shapely` when they are not already
 available.
 
 Sequence primitives:

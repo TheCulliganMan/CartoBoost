@@ -1,19 +1,18 @@
-# CartoBoost Graph Models And Features
+# Graph Models And Features
 
-> Supported API: graph models and feature encoders are imported from
-> `cartoboost.graph` in CartoBoost 0.3.
+Use graph models when connections between locations or entities carry signal
+that ordinary row features miss. For taxi data, a directed pickup-to-dropoff
+network can represent route frequency, travel patterns, or relationships
+between zones. Import these tools from `cartoboost.graph`.
 
-This is the contract page for graph-related functionality. Use the
-[graph model guides](user-guide/graph-models/index.md) for examples and model
-selection. Use this page when you need the formal encoder, artifact, and
-directionality details.
+Start with the [graph model guides](user-guide/graph-models/index.md) to choose
+a model. Return here for input shapes, directionality, generated features, and
+saved-model behavior.
 
 Graph support has two entry points:
 
-- CartoBoost graph models that fit, predict, score, save, and load as the
-  model artifact;
-- CartoBoost graph feature generators that emit dense graph-derived columns
-  for another estimator.
+- **Standalone graph models** fit, predict, score, save, and load directly.
+- **Graph feature generators** produce dense columns for another estimator.
 
 Keep direction explicit. Source-target facts are usually not interchangeable
 with the reverse edge.

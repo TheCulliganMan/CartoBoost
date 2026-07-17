@@ -1,51 +1,16 @@
-# CartoBoost Deep Model Guides
+# Deep Models
 
-> CartoBoost 0.3 does not ship the former NumPy representation or selective-SSM
-> modules. They have no import or compatibility namespace; any future return
-> requires a native binding and real-data evidence.
+Use `cartoboost.deep` when one row is not enough to describe the prediction
+problem. These models handle ordered source-target pairs, candidate response
+curves, event probabilities, residual correction, graph sequences, scenario
+generation, and constrained decisions.
 
-Use `cartoboost.deep` when the modeling unit is more structured than one
-ordinary row: ordered pairs, candidate response curves, event probabilities,
-baseline residual correction, graph sequences, or constrained candidate
-selection.
+Start with the table below. Open the dedicated guide for a runnable Python and
+browser example, required inputs, validation design, and limitations. Most of
+these models are specialized or experimental, so compare them against a simpler
+boosting, forecasting, graph, or statistical baseline on the same holdout.
 
-`RegimeMoEForecaster` combines six named regime experts with router entropy,
-expert usage, expert predictions, combined predictions, and single-expert
-comparison metrics. `ConditionalFlowDistributionHead` fits a
-native residual distribution head over model hidden state plus optional horizon,
-entity/pair, and graph context features; it emits deterministic joint scenario
-samples, log likelihoods, marginal quantiles, tail-risk summaries, and
-calibration metrics when actual residuals are supplied. Artifacts record the
-model class,
-architecture, artifact version, schema hash, ID maps, hash-bucket settings,
-embedding dimension, seed, feature roles, training cutoff, training metrics,
-save/load parity status, and backend metadata.
-`GeoTemporalDiffusionScenarioModel` is an experimental scenario generator that
-diffuses deterministic residual shocks over a graph around an existing point
-forecast panel. It reports scenario mean, variance, spatial correlation, and
-comparison to the point forecast, and its metadata explicitly excludes it from
-stable model selection and primary benchmark evidence.
-`GraphNeuralOperator` is an advanced experimental field-to-field layer for
-spatial panels. It consumes field values, coordinates, optional graph edges,
-and optional exogenous fields, then returns future, residual, and uncertainty
-fields. `FourierGeoOperator` and `SpatioTemporalOperator` are aliases for the
-same native-backed surface in this first cut.
-`ChoiceSetTransformer` scores candidates jointly within each decision set. It
-emits utility, softmax choice probability, optional nested probability,
-counterfactual best candidates, and calibration metrics when chosen labels are
-available. `UtilityNet`, `NestedChoiceHead`, and
-`CounterfactualCandidateScorer` are aliases for that native-backed surface.
-Foundation adapters such as `ChronosAdapter`, `TimesFMAdapter`,
-`MoiraiAdapter`, `TimeGPTAdapter`, and `TabPFNAdapter` are optional wrappers for
-external models. They can cache outputs with external version and model-hash
-metadata, but they are never core dependencies and are only eligible for
-automatic model-selection orchestration; choose a registered model explicitly.
-
-These guides are for Python developers and data scientists choosing a model
-surface. Start with the page that matches the unit being modeled, then validate
-against a simpler baseline under the same split.
-
-## Evidence Status
+## Maturity And Evidence
 
 | Model surface | Architecture | Evidence label |
 | --- | --- | --- |
@@ -54,16 +19,12 @@ against a simpler baseline under the same split.
 | `PropagationDelayGraphForecaster` | `delay_aware_graph_transformer` | synthetic claim evidence |
 | `ConditionalFlowDistributionHead` | `conditional_residual_sampler` | synthetic claim evidence |
 | `ChoiceSetTransformer` | `choice_set_utility_softmax` | synthetic claim evidence |
-| `ResponseCurveModel`, `EventOutcomeModel`, `ServiceTimeResidualModel`, `ConstrainedDecisionOptimizer` | native utility/residual heads | API contract only |
+| `ResponseCurveModel`, `EventOutcomeModel`, `ServiceTimeResidualModel`, `ConstrainedDecisionOptimizer` | native utility/residual heads | API behavior only |
 | `GeoTemporalDiffusionScenarioModel` | `conditional_residual_diffusion` | experimental only |
 | `GraphNeuralOperator` | `graph_neural_operator` | experimental only |
 
-The generated capability matrix is maintained at
-`docs/reference/capability-matrix.md`, with the machine-readable artifact at
-`docs/assets/capabilities/model_capabilities.json`. Docs CI should run
-`PYTHONPATH=python python scripts/check_capability_status.py` so exported model
-classes cannot ship without architecture, backend, parameter, native-core,
-evidence, and maturity status.
+See the [Model Capabilities](../reference/capability-matrix.md) table for
+backend, parameter, evidence, and maturity details.
 
 ## Choose A Guide
 
@@ -92,14 +53,54 @@ only when the environment has been provisioned for it and the run needs that
 hardware contract.
 
 `backend="webgpu"` is available in native builds that include the WebGPU
-feature and expose a compatible adapter. It runs the verified vector-add,
-affine-head, dense-layer, and pair-scoring kernels; an explicit request fails
-when the feature or adapter is unavailable.
+feature and expose a compatible adapter. It implements the complete shared
+operation contract: dense and affine work, pair scoring and distance, sparse
+CSR forward/backward kernels, row softmax, AdamW, layer normalization, scalar
+graphs, and tanh-MLP training. An explicit request fails when the feature or
+adapter is unavailable.
 
 The browser bundle exposes the same adapter through the asynchronous
-`webgpuDispatchReport` export. It resolves only after a real WebGPU compute
-pass and readback complete, so browser applications can verify availability
-without blocking the JavaScript event loop.
+`webgpuCapabilities` and operation-specific asynchronous exports. Capability
+probing resolves only after a real WebGPU compute pass and readback complete,
+so browser applications can verify availability without blocking the
+JavaScript event loop. The browser exports cover all operations in the native
+contract and return updated optimizer/training state where mutation cannot be
+represented directly across the JavaScript boundary.
+
+Browser N-BEATS and N-HiTS can use `runNeuralForecastWebgpu`. The asynchronous
+route performs window training with the WebGPU tanh-MLP kernel and dispatches
+every recursive hidden layer through WebGPU dense inference; its response uses
+the same forecast and backend-metadata shape as `runForecast`.
+
+Browser Node2Vec pipelines can use `runNode2VecModelWebgpu`. The asynchronous
+route batches skip-gram pairs into the shared scalar-graph training kernel,
+including reverse-mode gradients and optimizer updates on WebGPU. Random-walk
+generation and the branch-heavy CartoBoost tree stage remain on CPU, and the
+response metadata reports both stages instead of claiming the entire pipeline
+ran on the GPU.
+
+`runGraphDiffusionWebgpu` accepts the standard browser graph-temporal frame,
+normalizes its CSR edge weights, and keeps every configured diffusion and
+horizon step on browser WebGPU. It returns the normal graph forecast response,
+including optional graph-aware metrics and explicit accelerated-operation
+metadata.
+
+Browser nearest-neighbor Gaussian-process prediction accepts a backend in its
+geostatistics options. `runGeostatisticsWebgpu` computes the full transformed
+query-by-observation distance matrix on WebGPU, then performs only the small
+per-neighborhood covariance solves on CPU. Metadata distinguishes the GPU
+distance operation from the retained CPU solve.
+
+`empiricalSemivariogramWebgpu` accelerates both quadratic matrices needed for
+large empirical variograms: transformed coordinate distances and squared value
+differences. Pair filtering and bin reduction remain on CPU because they are
+branch-heavy; the response reports the split explicitly.
+
+Large geo-temporal diffusion scenario ensembles now keep both graph diffusion
+and the scenario-axis mean reduction on the selected accelerator. Small
+ensembles retain the lower-overhead CPU reduction, and
+`scenario_mean_backend` records which path executed. Browser WebGPU uses the
+same thresholded model-level contract asynchronously.
 
 `InvertedTemporalTransformer` models synchronized wide panels with entities as
 tokens. It reports horizon-wise metrics, cross-entity ablation, and metadata
@@ -111,9 +112,10 @@ upstream node can affect a downstream node after an explicit lag. It is also
 available through
 `SpatioTemporalGraphForecaster(backbone="delay_aware_graph_transformer")`.
 Artifacts include edge-delay sensitivity, save/load parity metadata, and a
-backend contract reserving CUDA, ROCm, and MLX accelerator targets. The current
-verified implementation selects CPU and raises clearly if an accelerator is
-requested before native kernels are available.
+shared backend contract supporting CPU, CUDA, ROCm/HIP, Metal, DirectML, and
+WebGPU. Explicit unavailable devices raise clearly; `auto` resolves to a
+compatible available backend during model construction and stores that concrete
+selection with the fitted artifact.
 
 `ConditionalFlowDistributionHead` reports
 `architecture="conditional_residual_sampler"` because the current native math is
@@ -151,9 +153,8 @@ counterfactual best candidates by decision, and Brier/ECE calibration when
 binary `chosen` labels are supplied.
 
 Foundation model adapters are optional comparators and feature generators. Use
-the adapter-specific extras such as `cartoboost[chronos]`,
-`cartoboost[timesfm]`, `cartoboost[moirai]`, `cartoboost[timegpt]`, or
-`cartoboost[tabpfn]`, or provide an explicit backend. Missing dependencies
+the adapter-specific packages such as `chronos-forecasting`, `timesfm`,
+`uni2ts`, `nixtla`, or `tabpfn`, or provide an explicit backend. Missing dependencies
 raise a clear skip reason. Cached outputs include external version metadata,
 model hash, input hash, output shape, and whether the adapter was explicitly
 enabled for orchestration.
@@ -169,6 +170,10 @@ compiled in. On Linux or WSL builds with ROCm support compiled in and a usable
 HIP device present, `backend="rocm"` is advertised for the same verified shared
 kernels. On Windows or Linux builds with the CUDA driver and NVRTC available,
 `backend="cuda"` is advertised for the same verified shared kernels.
+On Windows builds with the `directml` feature and a DirectX 12-capable adapter,
+`backend="directml"` provides the CUDA-parity tensor surface for dense and
+affine scoring, pair scoring, sparse diffusion and softmax forward/backward,
+AdamW, layer normalization, and scalar-graph inference.
 
 ## Input Validation
 

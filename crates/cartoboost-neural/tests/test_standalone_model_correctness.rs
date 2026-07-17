@@ -14,6 +14,7 @@ fn booster_config() -> StandaloneBoosterConfig {
         max_depth: 2,
         min_samples_leaf: 1,
         min_gain: 0.0,
+        backend: "cpu".to_string(),
     }
 }
 
