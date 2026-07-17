@@ -656,6 +656,7 @@ fn covariance_from_distance(h: f64, config: NngpConfig) -> f64 {
     config.sill * corr
 }
 
+#[allow(clippy::needless_range_loop)]
 fn validate_symmetric_distance_matrix(
     distances: &[Vec<f64>],
     expected_len: usize,
@@ -923,6 +924,7 @@ pub fn binned_variogram(
     empirical_semivariogram(coords, values, bin_count, max_distance, anisotropy)
 }
 
+#[allow(clippy::needless_range_loop)]
 pub fn fit_variogram_wls(
     bins: &[EmpiricalVariogramBin],
     kernels: &[CovarianceKernel],
@@ -977,6 +979,7 @@ pub fn fit_variogram_wls(
         })
 }
 
+#[allow(clippy::needless_range_loop)]
 pub fn fit_variogram_wls_with_backend(
     bins: &[EmpiricalVariogramBin],
     kernels: &[CovarianceKernel],

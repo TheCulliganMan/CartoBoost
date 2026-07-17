@@ -51,13 +51,19 @@ class GraphTemporalFrame:
         self._covariates = covariate_rows
         self._owner_mask = None if owner_mask is None else list(map(bool, owner_mask))
         self._target_mask = (
-            None if target_mask is None else np.ascontiguousarray(np.asarray(target_mask, dtype=bool))
+            None
+            if target_mask is None
+            else np.ascontiguousarray(np.asarray(target_mask, dtype=bool))
         )
         self._imputed_mask = (
-            None if imputed_mask is None else np.ascontiguousarray(np.asarray(imputed_mask, dtype=bool))
+            None
+            if imputed_mask is None
+            else np.ascontiguousarray(np.asarray(imputed_mask, dtype=bool))
         )
         self._target_weights = (
-            None if target_weights is None else np.ascontiguousarray(np.asarray(target_weights, dtype=float))
+            None
+            if target_weights is None
+            else np.ascontiguousarray(np.asarray(target_weights, dtype=float))
         )
         self._covariate_roles = None if covariate_roles is None else list(map(str, covariate_roles))
         native_args = (
@@ -78,7 +84,8 @@ class GraphTemporalFrame:
         )
         if not hasattr(native_class, "from_numpy"):
             raise RuntimeError(
-                "CartoBoost native extension is incompatible: GraphTemporalFrame.from_numpy is required"
+                "CartoBoost native extension is incompatible: "
+                "GraphTemporalFrame.from_numpy is required"
             )
         self._native_frame = native_class.from_numpy(*native_args)
 
@@ -873,17 +880,27 @@ class _PaperGraphTransformerForecaster(ArtifactPersistenceMixin):
         if phase not in {"pretrain", "supervised", "local_adaptation"}:
             raise ValueError("phase must be pretrain, supervised, or local_adaptation")
         mean, scale = (None, None) if normalization is None else normalization
-        identity_json = identity if isinstance(identity, str) else json.dumps(identity, sort_keys=True)
+        identity_json = (
+            identity if isinstance(identity, str) else json.dumps(identity, sort_keys=True)
+        )
         proposal = self._native_model.fit_shard_round(
-            _native_frame(frame), str(Path(shared_state_path)), str(Path(checkpoint_path)),
-            identity_json, float(objective_weight), phase, mean, scale,
+            _native_frame(frame),
+            str(Path(shared_state_path)),
+            str(Path(checkpoint_path)),
+            identity_json,
+            float(objective_weight),
+            phase,
+            mean,
+            scale,
         )
         self.is_fitted_ = True
         return str(proposal)
 
     def prepare_shard_warm_start(self, identity: dict[str, Any] | str):
         """Reset cutoff-bound optimizer state after strict policy validation."""
-        identity_json = identity if isinstance(identity, str) else json.dumps(identity, sort_keys=True)
+        identity_json = (
+            identity if isinstance(identity, str) else json.dumps(identity, sort_keys=True)
+        )
         self._native_model.prepare_shard_warm_start(identity_json)
         return self
 
@@ -978,7 +995,10 @@ class _PaperGraphTransformerForecaster(ArtifactPersistenceMixin):
     def memory_telemetry(self) -> dict[str, int]:
         """Return component-level native persistent-memory accounting in bytes."""
         self._check_is_fitted()
-        return {key: int(value) for key, value in json.loads(self._native_model.memory_telemetry_json()).items()}
+        return {
+            key: int(value)
+            for key, value in json.loads(self._native_model.memory_telemetry_json()).items()
+        }
 
     def edge_diagnostics(self) -> list[dict[str, Any]]:
         """Expose per-edge structural, diffusion, learned-attention, and horizon evidence."""

@@ -5812,6 +5812,7 @@ impl TrainableGraphTransformerState {
     /// can evaluate on Rayon workers and reduce its gradients deterministically
     /// before taking one optimizer step, just like the reference mini-batch
     /// trainer.
+    #[allow(clippy::too_many_arguments)]
     fn lsttn_example_loss_and_gradients(
         &self,
         window: &[Vec<f64>],
@@ -10147,6 +10148,7 @@ impl PaperGraphTransformerForecaster {
         serde_json::to_string(&reduced).map_err(Into::into)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn fit_internal(
         &mut self,
         frame: &GraphTemporalFrame,

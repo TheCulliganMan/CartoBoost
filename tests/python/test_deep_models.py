@@ -347,11 +347,9 @@ def test_inverted_transformer_dispatches_peer_attention_to_backend(monkeypatch) 
 
     def accelerated_dense(features, weights, biases, backend=None):
         calls.append(str(backend))
-        return (
-            np.asarray(features, dtype=np.float32)
-            @ np.asarray(weights, dtype=np.float32)
-            + np.asarray(biases, dtype=np.float32)
-        )
+        return np.asarray(features, dtype=np.float32) @ np.asarray(
+            weights, dtype=np.float32
+        ) + np.asarray(biases, dtype=np.float32)
 
     monkeypatch.setattr(temporal_module, "dense_layer", accelerated_dense)
     y = np.asarray(
@@ -912,15 +910,9 @@ def test_diffusion_scenario_generator_reports_experimental_summaries():
 def test_large_diffusion_scenario_mean_runs_on_every_backend():
     nodes = 33
     point_forecast = np.asarray(
-        [
-            [10.0 + time * 0.2 + node * 0.03 for node in range(nodes)]
-            for time in range(8)
-        ]
+        [[10.0 + time * 0.2 + node * 0.03 for node in range(nodes)] for time in range(8)]
     )
-    edges = [
-        {"source": source, "target": source + 1, "weight": 0.8}
-        for source in range(nodes - 1)
-    ]
+    edges = [{"source": source, "target": source + 1, "weight": 0.8} for source in range(nodes - 1)]
     expected = GeoTemporalDiffusionScenarioModel(
         scenario_count=128,
         diffusion_steps=2,

@@ -87,14 +87,14 @@ def test_spatial_lag_predicts_and_summarizes() -> None:
 def test_spatial_lag_public_model_accepts_every_complete_backend() -> None:
     weights, dense_weights, x, innovations = _identified_ring_fixture()
     y = _spatial_lag_target(dense_weights, x, innovations, rho=0.35, beta=1.2)
-    expected = SpatialLagRegressor(backend="cpu").fit(
-        x, y, spatial_weights=weights
-    ).predict(x, spatial_weights=weights)
+    expected = (
+        SpatialLagRegressor(backend="cpu")
+        .fit(x, y, spatial_weights=weights)
+        .predict(x, spatial_weights=weights)
+    )
 
     for backend in available_backends("csr_diffusion"):
-        model = SpatialLagRegressor(backend=backend).fit(
-            x, y, spatial_weights=weights
-        )
+        model = SpatialLagRegressor(backend=backend).fit(x, y, spatial_weights=weights)
         actual = model.predict(x, spatial_weights=weights)
         assert model.backend_ == backend
         np.testing.assert_allclose(actual, expected, rtol=2.0e-4, atol=2.0e-4)

@@ -693,9 +693,7 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
             graph_indices=getattr(native_model, "graph_indices", None),
             graph_weights=getattr(native_model, "graph_weights", None),
             graph_smoothing=float(getattr(native_model, "graph_smoothing", 0.0)),
-            graph_smoothing_iterations=int(
-                getattr(native_model, "graph_smoothing_iterations", 4)
-            ),
+            graph_smoothing_iterations=int(getattr(native_model, "graph_smoothing_iterations", 4)),
             backend=str(getattr(native_model, "backend", "cpu")),
         )
         estimator._model = native_model

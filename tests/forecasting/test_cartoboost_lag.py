@@ -39,7 +39,7 @@ def test_cartoboost_lag_converts_panel_and_delegates_to_native(install_fake_nati
     assert result == {"args": (2,), "kwargs": {}}
     assert native.calls[0] == (
         "init",
-        {"lags": [1], "rolling_windows": [], "calendar_features": False},
+        {"backend": "cpu", "lags": [1], "rolling_windows": [], "calendar_features": False},
     )
     assert native.calls[1][1].rows[:2] == [
         ("pickup_1", "1970-01-01T00:00:00", 10.0),
@@ -68,6 +68,7 @@ def test_cartoboost_lag_converts_supported_feature_configs(install_fake_native):
     assert native.calls[0] == (
         "init",
         {
+            "backend": "cpu",
             "lags": [1, 24],
             "difference_lags": [24],
             "rolling_trend_windows": [3],
@@ -126,6 +127,7 @@ def test_cartoboost_lag_passes_supported_regressor_params(install_fake_native):
     assert native.calls[0] == (
         "init",
         {
+            "backend": "cpu",
             "lags": [1, 7],
             "rolling_windows": [7],
             "difference_lags": [7],
@@ -157,6 +159,7 @@ def test_cartoboost_lag_passes_elapsed_calendar_feature_flag(install_fake_native
     assert native.calls[0] == (
         "init",
         {
+            "backend": "cpu",
             "lags": [1],
             "rolling_windows": [],
             "calendar_features": True,
@@ -193,6 +196,7 @@ def test_cartoboost_lag_dataframe_coercion_passes_static_covariates_to_native(
     assert native.calls[0] == (
         "init",
         {
+            "backend": "cpu",
             "covariate_features": ["distance_miles", "airport_lane"],
             "lags": [1],
             "rolling_windows": [],

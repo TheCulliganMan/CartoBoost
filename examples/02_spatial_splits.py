@@ -42,9 +42,7 @@ def fit_and_report(
         min_samples_leaf=1,
         split_policy="structured",
     )
-    schema = FeatureSchema.from_specs(
-        [SpatialPairSpec("x", "y"), NumericSpec("y")]
-    )
+    schema = FeatureSchema.from_specs([SpatialPairSpec("x", "y"), NumericSpec("y")])
     model.fit(x, y, feature_schema=schema)
     pred = model.predict(x)
     mae = sum(abs(actual - prediction) for actual, prediction in zip(y, pred, strict=True)) / len(y)

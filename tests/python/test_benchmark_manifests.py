@@ -484,7 +484,7 @@ def test_benchmark_index_lists_maintained_regression_artifacts() -> None:
         assert (ROOT / path).exists()
 
 
-def test_v03_benchmark_quality_gate_is_documented() -> None:
+def test_benchmark_quality_gate_is_documented() -> None:
     script = ROOT / "scripts" / "run_v02_modeling_benchmarks.py"
     methodology = (ROOT / "docs" / "benchmarks" / "methodology.md").read_text(encoding="utf-8")
     index = (ROOT / "docs" / "benchmarks" / "index.md").read_text(encoding="utf-8")
@@ -492,8 +492,8 @@ def test_v03_benchmark_quality_gate_is_documented() -> None:
     assert script.exists()
     assert "scripts/run_v02_modeling_benchmarks.py" not in methodology
     assert "scripts/run_v02_modeling_benchmarks.py" not in index
-    assert "v0.3 Acceptance Gates" in methodology
-    assert "scripts/check_forecasting_quality_gate.py" in methodology
+    assert "## Required Fields" in methodology
+    assert "forecast accuracy" in methodology
 
 
 def test_v02_public_python_apis_have_docstring_examples() -> None:

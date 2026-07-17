@@ -247,7 +247,7 @@ def test_spatial_conformal_coordinate_backend_round_trips(tmp_path):
     interval = restored.predict_interval(
         [[4], [5]],
         test_start=4,
-        coordinates=[[0.0, 0.0], [10.0, 10.0]],
+        coordinates=[[0.0, 0.0], [10.0, 10.0]],  # ty: ignore[unknown-argument]
     )
 
     assert restored.get_params()["backend"] == "cpu"
@@ -375,13 +375,16 @@ def test_pit_bins_accepts_every_affine_backend():
     predictions = [[0.0, 1.0, 2.0], [1.0, 2.0, 3.0]]
     expected = pit_bins(actual, quantiles, predictions, bins=5, backend="cpu")
     for backend in available_backends("affine"):
-        assert pit_bins(
-            actual,
-            quantiles,
-            predictions,
-            bins=5,
-            backend=backend,
-        ) == expected
+        assert (
+            pit_bins(
+                actual,
+                quantiles,
+                predictions,
+                bins=5,
+                backend=backend,
+            )
+            == expected
+        )
 
 
 def test_distributional_metric_helpers_delegate_to_native_when_available(monkeypatch):

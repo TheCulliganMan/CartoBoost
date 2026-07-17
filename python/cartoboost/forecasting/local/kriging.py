@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
 import json
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -90,7 +90,7 @@ class KrigingForecaster(NativeForecastWrapper):
 
     @classmethod
     def load(cls, path: str | Path):
-        model = super(KrigingForecaster, cls).load(path)
+        model = super().load(path)
         sidecar = _variogram_policy_sidecar(path)
         if sidecar.is_file():
             model.variogram_fit_ = json.loads(sidecar.read_text(encoding="utf-8"))
@@ -111,7 +111,9 @@ class KrigingForecaster(NativeForecastWrapper):
                 x, y = coordinate_by_id[str(series_id)]
                 selected.append((x, y, float(numeric[-1])))
         if len(selected) < 2:
-            raise ValueError("variogram_fit_policy requires at least two training series with coordinates")
+            raise ValueError(
+                "variogram_fit_policy requires at least two training series with coordinates"
+            )
         from ...geostats import empirical_semivariogram, fit_variogram_wls
 
         coords = np.asarray([(x, y) for x, y, _ in selected], dtype=float)
@@ -120,10 +122,13 @@ class KrigingForecaster(NativeForecastWrapper):
             "kernels": list(policy.get("kernels", [str(self.variogram_model)])),
             "range_candidates": [float(value) for value in policy["range_candidates"]],
             "sill_candidates": [float(value) for value in policy["sill_candidates"]],
-            "nugget_candidates": [float(value) for value in policy.get("nugget_candidates", [self.nugget])],
+            "nugget_candidates": [
+                float(value) for value in policy.get("nugget_candidates", [self.nugget])
+            ],
         }
         bins = empirical_semivariogram(
-            coords, targets,
+            coords,
+            targets,
             bin_count=int(policy.get("bin_count", 12)),
             max_distance=policy.get("max_distance", self.max_distance),
             anisotropy_angle_degrees=self.anisotropy_angle_degrees,

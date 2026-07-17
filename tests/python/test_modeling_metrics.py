@@ -280,11 +280,9 @@ def test_residual_morans_i_dispatches_distance_and_contraction(monkeypatch):
 
     def dense(features, weights, biases, backend=None):
         calls.append(("dense", str(backend)))
-        return (
-            np.asarray(features, dtype=np.float32)
-            @ np.asarray(weights, dtype=np.float32)
-            + np.asarray(biases, dtype=np.float32)
-        )
+        return np.asarray(features, dtype=np.float32) @ np.asarray(
+            weights, dtype=np.float32
+        ) + np.asarray(biases, dtype=np.float32)
 
     monkeypatch.setattr(metrics_module, "workload_decision", decision)
     monkeypatch.setattr(metrics_module, "pairwise_squared_distances", distances)

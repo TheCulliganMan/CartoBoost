@@ -526,7 +526,15 @@ def test_paper_graph_transformers_are_native_backed_and_persistent(tmp_path):
             inventory = model.parameter_inventory()
             assert inventory
             assert all(
-                {"name", "shape", "byte_size", "ownership", "optimizer_ownership", "hash", "node_count_dependent"}
+                {
+                    "name",
+                    "shape",
+                    "byte_size",
+                    "ownership",
+                    "optimizer_ownership",
+                    "hash",
+                    "node_count_dependent",
+                }
                 <= entry.keys()
                 for entry in inventory
             )
@@ -596,9 +604,7 @@ def test_lsttn_owner_scoped_prediction_and_edge_diagnostics_exclude_halos():
     median = model.predict_median(2)
     np.testing.assert_allclose(median, model.predict(2))
     calibration_median = np.stack([median, median])
-    calibration_actual = calibration_median + np.array(
-        [[[0.1, -0.2, 0.3], [0.4, -0.5, 0.6]]] * 2
-    )
+    calibration_actual = calibration_median + np.array([[[0.1, -0.2, 0.3], [0.4, -0.5, 0.6]]] * 2)
     intervals = model.predict_conformal(
         2,
         calibration_actual=calibration_actual,

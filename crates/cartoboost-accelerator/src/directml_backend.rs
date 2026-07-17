@@ -681,60 +681,10 @@ pub(crate) fn csr_diffusion(
     channels: usize,
     values: &[f32],
 ) -> Result<Vec<f32>> {
-    let nodes = indptr.len() - 1;
-    let batch = values.len() / (nodes * channels);
-    // DirectML has no native sparse matrix multiplication operator. Expanding
-    // a genuinely sparse graph to N x N makes both memory and execution scale
-    // quadratically, which is dramatically slower than walking the CSR data.
-    // Keep GEMM for sufficiently dense graphs and use the compact host kernel
-    // otherwise. This is a deterministic shape policy, not runtime calibration.
-    if weights.len().saturating_mul(16) < nodes.saturating_mul(nodes) {
-        let mut output = vec![0.0_f32; values.len()];
-        for batch_index in 0..batch {
-            for row in 0..nodes {
-                for edge in indptr[row] as usize..indptr[row + 1] as usize {
-                    let neighbor = indices[edge] as usize;
-                    let weight = weights[edge];
-                    for channel in 0..channels {
-                        output[(batch_index * nodes + row) * channels + channel] +=
-                            weight * values[(batch_index * nodes + neighbor) * channels + channel];
-                    }
-                }
-            }
-        }
-        return Ok(output);
-    }
-    let output_columns = batch * channels;
-    let mut adjacency = vec![0.0_f32; nodes * nodes];
-    for row in 0..nodes {
-        for edge in indptr[row] as usize..indptr[row + 1] as usize {
-            adjacency[row * nodes + indices[edge] as usize] += weights[edge];
-        }
-    }
-    // DirectML GEMM consumes [nodes,nodes] @ [nodes,batch*channels].
-    // Public tensors are [batch,nodes,channels], so transpose only at the
-    // API boundary and keep the matrix multiplication itself on the device.
-    let mut node_major = vec![0.0_f32; nodes * output_columns];
-    for batch_index in 0..batch {
-        for node in 0..nodes {
-            for channel in 0..channels {
-                node_major[node * output_columns + batch_index * channels + channel] =
-                    values[(batch_index * nodes + node) * channels + channel];
-            }
-        }
-    }
-    let bias = vec![0.0_f32; output_columns];
-    let node_output = directml_gemm(&adjacency, nodes, nodes, &node_major, output_columns, &bias)?;
-    let mut output = vec![0.0_f32; values.len()];
-    for batch_index in 0..batch {
-        for node in 0..nodes {
-            for channel in 0..channels {
-                output[(batch_index * nodes + node) * channels + channel] =
-                    node_output[node * output_columns + batch_index * channels + channel];
-            }
-        }
-    }
-    Ok(output)
+    // DirectML has no sparse operator. The DirectML feature therefore enables
+    // the shared DX12/WebGPU CSR kernel for this operation instead of silently
+    // executing sparse graphs on the host or densifying them to N x N.
+    crate::webgpu_backend::csr_diffusion(indptr, indices, weights, channels, values)
 }
 pub(crate) fn csr_diffusion_backward(
     indptr: &[u32],
@@ -744,84 +694,14 @@ pub(crate) fn csr_diffusion_backward(
     values: &[f32],
     output_grad: &[f32],
 ) -> Result<CsrDiffusionBackward> {
-    let nodes = indptr.len() - 1;
-    let batch = values.len() / (nodes * channels);
-    if weights.len().saturating_mul(16) < nodes.saturating_mul(nodes) {
-        let mut input_grad = vec![0.0_f32; values.len()];
-        let mut edge_grad = vec![0.0_f32; weights.len()];
-        for batch_index in 0..batch {
-            for row in 0..nodes {
-                for edge in indptr[row] as usize..indptr[row + 1] as usize {
-                    let neighbor = indices[edge] as usize;
-                    for channel in 0..channels {
-                        let grad = output_grad[(batch_index * nodes + row) * channels + channel];
-                        input_grad[(batch_index * nodes + neighbor) * channels + channel] +=
-                            weights[edge] * grad;
-                        edge_grad[edge] +=
-                            values[(batch_index * nodes + neighbor) * channels + channel] * grad;
-                    }
-                }
-            }
-        }
-        return Ok(CsrDiffusionBackward {
-            input_grad,
-            edge_grad,
-        });
-    }
-    let columns = batch * channels;
-    let mut adjacency_transpose = vec![0.0_f32; nodes * nodes];
-    for row in 0..nodes {
-        for edge in indptr[row] as usize..indptr[row + 1] as usize {
-            adjacency_transpose[indices[edge] as usize * nodes + row] += weights[edge];
-        }
-    }
-    let mut grad_node_major = vec![0.0_f32; nodes * columns];
-    for batch_index in 0..batch {
-        for node in 0..nodes {
-            for channel in 0..channels {
-                grad_node_major[node * columns + batch_index * channels + channel] =
-                    output_grad[(batch_index * nodes + node) * channels + channel];
-            }
-        }
-    }
-    let node_input_grad = directml_gemm(
-        &adjacency_transpose,
-        nodes,
-        nodes,
-        &grad_node_major,
-        columns,
-        &vec![0.0; columns],
-    )?;
-    let mut input_grad = vec![0.0_f32; values.len()];
-    for batch_index in 0..batch {
-        for node in 0..nodes {
-            for channel in 0..channels {
-                input_grad[(batch_index * nodes + node) * channels + channel] =
-                    node_input_grad[node * columns + batch_index * channels + channel];
-            }
-        }
-    }
-    // Edge gradients are a reduction across batch and channels. DirectML's
-    // GEMM computes the dominant input-gradient tensor; this compact gather
-    // reduction avoids materializing a dense nodes-by-nodes gradient matrix.
-    let mut edge_grad = vec![0.0_f32; weights.len()];
-    for row in 0..nodes {
-        for edge in indptr[row] as usize..indptr[row + 1] as usize {
-            let source = indices[edge] as usize;
-            let mut gradient = 0.0_f32;
-            for batch_index in 0..batch {
-                for channel in 0..channels {
-                    gradient += output_grad[(batch_index * nodes + row) * channels + channel]
-                        * values[(batch_index * nodes + source) * channels + channel];
-                }
-            }
-            edge_grad[edge] = gradient;
-        }
-    }
-    Ok(CsrDiffusionBackward {
-        input_grad,
-        edge_grad,
-    })
+    crate::webgpu_backend::csr_diffusion_backward(
+        indptr,
+        indices,
+        weights,
+        channels,
+        values,
+        output_grad,
+    )
 }
 pub(crate) fn csr_row_softmax(indptr: &[u32], logits: &[f32]) -> Result<Vec<f32>> {
     crate::webgpu_backend::csr_row_softmax(indptr, logits)

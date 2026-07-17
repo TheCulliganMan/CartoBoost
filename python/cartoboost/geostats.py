@@ -31,10 +31,10 @@ from ._artifacts import (
     versioned_artifact_payload,
 )
 from ._native import NearestNeighborGPRegressor as _NativeNearestNeighborGPRegressor
-from ._native import geostats_empirical_semivariogram_value as _native_empirical_semivariogram
 from ._native import (
     geostats_directional_lane_distance_matrix_value as _native_directional_lane_distance_matrix,
 )
+from ._native import geostats_empirical_semivariogram_value as _native_empirical_semivariogram
 from ._native import geostats_fit_variogram_wls_value as _native_fit_variogram_wls
 
 
@@ -147,9 +147,7 @@ class NearestNeighborGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseE
         distance_matrix: Iterable[Iterable[float]] | None = None,
         coverage: float = 0.9,
     ) -> tuple[np.ndarray, np.ndarray]:
-        mean, std = self.predict(
-            X, coords=coords, distance_matrix=distance_matrix, return_std=True
-        )
+        mean, std = self.predict(X, coords=coords, distance_matrix=distance_matrix, return_std=True)
         z = _normal_z_for_coverage(coverage)
         return mean - z * std, mean + z * std
 
@@ -544,14 +542,10 @@ def _as_symmetric_distance_matrix(
     return np.ascontiguousarray(array, dtype=float)
 
 
-def _as_distance_queries(
-    distances: Iterable[Iterable[float]], training_size: int
-) -> np.ndarray:
+def _as_distance_queries(distances: Iterable[Iterable[float]], training_size: int) -> np.ndarray:
     array = np.asarray(distances, dtype=float)
     if array.ndim != 2 or array.shape[1] != training_size:
-        raise ValueError(
-            f"distance_matrix must have shape (n_queries, {training_size})"
-        )
+        raise ValueError(f"distance_matrix must have shape (n_queries, {training_size})")
     if not np.isfinite(array).all() or np.any(array < 0.0):
         raise ValueError("distance_matrix must contain finite non-negative values")
     return np.ascontiguousarray(array, dtype=float)

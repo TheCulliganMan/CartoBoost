@@ -59,9 +59,7 @@ def test_nearest_neighbor_gp_save_load_preserves_predictions(tmp_path):
 
 
 def test_nearest_neighbor_gp_accepts_and_persists_metric_distance_matrix(tmp_path):
-    lanes = np.array(
-        [[0.0, 0.0, 2.0, 0.0], [0.2, 0.0, 2.2, 0.0], [3.0, 0.0, 5.0, 0.0]]
-    )
+    lanes = np.array([[0.0, 0.0, 2.0, 0.0], [0.2, 0.0, 2.2, 0.0], [3.0, 0.0, 5.0, 0.0]])
     distances = directional_lane_distance_matrix(lanes, origin_weight=2.0)
     y = np.array([1.0, 1.3, 4.0])
     model = NearestNeighborGPRegressor(range=2.0, n_neighbors=2).fit(
@@ -84,9 +82,7 @@ def test_directional_lane_metric_preserves_direction_and_supports_crossed_weight
     lanes = np.array([[0.0, 0.0, 2.0, 0.0], [2.0, 0.0, 0.0, 0.0]])
     forward = directional_lane_distance_matrix(lanes)
     crossed = directional_lane_distance_matrix(lanes, mode="crossed")
-    weighted = directional_lane_distance_matrix(
-        lanes, origin_weight=2.0, destination_weight=0.5
-    )
+    weighted = directional_lane_distance_matrix(lanes, origin_weight=2.0, destination_weight=0.5)
     np.testing.assert_allclose(np.diag(forward), 0.0)
     assert forward[0, 1] > 0.0  # A→B is distinct from B→A.
     assert crossed[0, 1] == 0.0
@@ -197,9 +193,9 @@ def test_residual_nngp_constructs_spatial_stage_on_every_backend(backend):
     x = coords[:, :1]
     y = np.array([2.0, 2.4, 1.8, 2.2])
     supplied_gp = NearestNeighborGPRegressor(n_neighbors=3)
-    model = ResidualNNGPRegressor(
-        MeanRegressor(), gp=supplied_gp, backend=backend
-    ).fit(x, y, coords=coords)
+    model = ResidualNNGPRegressor(MeanRegressor(), gp=supplied_gp, backend=backend).fit(
+        x, y, coords=coords
+    )
     assert model.gp_.backend_ == backend
     assert supplied_gp.backend == "cpu"
     assert np.all(np.isfinite(model.predict(x, coords=coords)))

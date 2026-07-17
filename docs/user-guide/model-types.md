@@ -61,7 +61,7 @@ The executable contract for this registry example is checked by
 
 Select the estimator that matches the study design, then use
 `cartoboost.validation` native split-manifest constructors to make the
-leakage policy explicit. The v0.3 distribution does not include an automatic
+leakage policy explicit. Automatic geo model selection is intentionally not shipped. The v0.3 distribution does not include an automatic
 geo selector or a model stack; any future return requires native selection
 behavior and real-family evidence.
 

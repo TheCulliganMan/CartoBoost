@@ -225,10 +225,7 @@ def check_stable_cpu_backend_policy() -> dict[str, Any]:
     unconditional_accelerators = [
         line
         for line in dependency_lines
-        if any(
-            name in line
-            for name in ("cuda", "rocm", "hip", "metal", "directml", "webgpu")
-        )
+        if any(name in line for name in ("cuda", "rocm", "hip", "metal", "directml", "webgpu"))
         and "features" in line
     ]
     optional_backend_features = {

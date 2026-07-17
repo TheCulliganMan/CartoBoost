@@ -225,9 +225,7 @@ class ConformalIntervalRegressor(ArtifactPersistenceMixin):
             payload["backend"] = self.backend
             payload["neighbor_count"] = self.neighbor_count
             payload["calibration_actual"] = (
-                None
-                if self.calibration_actual_ is None
-                else self.calibration_actual_.tolist()
+                None if self.calibration_actual_ is None else self.calibration_actual_.tolist()
             )
             payload["calibration_prediction"] = (
                 None
@@ -337,9 +335,7 @@ class QuantileCartoBoostRegressor(ArtifactPersistenceMixin):
                 native.fit(dense, targets)
                 self._native_model = native
                 self.models_ = {}
-                self.selected_backend_ = str(
-                    getattr(native, "selected_backend", self.backend)
-                )
+                self.selected_backend_ = str(getattr(native, "selected_backend", self.backend))
                 return self
             except (TypeError, ValueError):
                 # Categorical/mixed inputs and options outside the native set's
@@ -414,9 +410,7 @@ class QuantileCartoBoostRegressor(ArtifactPersistenceMixin):
                 "requested": self.backend,
                 "selected": (
                     {
-                        str(q): str(
-                            getattr(self._native_model, "selected_backend", self.backend)
-                        )
+                        str(q): str(getattr(self._native_model, "selected_backend", self.backend))
                         for q in self.quantiles
                     }
                     if self._native_model is not None
@@ -441,9 +435,7 @@ class QuantileCartoBoostRegressor(ArtifactPersistenceMixin):
             quantiles=list(self.quantiles),
             backend=self.backend,
             kwargs=dict(self.kwargs),
-            native_model=(
-                None if self._native_model is None else str(self._native_model.dumps())
-            ),
+            native_model=(None if self._native_model is None else str(self._native_model.dumps())),
             models=(
                 {
                     str(q): dump_model_artifact(model, purpose="quantile artifacts")
@@ -469,9 +461,7 @@ class QuantileCartoBoostRegressor(ArtifactPersistenceMixin):
         if native_payload is not None and native_class is not None:
             obj._native_model = native_class.loads(str(native_payload))
             obj.models_ = {}
-            obj.selected_backend_ = str(
-                getattr(obj._native_model, "selected_backend", obj.backend)
-            )
+            obj.selected_backend_ = str(getattr(obj._native_model, "selected_backend", obj.backend))
         else:
             obj._native_model = None
             obj.models_ = {
@@ -1238,7 +1228,5 @@ def _native_quantile_params(kwargs: dict[str, Any]) -> dict[str, Any] | None:
         policy = getattr(kwargs["split_policy"], "value", str(kwargs["split_policy"]))
         splitters = [str(policy)]
     if splitters is not None:
-        params["splitters"] = [
-            str(getattr(value, "value", value)) for value in splitters
-        ]
+        params["splitters"] = [str(getattr(value, "value", value)) for value in splitters]
     return params

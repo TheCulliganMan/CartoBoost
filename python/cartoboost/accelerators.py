@@ -66,6 +66,7 @@ def dispatch_report(
         raise RuntimeError("vector dispatch reporting requires the native extension")
     return dict(json.loads(function(backend, int(length))))
 
+
 def affine_scores(
     features: ArrayLike,
     means: ArrayLike,
@@ -148,6 +149,7 @@ def workload_decision(
         )
     )
 
+
 def dense_layer(
     features: ArrayLike,
     weights: ArrayLike,
@@ -183,6 +185,7 @@ def dense_layer(
         backend,
     )
     return np.asarray(output, dtype=np.float32)
+
 
 def csr_diffusion(
     indptr: ArrayLike,
@@ -297,6 +300,7 @@ def graph_smooth(
         dtype=np.float64,
     )
 
+
 def csr_diffusion_backward(
     indptr: ArrayLike,
     indices: ArrayLike,
@@ -341,6 +345,7 @@ def csr_diffusion_backward(
         np.asarray(edge_grad, dtype=np.float32),
     )
 
+
 def csr_row_softmax(
     indptr: ArrayLike,
     logits: ArrayLike,
@@ -366,6 +371,7 @@ def csr_row_softmax(
         function(indptr_array.tolist(), logits_array.tolist(), backend),
         dtype=np.float32,
     )
+
 
 def csr_row_softmax_backward(
     indptr: ArrayLike,
@@ -485,9 +491,8 @@ def adamw_step(
         second = 0.999 * second + 0.001 * grads * grads
         corrected_first = first / (1.0 - 0.9**step)
         corrected_second = second / (1.0 - 0.999**step)
-        params = (
-            params * (1.0 - learning_rate * weight_decay)
-            - learning_rate * corrected_first / (np.sqrt(corrected_second) + 1e-8)
+        params = params * (1.0 - learning_rate * weight_decay) - learning_rate * corrected_first / (
+            np.sqrt(corrected_second) + 1e-8
         )
         return params, first, second
     output = function(
@@ -498,6 +503,7 @@ def adamw_step(
         backend,
     )
     return tuple(np.asarray(values, dtype=np.float32) for values in output)  # type: ignore[return-value]
+
 
 def scalar_graph(
     initial_values: ArrayLike,
@@ -592,6 +598,7 @@ def train_tanh_mlp(
         backend,
     )
     return np.asarray(output, dtype=np.float32)
+
 
 def pairwise_squared_distances(
     left: ArrayLike,

@@ -156,9 +156,7 @@ def test_spatial_buffered_cv_backend_matches_cpu(monkeypatch):
 
     monkeypatch.setattr(
         "cartoboost.evaluation.workload_decision",
-        lambda backend, operation, workload_size, minimum_accelerated_size: {
-            "executed": "cuda"
-        },
+        lambda backend, operation, workload_size, minimum_accelerated_size: {"executed": "cuda"},
     )
     monkeypatch.setattr(
         "cartoboost.evaluation.pairwise_squared_distances",

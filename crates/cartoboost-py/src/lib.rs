@@ -11774,6 +11774,7 @@ fn geo_route_feature_vector_value(
 }
 
 #[pyfunction(signature = (origins, destinations, backend="cpu"))]
+#[allow(clippy::type_complexity)]
 fn geo_route_feature_rows_value(
     py: Python<'_>,
     origins: Vec<(f64, f64)>,
@@ -12296,6 +12297,7 @@ fn graph_smoothing_parts(smoothing: Option<&GraphLeafSmoothing>) -> GraphSmoothi
         .unwrap_or((None, None, None, 0.0, 4))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn validate_params(
     n_estimators: usize,
     learning_rate: f64,

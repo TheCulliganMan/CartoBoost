@@ -1463,12 +1463,12 @@ fn heterogeneous_neighbor_means(
         let output =
             backend_csr_diffusion_f32(backend, &indptr, &indices, &weights, width, &values)?;
         let mut relation_means = vec![vec![vec![0.0_f32; width]; relation_count]; current.len()];
-        for relation in 0..relation_count {
-            let relation_start = relation * current.len() * width;
-            for (node, row) in output[relation_start..relation_start + current.len() * width]
-                .chunks_exact(width)
-                .enumerate()
-            {
+        for (relation, relation_output) in output
+            .chunks_exact(current.len() * width)
+            .take(relation_count)
+            .enumerate()
+        {
+            for (node, row) in relation_output.chunks_exact(width).enumerate() {
                 relation_means[node][relation].copy_from_slice(row);
             }
         }

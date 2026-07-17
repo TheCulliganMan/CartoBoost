@@ -25,9 +25,7 @@ class _DirectForecastWrapper(NativeForecastWrapper):
             raise ValueError("fit_horizon must be positive")
         self.fit_horizon = int(fit_horizon)
         self.lags = None if lags is None else list(lags)
-        self.rolling_windows = (
-            None if rolling_windows is None else list(rolling_windows)
-        )
+        self.rolling_windows = None if rolling_windows is None else list(rolling_windows)
         self.n_estimators = n_estimators
         self.learning_rate = learning_rate
         self.max_depth = max_depth

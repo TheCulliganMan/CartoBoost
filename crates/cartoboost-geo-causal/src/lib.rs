@@ -733,7 +733,7 @@ fn affine_weighted_mean(
         &execution_backend,
         &[values.to_vec()],
         &vec![0.0; weights.len()],
-        &weights,
+        weights,
         &[0.0],
     )
     .map_err(|error| GeoCausalError::InvalidInput(error.to_string()))?[0];
