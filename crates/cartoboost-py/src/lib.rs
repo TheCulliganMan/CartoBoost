@@ -6401,6 +6401,39 @@ impl NativeCartoBoostRegressor {
         .map_err(to_py_value_error)
     }
 
+    /// Return exact path-dependent TreeSHAP values followed by the base value.
+    fn predict_feature_contributions_arrays(
+        &self,
+        py: Python<'_>,
+        x: PyReadonlyArray2<'_, f64>,
+    ) -> PyResult<Vec<Vec<f64>>> {
+        let model = self
+            .model
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("CartoBoostRegressor is not fitted"))?;
+        let shape = x.shape();
+        let rows = shape[0];
+        let cols = shape[1];
+        let values = x.as_slice()?;
+        let n_threads = self.n_threads;
+        py.detach(|| {
+            run_with_optional_threads(n_threads, || {
+                model.try_predict_feature_contributions_flat(rows, cols, values)
+            })
+        })
+        .map_err(to_py_value_error)
+    }
+
+    fn feature_contribution_base_value(&self) -> PyResult<f64> {
+        let model = self
+            .model
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("CartoBoostRegressor is not fitted"))?;
+        model
+            .feature_contribution_base_value()
+            .map_err(to_py_value_error)
+    }
+
     /// Serialize the exact axis-tree ensemble accepted by SHAP's TreeExplainer.
     fn tree_shap_ensemble_json(&self) -> PyResult<String> {
         let model = self

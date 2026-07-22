@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 import json
 
 import numpy as np
@@ -892,9 +893,30 @@ def test_linear_leaf_feature_indices_are_validated():
             leaf_predictor="linear",
             linear_leaf_features=["distance"],
         ).fit([[0.0], [1.0]], [0.0, 1.0])
-
     with pytest.raises(ValueError, match="out of bounds"):
         CartoBoostRegressor(
             leaf_predictor="linear",
             linear_leaf_features=["2"],
         ).fit([[0.0], [1.0]], [0.0, 1.0])
+
+
+def test_feature_contributions_do_not_import_optional_shap(monkeypatch):
+    original_import = builtins.__import__
+
+    def reject_shap(name, *args, **kwargs):
+        if name == "shap" or name.startswith("shap."):
+            raise AssertionError("native feature contributions must not import shap")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", reject_shap)
+    model = CartoBoostRegressor(
+        n_estimators=2,
+        max_depth=1,
+        min_samples_leaf=1,
+        split_policy="axis_only",
+    ).fit([[0.0], [1.0], [2.0], [3.0]], [0.0, 0.0, 4.0, 4.0])
+
+    values = model.predict([[0.0], [3.0]], pred_contrib=True)
+
+    assert values.shape == (2, 2)
+    assert values.sum(axis=1) == pytest.approx(model.predict([[0.0], [3.0]]))

@@ -163,6 +163,28 @@ fn bench_prediction(c: &mut Criterion) {
             },
         );
     }
+    for &(rows, cols, trees) in &[(1, 8, 100), (1_024, 8, 100)] {
+        let values = synthetic_values(rows, cols);
+        let model = synthetic_axis_model(trees, cols);
+        group.bench_with_input(
+            BenchmarkId::new(
+                "model_predict_feature_contributions",
+                format!("{rows}x{cols}_{trees}trees"),
+            ),
+            &(model, values),
+            |bench, (model, values)| {
+                bench.iter(|| {
+                    black_box(model)
+                        .try_predict_feature_contributions_flat(
+                            black_box(rows),
+                            black_box(cols),
+                            black_box(values),
+                        )
+                        .expect("axis-tree contribution benchmark must be supported")
+                });
+            },
+        );
+    }
     group.finish();
 }
 

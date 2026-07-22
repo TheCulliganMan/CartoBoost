@@ -1797,8 +1797,8 @@ fn solve_linear_system(mut matrix: Vec<Vec<f64>>, mut rhs: Vec<f64>) -> Vec<f64>
                 continue;
             }
             let factor = matrix[row][pivot];
-            for col in pivot..n {
-                matrix[row][col] -= factor * pivot_row[col];
+            for (col, pivot_value) in pivot_row.iter().enumerate().take(n).skip(pivot) {
+                matrix[row][col] -= factor * pivot_value;
             }
             rhs[row] -= factor * rhs[pivot];
         }

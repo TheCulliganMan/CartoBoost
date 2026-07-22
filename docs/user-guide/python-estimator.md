@@ -226,11 +226,27 @@ routing, losses, or linear leaves only after the validation design is fixed.
 match `predict(X)`. Use these artifacts to inspect which fitted components
 move predictions before turning the model into a scientific claim.
 
+For original-feature attribution with LightGBM's array layout, use the native
+background-free path-dependent TreeSHAP surface:
+
+```python
+contributions = model.predict(X_test, pred_contrib=True)
+feature_names = model.feature_name_
+reconstructed = contributions.sum(axis=1)
+```
+
+The last column is the cover-weighted expected prediction. The preceding
+columns align with `feature_name_`; internally expanded categorical columns are
+aggregated back to the original fitted feature.
+
 SHAP support is exposed through:
 
 ```python
 explainer = model.make_shap_explainer(X_background)
 explanation = model.explain_shap(X_test, background=X_background)
+
+# Hard axis trees can omit the background and use native path-dependent SHAP.
+explanation = model.explain_shap(X_test)
 ```
 
 For an exact, low-latency attribution to the fitted ensemble components, use

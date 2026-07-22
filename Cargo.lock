@@ -169,7 +169,7 @@ dependencies = [
 
 [[package]]
 name = "cartoboost-accelerator"
-version = "0.3.10"
+version = "0.3.11"
 dependencies = [
  "cuda-core",
  "cuda-device",
@@ -187,7 +187,7 @@ dependencies = [
 
 [[package]]
 name = "cartoboost-cli"
-version = "0.3.10"
+version = "0.3.11"
 dependencies = [
  "cartoboost-core",
  "cartoboost-neural",
@@ -195,7 +195,7 @@ dependencies = [
 
 [[package]]
 name = "cartoboost-core"
-version = "0.3.10"
+version = "0.3.11"
 dependencies = [
  "cartoboost-accelerator",
  "chrono",
@@ -210,7 +210,7 @@ dependencies = [
 
 [[package]]
 name = "cartoboost-geo-causal"
-version = "0.3.10"
+version = "0.3.11"
 dependencies = [
  "cartoboost-geo-core",
  "cartoboost-neural",
@@ -222,7 +222,7 @@ dependencies = [
 
 [[package]]
 name = "cartoboost-geo-core"
-version = "0.3.10"
+version = "0.3.11"
 dependencies = [
  "cartoboost-accelerator",
  "chrono",
@@ -234,7 +234,7 @@ dependencies = [
 
 [[package]]
 name = "cartoboost-geo-st"
-version = "0.3.10"
+version = "0.3.11"
 dependencies = [
  "cartoboost-neural",
  "rayon",
@@ -246,7 +246,7 @@ dependencies = [
 
 [[package]]
 name = "cartoboost-geostats"
-version = "0.3.10"
+version = "0.3.11"
 dependencies = [
  "cartoboost-geo-core",
  "cartoboost-neural",
@@ -258,7 +258,7 @@ dependencies = [
 
 [[package]]
 name = "cartoboost-neural"
-version = "0.3.10"
+version = "0.3.11"
 dependencies = [
  "cartoboost-accelerator",
  "cartoboost-core",
@@ -273,7 +273,7 @@ dependencies = [
 
 [[package]]
 name = "cartoboost-prob"
-version = "0.3.10"
+version = "0.3.11"
 dependencies = [
  "cartoboost-core",
  "cartoboost-neural",
@@ -285,7 +285,7 @@ dependencies = [
 
 [[package]]
 name = "cartoboost-py"
-version = "0.3.10"
+version = "0.3.11"
 dependencies = [
  "cartoboost-core",
  "cartoboost-geo-causal",
@@ -304,7 +304,7 @@ dependencies = [
 
 [[package]]
 name = "cartoboost-spatial-econ"
-version = "0.3.10"
+version = "0.3.11"
 dependencies = [
  "cartoboost-geo-core",
  "cartoboost-neural",
@@ -316,7 +316,7 @@ dependencies = [
 
 [[package]]
 name = "cartoboost-wasm"
-version = "0.3.10"
+version = "0.3.11"
 dependencies = [
  "cartoboost-core",
  "cartoboost-geo-causal",

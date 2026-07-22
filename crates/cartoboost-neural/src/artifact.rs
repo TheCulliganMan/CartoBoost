@@ -318,7 +318,7 @@ fn compute_checksum(metadata: &EmbeddingTableMetadata, rows: &[EmbeddingRow]) ->
     let digest = hasher.finalize();
     let mut checksum = String::with_capacity(digest.len() * 2);
     for byte in digest {
-        let _ = write!(&mut checksum, "{:02x}", byte);
+        let _ = write!(&mut checksum, "{byte:02x}");
     }
 
     checksum

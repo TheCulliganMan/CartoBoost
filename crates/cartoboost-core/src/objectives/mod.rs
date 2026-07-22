@@ -693,8 +693,7 @@ fn validate_multiclass_targets(targets: &[f64], class_count: usize) -> Result<()
         .any(|target| target.fract() != 0.0 || *target < 0.0 || *target as usize >= class_count)
     {
         return Err(CartoBoostError::InvalidInput(format!(
-            "multiclass_logloss targets must be integer class ids in [0, {})",
-            class_count
+            "multiclass_logloss targets must be integer class ids in [0, {class_count})"
         )));
     }
     Ok(())

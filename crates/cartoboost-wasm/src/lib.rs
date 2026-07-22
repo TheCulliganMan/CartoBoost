@@ -6197,7 +6197,7 @@ fn split_display(
             let (_, label) = split_display(base, dense_feature_count, feature_names);
             (
                 "fuzzy".to_string(),
-                format!("fuzzy {kernel:?} bw {:.3}: {label}", bandwidth),
+                format!("fuzzy {kernel:?} bw {bandwidth:.3}: {label}"),
             )
         }
     }

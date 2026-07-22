@@ -11,7 +11,7 @@ from .regressor import _tabular_column_mapping
 
 def make_shap_explainer(
     model: Any,
-    background: Any,
+    background: Any | None = None,
     *,
     sparse_sets: Any | None = None,
     sparse_id_vocabulary: dict[str, list[int]] | None = None,
@@ -29,6 +29,8 @@ def make_shap_explainer(
     _validate_shap_model(model)
     decomposition = _validate_decomposition(decomposition)
     if decomposition == ExplanationDecomposition.WEIGHTS:
+        if background is None:
+            raise ValueError("background is required for decomposition='weights'")
         adapter = _AdditiveWeightShapAdapter(
             model,
             background,
@@ -36,6 +38,8 @@ def make_shap_explainer(
         )
         return _AdditiveWeightShapExplainer(shap, adapter, **kwargs)
     if sparse_sets is not None:
+        if background is None:
+            raise ValueError("background is required for sparse SHAP")
         adapter = _SparseSetShapAdapter(
             model,
             background,
@@ -57,6 +61,8 @@ def make_shap_explainer(
             "sparse_sets must be provided when explaining a model that requires sparse_sets"
         )
     names = feature_names or _model_feature_names(model)
+    if background is None:
+        return _NativePathDependentShapExplainer(shap, model, names, **kwargs)
     tree_ensemble = _tree_shap_ensemble(model)
     if tree_ensemble is not None:
         return _NativeTreeShapExplainer(
@@ -81,7 +87,7 @@ def explain_shap(
     model: Any,
     X: Any,
     *,
-    background: Any,
+    background: Any | None = None,
     sparse_sets: Any | None = None,
     background_sparse_sets: Any | None = None,
     sparse_id_vocabulary: dict[str, list[int]] | None = None,
@@ -147,6 +153,10 @@ def _validate_decomposition(
 
 
 def _model_feature_names(model: Any) -> list[str] | None:
+    names = getattr(model, "feature_name_", None)
+    if names is not None:
+        return [str(name) for name in names]
+
     names = getattr(model, "feature_names_in_", None)
     if names is not None:
         return [str(name) for name in names]
@@ -221,6 +231,52 @@ class _NativeTreeShapExplainer:
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.explainer, name)
+
+
+class _NativePathDependentShapExplainer:
+    """Format Rust-native path-dependent TreeSHAP as standard SHAP objects."""
+
+    def __init__(
+        self,
+        shap: Any,
+        model: Any,
+        feature_names: list[str] | None,
+        **kwargs: Any,
+    ) -> None:
+        if kwargs:
+            unsupported = ", ".join(sorted(kwargs))
+            raise TypeError(
+                f"native path-dependent SHAP does not accept explainer options: {unsupported}"
+            )
+        native_model = getattr(model, "_model", None)
+        base_value = getattr(native_model, "feature_contribution_base_value", None)
+        if not callable(base_value):
+            raise RuntimeError(
+                "cartoboost._native model is missing native feature contributions; "
+                "rebuild the native extension with `maturin develop`"
+            )
+        self._shap = shap
+        self.model = model
+        self.expected_value = float(base_value())
+        self.feature_names = feature_names
+
+    def __call__(self, X: Any, **kwargs: Any) -> Any:
+        if kwargs:
+            unsupported = ", ".join(sorted(kwargs))
+            raise TypeError(
+                f"native path-dependent SHAP does not accept call options: {unsupported}"
+            )
+        contributions = np.asarray(self.model.predict_feature_contributions(X), dtype=float)
+        return self._shap.Explanation(
+            values=contributions[:, :-1],
+            base_values=np.full(contributions.shape[0], self.expected_value, dtype=float),
+            data=_as_explanation_data(X),
+            feature_names=self.feature_names,
+        )
+
+    def shap_values(self, X: Any, **kwargs: Any) -> np.ndarray:
+        """Return the native feature contributions without the bias column."""
+        return np.asarray(self(X, **kwargs).values, dtype=float)
 
 
 class _AdditiveWeightShapAdapter:
@@ -343,6 +399,15 @@ def _as_2d_array(values: Any) -> np.ndarray:
     if hasattr(values, "to_numpy"):
         values = values.to_numpy()
     rows = np.asarray(values, dtype=float)
+    if rows.ndim != 2:
+        raise ValueError("SHAP inputs must be 2D")
+    return rows
+
+
+def _as_explanation_data(values: Any) -> np.ndarray:
+    if hasattr(values, "to_numpy"):
+        values = values.to_numpy()
+    rows = np.asarray(values)
     if rows.ndim != 2:
         raise ValueError("SHAP inputs must be 2D")
     return rows

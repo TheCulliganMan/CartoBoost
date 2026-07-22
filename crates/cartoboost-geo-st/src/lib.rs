@@ -5857,16 +5857,14 @@ impl TrainableGraphTransformerState {
             .flat_map(|horizon| (0..self.nodes).map(move |node| active_weight(horizon, node)))
             .sum();
         let scale = tape.constant(1.0 / total_weight.max(1.0));
-        for node in 0..self.nodes {
-            for horizon in 0..self.horizons {
+        for (node, node_outputs) in outputs.iter().enumerate().take(self.nodes) {
+            for (horizon, horizon_targets) in targets.iter().enumerate().take(self.horizons) {
                 let weight = active_weight(horizon, node);
                 if weight == 0.0 {
                     continue;
                 }
-                let residual = tape.add(
-                    outputs[node][horizon],
-                    tape.constant(-targets[horizon][node]),
-                );
+                let residual =
+                    tape.add(node_outputs[horizon], tape.constant(-horizon_targets[node]));
                 let residual = tape.mul(residual, tape.constant(self.target_scale));
                 let mae = tape.sqrt(tape.add(tape.mul(residual, residual), tape.constant(1e-12)));
                 loss = tape.add(loss, tape.mul(mae, tape.mul(scale, tape.constant(weight))));
@@ -5926,17 +5924,15 @@ impl TrainableGraphTransformerState {
             })
             .count();
         let scale = tape.constant(1.0 / valid.max(1) as f64);
-        for node in 0..self.nodes {
-            for horizon in 0..self.horizons {
+        for (node, node_outputs) in outputs.iter().enumerate().take(self.nodes) {
+            for (horizon, horizon_targets) in targets.iter().enumerate().take(self.horizons) {
                 if *profile == GraphTransformerProfile::LongShortFusion
-                    && (targets[horizon][node] - self.normalized_zero).abs() <= 1e-12
+                    && (horizon_targets[node] - self.normalized_zero).abs() <= 1e-12
                 {
                     continue;
                 }
-                let residual = tape.add(
-                    outputs[node][horizon],
-                    tape.constant(-targets[horizon][node]),
-                );
+                let residual =
+                    tape.add(node_outputs[horizon], tape.constant(-horizon_targets[node]));
                 let point_loss = if *profile == GraphTransformerProfile::LongShortFusion {
                     let residual = tape.mul(residual, tape.constant(self.target_scale));
                     // The reference LSTTN trains its forecast stage with
@@ -11651,8 +11647,8 @@ fn maximum_spatiotemporal_graph_division(
     dp[0][0] = 0.0;
     for group in 1..=groups {
         for end in group..=periodicity {
-            for start in group - 1..end {
-                let candidate = dp[group - 1][start] + score[start][end];
+            for (start, score_row) in score.iter().enumerate().take(end).skip(group - 1) {
+                let candidate = dp[group - 1][start] + score_row[end];
                 if candidate > dp[group][end] {
                     dp[group][end] = candidate;
                     parent[group][end] = start;

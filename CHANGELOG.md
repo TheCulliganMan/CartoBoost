@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.11 — Native Feature Contributions
+
+- Added exact background-free, path-dependent TreeSHAP for supported
+  hard axis-aligned regression trees, with LightGBM-compatible feature columns
+  followed by a constant base-value column.
+- Added `predict(..., pred_contrib=True)`,
+  `predict_feature_contributions(...)`, and fitted `feature_name_` metadata,
+  including aggregation of encoded categorical columns back to original input
+  features.
+- Added native-backed `shap.Explanation` helpers while preserving explicit
+  background-based SHAP and the initial-value/per-tree additive decomposition.
+
 ## 0.3.10 — Minimal Python Installation
 
 - Kept the standard Python installation limited to CartoBoost and NumPy.

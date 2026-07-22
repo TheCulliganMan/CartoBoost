@@ -4,10 +4,10 @@ use cartoboost_core::forecasting::{
 };
 use cartoboost_core::BoosterConfig;
 use cartoboost_neural::{
-    available_backends, fit_dense_regressor_with_backend, ComponentMode, DenseRegressorConfig,
-    LaneNeuralPanelConfig, LaneNeuralPanelForecaster, NBeatsConfig, NBeatsForecaster, NHiTSConfig,
-    NHiTSForecaster, NeuralPanelConfig, NeuralPanelForecaster, NeuralPanelMode, StandardScaler,
-    TrendMode,
+    available_backends, fit_dense_regressor_with_backend, select_backend, ComponentMode,
+    DenseRegressorConfig, LaneNeuralPanelConfig, LaneNeuralPanelForecaster, NBeatsConfig,
+    NBeatsForecaster, NHiTSConfig, NHiTSForecaster, NeuralPanelConfig, NeuralPanelForecaster,
+    NeuralPanelMode, StandardScaler, TrendMode,
 };
 use std::collections::BTreeMap;
 
@@ -44,7 +44,7 @@ fn nbeats_forecaster_is_deterministic_on_cpu() {
         hidden_size: 6,
         epochs: 30,
         learning_rate: 0.01,
-        ..NBeatsConfig::default()
+        backend: select_backend(Some("cpu")).expect("CPU backend"),
     };
     let mut first = NBeatsForecaster::new(config.clone()).expect("first model");
     let mut second = NBeatsForecaster::new(config).expect("second model");

@@ -58,6 +58,7 @@ index of those maintained guides.
 - Neural features contract: ./docs/neural-features.md
 - Sparse H3/S2 and route-cell features: ./docs/sparse_features.md
 - Spatial modeling and bearing unit-vector features: ./docs/spatial_modeling.md
+- Native path-dependent TreeSHAP, LightGBM-compatible contribution arrays, and background-based SHAP: ./docs/shap.md
 - Geo evaluation standard: ./docs/user-guide/geo-evaluation-standard.md
 - Geo-causal representation supplements: ./docs/user-guide/geo-causal-models.md
 - Benchmarks: ./docs/benchmarks/index.md
@@ -83,6 +84,8 @@ index of those maintained guides.
 ## Public Surfaces
 
 - `cartoboost.CartoBoostRegressor`
+  - `predict(X, pred_contrib=True)` and `predict_feature_contributions(X)` return original-feature TreeSHAP values plus a final base-value column for supported hard axis trees.
+  - `feature_name_` gives the contribution-column names; `explain_shap(X)` returns an optional `shap.Explanation` without serving-time background data.
 - `cartoboost.CartoBoostClassifier`
 - `cartoboost.CartoBoostRanker`
 - `cartoboost.models.*`

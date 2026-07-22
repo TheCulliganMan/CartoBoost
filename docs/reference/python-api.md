@@ -71,10 +71,11 @@ CartoBoostRegressor(
 | Method | Returns | Notes |
 | --- | --- | --- |
 | `fit(X, y, sample_weight=None, feature_schema=None, sparse_sets=None, eval_set=None)` | `self` | `eval_set` is accepted but currently ignored. |
-| `predict(X, sparse_sets=None)` | `numpy.ndarray` | Requires matching dense width and sparse columns. |
+| `predict(X, sparse_sets=None, *, pred_contrib=False)` | `numpy.ndarray` | Normal predictions by default. With `pred_contrib=True`, returns original-feature path-dependent TreeSHAP values followed by the base value for supported hard axis trees. |
+| `predict_feature_contributions(X, sparse_sets=None)` | `numpy.ndarray` | Explicit equivalent of `predict(..., pred_contrib=True)`; does not require the optional SHAP dependency. |
 | `predict_additive_values(X, sparse_sets=None)` | `numpy.ndarray` | Row sums equal `predict(X)`. |
-| `make_shap_explainer(background, decomposition="features", **kwargs)` | SHAP explainer | Requires optional SHAP dependency. `decomposition="weights"` returns CartoBoost's direct exact initial-value/per-tree explainer. |
-| `explain_shap(X, background=..., decomposition="features", **kwargs)` | `shap.Explanation` | Convenience SHAP entry point. Weight explanations use the background component mean as their baseline and avoid permutation sampling. |
+| `make_shap_explainer(background=None, decomposition="features", **kwargs)` | SHAP explainer | Without a background, formats native path-dependent feature contributions. `decomposition="weights"` requires a background and returns the exact initial-value/per-tree explainer. |
+| `explain_shap(X, background=None, decomposition="features", **kwargs)` | `shap.Explanation` | Background-free feature explanations use native path-dependent TreeSHAP; passing a background preserves interventional/general SHAP behavior. |
 | `save(path)` | `None` | Writes a model artifact. |
 | `save_weights(path, format="auto")` | `None` | Writes JSON weights or supported ONNX. |
 | `CartoBoostRegressor.load(path)` | estimator | Loads model artifacts. |

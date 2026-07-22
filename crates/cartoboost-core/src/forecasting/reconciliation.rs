@@ -193,8 +193,7 @@ impl Reconciler {
         let middle_nodes = self.hierarchy.level_indices(level);
         if middle_nodes.is_empty() {
             return Err(CartoBoostError::InvalidInput(format!(
-                "hierarchy has no nodes at middle-out level {}",
-                level
+                "hierarchy has no nodes at middle-out level {level}"
             )));
         }
         let horizon = base_forecasts[0].len();

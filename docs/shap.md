@@ -66,13 +66,45 @@ shap.plots.waterfall(explanation[0])
 CartoBoost also provides convenience helpers:
 
 ```python
+explanation = model.explain_shap(X_test)
+explainer = model.make_shap_explainer()
+
+# Preserve interventional/background-based semantics when desired.
 explanation = model.explain_shap(X_test, background=X_train)
-explainer = model.make_shap_explainer(X_train)
 ```
 
 The module-level helpers are available from
 `cartoboost.explain`; estimator methods are the preferred application
 interface because they preserve CartoBoost's fitted feature metadata.
+
+## Background-Free Feature Contributions
+
+For conventional hard axis-aligned regression trees with constant leaves,
+CartoBoost computes exact path-dependent TreeSHAP in Rust. The fitted node
+covers represent the training distribution, so serving does not retain a
+background dataset, construct a Python explainer, or require the optional
+`shap` package.
+
+```python
+contributions = model.predict(X_test, pred_contrib=True)
+# Equivalent explicit spelling:
+contributions = model.predict_feature_contributions(X_test)
+
+feature_names = model.feature_name_
+feature_values = contributions[:, :-1]
+base_value = contributions[:, -1]
+reconstructed = base_value + feature_values.sum(axis=1)
+```
+
+The array follows LightGBM's layout: one column per original fitted feature,
+then the expected prediction in the final column. Internally expanded
+categorical columns are summed back to their original DataFrame feature. The
+base value is the initial prediction plus the cover-weighted expected output of
+every tree; it is constant across rows.
+
+This native surface is path-dependent SHAP. Passing an explicit `background=`
+to the rich helpers retains the existing interventional/background-based SHAP
+semantics instead.
 
 ## Additive Weight Decomposition
 
@@ -121,7 +153,8 @@ to floating-point precision.
 
 | Need | Use | Runtime behavior | Attribution meaning |
 | --- | --- | --- | --- |
-| Which input columns moved this prediction? | Default `decomposition="features"` | Native TreeExplainer for dense axis trees; SHAP's general adapter for structured routing. | Input columns, including any generated dense columns. |
+| Which input columns moved this prediction without serving background data? | `predict(X, pred_contrib=True)` or background-free default feature explanation | Native Rust path-dependent TreeSHAP for hard dense axis trees. | Original fitted input columns plus a final base-value column. |
+| Which input columns moved this prediction relative to a chosen background? | Default feature explanation with `background=...` | Native TreeExplainer for dense axis trees; SHAP's general adapter for structured routing. | Input columns, including any generated dense columns. |
 | Store a fast, exact audit trail across a large ensemble | `decomposition="weights"` | One native additive-values call; no permutation sampling or repeated prediction calls. | Initial prediction plus each fitted tree contribution. |
 | Analyze sparse-set IDs | Default decomposition with both `sparse_sets` and `background_sparse_sets` | SHAP runs on CartoBoost's binary sparse-ID representation. | Dense columns and active sparse IDs such as `pickup_zone=132`. |
 
@@ -134,15 +167,14 @@ audit and needs predictable latency.
 ## TreeExplainer Support
 
 For fitted dense models whose selected trees use ordinary axis-aligned splits
-and constant leaves, `make_shap_explainer` and `explain_shap` automatically use
-SHAP's native `TreeExplainer`. CartoBoost exports the trained Rust tree
-ensemble, including the initial prediction, learning-rate-scaled leaves,
-thresholds, missing-value direction, and node weights, directly into SHAP's
-tree representation. The resulting object exposes the normal TreeExplainer
-methods such as `shap_values` and returns a standard `shap.Explanation`.
+and constant leaves, background-free helpers use the same native Rust
+contribution kernel as `pred_contrib=True`. The helper only formats those
+values as a standard `shap.Explanation`. With an explicit background,
+CartoBoost exports the ensemble to SHAP's `TreeExplainer` and preserves the
+existing interventional behavior.
 
 ```python
-explainer = model.make_shap_explainer(X_train)
+explainer = model.make_shap_explainer()
 explanation = explainer(X_test)
 feature_values = explainer.shap_values(X_test)
 ```
@@ -206,9 +238,13 @@ explanations.
   attributes predictions to the initial value and fitted tree components, not
   to original input columns. Use the default feature decomposition when you
   need column-level attributions.
-- Dense axis-tree models use SHAP's native `TreeExplainer` through
-  `make_shap_explainer` and `explain_shap`. Calling `shap.TreeExplainer` on a
-  CartoBoost estimator directly is not supported; use the CartoBoost helper.
+- Background-free native feature contributions support identity-output models
+  whose fitted trees contain only hard axis-aligned splits and constant leaves.
+  Structured or periodic splits, sparse-list routing, fuzzy routing, linear
+  leaves, and transformed `log_l2` output fail clearly; use background-based
+  SHAP or the per-tree weight decomposition for those models.
+- Calling `shap.TreeExplainer` on a CartoBoost estimator directly is not
+  supported; use the CartoBoost helper.
 - Dense Python, NumPy, and pandas inputs are supported through existing
   estimator input handling.
 - Sparse-set models are supported through CartoBoost helpers because they need

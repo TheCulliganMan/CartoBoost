@@ -233,6 +233,11 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
         self.categorical_encoder_ = categorical_encoder
         if feature_names is not None:
             self.feature_names_in_ = np.asarray(feature_names, dtype=object)
+        self.feature_name_ = (
+            [str(name) for name in feature_names]
+            if feature_names is not None
+            else [f"feature_{index}" for index in range(self.n_features_in_)]
+        )
 
         model = _NativeRegressorModel(
             n_estimators=int(self.n_estimators),
@@ -339,7 +344,16 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
         self.is_fitted_ = True
         return self
 
-    def predict(self, X: Iterable[Iterable[float]], sparse_sets: Any | None = None) -> np.ndarray:
+    def predict(
+        self,
+        X: Iterable[Iterable[float]],
+        sparse_sets: Any | None = None,
+        *,
+        pred_contrib: bool = False,
+    ) -> np.ndarray:
+        """Predict targets or LightGBM-compatible per-feature contributions."""
+        if pred_contrib:
+            return self.predict_feature_contributions(X, sparse_sets=sparse_sets)
         if self._model is None:
             raise RuntimeError("CartoBoostRegressor is not fitted")
         expected_sparse_count = getattr(self, "n_sparse_sets_in_", 0)
@@ -408,6 +422,49 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
             predict_arrays(dense_array, sparse_offsets, sparse_ids),
             dtype=float,
         )
+
+    def predict_feature_contributions(
+        self,
+        X: Iterable[Iterable[float]],
+        sparse_sets: Any | None = None,
+    ) -> np.ndarray:
+        """Return exact feature SHAP values followed by the expected prediction.
+
+        The result has shape ``(n_rows, n_features + 1)``. Its final column is
+        the background-free, training-cover-weighted base value, matching
+        LightGBM's ``pred_contrib=True`` layout.
+        """
+        if self._model is None:
+            raise RuntimeError("CartoBoostRegressor is not fitted")
+        dense_array, _, _, _ = self._prediction_inputs(X, sparse_sets)
+        predict_contributions = getattr(
+            self._model,
+            "predict_feature_contributions_arrays",
+            None,
+        )
+        if not callable(predict_contributions):
+            raise RuntimeError(
+                "cartoboost._native model is missing the typed feature-contribution binding; "
+                "rebuild the native extension with `maturin develop`"
+            )
+        encoded_values = np.asarray(predict_contributions(dense_array), dtype=float)
+        encoded_shape = (dense_array.shape[0], dense_array.shape[1] + 1)
+        if encoded_values.shape != encoded_shape:
+            raise RuntimeError(
+                "native feature contributions returned shape "
+                f"{encoded_values.shape}, expected {encoded_shape}"
+            )
+        values = _aggregate_encoded_feature_contributions(
+            encoded_values,
+            getattr(self, "categorical_encoder_", None),
+            int(self.n_features_in_),
+        )
+        expected_shape = (dense_array.shape[0], int(self.n_features_in_) + 1)
+        if values.shape != expected_shape:
+            raise RuntimeError(
+                f"feature contributions returned shape {values.shape}, expected {expected_shape}"
+            )
+        return values
 
     def score(
         self,
@@ -505,7 +562,7 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
 
     def make_shap_explainer(
         self,
-        background: Any,
+        background: Any | None = None,
         *,
         sparse_sets: Any | None = None,
         sparse_id_vocabulary: dict[str, list[int]] | None = None,
@@ -532,7 +589,7 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
         self,
         X: Any,
         *,
-        background: Any,
+        background: Any | None = None,
         sparse_sets: Any | None = None,
         background_sparse_sets: Any | None = None,
         sparse_id_vocabulary: dict[str, list[int]] | None = None,
@@ -572,6 +629,7 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
                 training_config=native_payload.get("training_config", {}),
                 payload={
                     "categorical_encoder": getattr(self, "categorical_encoder_", None),
+                    "feature_names": list(getattr(self, "feature_name_", [])),
                     "native_model": native_payload,
                 },
             )
@@ -624,6 +682,7 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
 
     def __setstate__(self, state: dict[str, Any]) -> None:
         payload = state.pop("_cartoboost_pickle_artifact", None)
+        saved_feature_names = state.get("feature_name_", state.get("feature_names_in_"))
         self.__dict__.update(state)
         if payload is None:
             return
@@ -632,6 +691,11 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
             path.write_bytes(payload)
             restored = type(self).load(path)
         self.__dict__.update(restored.__dict__)
+        if saved_feature_names is not None:
+            names = [str(name) for name in saved_feature_names]
+            if len(names) == int(self.n_features_in_):
+                self.feature_name_ = names
+                self.feature_names_in_ = np.asarray(names, dtype=object)
 
     @classmethod
     def load(cls, path: str | Path) -> CartoBoostRegressor:
@@ -653,6 +717,14 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
         if estimator.categorical_encoder_ is not None:
             estimator.n_features_in_ = int(estimator.categorical_encoder_["original_feature_count"])
         estimator.encoded_n_features_in_ = native_model.feature_count
+        saved_feature_names = inner.get("feature_names")
+        estimator.feature_name_ = (
+            [str(name) for name in saved_feature_names]
+            if isinstance(saved_feature_names, list)
+            and len(saved_feature_names) == int(estimator.n_features_in_)
+            else _fitted_feature_names(estimator)
+        )
+        estimator.feature_names_in_ = np.asarray(estimator.feature_name_, dtype=object)
         return estimator
 
     @classmethod
@@ -702,6 +774,8 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
         estimator.encoded_n_features_in_ = native_model.feature_count
         estimator.categorical_encoder_ = None
         estimator.feature_schema_ = _json_attr(native_model, "feature_schema_json")
+        estimator.feature_name_ = _fitted_feature_names(estimator)
+        estimator.feature_names_in_ = np.asarray(estimator.feature_name_, dtype=object)
         estimator.sparse_set_names_ = _sparse_names_from_feature_schema(estimator.feature_schema_)
         estimator.n_sparse_sets_in_ = len(estimator.sparse_set_names_)
         estimator.metadata_ = _json_attr(native_model, "metadata_json")
@@ -979,6 +1053,35 @@ def _transform_categorical_features(
         else:
             raise ValueError(f"unknown categorical encoding strategy {strategy!r}")
     return np.ascontiguousarray(np.column_stack(encoded_columns), dtype=np.float64)
+
+
+def _aggregate_encoded_feature_contributions(
+    values: np.ndarray,
+    encoder: dict[str, Any] | None,
+    original_width: int,
+) -> np.ndarray:
+    if not encoder:
+        return values
+    column_encoders = {int(column["index"]): column for column in encoder.get("columns", [])}
+    output = np.zeros((values.shape[0], original_width + 1), dtype=float)
+    encoded_index = 0
+    for original_index in range(original_width):
+        column_encoder = column_encoders.get(original_index)
+        width = 1
+        if column_encoder is not None:
+            strategy = column_encoder.get("strategy")
+            if strategy in {"OneHot", "one_hot"}:
+                width = len(column_encoder.get("categories", []))
+            elif strategy in {"Partition", "partition"}:
+                width = len(column_encoder.get("partitions", []))
+        if width <= 0 or encoded_index + width > values.shape[1] - 1:
+            raise RuntimeError("categorical encoder does not match native contribution width")
+        output[:, original_index] = values[:, encoded_index : encoded_index + width].sum(axis=1)
+        encoded_index += width
+    if encoded_index != values.shape[1] - 1:
+        raise RuntimeError("categorical encoder does not consume every native contribution column")
+    output[:, -1] = values[:, -1]
+    return output
 
 
 def _encoded_feature_schema(
@@ -1661,6 +1764,42 @@ def _json_attr(model: Any, attr: str) -> Any | None:
     if payload is None:
         return None
     return json.loads(payload)
+
+
+def _fitted_feature_names(estimator: Any) -> list[str]:
+    encoder = getattr(estimator, "categorical_encoder_", None)
+    if isinstance(encoder, dict):
+        original_width = int(encoder.get("original_feature_count", estimator.n_features_in_))
+        column_encoders = {int(column["index"]): column for column in encoder.get("columns", [])}
+        encoded_names = [str(name) for name in encoder.get("encoded_feature_names", [])]
+        names: list[str] = []
+        encoded_index = 0
+        for original_index in range(original_width):
+            column_encoder = column_encoders.get(original_index)
+            if column_encoder is None:
+                names.append(
+                    encoded_names[encoded_index]
+                    if encoded_index < len(encoded_names)
+                    else f"feature_{original_index}"
+                )
+                encoded_index += 1
+                continue
+            names.append(str(column_encoder.get("name", f"feature_{original_index}")))
+            strategy = column_encoder.get("strategy")
+            if strategy in {"OneHot", "one_hot"}:
+                encoded_index += len(column_encoder.get("categories", []))
+            elif strategy in {"Partition", "partition"}:
+                encoded_index += len(column_encoder.get("partitions", []))
+            else:
+                encoded_index += 1
+        return names
+
+    schema = getattr(estimator, "feature_schema_", None)
+    if isinstance(schema, dict) and isinstance(schema.get("names"), list):
+        names = [str(name) for name in schema["names"][: int(estimator.n_features_in_)]]
+        if len(names) == int(estimator.n_features_in_):
+            return names
+    return [f"feature_{index}" for index in range(int(estimator.n_features_in_))]
 
 
 def _sparse_names_from_feature_schema(feature_schema: Any | None) -> list[str]:

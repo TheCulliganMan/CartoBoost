@@ -1723,7 +1723,7 @@ pub fn temporal_entity_fit_with_backend(
             intercepts[h][entity] = target_sum / samples as f64;
         }
     }
-    for entity in 0..entity_count {
+    for (entity, residual_scale) in residual_scales.iter_mut().enumerate() {
         let mut rss = 0.0;
         let mut count = 0usize;
         for sample in 0..samples {
@@ -1738,7 +1738,7 @@ pub fn temporal_entity_fit_with_backend(
             rss += (y[cutoff][entity] - pred).powi(2);
             count += 1;
         }
-        residual_scales[entity] = (rss / count.max(1) as f64).sqrt();
+        *residual_scale = (rss / count.max(1) as f64).sqrt();
     }
     Ok(DeepTemporalEntityArtifact {
         model_class: "TemporalEntityTransformer".to_string(),

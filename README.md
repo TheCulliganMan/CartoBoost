@@ -263,6 +263,14 @@ incomplete for that claim.
 model.save("duration.cartoboost.json")
 loaded = CartoBoostRegressor.load("duration.cartoboost.json")
 
+# LightGBM-compatible native TreeSHAP: feature columns, then base value.
+contributions = loaded.predict(X_validation_dense, pred_contrib=True)
+reconstructed = contributions.sum(axis=1)
+
+# A standard shap.Explanation, still without serving-time background data.
+explanation = loaded.explain_shap(X_validation_dense)
+
+# Explicit background data selects the existing background-based explanation.
 explanation = loaded.explain_shap(
     X_validation_dense,
     background=X_train_dense,
