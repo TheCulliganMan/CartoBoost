@@ -83,9 +83,19 @@ jobs:
 
       - name: Install CUDA codegen driver
         if: matrix.backend == 'cuda'
-        run: >-
-          cargo +${{ matrix.toolchain }} install --locked
-          --git https://github.com/NVlabs/cuda-oxide.git cargo-oxide
+        env:
+          CUDA_OXIDE_REV: 29396b7f643b1d42eb4d80b7347ad27bb011525a
+        run: |
+          cargo +${{ matrix.toolchain }} install --locked \
+            --git https://github.com/NVlabs/cuda-oxide.git \
+            --rev "${CUDA_OXIDE_REV}" cargo-oxide
+          mkdir -p "${CARGO_HOME}/cuda-oxide"
+          git init "${CARGO_HOME}/cuda-oxide/src"
+          git -C "${CARGO_HOME}/cuda-oxide/src" remote add origin \
+            https://github.com/NVlabs/cuda-oxide.git
+          git -C "${CARGO_HOME}/cuda-oxide/src" fetch --depth 1 origin \
+            "${CUDA_OXIDE_REV}"
+          git -C "${CARGO_HOME}/cuda-oxide/src" checkout --detach FETCH_HEAD
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
