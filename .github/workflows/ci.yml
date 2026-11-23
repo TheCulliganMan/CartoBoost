@@ -43,7 +43,7 @@ jobs:
           - os: ubuntu-latest
             backend: webgpu
             toolchain: stable
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             backend: cuda
             toolchain: nightly-2026-04-03
           - os: ubuntu-latest

@@ -1,13 +1,11 @@
 [advisories]
 version = 2
-# PyO3 0.26 supports CPython 3.14's free-threaded build. CartoBoost does not
-# call `PyCFunction::new_closure`; revisit this exception on the next PyO3
-# upgrade.
 # `paste` is pulled only by the optional Metal backend. The advisory
 # reports no safe upgrade; stable CPU wheels do not enable this dependency.
-# CartoBoost does not use the PyList/PyTuple iterator or closure APIs covered by
-# the PyO3 advisories.
-ignore = ["RUSTSEC-2026-0176", "RUSTSEC-2026-0177", "RUSTSEC-2024-0436"]
+# Chrono has no patched version for this informational unmaintained advisory.
+# The workspace shares its timestamp types across model, PyO3, and WASM APIs;
+# replacing those contracts is outside the Python interpreter support change.
+ignore = ["RUSTSEC-2026-0543", "RUSTSEC-2024-0436"]
 
 [licenses]
 version = 2

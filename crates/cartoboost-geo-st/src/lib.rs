@@ -11857,8 +11857,10 @@ fn deterministic_weight_matrix(rows: usize, cols: usize, seed: u64) -> Vec<Vec<f
 fn csr_edges(adjacency: &CsrAdjacency, node_count: usize) -> Vec<(usize, usize)> {
     let mut edges = Vec::with_capacity(adjacency.indices.len());
     for source in 0..node_count {
-        for edge_idx in adjacency.indptr[source]..adjacency.indptr[source + 1] {
-            edges.push((source, adjacency.indices[edge_idx]));
+        let start = adjacency.indptr[source];
+        let end = adjacency.indptr[source + 1];
+        for &destination in &adjacency.indices[start..end] {
+            edges.push((source, destination));
         }
     }
     edges
@@ -12100,8 +12102,9 @@ fn graph_distances(adjacency: &CsrAdjacency, nodes: usize) -> Vec<Vec<usize>> {
         queue.push_back(source);
         while let Some(node) = queue.pop_front() {
             let next_distance = distances[node] + 1;
-            for edge in adjacency.indptr[node]..adjacency.indptr[node + 1] {
-                let next = adjacency.indices[edge];
+            let start = adjacency.indptr[node];
+            let end = adjacency.indptr[node + 1];
+            for &next in &adjacency.indices[start..end] {
                 if distances[next] > next_distance {
                     distances[next] = next_distance;
                     queue.push_back(next);
