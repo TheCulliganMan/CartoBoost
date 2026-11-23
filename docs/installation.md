@@ -13,12 +13,13 @@ are installed directly only when needed.
 uv add cartoboost
 ```
 
-The published wheels target CPython 3.10, 3.11, 3.12, 3.13, and 3.14 on:
+The published wheels target CPython 3.10, 3.11, 3.12, 3.13, 3.14, and 3.15,
+plus free-threaded CPython 3.14t and 3.15t, on:
 
 - Linux x86_64 and aarch64 with manylinux2014 compatibility.
 - macOS x86_64 and arm64.
-- Windows x86_64 and arm64 (Python 3.11–3.14 on Windows arm64; check the
-  release assets for the exact interpreter/platform matrix).
+- Windows x86_64 and arm64 (Python 3.11–3.15 and 3.14t/3.15t on Windows
+  arm64; check release assets for the exact interpreter/platform matrix).
 
 If no compatible wheel exists, `uv` may try to build from source, which requires
 the project build toolchain.
@@ -152,6 +153,6 @@ unavailable.
 | Symptom | Fix |
 | --- | --- |
 | `ImportError` during import | Reinstall CartoBoost in a clean Python environment. |
-| `uv` tries to compile from source | Use CPython 3.10-3.14 on a supported platform, or install the project build toolchain before building. |
+| `uv` tries to compile from source | Use CPython 3.10-3.15 or free-threaded CPython 3.14t/3.15t on a supported platform, or install the project build toolchain before building. |
 | `examples/quickstart.py` cannot import CartoBoost | Make sure the Python environment where `cartoboost` was installed is active. |
 | cuda-oxide reports an artifact for a newer GPU architecture | Rebuild with `cargo oxide ... --arch sm_XX`, where `sm_XX` matches `nvidia-smi --query-gpu=compute_cap --format=csv,noheader`. |

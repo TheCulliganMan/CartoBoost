@@ -103,6 +103,24 @@ def test_ci_runs_benchmark_smoke_and_quality_without_freshness_gate():
     assert "scripts/run_scale_performance_gate.py" in workflow
 
 
+def test_python_315_and_free_threaded_support_are_declared_end_to_end():
+    repo_root = Path(__file__).resolve().parents[2]
+    root_metadata = tomllib.loads((repo_root / "pyproject.toml").read_text(encoding="utf-8"))
+    native_metadata = tomllib.loads(
+        (repo_root / "crates" / "cartoboost-py" / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    cargo_manifest = tomllib.loads((repo_root / "Cargo.toml").read_text(encoding="utf-8"))
+    ci = (repo_root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    release = (repo_root / ".github" / "workflows" / "publish-pypi.yml").read_text(encoding="utf-8")
+
+    assert "Programming Language :: Python :: 3.15" in root_metadata["project"]["classifiers"]
+    assert "Programming Language :: Python :: 3.15" in native_metadata["project"]["classifiers"]
+    assert cargo_manifest["workspace"]["dependencies"]["pyo3"] == "0.30"
+    assert 'python-version: "3.15"' in ci
+    assert 'python-version: "3.15t"' in ci
+    assert '"3.15", "3.15t"' in release
+
+
 def test_release_workflow_requires_ci_ancestry_and_distribution_smoke():
     repo_root = Path(__file__).resolve().parents[2]
     workflow = (repo_root / ".github" / "workflows" / "publish-pypi.yml").read_text(

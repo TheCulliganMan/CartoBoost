@@ -42,7 +42,7 @@ thiserror = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 chrono = { version = "0.4", features = ["serde"] }
-pyo3 = "0.26"
+pyo3 = "0.30"
 clap = { version = "4", features = ["derive"] }
 toml = "0.8"
 criterion = "0.5"
