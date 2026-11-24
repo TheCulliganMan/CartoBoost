@@ -592,18 +592,29 @@ def _build_native_frame(frame: ForecastFrame, *, data: Any | None = None) -> Any
         *frame.historical_covariates,
     ]
     data = frame.data if data is None else data
-    records = data.to_dict(orient="records")
     sample_weights = None
     if frame.sample_weight_col is not None:
         sample_weights = [float(value) for value in data[frame.sample_weight_col].tolist()]
-    for values in records:
-        series_id = (
-            "__single__" if frame.series_id_col is None else str(values[frame.series_id_col])
-        )
-        timestamp = values[frame.timestamp_col].isoformat()
-        target = float(values[frame.target_col])
+    columns = [frame.timestamp_col, frame.target_col, *covariate_cols]
+    value_offset = 0
+    if frame.series_id_col is not None:
+        columns.insert(0, frame.series_id_col)
+        value_offset = 1
+    # Project only native fields and stream tuples. Wide tables can carry large
+    # unrelated columns; materializing a dictionary for every source row copies
+    # those columns and duplicates the required row payload unnecessarily.
+    for values in data[columns].itertuples(index=False, name=None):
+        series_id = "__single__" if value_offset == 0 else str(values[0])
+        timestamp = values[value_offset].isoformat()
+        target = float(values[value_offset + 1])
         rows.append((series_id, timestamp, target))
-        row_covariates.append({name: float(values[name]) for name in covariate_cols})
+        if covariate_cols:
+            row_covariates.append(
+                {
+                    name: float(value)
+                    for name, value in zip(covariate_cols, values[value_offset + 2 :], strict=True)
+                }
+            )
     try:
         return _native.ForecastFrame(
             rows,

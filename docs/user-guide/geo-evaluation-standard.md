@@ -1,9 +1,9 @@
 # Evaluating Geographic Models
 
-Evaluate geographic models with a split that withholds place, time, groups, or
-a documented combination of those axes. Treat a random row split as a
-diagnostic because nearby taxi trips can share pickup/dropoff
-zone effects, road geometry, traffic shocks, weather, and calendar pressure.
+Predicting another trip in a familiar
+pickup zone, a trip in an unseen zone, and next week's demand are different
+tests. Choose place, time, group, or combined holdouts accordingly; use a random
+split as a diagnostic of the easier repeated-context task.
 
 ## Required Metadata
 
@@ -24,6 +24,7 @@ benchmark and update the manifest hash in the report.
 ## Python Example
 
 ```python
+import cartoboost
 from cartoboost.geo import CoordinateMatrix, spatial_block_cv_manifest
 
 coords = CoordinateMatrix(
@@ -37,8 +38,8 @@ manifest = spatial_block_cv_manifest(
     n_folds=5,
     dataset_fingerprint="sha256:9c694e388df6104ec6187f95e25c5198acff19667c8cf5ac025d0ee1a2d09900",
     coordinate_crs_note="NYC TLC taxi zones projected to EPSG:2263 before splitting",
-    model_version="0.2.32",
-    dependency_versions={"cartoboost": "0.2.32"},
+    model_version=cartoboost.__version__,
+    dependency_versions={"cartoboost": cartoboost.__version__},
     random_seed=42,
     split_id="pickup_zone_block_cv_v1",
 )
@@ -50,21 +51,17 @@ for fold_id, train_idx, test_idx in manifest.folds():
 
 ## Split Types
 
-Use `spatial_block_cv_manifest` when the claim is about generalizing to held-out
-places. It sorts projected coordinates into deterministic spatial blocks.
+| What deployment must handle | Split helper | What is withheld |
+| --- | --- | --- |
+| Unseen places | `spatial_block_cv_manifest` | Deterministic blocks of projected coordinates |
+| Unseen places without nearby training observations | `buffered_spatial_cv_manifest` | A test block plus a buffer removed from training |
+| Entire unseen zones or route families | `group_spatial_cv_manifest` | Complete spatial groups |
+| Future demand in each panel series | `rolling_origin_panel_split_manifest` | The next horizon at each origin |
+| Both unseen places and future periods | `spatial_temporal_blocked_split_manifest` | Spatial and temporal blocks together |
 
-Use `buffered_spatial_cv_manifest` when nearby train rows would leak the held-out
-place. It removes training rows within the configured buffer distance of each
-test block.
-
-Use `group_spatial_cv_manifest` when a full pickup zone, route family, customer,
-or other spatial group must be absent from training.
-
-Use `rolling_origin_panel_split_manifest` for panel demand forecasting where
-future rows must be held out for every zone or lane.
-
-Use `spatial_temporal_blocked_split_manifest` when a benchmark claim needs both
-held-out places and held-out future time.
+Buffer distances must use the same units as the projected coordinates. Inspect
+fold sizes after buffering: a wide exclusion zone can leave too little history
+for a useful comparison.
 
 ## Wasm And Modeling Lab Example
 
@@ -92,5 +89,7 @@ const report = {
 This is enough for the page to distinguish a random diagnostic score from a
 leakage-safe geographic claim.
 
-The executable contract for the Python split-manifest example is checked by
-`scripts/check_docs_examples.py` in CI.
+Keep the manifest with the scored predictions so a comparison can be traced
+back to its exact rows.
+
+{/* Executable example coverage: scripts/check_docs_examples.py */}

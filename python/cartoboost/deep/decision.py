@@ -5,7 +5,7 @@ from typing import Any
 import numpy as np
 
 from ..config import FallbackMode, Objective
-from ._native import dumps, loads, require_native
+from ._native import require_native
 from .choice import ChoiceSetTransformer
 from .flow import flow_uncertainty_report
 
@@ -27,16 +27,14 @@ class ConstrainedDecisionOptimizer:
     def select(
         self, candidate_frame: list[dict[str, Any]], predictions: Any | None = None
     ) -> list[dict[str, Any]]:
-        select = require_native("deep_constrained_decision_select_value")
+        select = require_native("deep_constrained_decision_select_records")
         candidates = _merge_predictions(candidate_frame, predictions)
-        return loads(
-            select(
-                dumps(candidates),
-                str(self.objective),
-                dumps(self.constraints),
-                str(self.fallback),
-                self.risk_aversion,
-            )
+        return select(
+            candidates,
+            str(self.objective),
+            self.constraints,
+            str(self.fallback),
+            self.risk_aversion,
         )
 
     def flow_uncertainty_report(
@@ -86,15 +84,23 @@ def _merge_predictions(
         return [dict(row) for row in candidate_frame]
     if not isinstance(predictions, list):
         predictions = list(predictions)
-    by_candidate = {
-        str(row["candidate_id"]): row
-        for row in predictions
-        if isinstance(row, dict) and "candidate_id" in row
-    }
+    by_group_candidate = {}
+    by_candidate = {}
+    for row in predictions:
+        if not isinstance(row, dict) or "candidate_id" not in row:
+            continue
+        candidate = str(row["candidate_id"])
+        if "decision_id" in row:
+            by_group_candidate[(str(row["decision_id"]), candidate)] = row
+        else:
+            by_candidate[candidate] = row
     merged = []
     for row in candidate_frame:
         out = dict(row)
-        pred = by_candidate.get(str(row.get("candidate_id")))
+        candidate = str(row.get("candidate_id"))
+        pred = by_group_candidate.get(
+            (str(row.get("decision_id")), candidate), by_candidate.get(candidate)
+        )
         if pred is not None:
             for key, value in pred.items():
                 if key not in {"decision_id", "candidate_id", "candidate_value"}:

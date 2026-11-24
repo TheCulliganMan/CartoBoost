@@ -38,6 +38,33 @@ def test_naive_native_metadata_round_trips_after_fit():
     assert metadata == {"model": "naive"}
 
 
+def test_panel_conversion_preserves_series_and_timestamp_order(install_fake_native):
+    native = install_fake_native("NaiveForecaster")
+
+    NaiveForecaster().fit({"pickup_2": [4.0, 5.0], 1: [2.0, 3.0]})
+
+    assert native.calls[1][1].rows == [
+        ("pickup_2", "1970-01-01T00:00:00", 4.0),
+        ("pickup_2", "1970-01-02T00:00:00", 5.0),
+        ("1", "1970-01-01T00:00:00", 2.0),
+        ("1", "1970-01-02T00:00:00", 3.0),
+    ]
+
+
+def test_native_persistence_does_not_encode_training_inputs(monkeypatch, tmp_path):
+    import cartoboost.forecasting._native_wrappers as wrappers
+
+    def unexpected_encoding(*args, **kwargs):
+        raise AssertionError("native persistence must not copy fit inputs")
+
+    monkeypatch.setattr(wrappers, "_encode_fit_artifact", unexpected_encoding)
+    model = NaiveForecaster().fit([1.0, 2.0, 4.0])
+    path = tmp_path / "naive.json"
+    model.save(path)
+
+    assert NaiveForecaster.load(path).predict(2).predictions() == model.predict(2).predictions()
+
+
 def test_naive_pickle_and_weights_roundtrip(tmp_path: Path):
     model = NaiveForecaster().fit([1.0, 2.0, 4.0])
     expected = model.predict(3).predictions()

@@ -188,7 +188,7 @@ pub(crate) fn validate_season_length(season_length: usize) -> Result<()> {
 }
 
 pub(crate) fn validate_trend_window(window: usize) -> Result<()> {
-    if window < 3 || window.is_multiple_of(2) {
+    if window < 3 || window % 2 == 0 {
         return Err(CartoBoostError::InvalidInput(
             "trend_window must be an odd integer of at least 3".to_string(),
         ));
@@ -211,7 +211,7 @@ pub(crate) fn default_trend_window(season_length: usize) -> Result<usize> {
 
 fn next_odd(value: usize) -> Result<usize> {
     let value = value.max(3);
-    if value.is_multiple_of(2) {
+    if value % 2 == 0 {
         value.checked_add(1).ok_or_else(|| {
             CartoBoostError::InvalidInput("smoothing window is too large".to_string())
         })

@@ -73,7 +73,61 @@ pub fn parse_forecast_timestamp(value: &str) -> Result<NaiveDateTime> {
     if let Ok(timestamp) = DateTime::parse_from_rfc3339(trimmed) {
         return Ok(timestamp.naive_utc());
     }
+    // Keep the existing common formats on their fast path. Naive ISO strings
+    // from dataframe timestamps can also carry subsecond precision.
+    for format in ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%d %H:%M:%S%.f"] {
+        if let Ok(timestamp) = NaiveDateTime::parse_from_str(trimmed, format) {
+            return Ok(timestamp);
+        }
+    }
     Err(CartoBoostError::InvalidInput(format!(
         "forecast timestamp {value:?} is not parseable"
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Timelike;
+
+    #[test]
+    fn parses_subsecond_naive_and_offset_timestamps_without_losing_precision() {
+        for (text, nanos) in [
+            ("2026-01-01T00:00:00.125000", 125_000_000),
+            ("2026-01-01 00:00:00.123456789", 123_456_789),
+            (" 2026-01-01T00:00:00.000000001 ", 1),
+            ("2026-01-01T01:00:00.123456789+01:00", 123_456_789),
+        ] {
+            let timestamp = parse_forecast_timestamp(text).unwrap();
+            assert_eq!(
+                timestamp.date(),
+                NaiveDate::from_ymd_opt(2026, 1, 1).unwrap()
+            );
+            assert_eq!(timestamp.hour(), 0);
+            assert_eq!(timestamp.nanosecond(), nanos);
+            let serialized = timestamp.format("%Y-%m-%dT%H:%M:%S%.f").to_string();
+            assert_eq!(parse_forecast_timestamp(&serialized).unwrap(), timestamp);
+        }
+    }
+
+    #[test]
+    fn preserves_existing_timestamp_forms_and_rejects_invalid_subseconds() {
+        let expected = NaiveDate::from_ymd_opt(2026, 1, 1)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap();
+        for text in [
+            "2026-01-01",
+            "2026-01-01 00:00",
+            "2026-01-01T00:00",
+            "2026-01-01 00:00:00",
+            "2026-01-01T00:00:00",
+            "2026-01-01T00:00:00Z",
+        ] {
+            assert_eq!(parse_forecast_timestamp(text).unwrap(), expected);
+        }
+        for text in ["", "2026-02-30T00:00:00.125", "2026-01-01T00:00:00.xyz"] {
+            assert!(parse_forecast_timestamp(text).is_err());
+        }
+    }
 }

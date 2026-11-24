@@ -26,12 +26,15 @@ export function availableForecastModels() {
  * @param {any} candidates
  * @param {number} temperature
  * @param {string | null} [monotone_candidate_value]
+ * @param {string | null} [backend]
  * @returns {any}
  */
-export function deepChoiceSetTransformerReport(candidates, temperature, monotone_candidate_value) {
+export function deepChoiceSetTransformerReport(candidates, temperature, monotone_candidate_value, backend) {
     var ptr0 = isLikeNone(monotone_candidate_value) ? 0 : passStringToWasm0(monotone_candidate_value, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
     var len0 = WASM_VECTOR_LEN;
-    const ret = wasm.deepChoiceSetTransformerReport(candidates, temperature, ptr0, len0);
+    var ptr1 = isLikeNone(backend) ? 0 : passStringToWasm0(backend, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    var len1 = WASM_VECTOR_LEN;
+    const ret = wasm.deepChoiceSetTransformerReport(candidates, temperature, ptr0, len0, ptr1, len1);
     if (ret[2]) {
         throw takeFromExternrefTable0(ret[1]);
     }
@@ -43,14 +46,17 @@ export function deepChoiceSetTransformerReport(candidates, temperature, monotone
  * @param {Float64Array} residuals
  * @param {Float64Array} quantiles
  * @param {number} sample_count
+ * @param {string | null} [backend]
  * @returns {any}
  */
-export function deepConditionalFlowFit(hidden, residuals, quantiles, sample_count) {
+export function deepConditionalFlowFit(hidden, residuals, quantiles, sample_count, backend) {
     const ptr0 = passArrayF64ToWasm0(residuals, wasm.__wbindgen_malloc);
     const len0 = WASM_VECTOR_LEN;
     const ptr1 = passArrayF64ToWasm0(quantiles, wasm.__wbindgen_malloc);
     const len1 = WASM_VECTOR_LEN;
-    const ret = wasm.deepConditionalFlowFit(hidden, ptr0, len0, ptr1, len1, sample_count);
+    var ptr2 = isLikeNone(backend) ? 0 : passStringToWasm0(backend, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    var len2 = WASM_VECTOR_LEN;
+    const ret = wasm.deepConditionalFlowFit(hidden, ptr0, len0, ptr1, len1, sample_count, ptr2, len2);
     if (ret[2]) {
         throw takeFromExternrefTable0(ret[1]);
     }
@@ -71,6 +77,22 @@ export function deepConditionalFlowPredict(artifact, hidden, actual) {
         throw takeFromExternrefTable0(ret[1]);
     }
     return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * Conditional-flow inference with both learned affine projections executed
+ * by browser WebGPU. Sampling and metrics reuse the native probability
+ * contract so this export remains numerically aligned with native backends.
+ * @param {any} artifact
+ * @param {any} hidden
+ * @param {Float64Array | null} [actual]
+ * @returns {Promise<any>}
+ */
+export function deepConditionalFlowPredictWebgpu(artifact, hidden, actual) {
+    var ptr0 = isLikeNone(actual) ? 0 : passArrayF64ToWasm0(actual, wasm.__wbindgen_malloc);
+    var len0 = WASM_VECTOR_LEN;
+    const ret = wasm.deepConditionalFlowPredictWebgpu(artifact, hidden, ptr0, len0);
+    return ret;
 }
 
 /**
@@ -98,10 +120,13 @@ export function deepConstrainedDecisionSelect(candidates, objective, constraints
  * @param {number} scenario_count
  * @param {number} diffusion_steps
  * @param {number} shock_scale
+ * @param {string | null} [backend]
  * @returns {any}
  */
-export function deepDiffusionScenarioGenerate(point_forecast, edges, scenario_count, diffusion_steps, shock_scale) {
-    const ret = wasm.deepDiffusionScenarioGenerate(point_forecast, edges, scenario_count, diffusion_steps, shock_scale);
+export function deepDiffusionScenarioGenerate(point_forecast, edges, scenario_count, diffusion_steps, shock_scale, backend) {
+    var ptr0 = isLikeNone(backend) ? 0 : passStringToWasm0(backend, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    var len0 = WASM_VECTOR_LEN;
+    const ret = wasm.deepDiffusionScenarioGenerate(point_forecast, edges, scenario_count, diffusion_steps, shock_scale, ptr0, len0);
     if (ret[2]) {
         throw takeFromExternrefTable0(ret[1]);
     }
@@ -109,11 +134,27 @@ export function deepDiffusionScenarioGenerate(point_forecast, edges, scenario_co
 }
 
 /**
+ * @param {any} point_forecast
+ * @param {any} edges
+ * @param {number} scenario_count
+ * @param {number} diffusion_steps
+ * @param {number} shock_scale
+ * @returns {Promise<any>}
+ */
+export function deepDiffusionScenarioGenerateWebgpu(point_forecast, edges, scenario_count, diffusion_steps, shock_scale) {
+    const ret = wasm.deepDiffusionScenarioGenerateWebgpu(point_forecast, edges, scenario_count, diffusion_steps, shock_scale);
+    return ret;
+}
+
+/**
  * @param {any} rows
+ * @param {string | null} [backend]
  * @returns {any}
  */
-export function deepDirectionalPairPredict(rows) {
-    const ret = wasm.deepDirectionalPairPredict(rows);
+export function deepDirectionalPairPredict(rows, backend) {
+    var ptr0 = isLikeNone(backend) ? 0 : passStringToWasm0(backend, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    var len0 = WASM_VECTOR_LEN;
+    const ret = wasm.deepDirectionalPairPredict(rows, ptr0, len0);
     if (ret[2]) {
         throw takeFromExternrefTable0(ret[1]);
     }
@@ -170,10 +211,60 @@ export function deepEventOutcomePredictWebgpu(artifact, features) {
  * @param {any} exogenous_fields
  * @param {number} smoothing
  * @param {number} coordinate_scale
+ * @param {string | null} [backend]
  * @returns {any}
  */
-export function deepGraphNeuralOperatorPredict(field_values, coordinates, edges, exogenous_fields, smoothing, coordinate_scale) {
-    const ret = wasm.deepGraphNeuralOperatorPredict(field_values, coordinates, edges, exogenous_fields, smoothing, coordinate_scale);
+export function deepGraphNeuralOperatorPredict(field_values, coordinates, edges, exogenous_fields, smoothing, coordinate_scale, backend) {
+    var ptr0 = isLikeNone(backend) ? 0 : passStringToWasm0(backend, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    var len0 = WASM_VECTOR_LEN;
+    const ret = wasm.deepGraphNeuralOperatorPredict(field_values, coordinates, edges, exogenous_fields, smoothing, coordinate_scale, ptr0, len0);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * Graph-neural-operator inference with graph aggregation executed by browser
+ * WebGPU. This is async because browsers do not expose synchronous adapter
+ * discovery or command completion.
+ * @param {any} field_values
+ * @param {any} coordinates
+ * @param {any} edges
+ * @param {any} exogenous_fields
+ * @param {number} smoothing
+ * @param {number} coordinate_scale
+ * @returns {Promise<any>}
+ */
+export function deepGraphNeuralOperatorPredictWebgpu(field_values, coordinates, edges, exogenous_fields, smoothing, coordinate_scale) {
+    const ret = wasm.deepGraphNeuralOperatorPredictWebgpu(field_values, coordinates, edges, exogenous_fields, smoothing, coordinate_scale);
+    return ret;
+}
+
+/**
+ * @param {any} y
+ * @param {number} lookback
+ * @param {string | null} [backend]
+ * @returns {any}
+ */
+export function deepInvertedTemporalFit(y, lookback, backend) {
+    var ptr0 = isLikeNone(backend) ? 0 : passStringToWasm0(backend, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    var len0 = WASM_VECTOR_LEN;
+    const ret = wasm.deepInvertedTemporalFit(y, lookback, ptr0, len0);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * @param {any} artifact
+ * @param {number} horizon
+ * @param {boolean} cross_entity
+ * @returns {any}
+ */
+export function deepInvertedTemporalPredict(artifact, horizon, cross_entity) {
+    const ret = wasm.deepInvertedTemporalPredict(artifact, horizon, cross_entity);
     if (ret[2]) {
         throw takeFromExternrefTable0(ret[1]);
     }
@@ -292,10 +383,13 @@ export function deepServiceResidualPredictWebgpu(artifact, rows) {
  * @param {any} y
  * @param {number} lookback
  * @param {number} horizon
+ * @param {string | null} [backend]
  * @returns {any}
  */
-export function deepTemporalEntityFit(y, lookback, horizon) {
-    const ret = wasm.deepTemporalEntityFit(y, lookback, horizon);
+export function deepTemporalEntityFit(y, lookback, horizon, backend) {
+    var ptr0 = isLikeNone(backend) ? 0 : passStringToWasm0(backend, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    var len0 = WASM_VECTOR_LEN;
+    const ret = wasm.deepTemporalEntityFit(y, lookback, horizon, ptr0, len0);
     if (ret[2]) {
         throw takeFromExternrefTable0(ret[1]);
     }
@@ -313,6 +407,22 @@ export function deepTemporalEntityPredict(artifact, horizon) {
         throw takeFromExternrefTable0(ret[1]);
     }
     return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * @param {any} coords
+ * @param {Float32Array} values
+ * @param {number} bin_count
+ * @param {number | null | undefined} max_distance
+ * @param {number} anisotropy_angle_degrees
+ * @param {number} anisotropy_scaling
+ * @returns {Promise<any>}
+ */
+export function empiricalSemivariogramWebgpu(coords, values, bin_count, max_distance, anisotropy_angle_degrees, anisotropy_scaling) {
+    const ptr0 = passArrayF32ToWasm0(values, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.empiricalSemivariogramWebgpu(coords, ptr0, len0, bin_count, !isLikeNone(max_distance), isLikeNone(max_distance) ? 0 : max_distance, anisotropy_angle_degrees, anisotropy_scaling);
+    return ret;
 }
 
 /**
@@ -421,6 +531,15 @@ export function runGeoFeatureExamples(request) {
 
 /**
  * @param {any} request
+ * @returns {Promise<any>}
+ */
+export function runGeoFeatureExamplesWebgpu(request) {
+    const ret = wasm.runGeoFeatureExamplesWebgpu(request);
+    return ret;
+}
+
+/**
+ * @param {any} request
  * @returns {any}
  */
 export function runGeostatisticsModel(request) {
@@ -433,6 +552,15 @@ export function runGeostatisticsModel(request) {
 
 /**
  * @param {any} request
+ * @returns {Promise<any>}
+ */
+export function runGeostatisticsWebgpu(request) {
+    const ret = wasm.runGeostatisticsWebgpu(request);
+    return ret;
+}
+
+/**
+ * @param {any} request
  * @returns {any}
  */
 export function runGeotemporalDiagnostics(request) {
@@ -441,6 +569,17 @@ export function runGeotemporalDiagnostics(request) {
         throw takeFromExternrefTable0(ret[1]);
     }
     return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * Runs a graph-diffusion forecaster whose sparse propagation remains on
+ * browser WebGPU for every diffusion and horizon step.
+ * @param {any} request
+ * @returns {Promise<any>}
+ */
+export function runGraphDiffusionWebgpu(request) {
+    const ret = wasm.runGraphDiffusionWebgpu(request);
+    return ret;
 }
 
 /**
@@ -470,6 +609,18 @@ export function runMarketStructureExplorer(request) {
 }
 
 /**
+ * Fits and recursively predicts N-BEATS/N-HiTS with browser WebGPU training
+ * and dense hidden-layer inference. Kept separate from the synchronous
+ * dispatcher because browser GPU promises cannot be synchronously blocked.
+ * @param {any} request
+ * @returns {Promise<any>}
+ */
+export function runNeuralForecastWebgpu(request) {
+    const ret = wasm.runNeuralForecastWebgpu(request);
+    return ret;
+}
+
+/**
  * @param {any} request
  * @returns {any}
  */
@@ -479,6 +630,15 @@ export function runNeuralModel(request) {
         throw takeFromExternrefTable0(ret[1]);
     }
     return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * @param {any} request
+ * @returns {Promise<any>}
+ */
+export function runNode2VecModelWebgpu(request) {
+    const ret = wasm.runNode2VecModelWebgpu(request);
+    return ret;
 }
 
 /**
@@ -506,6 +666,134 @@ export function runSequence(request) {
 }
 
 /**
+ * @param {Float32Array} parameters
+ * @param {Float32Array} first_moment
+ * @param {Float32Array} second_moment
+ * @param {Float32Array} gradient
+ * @param {bigint} step
+ * @param {number} learning_rate
+ * @param {number} weight_decay
+ * @returns {Promise<any>}
+ */
+export function webgpuAdamwStep(parameters, first_moment, second_moment, gradient, step, learning_rate, weight_decay) {
+    const ptr0 = passArrayF32ToWasm0(parameters, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArrayF32ToWasm0(first_moment, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArrayF32ToWasm0(second_moment, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ptr3 = passArrayF32ToWasm0(gradient, wasm.__wbindgen_malloc);
+    const len3 = WASM_VECTOR_LEN;
+    const ret = wasm.webgpuAdamwStep(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, step, learning_rate, weight_decay);
+    return ret;
+}
+
+/**
+ * @param {any} features
+ * @param {Float64Array} means
+ * @param {Float64Array} weights
+ * @param {Float64Array} intercepts
+ * @returns {Promise<any>}
+ */
+export function webgpuAffineScores(features, means, weights, intercepts) {
+    const ptr0 = passArrayF64ToWasm0(means, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArrayF64ToWasm0(weights, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArrayF64ToWasm0(intercepts, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ret = wasm.webgpuAffineScores(features, ptr0, len0, ptr1, len1, ptr2, len2);
+    return ret;
+}
+
+/**
+ * Probes the browser adapter and reports the same complete operation contract
+ * used by native backends. This is async because browser adapter discovery is
+ * promise-driven and must never be guessed from compile-time features alone.
+ * @returns {Promise<any>}
+ */
+export function webgpuCapabilities() {
+    const ret = wasm.webgpuCapabilities();
+    return ret;
+}
+
+/**
+ * @param {Uint32Array} indptr
+ * @param {Uint32Array} indices
+ * @param {Float32Array} weights
+ * @param {number} channels
+ * @param {Float32Array} values
+ * @returns {Promise<Float32Array>}
+ */
+export function webgpuCsrDiffusion(indptr, indices, weights, channels, values) {
+    const ptr0 = passArray32ToWasm0(indptr, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArray32ToWasm0(indices, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArrayF32ToWasm0(weights, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ptr3 = passArrayF32ToWasm0(values, wasm.__wbindgen_malloc);
+    const len3 = WASM_VECTOR_LEN;
+    const ret = wasm.webgpuCsrDiffusion(ptr0, len0, ptr1, len1, ptr2, len2, channels, ptr3, len3);
+    return ret;
+}
+
+/**
+ * @param {Uint32Array} indptr
+ * @param {Uint32Array} indices
+ * @param {Float32Array} weights
+ * @param {number} channels
+ * @param {Float32Array} values
+ * @param {Float32Array} output_grad
+ * @returns {Promise<any>}
+ */
+export function webgpuCsrDiffusionBackward(indptr, indices, weights, channels, values, output_grad) {
+    const ptr0 = passArray32ToWasm0(indptr, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArray32ToWasm0(indices, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArrayF32ToWasm0(weights, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ptr3 = passArrayF32ToWasm0(values, wasm.__wbindgen_malloc);
+    const len3 = WASM_VECTOR_LEN;
+    const ptr4 = passArrayF32ToWasm0(output_grad, wasm.__wbindgen_malloc);
+    const len4 = WASM_VECTOR_LEN;
+    const ret = wasm.webgpuCsrDiffusionBackward(ptr0, len0, ptr1, len1, ptr2, len2, channels, ptr3, len3, ptr4, len4);
+    return ret;
+}
+
+/**
+ * @param {Uint32Array} indptr
+ * @param {Float32Array} logits
+ * @returns {Promise<Float32Array>}
+ */
+export function webgpuCsrRowSoftmax(indptr, logits) {
+    const ptr0 = passArray32ToWasm0(indptr, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArrayF32ToWasm0(logits, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.webgpuCsrRowSoftmax(ptr0, len0, ptr1, len1);
+    return ret;
+}
+
+/**
+ * @param {Uint32Array} indptr
+ * @param {Float32Array} weights
+ * @param {Float32Array} output_grad
+ * @returns {Promise<Float32Array>}
+ */
+export function webgpuCsrRowSoftmaxBackward(indptr, weights, output_grad) {
+    const ptr0 = passArray32ToWasm0(indptr, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArrayF32ToWasm0(weights, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArrayF32ToWasm0(output_grad, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ret = wasm.webgpuCsrRowSoftmaxBackward(ptr0, len0, ptr1, len1, ptr2, len2);
+    return ret;
+}
+
+/**
  * @param {any} features
  * @param {Float32Array} weights
  * @param {Float32Array} biases
@@ -529,6 +817,141 @@ export function webgpuDenseLayer(features, weights, biases) {
  */
 export function webgpuDispatchReport(len) {
     const ret = wasm.webgpuDispatchReport(len);
+    return ret;
+}
+
+/**
+ * @param {Uint32Array} indptr
+ * @param {Uint32Array} indices
+ * @param {Float32Array} weights
+ * @param {Float64Array} values
+ * @param {number} smoothing
+ * @param {number} iterations
+ * @returns {Promise<any>}
+ */
+export function webgpuGraphSmooth(indptr, indices, weights, values, smoothing, iterations) {
+    const ptr0 = passArray32ToWasm0(indptr, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArray32ToWasm0(indices, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArrayF32ToWasm0(weights, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ptr3 = passArrayF64ToWasm0(values, wasm.__wbindgen_malloc);
+    const len3 = WASM_VECTOR_LEN;
+    const ret = wasm.webgpuGraphSmooth(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, smoothing, iterations);
+    return ret;
+}
+
+/**
+ * @param {Float32Array} values
+ * @param {number} rows
+ * @param {number} width
+ * @param {Float32Array} gamma
+ * @param {Float32Array} beta
+ * @returns {Promise<Float32Array>}
+ */
+export function webgpuLayerNorm(values, rows, width, gamma, beta) {
+    const ptr0 = passArrayF32ToWasm0(values, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArrayF32ToWasm0(gamma, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArrayF32ToWasm0(beta, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ret = wasm.webgpuLayerNorm(ptr0, len0, rows, width, ptr1, len1, ptr2, len2);
+    return ret;
+}
+
+/**
+ * @param {any} embeddings
+ * @param {any} pairs
+ * @returns {Promise<any>}
+ */
+export function webgpuPairSigmoidScores(embeddings, pairs) {
+    const ret = wasm.webgpuPairSigmoidScores(embeddings, pairs);
+    return ret;
+}
+
+/**
+ * @param {any} left
+ * @param {any} right
+ * @returns {Promise<any>}
+ */
+export function webgpuPairwiseSquaredDistances(left, right) {
+    const ret = wasm.webgpuPairwiseSquaredDistances(left, right);
+    return ret;
+}
+
+/**
+ * @param {Float32Array} initial_values
+ * @param {Uint8Array} opcodes
+ * @param {Uint32Array} left
+ * @param {Uint32Array} right
+ * @returns {Promise<Float32Array>}
+ */
+export function webgpuScalarGraph(initial_values, opcodes, left, right) {
+    const ptr0 = passArrayF32ToWasm0(initial_values, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArray8ToWasm0(opcodes, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArray32ToWasm0(left, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ptr3 = passArray32ToWasm0(right, wasm.__wbindgen_malloc);
+    const len3 = WASM_VECTOR_LEN;
+    const ret = wasm.webgpuScalarGraph(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3);
+    return ret;
+}
+
+/**
+ * @param {Float32Array} initial_values
+ * @param {Uint8Array} opcodes
+ * @param {Uint32Array} left
+ * @param {Uint32Array} right
+ * @param {Uint32Array} parameter_ids
+ * @param {number} loss
+ * @param {Float32Array} parameters
+ * @param {Float32Array} first_moment
+ * @param {Float32Array} second_moment
+ * @param {bigint} step
+ * @param {number} learning_rate
+ * @param {number} weight_decay
+ * @returns {Promise<any>}
+ */
+export function webgpuScalarGraphTrainStep(initial_values, opcodes, left, right, parameter_ids, loss, parameters, first_moment, second_moment, step, learning_rate, weight_decay) {
+    const ptr0 = passArrayF32ToWasm0(initial_values, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArray8ToWasm0(opcodes, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArray32ToWasm0(left, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ptr3 = passArray32ToWasm0(right, wasm.__wbindgen_malloc);
+    const len3 = WASM_VECTOR_LEN;
+    const ptr4 = passArray32ToWasm0(parameter_ids, wasm.__wbindgen_malloc);
+    const len4 = WASM_VECTOR_LEN;
+    const ptr5 = passArrayF32ToWasm0(parameters, wasm.__wbindgen_malloc);
+    const len5 = WASM_VECTOR_LEN;
+    const ptr6 = passArrayF32ToWasm0(first_moment, wasm.__wbindgen_malloc);
+    const len6 = WASM_VECTOR_LEN;
+    const ptr7 = passArrayF32ToWasm0(second_moment, wasm.__wbindgen_malloc);
+    const len7 = WASM_VECTOR_LEN;
+    const ret = wasm.webgpuScalarGraphTrainStep(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, loss, ptr5, len5, ptr6, len6, ptr7, len7, step, learning_rate, weight_decay);
+    return ret;
+}
+
+/**
+ * @param {any} inputs
+ * @param {Float32Array} targets
+ * @param {number} hidden_size
+ * @param {number} epochs
+ * @param {number} learning_rate
+ * @param {Float32Array} parameters
+ * @returns {Promise<Float32Array>}
+ */
+export function webgpuTrainTanhMlp(inputs, targets, hidden_size, epochs, learning_rate, parameters) {
+    const ptr0 = passArrayF32ToWasm0(targets, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArrayF32ToWasm0(parameters, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.webgpuTrainTanhMlp(inputs, ptr0, len0, hidden_size, epochs, learning_rate, ptr1, len1);
     return ret;
 }
 function __wbg_get_imports() {
@@ -841,7 +1264,7 @@ function __wbg_get_imports() {
                     const a = state0.a;
                     state0.a = 0;
                     try {
-                        return wasm_bindgen__convert__closures_____invoke__h39e1bf8ff3fdbdb9(a, state0.b, arg0, arg1);
+                        return wasm_bindgen_e13304a9bf4bdd25___convert__closures_____invoke___js_sys_9a5df1e41d83eac9___Function_fn_wasm_bindgen_e13304a9bf4bdd25___JsValue_____wasm_bindgen_e13304a9bf4bdd25___sys__Undefined___js_sys_9a5df1e41d83eac9___Function_fn_wasm_bindgen_e13304a9bf4bdd25___JsValue_____wasm_bindgen_e13304a9bf4bdd25___sys__Undefined_______true_(a, state0.b, arg0, arg1);
                     } finally {
                         state0.a = a;
                     }
@@ -1130,13 +1553,13 @@ function __wbg_get_imports() {
             arg0.writeBuffer(arg1, arg2, getArrayU8FromWasm0(arg3, arg4), arg5, arg6);
         }, arguments); },
         __wbindgen_cast_0000000000000001: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 504, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, wasm_bindgen__convert__closures_____invoke__h0187be81d5918678);
+            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 1235, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+            const ret = makeMutClosure(arg0, arg1, wasm_bindgen_e13304a9bf4bdd25___convert__closures_____invoke___wasm_bindgen_e13304a9bf4bdd25___JsValue______true_);
             return ret;
         },
         __wbindgen_cast_0000000000000002: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 933, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, wasm_bindgen__convert__closures_____invoke__h164c0d2c76578433);
+            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 1258, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
+            const ret = makeMutClosure(arg0, arg1, wasm_bindgen_e13304a9bf4bdd25___convert__closures_____invoke___wasm_bindgen_e13304a9bf4bdd25___JsValue__core_608f92abc48d28da___result__Result_____wasm_bindgen_e13304a9bf4bdd25___JsError___true_);
             return ret;
         },
         __wbindgen_cast_0000000000000003: function(arg0) {
@@ -1164,6 +1587,13 @@ function __wbg_get_imports() {
             const ret = BigInt.asUintN(64, arg0);
             return ret;
         },
+        __wbindgen_cast_0000000000000008: function(arg0, arg1) {
+            var v0 = getArrayF32FromWasm0(arg0, arg1).slice();
+            wasm.__wbindgen_free(arg0, arg1 * 4, 4);
+            // Cast intrinsic for `Vector(F32) -> Externref`.
+            const ret = v0;
+            return ret;
+        },
         __wbindgen_init_externref_table: function() {
             const table = wasm.__wbindgen_externrefs;
             const offset = table.grow(4);
@@ -1180,19 +1610,19 @@ function __wbg_get_imports() {
     };
 }
 
-function wasm_bindgen__convert__closures_____invoke__h0187be81d5918678(arg0, arg1, arg2) {
-    wasm.wasm_bindgen__convert__closures_____invoke__h0187be81d5918678(arg0, arg1, arg2);
+function wasm_bindgen_e13304a9bf4bdd25___convert__closures_____invoke___wasm_bindgen_e13304a9bf4bdd25___JsValue______true_(arg0, arg1, arg2) {
+    wasm.wasm_bindgen_e13304a9bf4bdd25___convert__closures_____invoke___wasm_bindgen_e13304a9bf4bdd25___JsValue______true_(arg0, arg1, arg2);
 }
 
-function wasm_bindgen__convert__closures_____invoke__h164c0d2c76578433(arg0, arg1, arg2) {
-    const ret = wasm.wasm_bindgen__convert__closures_____invoke__h164c0d2c76578433(arg0, arg1, arg2);
+function wasm_bindgen_e13304a9bf4bdd25___convert__closures_____invoke___wasm_bindgen_e13304a9bf4bdd25___JsValue__core_608f92abc48d28da___result__Result_____wasm_bindgen_e13304a9bf4bdd25___JsError___true_(arg0, arg1, arg2) {
+    const ret = wasm.wasm_bindgen_e13304a9bf4bdd25___convert__closures_____invoke___wasm_bindgen_e13304a9bf4bdd25___JsValue__core_608f92abc48d28da___result__Result_____wasm_bindgen_e13304a9bf4bdd25___JsError___true_(arg0, arg1, arg2);
     if (ret[1]) {
         throw takeFromExternrefTable0(ret[0]);
     }
 }
 
-function wasm_bindgen__convert__closures_____invoke__h39e1bf8ff3fdbdb9(arg0, arg1, arg2, arg3) {
-    wasm.wasm_bindgen__convert__closures_____invoke__h39e1bf8ff3fdbdb9(arg0, arg1, arg2, arg3);
+function wasm_bindgen_e13304a9bf4bdd25___convert__closures_____invoke___js_sys_9a5df1e41d83eac9___Function_fn_wasm_bindgen_e13304a9bf4bdd25___JsValue_____wasm_bindgen_e13304a9bf4bdd25___sys__Undefined___js_sys_9a5df1e41d83eac9___Function_fn_wasm_bindgen_e13304a9bf4bdd25___JsValue_____wasm_bindgen_e13304a9bf4bdd25___sys__Undefined_______true_(arg0, arg1, arg2, arg3) {
+    wasm.wasm_bindgen_e13304a9bf4bdd25___convert__closures_____invoke___js_sys_9a5df1e41d83eac9___Function_fn_wasm_bindgen_e13304a9bf4bdd25___JsValue_____wasm_bindgen_e13304a9bf4bdd25___sys__Undefined___js_sys_9a5df1e41d83eac9___Function_fn_wasm_bindgen_e13304a9bf4bdd25___JsValue_____wasm_bindgen_e13304a9bf4bdd25___sys__Undefined_______true_(arg0, arg1, arg2, arg3);
 }
 
 
@@ -1291,6 +1721,11 @@ function debugString(val) {
     return className;
 }
 
+function getArrayF32FromWasm0(ptr, len) {
+    ptr = ptr >>> 0;
+    return getFloat32ArrayMemory0().subarray(ptr / 4, ptr / 4 + len);
+}
+
 function getArrayU32FromWasm0(ptr, len) {
     ptr = ptr >>> 0;
     return getUint32ArrayMemory0().subarray(ptr / 4, ptr / 4 + len);
@@ -1384,6 +1819,20 @@ function makeMutClosure(arg0, arg1, f) {
     };
     CLOSURE_DTORS.register(real, state, state);
     return real;
+}
+
+function passArray32ToWasm0(arg, malloc) {
+    const ptr = malloc(arg.length * 4, 4) >>> 0;
+    getUint32ArrayMemory0().set(arg, ptr / 4);
+    WASM_VECTOR_LEN = arg.length;
+    return ptr;
+}
+
+function passArray8ToWasm0(arg, malloc) {
+    const ptr = malloc(arg.length * 1, 1) >>> 0;
+    getUint8ArrayMemory0().set(arg, ptr / 1);
+    WASM_VECTOR_LEN = arg.length;
+    return ptr;
 }
 
 function passArrayF32ToWasm0(arg, malloc) {

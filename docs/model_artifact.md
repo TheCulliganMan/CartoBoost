@@ -1,13 +1,18 @@
 # Saving And Loading Models
 
-CartoBoost models are stored as JSON artifacts. Use them when you need to reload
-a fitted temporal-spatial model with its split policy, sparse-feature requirements,
-feature schema, and training parameters intact.
+Save a fitted CartoBoost model as JSON, then reload it with its feature schema,
+split policy, sparse inputs, and training settings intact. JSON artifacts are
+inspectable and do not depend on pickling a Python process.
 
-For reproducible analysis, save the model together with the data split,
-package version, feature definitions, and evaluation metrics. The JSON file
-records the model configuration needed to reproduce predictions, but it does
-not contain the original training data or replace an experiment record.
+| You need | Use |
+| --- | --- |
+| A fitted model with configuration metadata | `model.save(...)` and `CartoBoostRegressor.load(...)` |
+| A versioned prediction-ready weights file | `save_weights(...)` and `load_weights(...)` |
+| ONNX for a supported dense axis-tree model | `save_weights(..., format="onnx")` |
+
+Keep the data split, package version, feature definitions, and evaluation
+metrics alongside the artifact. The model file preserves prediction behavior;
+it does not contain the original training data.
 
 ## Contents
 
@@ -29,10 +34,11 @@ settings, and leaf configuration.
 
 ## Graph-Derived Features
 
-Graph support remains a precompute layer in front of the booster. A
-`GraphFeatureBundle` appends dense graph columns and optional sparse graph
-memberships before `CartoBoostRegressor.fit(...)`; the saved booster artifact
-then remains an ordinary CartoBoost model artifact.
+When you use graph-derived features with a booster, `GraphFeatureBundle`
+appends dense graph columns and optional sparse memberships before fitting.
+The saved booster remains a CartoBoost model artifact; persist the graph encoder
+separately so you can reproduce those inputs. Standalone graph models use their
+own [graph model artifacts](graph-features.md).
 
 ```mermaid
 flowchart LR
@@ -121,6 +127,5 @@ loaded.predict(X_test_dense, sparse_sets={"taxi_zones": taxi_zones_test})
 ## Dense And Sparse Prediction Safety
 
 Models with sparse-list splits require dataset-aware prediction. Python exposes
-that through `predict(X, sparse_sets=...)`. Dense-only prediction on a model that
-contains sparse-list splits should raise a clear error rather than silently
-routing sparse data as missing.
+that through `predict(X, sparse_sets=...)`. Dense-only prediction raises an error when the model contains sparse-list
+splits. Supply every required sparse column to preserve the fitted routing.

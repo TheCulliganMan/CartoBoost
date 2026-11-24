@@ -8,6 +8,68 @@ mod tests {
     }
 
     #[test]
+    fn recursive_lag_state_matches_full_history_features_exactly() {
+        let builder = LagFeatureBuilder::new(LagFeatureConfig {
+            lags: vec![1, 7],
+            rolling_mean_windows: vec![3, 7],
+            rolling_std_windows: vec![7],
+            rolling_min_windows: vec![7],
+            rolling_max_windows: vec![7],
+            partial_rolling_mean_windows: vec![168],
+            ewm_alpha_percents: vec![1, 37, 99],
+            difference_lags: vec![3],
+            rolling_trend_windows: vec![7],
+            covariate_features: vec!["trip_distance".into()],
+            ..LagFeatureConfig::default()
+        })
+        .unwrap();
+        let mut history = (0..256)
+            .map(|index| {
+                ForecastRow::with_covariates(
+                    "taxi_lane",
+                    ts(1) + chrono::Duration::hours(index),
+                    30.0 + (index as f64 * 0.13).sin(),
+                    BTreeMap::from([("trip_distance".into(), 2.5)]),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut state = builder.recursive_state("taxi_lane", &history).unwrap();
+        for step in 0..168 {
+            let timestamp = history.last().unwrap().timestamp + chrono::Duration::hours(1);
+            let covariates = BTreeMap::from([("trip_distance".into(), 3.0 + step as f64)]);
+            let reference = builder
+                .transform_next_sorted_prior_with_covariates(
+                    "taxi_lane",
+                    &history,
+                    timestamp,
+                    Some(&covariates),
+                )
+                .unwrap();
+            let optimized = builder
+                .transform_next_recursive(
+                    "taxi_lane",
+                    &history,
+                    timestamp,
+                    Some(&covariates),
+                    &mut state,
+                )
+                .unwrap();
+            assert_eq!(optimized, reference);
+            history.push(ForecastRow::with_covariates(
+                "taxi_lane",
+                timestamp,
+                40.0 + (step as f64 * 0.17).cos(),
+                covariates,
+            ));
+        }
+        history.swap(0, 1);
+        assert!(builder.recursive_state("taxi_lane", &history).is_err());
+        assert!(builder
+            .transform_next_sorted_prior("taxi_lane", &history, ts(30))
+            .is_err());
+    }
+
+    #[test]
     fn delta_and_trend_features_use_only_prior_history() {
         let frame = ForecastFrame::new(
             vec![

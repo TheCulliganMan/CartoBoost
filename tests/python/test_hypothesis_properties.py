@@ -136,7 +136,7 @@ def test_native_fuzzy_midpoint_preserves_branch_mass():
         max_depth=1,
         min_samples_leaf=1,
         min_gain=0.0,
-        splitters=["axis"],
+        split_policy="axis_only",
         fuzzy=True,
         fuzzy_bandwidth=1.0,
     )
@@ -156,7 +156,7 @@ def test_native_periodic_prediction_invariant_under_period_shift():
         max_depth=1,
         min_samples_leaf=1,
         min_gain=0.0,
-        splitters=["periodic:24"],
+        split_policy="structured",
     )
 
     _fit_or_skip(
@@ -182,10 +182,19 @@ def test_native_duplicate_sparse_ids_do_not_change_predictions():
         max_depth=1,
         min_samples_leaf=1,
         min_gain=0.0,
-        splitters=["sparse_set"],
+        split_policy="structured",
     )
 
-    _fit_or_skip(model, x, y, sparse_sets=sparse_sets)
+    _fit_or_skip(
+        model,
+        x,
+        y,
+        sparse_sets=sparse_sets,
+        feature_schema={
+            "dense": [("feature_0", "numeric")],
+            "sparse_sets": [("route_cells", "sparse_set")],
+        },
+    )
 
     assert model.predict(x, sparse_sets=duplicate_sparse_sets) == pytest.approx(
         model.predict(x, sparse_sets=sparse_sets),
@@ -203,9 +212,18 @@ def test_native_sparse_save_load_preserves_predictions(tmp_path: Path):
         max_depth=1,
         min_samples_leaf=1,
         min_gain=0.0,
-        splitters=["sparse_set"],
+        split_policy="structured",
     )
-    _fit_or_skip(model, x, y, sparse_sets=sparse_sets)
+    _fit_or_skip(
+        model,
+        x,
+        y,
+        sparse_sets=sparse_sets,
+        feature_schema={
+            "dense": [("feature_0", "numeric")],
+            "sparse_sets": [("route_cells", "sparse_set")],
+        },
+    )
     before = np.asarray(model.predict(x, sparse_sets=sparse_sets), dtype=float)
     path = tmp_path / "sparse.json"
 

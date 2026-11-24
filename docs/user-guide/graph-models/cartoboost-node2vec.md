@@ -1,11 +1,15 @@
+---
+sidebar_label: Node2Vec
+---
+
 import {NeuralModelExample} from '@site/src/components/ModelingLabClient';
 
 # CartoBoost Node2Vec Graph Models
 
-Use Node2Vec when graph topology is the signal: which nodes connect, how
-directed flow moves through the graph, and which source-target pairs appear in
-similar neighborhoods. Node attributes are optional; the model learns from the
-edge structure itself.
+Learn a representation from who connects to whom with Node2Vec. In a taxi
+flow graph, pickup and dropoff zones can share neighborhood structure even when
+they are far apart. Use this family when directed edges and repeated flow
+patterns matter more than measured node attributes.
 
 ## When To Use
 
@@ -16,6 +20,9 @@ edge structure itself.
   labels or held-out edges.
 
 ## Interactive Example
+
+Run the small example to inspect inputs and model behavior. It is a browser
+demonstration, not a benchmark on held-out taxi trips.
 
 <NeuralModelExample title="Node2Vec graph browser model" pipeline="node2vec" />
 

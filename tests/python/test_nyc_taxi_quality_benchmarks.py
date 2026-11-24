@@ -259,10 +259,11 @@ def test_nyc_taxi_public_doc_matches_maintained_artifact_rows():
     results = json.loads(results_path.read_text(encoding="utf-8"))
     doc = doc_path.read_text(encoding="utf-8")
 
+    assert set(results["tasks"]) == {"duration", "fare"}
     for task_name, split_name, model_name in [
-        ("duration", "random", "cartoboost"),
-        ("fare", "spatial_holdout", "cartoboost"),
-        ("pickup_demand", "random", "cartoboost"),
+        (task, split, "cartoboost")
+        for task in ("duration", "fare")
+        for split in ("random", "spatial_holdout", "out_of_time")
     ]:
         result = results["tasks"][task_name]["splits"][split_name]["models"][model_name]
         metrics = result["metrics"]
@@ -296,7 +297,12 @@ def test_nyc_taxi_maintained_artifacts_are_complete():
         for line in (artifact_dir / "results.jsonl").read_text(encoding="utf-8").splitlines()
         if line
     ]
-    assert len(results["external_baseline_comparison"]) == 7
+    assert len(results["external_baseline_comparison"]) == 6
+    assert {(row["task"], row["split"]) for row in results["external_baseline_comparison"]} == {
+        (task, split)
+        for task in ("duration", "fare")
+        for split in ("random", "spatial_holdout", "out_of_time")
+    }
     assert results["comparability_audit"]["same_outer_splits"] is True
     assert results["comparability_audit"]["selection_uses_outer_test_labels"] is False
     assert results["comparability_audit"]["same_feature_access_policy"] is True
@@ -311,7 +317,7 @@ def test_nyc_taxi_maintained_artifacts_are_complete():
     } >= {
         ("spatial", "duration", "random", "cartoboost", "rmse"),
         ("spatial", "fare", "spatial_holdout", "hist_gradient_boosting", "wape"),
-        ("spatial", "pickup_demand", "random", "hist_gradient_boosting", "r2"),
+        ("temporal", "fare", "out_of_time", "hist_gradient_boosting", "r2"),
     }
 
     repeated = json.loads((artifact_dir / "repeated_results.json").read_text(encoding="utf-8"))

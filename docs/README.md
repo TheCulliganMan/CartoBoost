@@ -1,21 +1,19 @@
-# CartoBoost Docs
+# CartoBoost documentation
 
-The documentation is written for Python developers and data scientists. Use it
-to move from a prediction problem to a fitted, validated, and reproducible
-CartoBoost model.
+Start at the [documentation home](./index.md), then follow the path that matches
+your task. The guides connect model inputs, fitting, validation, and saved
+artifacts using concrete taxi modeling examples.
 
-## Learning Path
+| You need to… | Read |
+| --- | --- |
+| Prepare your environment | [Install CartoBoost](./installation.md) |
+| Run a complete first fit | [Your first model](./getting-started.md) |
+| Decide between model families | [Choose a model](./user-guide/model-types.md) |
+| Predict future pickup demand | [Forecasting](./forecasting.md) |
+| Test generalization across locations | [Spatial validation](./user-guide/spatial-cv-best-practices.md) |
+| Reproduce a split and its metadata | [Geo evaluation](./user-guide/geo-evaluation-standard.md) |
+| Check a method or command | [Python API](./reference/python-api.md) and [CLI](./reference/cli.md) |
+| Compare published results | [Benchmarks](./benchmarks/index.md) |
 
-1. [Install CartoBoost](./installation.md).
-2. [Fit and validate a first model](./getting-started.md).
-3. [Choose a model family](./user-guide/model-types.md).
-4. Use the task guide for [forecasting](./forecasting.md),
-   [spatial validation](./user-guide/spatial-cv-best-practices.md), or
-   [geo evaluation](./user-guide/geo-evaluation-standard.md).
-5. Consult the [Python API](./reference/python-api.md) or
-   [CLI reference](./reference/cli.md) while implementing.
-6. Review the [benchmarks](./benchmarks/index.md) before making performance claims.
-
-The `llms.txt` files are machine-readable indexes of these docs. They are a
-secondary discovery surface, not the structure or intended reading order of
-the human documentation.
+The website navigation follows the same task-based structure. The root and docs
+`llms.txt` files provide discovery indexes for tools and coding assistants.

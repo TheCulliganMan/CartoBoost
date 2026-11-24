@@ -2,9 +2,10 @@ import {RegressionModelExample} from '@site/src/components/ModelingLabClient';
 
 # CartoBoost Regressor
 
-Use `CartoBoostRegressor` for numeric row-level targets when the effect of
-time, location, route membership, or other structure is part of the question.
-Typical uses include duration, fare, demand, or residual modeling.
+Predict taxi fare, trip duration, or another numeric target with a boosted tree
+model that can use cyclic time, coordinates, and zone memberships. Start with
+`CartoBoostRegressor` when each row describes one trip or one aggregate and you
+want to test whether that structure improves a tabular baseline.
 
 ## Python Example
 
@@ -22,7 +23,10 @@ model.fit(X_train, y_train)
 pred = model.predict(X_test)
 ```
 
-## Browser WASM Example
+## Interactive Example
+
+Run the small example to inspect inputs and model behavior. It is a browser
+demonstration, not a benchmark on held-out taxi trips.
 
 <RegressionModelExample title="CartoBoost regressor browser model" mode="auto" loss="l2" />
 

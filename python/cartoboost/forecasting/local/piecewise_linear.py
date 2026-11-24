@@ -74,6 +74,7 @@ class PiecewiseLinearSeasonalForecaster(NativeForecastWrapper):
         regressor_modes: Mapping[str, str] | None = None,
         extra_regressor_monotonic_constraints: Mapping[str, int] | None = None,
         regressor_standardization: RegulatorStandardization = RegulatorStandardization.AUTO,
+        regressor_standardization_by_name: Mapping[str, str] | None = None,
         future_regressors: Mapping[str, Sequence[float]] | None = None,
         future_regressors_by_series: Mapping[str, Mapping[str, Sequence[float]]] | None = None,
         trend_adjustments: Mapping[int, float] | None = None,
@@ -243,6 +244,14 @@ class PiecewiseLinearSeasonalForecaster(NativeForecastWrapper):
             huber_delta=huber_delta,
             irls_iterations=int(irls_iterations),
         )
+        if regressor_standardization_by_name:
+            self._params["regressor_standardization_by_name"] = {
+                str(name): _validate_choice(
+                    "regressor standardization", mode, {"none", "auto", "standardize"}
+                )
+                for name, mode in regressor_standardization_by_name.items()
+            }
+        self._loaded_native_template: Any | None = None
         self._country_holidays: str | None = None
         self._country_holiday_years: tuple[int, ...] = _country_holiday_years(country_holiday_years)
         self._country_holiday_subdivision = (
@@ -272,7 +281,14 @@ class PiecewiseLinearSeasonalForecaster(NativeForecastWrapper):
             self._country_holiday_subdivision = str(subdivision)
         return self
 
+    def set_params(self, **params: Any) -> PiecewiseLinearSeasonalForecaster:
+        self._loaded_native_template = None
+        super().set_params(**params)
+        return self
+
     def _new_native_model(self) -> Any:
+        if self._loaded_native_template is not None:
+            return self._loaded_native_template.unfitted_clone()
         if self._country_holidays is None:
             return super()._new_native_model()
         native_class = _native_class(self.native_class_name)
@@ -327,6 +343,41 @@ class PiecewiseLinearSeasonalForecaster(NativeForecastWrapper):
             else None,
         )
 
+    def predict_with_components(
+        self,
+        horizon: int,
+        *,
+        future_regressors: Mapping[str, Sequence[float]] | None = None,
+        future_regressors_by_series: Mapping[str, Mapping[str, Sequence[float]]] | None = None,
+        prediction_interval_levels: list[float] | tuple[float, ...] | None = None,
+        uncertainty_samples: int | None = None,
+        trend_adjustments: Mapping[int, float] | None = None,
+        trend_adjustments_by_series: Mapping[str, Mapping[int, float]] | None = None,
+        future_timestamps: Sequence[Any] | None = None,
+        future_timestamps_by_series: Mapping[str, Sequence[Any]] | None = None,
+    ) -> tuple[Any, dict[str, Any]]:
+        self._check_is_fitted()
+        result, components = self._native_model.predict_with_components(
+            int(horizon),
+            _future_regressor_values(future_regressors) if future_regressors is not None else None,
+            _future_regressor_values_by_series(future_regressors_by_series)
+            if future_regressors_by_series is not None
+            else None,
+            _prediction_interval_levels(prediction_interval_levels)
+            if prediction_interval_levels is not None
+            else None,
+            None if uncertainty_samples is None else int(uncertainty_samples),
+            _trend_adjustment_values(trend_adjustments) if trend_adjustments is not None else None,
+            _trend_adjustment_values_by_series(trend_adjustments_by_series)
+            if trend_adjustments_by_series is not None
+            else None,
+            _future_timestamp_values(future_timestamps) if future_timestamps is not None else None,
+            _future_timestamp_values_by_series(future_timestamps_by_series)
+            if future_timestamps_by_series is not None
+            else None,
+        )
+        return result, dict(json.loads(components))
+
     def components(
         self,
         horizon: int,
@@ -335,6 +386,8 @@ class PiecewiseLinearSeasonalForecaster(NativeForecastWrapper):
         future_regressors_by_series: Mapping[str, Mapping[str, Sequence[float]]] | None = None,
         trend_adjustments: Mapping[int, float] | None = None,
         trend_adjustments_by_series: Mapping[str, Mapping[int, float]] | None = None,
+        future_timestamps: Sequence[Any] | None = None,
+        future_timestamps_by_series: Mapping[str, Sequence[Any]] | None = None,
     ) -> dict[str, Any]:
         self._check_is_fitted()
         return dict(
@@ -353,6 +406,7 @@ class PiecewiseLinearSeasonalForecaster(NativeForecastWrapper):
                     _trend_adjustment_values_by_series(trend_adjustments_by_series)
                     if trend_adjustments_by_series is not None
                     else None,
+                    **_future_timestamp_kwargs(future_timestamps, future_timestamps_by_series),
                 )
             )
         )
@@ -365,6 +419,8 @@ class PiecewiseLinearSeasonalForecaster(NativeForecastWrapper):
         future_regressors_by_series: Mapping[str, Mapping[str, Sequence[float]]] | None = None,
         trend_adjustments: Mapping[int, float] | None = None,
         trend_adjustments_by_series: Mapping[str, Mapping[int, float]] | None = None,
+        future_timestamps: Sequence[Any] | None = None,
+        future_timestamps_by_series: Mapping[str, Sequence[Any]] | None = None,
     ) -> str:
         self._check_is_fitted()
         return str(
@@ -382,6 +438,7 @@ class PiecewiseLinearSeasonalForecaster(NativeForecastWrapper):
                 _trend_adjustment_values_by_series(trend_adjustments_by_series)
                 if trend_adjustments_by_series is not None
                 else None,
+                **_future_timestamp_kwargs(future_timestamps, future_timestamps_by_series),
             )
         )
 
@@ -393,6 +450,8 @@ class PiecewiseLinearSeasonalForecaster(NativeForecastWrapper):
         future_regressors_by_series: Mapping[str, Mapping[str, Sequence[float]]] | None = None,
         trend_adjustments: Mapping[int, float] | None = None,
         trend_adjustments_by_series: Mapping[str, Mapping[int, float]] | None = None,
+        future_timestamps: Sequence[Any] | None = None,
+        future_timestamps_by_series: Mapping[str, Sequence[Any]] | None = None,
     ) -> Any:
         """Return forecast component diagnostics as a pandas DataFrame."""
         pd = require_pandas()
@@ -402,6 +461,8 @@ class PiecewiseLinearSeasonalForecaster(NativeForecastWrapper):
             future_regressors_by_series=future_regressors_by_series,
             trend_adjustments=trend_adjustments,
             trend_adjustments_by_series=trend_adjustments_by_series,
+            future_timestamps=future_timestamps,
+            future_timestamps_by_series=future_timestamps_by_series,
         )
         return _component_records_frame(pd, payload)
 
@@ -430,6 +491,8 @@ class PiecewiseLinearSeasonalForecaster(NativeForecastWrapper):
         uncertainty_samples: int | None = None,
         trend_adjustments: Mapping[int, float] | None = None,
         trend_adjustments_by_series: Mapping[str, Mapping[int, float]] | None = None,
+        future_timestamps: Sequence[Any] | None = None,
+        future_timestamps_by_series: Mapping[str, Sequence[Any]] | None = None,
     ) -> dict[str, Any]:
         self._check_is_fitted()
         return dict(
@@ -449,8 +512,37 @@ class PiecewiseLinearSeasonalForecaster(NativeForecastWrapper):
                     _trend_adjustment_values_by_series(trend_adjustments_by_series)
                     if trend_adjustments_by_series is not None
                     else None,
+                    **_future_timestamp_kwargs(future_timestamps, future_timestamps_by_series),
                 )
             )
+        )
+
+    def samples_arrays(
+        self,
+        horizon: int,
+        *,
+        future_regressors: Mapping[str, Sequence[float]] | None = None,
+        future_regressors_by_series: Mapping[str, Mapping[str, Sequence[float]]] | None = None,
+        uncertainty_samples: int | None = None,
+        trend_adjustments: Mapping[int, float] | None = None,
+        trend_adjustments_by_series: Mapping[str, Mapping[int, float]] | None = None,
+        future_timestamps: Sequence[Any] | None = None,
+        future_timestamps_by_series: Mapping[str, Sequence[Any]] | None = None,
+    ) -> tuple[list[str], list[str], Any]:
+        """Return series ids, timestamps, and a row-by-sample NumPy matrix."""
+        self._check_is_fitted()
+        return self._native_model.samples_arrays(
+            int(horizon),
+            _future_regressor_values(future_regressors) if future_regressors is not None else None,
+            _future_regressor_values_by_series(future_regressors_by_series)
+            if future_regressors_by_series is not None
+            else None,
+            None if uncertainty_samples is None else int(uncertainty_samples),
+            _trend_adjustment_values(trend_adjustments) if trend_adjustments is not None else None,
+            _trend_adjustment_values_by_series(trend_adjustments_by_series)
+            if trend_adjustments_by_series is not None
+            else None,
+            **_future_timestamp_kwargs(future_timestamps, future_timestamps_by_series),
         )
 
     def samples_json(
@@ -462,6 +554,8 @@ class PiecewiseLinearSeasonalForecaster(NativeForecastWrapper):
         uncertainty_samples: int | None = None,
         trend_adjustments: Mapping[int, float] | None = None,
         trend_adjustments_by_series: Mapping[str, Mapping[int, float]] | None = None,
+        future_timestamps: Sequence[Any] | None = None,
+        future_timestamps_by_series: Mapping[str, Sequence[Any]] | None = None,
     ) -> str:
         self._check_is_fitted()
         return str(
@@ -480,6 +574,7 @@ class PiecewiseLinearSeasonalForecaster(NativeForecastWrapper):
                 _trend_adjustment_values_by_series(trend_adjustments_by_series)
                 if trend_adjustments_by_series is not None
                 else None,
+                **_future_timestamp_kwargs(future_timestamps, future_timestamps_by_series),
             )
         )
 
@@ -565,6 +660,7 @@ class PiecewiseLinearSeasonalForecaster(NativeForecastWrapper):
             )
         model = cls()
         model._native_model = native_class.from_json(value)
+        model._loaded_native_template = model._native_model
         model.is_fitted_ = True
         return model
 
@@ -926,3 +1022,15 @@ def _component_records_frame(pd: Any, payload: Mapping[str, Any]) -> Any:
 
 
 __all__ = ["PiecewiseLinearSeasonalForecaster"]
+
+
+def _future_timestamp_kwargs(
+    timestamps: Sequence[Any] | None,
+    by_series: Mapping[str, Sequence[Any]] | None,
+) -> dict[str, Any]:
+    kwargs = {}
+    if timestamps is not None:
+        kwargs["future_timestamps"] = _future_timestamp_values(timestamps)
+    if by_series is not None:
+        kwargs["future_timestamps_by_series"] = _future_timestamp_values_by_series(by_series)
+    return kwargs

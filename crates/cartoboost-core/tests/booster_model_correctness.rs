@@ -282,3 +282,164 @@ fn model_additive_contributions_and_json_roundtrip_preserve_predictions() {
     assert_eq!(restored.try_predict(&x).expect("predict after"), before);
     assert_eq!(restored.feature_count, 1);
 }
+
+#[test]
+fn borrowed_dense_classifier_predictions_preserve_batch_and_dataset_results() {
+    use cartoboost_core::{ClassificationObjective, Classifier, ClassifierConfig};
+    let train = Dataset::from_rows(
+        (0..12)
+            .map(|row| vec![row as f64, (row % 3) as f64])
+            .collect(),
+    )
+    .unwrap();
+    for (objective, classes) in [
+        (ClassificationObjective::BinaryLogLoss, 2),
+        (ClassificationObjective::MulticlassLogLoss, 3),
+    ] {
+        for fuzzy in [false, true] {
+            let labels = (0..12)
+                .map(|row| (row % classes) as f64)
+                .collect::<Vec<_>>();
+            let mut model = Classifier::new(ClassifierConfig {
+                n_estimators: 4,
+                max_depth: 2,
+                min_samples_leaf: 1,
+                splitters: vec![SplitterKind::Axis],
+                objective,
+                fuzzy,
+                fuzzy_bandwidth: if fuzzy { 0.5 } else { 0.0 },
+                ..ClassifierConfig::default()
+            })
+            .fit(&train, &labels, None)
+            .unwrap();
+            // Exercise both sides of the work threshold without repeatedly fitting.
+            model.trees = model.trees.iter().cycle().take(128).cloned().collect();
+            for rows in [1, 32, 512, 1024] {
+                let values = (0..rows)
+                    .flat_map(|row| [row as f64 * 0.125, (row % 3) as f64])
+                    .collect::<Vec<_>>();
+                let dataset = Dataset::from_flat(rows, 2, values.clone()).unwrap();
+                assert_eq!(
+                    model.decision_function_dense(rows, 2, &values).unwrap(),
+                    model.decision_function(&dataset).unwrap()
+                );
+                assert_eq!(
+                    model.predict_proba_dense(rows, 2, &values).unwrap(),
+                    model.predict_proba(&dataset).unwrap()
+                );
+                assert_eq!(
+                    model.predict_dense(rows, 2, &values).unwrap(),
+                    model.predict(&dataset).unwrap()
+                );
+            }
+            for (rows, cols, values) in [
+                (0, 2, vec![]),
+                (1, 0, vec![]),
+                (1, 1, vec![0.0]),
+                (1, 2, vec![0.0]),
+                (1, 2, vec![0.0, f64::NAN]),
+                (usize::MAX, 2, vec![]),
+            ] {
+                assert!(model.decision_function_dense(rows, cols, &values).is_err());
+                assert!(model.predict_proba_dense(rows, cols, &values).is_err());
+                assert!(model.predict_dense(rows, cols, &values).is_err());
+            }
+        }
+    }
+}
+
+#[test]
+fn borrowed_dense_ranker_predictions_preserve_batch_and_dataset_results() {
+    use cartoboost_core::{Ranker, RankerConfig};
+    let train = Dataset::from_rows(
+        (0..12)
+            .map(|row| vec![(row % 4) as f64, row as f64])
+            .collect(),
+    )
+    .unwrap();
+    let labels = (0..12).map(|row| (row % 4) as f64).collect::<Vec<_>>();
+    let mut model = Ranker::new(RankerConfig {
+        n_estimators: 4,
+        max_depth: 2,
+        min_samples_leaf: 1,
+        splitters: vec![SplitterKind::Axis],
+        ..RankerConfig::default()
+    })
+    .fit(&train, &labels, &[4, 4, 4], None)
+    .unwrap();
+    model.trees = model.trees.iter().cycle().take(128).cloned().collect();
+    for rows in [1, 31, 32, 33, 512, 1024] {
+        let values = (0..rows)
+            .flat_map(|row| [(row % 4) as f64, row as f64])
+            .collect::<Vec<_>>();
+        let dataset = Dataset::from_flat(rows, 2, values.clone()).unwrap();
+        let expected = model.predict(&dataset).unwrap();
+        assert_eq!(model.predict_dense(rows, 2, &values).unwrap(), expected);
+        let singleton = values
+            .chunks_exact(2)
+            .map(|row| model.predict_dense(1, 2, row).unwrap()[0])
+            .collect::<Vec<_>>();
+        assert_eq!(expected, singleton);
+    }
+    for (rows, cols, values) in [
+        (0, 2, vec![]),
+        (1, 0, vec![]),
+        (1, 1, vec![0.0]),
+        (1, 2, vec![0.0]),
+        (1, 2, vec![0.0, f64::INFINITY]),
+        (usize::MAX, 2, vec![]),
+    ] {
+        assert!(model.predict_dense(rows, cols, &values).is_err());
+    }
+}
+
+#[test]
+fn prediction_and_contribution_batches_match_single_rows_exactly() {
+    let train = Dataset::from_rows(
+        (0..8)
+            .map(|row| vec![row as f64, (row % 3) as f64])
+            .collect(),
+    )
+    .unwrap();
+    let mut model = Booster::new(BoosterConfig {
+        n_estimators: 4,
+        max_depth: 2,
+        min_samples_leaf: 1,
+        splitters: vec![SplitterKind::Axis],
+        ..BoosterConfig::default()
+    })
+    .fit(&train, &[1.1, 5.2, 2.3, 3.4, 4.5, 6.6, 2.7, 1.8], None)
+    .unwrap();
+    model.trees = model.trees.iter().cycle().take(128).cloned().collect();
+    let predictor = model.flat_axis_predictor().unwrap();
+    let probe = [2.7, 1.0];
+    let single = model.try_predict_flat(1, 2, &probe, &[], &[]).unwrap();
+    let single_cached = predictor.predict_flat(1, 2, &probe);
+    let additive = model
+        .try_predict_additive_flat(1, 2, &probe, &[], &[])
+        .unwrap();
+    let contribution = model
+        .try_predict_feature_contributions_flat(1, 2, &probe)
+        .unwrap();
+    for rows in [32, 512, 1024] {
+        let values = probe.repeat(rows);
+        assert_eq!(
+            model.try_predict_flat(rows, 2, &values, &[], &[]).unwrap(),
+            single.repeat(rows)
+        );
+        assert_eq!(
+            predictor.predict_flat(rows, 2, &values),
+            single_cached.repeat(rows)
+        );
+        assert!(model
+            .try_predict_additive_flat(rows, 2, &values, &[], &[])
+            .unwrap()
+            .iter()
+            .all(|row| row == &additive[0]));
+        assert!(model
+            .try_predict_feature_contributions_flat(rows, 2, &values)
+            .unwrap()
+            .iter()
+            .all(|row| row == &contribution[0]));
+    }
+}

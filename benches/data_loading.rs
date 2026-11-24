@@ -40,6 +40,20 @@ fn parse_csv(input: &str, cols: usize) -> Result<(Vec<f32>, Vec<f32>), std::num:
 }
 
 fn bench_data_loading(c: &mut Criterion) {
+    for features in [64, 4_096] {
+        let schema = cartoboost_core::data::FeatureSchema::unnamed_numeric(features);
+        c.bench_with_input(
+            BenchmarkId::new("schema_validate", features),
+            &schema,
+            |bench, schema| {
+                bench.iter(|| {
+                    black_box(schema)
+                        .validate()
+                        .expect("schema fixture is valid")
+                });
+            },
+        );
+    }
     let mut group = c.benchmark_group("data_loading");
     for &(rows, cols) in &[(1_000, 16), (25_000, 32)] {
         let input = synthetic_csv(rows, cols);

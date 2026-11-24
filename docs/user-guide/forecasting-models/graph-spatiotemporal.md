@@ -3,18 +3,24 @@ import {MarketStructureExplorerSample} from '@site/src/components/MarketStructur
 
 # Graph and Market Structure Forecasting
 
-`MarketStructureForecaster` is the learned sparse-kernel model for connected,
-directional markets. Open the [Modeling Lab](../../../modeling-lab), select
-**Deep**, then run **Learned market structure explorer** to inspect forecasts,
-inbound/outbound volume, components, and the retained kernels interactively.
+Forecast connected places with either a supplied graph or a learned network.
+The graph forecasters use explicit directed edges between taxi zones. The
+market-structure model learns a sparse set of relationships between directional
+pickup/dropoff lanes and keeps those relationships visible in its output.
+
+| What you know | Start here |
+| --- | --- |
+| Node histories and directed adjacency | [Graph spatiotemporal forecasting](#graph-spatiotemporal-forecasting) |
+| You need a particular graph-attention mechanism | [Graph Transformer profiles](#paper-graph-transformer-profiles) |
+| Related lanes share endpoints, geography, or recurring behavior | [Learned market structure](#learned-market-structure) |
+| You want to inspect a forecast on the map | [Market Structure Explorer](#market-structure-explorer) |
 
 ## Graph Spatiotemporal Forecasting
 
 Use `DCRNNForecaster`, `GraphWaveNetForecaster`, or `STAEformerForecaster`
-when each forecast series is a node in a known directed graph and neighboring
-nodes can lead, lag, or diffuse signal into one another. This is for sensor
-networks, route flows, road segments, zone flows, equipment networks, or other
-panels where the graph is part of the modeling claim.
+when each forecast series belongs to a node and directed edges describe useful
+relationships. In a taxi network, neighboring or connected zones may lead or
+lag one another as demand moves through the city.
 
 Do not use a graph forecaster only because node ids exist. The edges should
 represent known movement, influence, adjacency, or dependency available at the
@@ -22,11 +28,10 @@ forecast cutoff.
 
 ## Paper Graph Transformer Profiles
 
-Five native graph-transformer profiles extend the directed graph surface. They
-all fit in Rust, make direct multi-horizon predictions, and save/load as native
-JSON artifacts. Choose the mechanism you need, then compare it with DCRNN,
-GraphWaveNet, STAEformer, and seasonal-naive baselines on the identical
-time-ordered split.
+Five graph-transformer profiles make direct multi-horizon predictions and
+support saved JSON artifacts. Choose the mechanism that matches the graph and
+history, then compare it with DCRNN, GraphWaveNet, STAEformer, and seasonal
+naive on the same time-ordered holdout.
 
 | Model | Use when | Native components |
 | --- | --- | --- |
@@ -78,7 +83,7 @@ geography with stable node ids and explicit directed edges.
 For another sampling frequency, set `lookback`, `periodicity`,
 `recent_window`, and `horizon`
 explicitly. All four are measured in frame rows rather than fixed wall-clock
-units. For example, an hourly freight-network forecast can use:
+units. For example, an hourly taxi-zone forecast can use:
 
 ```python
 model = LSTTNForecaster(
@@ -159,10 +164,9 @@ The Modeling Lab exposes separate runnable Rust/WASM entries for
 `SpatialShiftGraphonMoEForecaster`. Select **Deep** and choose the model by
 name to run the same native profile against the directed taxi-shaped graph.
 
-These profiles are implementation surfaces, not a claim that the included
-synthetic checks reproduce published benchmark rankings. Validate any accuracy
-claim with your production or real traffic data and a leakage-safe temporal
-holdout. The original papers are [STGormer](https://arxiv.org/abs/2408.10822),
+The included synthetic examples demonstrate model behavior. They do not
+reproduce the papers' benchmark rankings. Assess accuracy on real data with a
+time-ordered holdout and the same inputs for each model. The original papers are [STGormer](https://arxiv.org/abs/2408.10822),
 [STGformer](https://arxiv.org/abs/2410.00385),
 [LSTTN](https://arxiv.org/abs/2403.16495) and the
 [authors' reference implementation](https://github.com/GeoX-Lab/LSTTN),
@@ -294,7 +298,7 @@ target = np.array(
 )
 
 frame = GraphTemporalFrame(
-    node_ids=["sensor_a", "sensor_b", "sensor_c", "sensor_d"],
+    node_ids=["PULocationID:132", "PULocationID:161", "PULocationID:236", "PULocationID:237"],
     timestamps=list(range(target.shape[0])),
     target=target,
     indptr=[0, 2, 3, 4, 4],

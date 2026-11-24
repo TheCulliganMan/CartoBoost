@@ -1248,9 +1248,11 @@ pub fn split_conformal_residual_quantile(
         .zip(prediction)
         .map(|(&y, &p)| (y - p).abs())
         .collect::<Vec<_>>();
-    residuals.sort_by(f64::total_cmp);
+    validate_finite(&residuals, "residuals")?;
     let rank = (((residuals.len() + 1) as f64) * (1.0 - alpha)).ceil() as usize;
-    Ok(residuals[rank.saturating_sub(1).min(residuals.len() - 1)])
+    let index = rank.saturating_sub(1).min(residuals.len() - 1);
+    let (_, quantile, _) = residuals.select_nth_unstable_by(index, f64::total_cmp);
+    Ok(*quantile)
 }
 
 pub fn weighted_conformal_residual_quantile(
@@ -1551,9 +1553,7 @@ fn validate_quantile_rows(
     if actual.len() != predictions.len() {
         return invalid("actual and predictions must have the same row count");
     }
-    for &q in quantiles {
-        validate_alpha(q)?;
-    }
+    validate_quantile_grid(quantiles)?;
     for row in predictions {
         if row.len() != quantiles.len() {
             return invalid("each prediction row must match quantiles length");
@@ -1570,10 +1570,11 @@ fn conformal_quantile(residuals: &[f64], alpha: f64) -> Result<f64> {
     if residuals.is_empty() {
         return invalid("residuals must contain at least one value");
     }
-    let mut sorted = residuals.to_vec();
-    sorted.sort_by(f64::total_cmp);
-    let rank = (((sorted.len() + 1) as f64) * (1.0 - alpha)).ceil() as usize;
-    Ok(sorted[rank.saturating_sub(1).min(sorted.len() - 1)])
+    let mut values = residuals.to_vec();
+    let rank = (((values.len() + 1) as f64) * (1.0 - alpha)).ceil() as usize;
+    let index = rank.saturating_sub(1).min(values.len() - 1);
+    let (_, quantile, _) = values.select_nth_unstable_by(index, f64::total_cmp);
+    Ok(*quantile)
 }
 
 fn validate_same_non_empty(
@@ -1668,13 +1669,13 @@ fn validate_quantile_grid(quantiles: &[f64]) -> Result<()> {
     Ok(())
 }
 
-fn ridge_fit(features: &[Vec<f64>], target: &[f64], ridge: f64) -> Vec<f64> {
+fn ridge_fit(features: &[Vec<f64>], target: &[f64], ridge: f64) -> Result<Vec<f64>> {
     let cols = features[0].len() + 1;
     let mut xtx = vec![vec![0.0; cols]; cols];
     let mut xty = vec![0.0; cols];
+    let mut x = vec![1.0; cols];
     for (row, &y) in features.iter().zip(target) {
-        let mut x = vec![1.0];
-        x.extend_from_slice(row);
+        x[1..].copy_from_slice(row);
         for r in 0..cols {
             xty[r] += x[r] * y;
             for c in 0..cols {
@@ -1698,7 +1699,7 @@ fn ridge_fit_with_backend(
     if backend.selected == "cpu"
         || features.len().saturating_mul(cols).saturating_mul(cols) < PROB_DENSE_DISPATCH_MIN_OPS
     {
-        return Ok(ridge_fit(features, target, ridge));
+        return ridge_fit(features, target, ridge);
     }
     let augmented = features
         .iter()
@@ -1729,7 +1730,7 @@ fn ridge_fit_with_backend(
     for (idx, row) in xtx.iter_mut().enumerate().skip(1) {
         row[idx] += ridge.max(1.0e-12);
     }
-    Ok(solve_linear_system(xtx, xty))
+    solve_linear_system(xtx, xty)
 }
 
 fn predict_linear_with_backend(
@@ -1770,8 +1771,21 @@ fn should_accelerate_linear_prediction(
         && row_count.saturating_mul(feature_count) >= PROB_DENSE_DISPATCH_MIN_OPS
 }
 
-fn solve_linear_system(mut matrix: Vec<Vec<f64>>, mut rhs: Vec<f64>) -> Vec<f64> {
+fn solve_linear_system(mut matrix: Vec<Vec<f64>>, mut rhs: Vec<f64>) -> Result<Vec<f64>> {
     let n = rhs.len();
+    if n == 0
+        || matrix.len() != n
+        || matrix.iter().any(|row| row.len() != n)
+        || matrix
+            .iter()
+            .flatten()
+            .chain(&rhs)
+            .any(|value| !value.is_finite())
+    {
+        return Err(CartoBoostError::InvalidInput(
+            "linear system must be a finite non-empty square matrix".to_string(),
+        ));
+    }
     for pivot in 0..n {
         let mut best = pivot;
         for row in pivot + 1..n {
@@ -1784,8 +1798,10 @@ fn solve_linear_system(mut matrix: Vec<Vec<f64>>, mut rhs: Vec<f64>) -> Vec<f64>
             rhs.swap(pivot, best);
         }
         let diag = matrix[pivot][pivot];
-        if diag.abs() < 1.0e-12 {
-            continue;
+        if !diag.is_finite() || diag.abs() < 1.0e-12 {
+            return Err(CartoBoostError::InvalidInput(
+                "linear system is singular or ill-conditioned".to_string(),
+            ));
         }
         for value in matrix[pivot].iter_mut().skip(pivot) {
             *value /= diag;
@@ -1803,7 +1819,12 @@ fn solve_linear_system(mut matrix: Vec<Vec<f64>>, mut rhs: Vec<f64>) -> Vec<f64>
             rhs[row] -= factor * rhs[pivot];
         }
     }
-    rhs
+    if rhs.iter().any(|value| !value.is_finite()) {
+        return Err(CartoBoostError::InvalidInput(
+            "linear solve produced non-finite coefficients".to_string(),
+        ));
+    }
+    Ok(rhs)
 }
 
 fn deterministic_standard_sample(row: usize, sample: usize) -> f64 {
@@ -2343,6 +2364,28 @@ fn invalid<T>(message: &str) -> Result<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn conformal_quantile_matches_exact_order_statistic_and_rejects_overflow() {
+        let actual = (0..10).rev().map(|value| value as f64).collect::<Vec<_>>();
+        let prediction = vec![0.0; actual.len()];
+        let order = SplitOrder {
+            train_end_exclusive: 1,
+            calibration_start: 1,
+            calibration_end_exclusive: 11,
+            test_start: 11,
+        };
+        for alpha in [0.01, 0.1, 0.5, 0.75, 0.99] {
+            let rank = ((11.0_f64 * (1.0 - alpha)).ceil() as usize).min(10);
+            let expected = (rank - 1) as f64;
+            assert_eq!(
+                split_conformal_residual_quantile(&actual, &prediction, alpha, order).unwrap(),
+                expected
+            );
+            assert_eq!(conformal_quantile(&actual, alpha).unwrap(), expected);
+        }
+        assert!(split_conformal_residual_quantile(&[f64::MAX], &[-f64::MAX], 0.5, order,).is_err());
+    }
 
     #[test]
     fn split_conformal_covers_synthetic_holdout_without_holdout_training() {
@@ -3021,5 +3064,25 @@ mod tests {
                 "nearest calibration mismatch on {backend}"
             );
         }
+    }
+
+    #[test]
+    fn probability_metrics_reject_empty_or_unordered_quantile_grids() {
+        for quantiles in [vec![], vec![0.5, 0.5], vec![0.9, 0.1]] {
+            let predictions = vec![vec![1.0; quantiles.len()]];
+            assert!(crps_approximation(&[1.0], &quantiles, &predictions).is_err());
+            assert!(pit_bins(&[1.0], &quantiles, &predictions, 5).is_err());
+        }
+    }
+
+    #[test]
+    fn linear_solver_rejects_singular_and_overflowing_systems() {
+        assert!(solve_linear_system(vec![vec![1.0, 1.0], vec![1.0, 1.0]], vec![1.0, 2.0]).is_err());
+        assert!(solve_linear_system(vec![vec![f64::INFINITY]], vec![1.0]).is_err());
+        assert!(solve_linear_system(vec![vec![1.0e-10]], vec![f64::MAX]).is_err());
+        let solution = solve_linear_system(vec![vec![2.0, 1.0], vec![1.0, 3.0]], vec![4.0, 7.0])
+            .expect("valid solve");
+        assert!((solution[0] - 1.0).abs() < 1.0e-12);
+        assert!((solution[1] - 2.0).abs() < 1.0e-12);
     }
 }

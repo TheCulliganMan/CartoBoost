@@ -6,8 +6,9 @@ from typing import Any
 import numpy as np
 
 from ..config import Backend, FallbackMode
-from ..regressor import CartoBoostRegressor, _rust_feature_schema_payload
-from .features import NeuralEmbeddingFeatures
+from ..regressor import CartoBoostRegressor, _normalize_sparse_sets, _rust_feature_schema_payload
+from ..standalone import _integer_array
+from .features import NeuralEmbeddingFeatures, _as_u64_array
 
 
 class NeuralEmbeddingRegressor:
@@ -38,7 +39,7 @@ class NeuralEmbeddingRegressor:
         if oof_folds < 1:
             raise ValueError("oof_folds must be at least 1")
 
-        self.dim = int(dim)
+        self.dim = int(dim if neural_transformer is None else neural_transformer.dim)
         self.fallback = fallback
         self.random_state = random_state
         self.use_residual = use_residual
@@ -47,6 +48,7 @@ class NeuralEmbeddingRegressor:
         self.id_column = id_column
         self.support_prior_strength = float(support_prior_strength)
         self.backend = str(backend)
+        self._provided_neural_transformer = neural_transformer
         self.neural_transformer = neural_transformer or NeuralEmbeddingFeatures(
             dim=dim,
             fallback=str(fallback),
@@ -86,6 +88,8 @@ class NeuralEmbeddingRegressor:
 
         if dense.shape[0] != target.shape[0]:
             raise ValueError("X and y must contain the same number of rows")
+        if id_values.shape[0] != target.shape[0]:
+            raise ValueError("X, y, and ids must contain the same number of rows")
 
         if sample_weight is not None:
             sample_weight = np.asarray(sample_weight, dtype=np.float64)
@@ -115,11 +119,17 @@ class NeuralEmbeddingRegressor:
             residual_target = target
 
         start = time.perf_counter()
+        oof_targets = (
+            self._oof_residual_targets(dense, target, base_fit_kwargs)
+            if self.use_residual and 1 < self.oof_folds <= target.shape[0]
+            else None
+        )
         neural_features = self._fit_transform_embeddings(
             id_values,
             residual_target,
             fallback_ids=fallback_ids,
             neighbor_ids=neighbor_ids,
+            oof_targets=oof_targets,
         )
         self._fit_timings_ms["neural_fit_ms"] = _ms_since(start)
 
@@ -268,7 +278,7 @@ class NeuralEmbeddingRegressor:
             "dim": self.dim,
             "fallback": self.fallback,
             "random_state": self.random_state,
-            "neural_transformer": None,
+            "neural_transformer": self._provided_neural_transformer,
             "use_residual": self.use_residual,
             "oof_folds": self.oof_folds,
             "drop_id_column": self.drop_id_column,
@@ -289,7 +299,10 @@ class NeuralEmbeddingRegressor:
         return self
 
     def __sklearn_clone__(self) -> NeuralEmbeddingRegressor:
-        return type(self)(**self.get_params(deep=False))
+        params = self.get_params(deep=False)
+        if self._provided_neural_transformer is not None:
+            params["neural_transformer"] = self._new_transformer(0)
+        return type(self)(**params)
 
     def _build_base_model(self) -> CartoBoostRegressor:
         return CartoBoostRegressor(**self.base_model_kwargs)
@@ -309,6 +322,7 @@ class NeuralEmbeddingRegressor:
         *,
         fallback_ids: Any | None,
         neighbor_ids: Any | None,
+        oof_targets: list[np.ndarray] | None = None,
     ) -> np.ndarray:
         id_matrix = _ensure_id_matrix(ids)
         fallback_by_key = _split_fallback_by_key(
@@ -321,7 +335,11 @@ class NeuralEmbeddingRegressor:
 
         blocks: list[np.ndarray] = []
         for key_index in range(id_matrix.shape[1]):
-            transformer = self._new_transformer(key_index)
+            transformer = (
+                self._provided_neural_transformer
+                if key_index == 0 and self._provided_neural_transformer is not None
+                else self._new_transformer(key_index)
+            )
             key_ids = id_matrix[:, key_index]
             if self.oof_folds > 1 and key_ids.shape[0] >= self.oof_folds:
                 block = self._oof_embedding_block(
@@ -330,6 +348,7 @@ class NeuralEmbeddingRegressor:
                     key_index=key_index,
                     fallback_ids=fallback_by_key[key_index],
                     neighbor_ids=neighbor_by_key[key_index],
+                    oof_targets=oof_targets,
                 )
                 transformer.fit(key_ids, target)
             else:
@@ -385,17 +404,17 @@ class NeuralEmbeddingRegressor:
         key_index: int,
         fallback_ids: Any | None,
         neighbor_ids: Any | None,
+        oof_targets: list[np.ndarray] | None = None,
     ) -> np.ndarray:
         output = np.empty((ids.shape[0], self.dim), dtype=np.float32)
-        rng = np.random.default_rng(0 if self.random_state is None else self.random_state)
-        folds = np.array_split(rng.permutation(ids.shape[0]), self.oof_folds)
-        for fold_index, valid_idx in enumerate(folds):
+        for fold_index, valid_idx in enumerate(self._oof_indices(ids.shape[0])):
             if valid_idx.size == 0:
                 continue
             train_mask = np.ones(ids.shape[0], dtype=bool)
             train_mask[valid_idx] = False
             transformer = self._new_transformer(key_index + fold_index + 1)
-            transformer.fit(ids[train_mask], target[train_mask])
+            training_target = target[train_mask] if oof_targets is None else oof_targets[fold_index]
+            transformer.fit(ids[train_mask], training_target)
             output[valid_idx] = transformer.transform_with_fallback(
                 ids[valid_idx],
                 fallback_ids=_take_optional_rows(fallback_ids, valid_idx),
@@ -403,14 +422,54 @@ class NeuralEmbeddingRegressor:
             )
         return output
 
+    def _oof_indices(self, row_count: int) -> list[np.ndarray]:
+        rng = np.random.default_rng(0 if self.random_state is None else self.random_state)
+        return list(np.array_split(rng.permutation(row_count), self.oof_folds))
+
+    def _oof_residual_targets(
+        self, dense: np.ndarray, target: np.ndarray, fit_kwargs: dict[str, Any]
+    ) -> list[np.ndarray]:
+        """Fit each residual baseline using only that embedding fold's training rows."""
+
+        sparse_columns, sparse_names = _normalize_sparse_sets(
+            fit_kwargs.get("sparse_sets"), target.shape[0]
+        )
+        weights = fit_kwargs.get("sample_weight")
+        residuals = []
+        for valid_idx in self._oof_indices(target.shape[0]):
+            train_mask = np.ones(target.shape[0], dtype=bool)
+            train_mask[valid_idx] = False
+            train_idx = np.flatnonzero(train_mask)
+            fold_kwargs = dict(fit_kwargs)
+            fold_kwargs["sample_weight"] = None if weights is None else weights[train_idx]
+            fold_sparse = (
+                {
+                    name: [column[int(row)] for row in train_idx]
+                    for name, column in zip(sparse_names, sparse_columns, strict=True)
+                }
+                if sparse_columns
+                else None
+            )
+            fold_kwargs["sparse_sets"] = fold_sparse
+            base_params = _subset_graph_params(self.base_model_kwargs, train_idx, target.shape[0])
+            baseline = CartoBoostRegressor(**base_params).fit(
+                dense[train_idx], target[train_idx], **fold_kwargs
+            )
+            residuals.append(
+                target[train_idx] - baseline.predict(dense[train_idx], sparse_sets=fold_sparse)
+            )
+        return residuals
+
     def _new_transformer(self, salt: int) -> NeuralEmbeddingFeatures:
-        random_state = None if self.random_state is None else int(self.random_state) + salt
-        return NeuralEmbeddingFeatures(
-            dim=self.dim,
-            fallback=self.fallback,
+        template = self._provided_neural_transformer or self.neural_transformer
+        random_state = None if template.random_state is None else int(template.random_state) + salt
+        return type(template)(
+            dim=template.dim,
+            fallback=template.fallback,
             random_state=random_state,
-            support_prior_strength=self.support_prior_strength,
-            backend=self.backend,
+            parent_resolution=template.parent_resolution,
+            support_prior_strength=template.support_prior_strength,
+            backend=template.backend,
         )
 
     def _prepare_dense_and_ids(
@@ -431,15 +490,17 @@ class NeuralEmbeddingRegressor:
             raise ValueError("id_column or ids is required")
 
         if isinstance(id_column, int):
-            dense = _to_2d_float_array(X)
-            if id_column < 0 or id_column >= dense.shape[1]:
+            raw = np.asarray(X) if isinstance(X, np.ndarray) else np.asarray(X, dtype=object)
+            if raw.ndim != 2:
+                raise ValueError("X must be a 2D numeric array or 2D table")
+            if id_column < 0 or id_column >= raw.shape[1]:
                 raise ValueError("id_column index is out of range")
-            id_values = _to_u64_id_matrix(dense[:, id_column])
+            id_values = _to_u64_id_matrix(raw[:, id_column])
 
             if self.drop_id_column:
-                dense = np.delete(dense, id_column, axis=1)
+                raw = np.delete(raw, id_column, axis=1)
 
-            return dense, id_values
+            return _to_2d_float_array(raw), id_values
 
         if not hasattr(X, "__getitem__"):
             raise ValueError("id_column string lookup requires object with named columns")
@@ -500,9 +561,7 @@ def benchmark_neural_vs_cartoboost(
     carto_mae = _mean_absolute_error(y_valid, cart_pred)
 
     hybrid = NeuralEmbeddingRegressor(
-        dim=16,
-        drop_id_column=False,
-        **(neural_kwargs or {}),
+        **{"dim": 16, "drop_id_column": False, **(neural_kwargs or {})}
     )
     start = time.perf_counter()
     hybrid.fit(x_train, y_train, ids=id_train)
@@ -551,31 +610,23 @@ def _to_1d_float_array(values: Any) -> np.ndarray:
 
 
 def _to_u64_ids(values: np.ndarray | list[Any] | tuple[Any, ...]) -> np.ndarray:
-    array = np.asarray(values)
+    array = _as_u64_array(values)
     if array.ndim == 0:
         raise ValueError("ids must be 1D")
     if array.ndim != 1:
         array = np.ravel(array)
 
-    float_ids = np.asarray(array, dtype=np.float64)
-    if not np.all(np.isfinite(float_ids)):
-        raise ValueError("ids must be finite")
-
-    return np.asarray(np.rint(float_ids).astype(np.uint64), dtype=np.uint64)
+    return array
 
 
 def _to_u64_id_matrix(values: Any) -> np.ndarray:
-    array = np.asarray(values)
+    array = _as_u64_array(values)
     if array.ndim == 0:
         raise ValueError("ids must be 1D or 2D")
     if array.ndim > 2:
         raise ValueError("ids must be 1D or 2D")
 
-    float_ids = np.asarray(array, dtype=np.float64)
-    if not np.all(np.isfinite(float_ids)):
-        raise ValueError("ids must be finite")
-
-    id_values = np.asarray(np.rint(float_ids).astype(np.uint64), dtype=np.uint64)
+    id_values = array
     if id_values.ndim == 1:
         id_values = id_values.reshape(-1, 1)
     return np.ascontiguousarray(id_values, dtype=np.uint64)
@@ -602,7 +653,7 @@ def _split_fallback_by_key(values: Any | None, n_keys: int, row_count: int) -> l
         except ValueError:
             pass
 
-    array = np.asarray(values)
+    array = _integer_array(values)
     if n_keys == 1:
         return [_normalize_fallback_rows(array, row_count)]
     if array.ndim == 2 and array.shape == (row_count, n_keys):
@@ -613,7 +664,7 @@ def _split_fallback_by_key(values: Any | None, n_keys: int, row_count: int) -> l
 
 
 def _normalize_fallback_rows(values: Any, row_count: int) -> np.ndarray:
-    array = np.asarray(values)
+    array = _as_u64_array(values, "fallback_ids")
     if array.ndim == 1:
         if array.shape[0] != row_count:
             raise ValueError("fallback_ids length must match rows")
@@ -648,6 +699,33 @@ def _take_optional_rows(values: Any | None, indices: np.ndarray) -> Any | None:
     if isinstance(values, np.ndarray):
         return values[indices]
     return [values[int(index)] for index in indices]
+
+
+def _subset_graph_params(
+    params: dict[str, Any], rows: np.ndarray, row_count: int
+) -> dict[str, Any]:
+    """Restrict a validated training CSR graph to the selected fold rows."""
+
+    result = dict(params)
+    offsets = params.get("graph_indptr")
+    if offsets is None:
+        return result
+    indices = params["graph_indices"]
+    weights = params["graph_weights"]
+    remapped = np.full(row_count, -1, dtype=np.int64)
+    remapped[rows] = np.arange(rows.size)
+    fold_offsets = [0]
+    fold_indices = []
+    fold_weights = []
+    for row in rows:
+        for edge in range(offsets[row], offsets[row + 1]):
+            target = int(remapped[indices[edge]])
+            if target >= 0:
+                fold_indices.append(target)
+                fold_weights.append(weights[edge])
+        fold_offsets.append(len(fold_indices))
+    result.update(graph_indptr=fold_offsets, graph_indices=fold_indices, graph_weights=fold_weights)
+    return result
 
 
 def _drop_named_column(values: Any, column: str) -> Any:
@@ -745,6 +823,14 @@ def _append_feature_schema(
         sparse_names=sparse_names,
     )
     return {
-        "names": [*base_payload["names"], *_neural_feature_names(neural_dim)],
-        "kinds": [*base_payload["kinds"], *(["Numeric"] * neural_dim)],
+        "names": [
+            *base_payload["names"][:dense_width],
+            *_neural_feature_names(neural_dim),
+            *base_payload["names"][dense_width:],
+        ],
+        "kinds": [
+            *base_payload["kinds"][:dense_width],
+            *(["Numeric"] * neural_dim),
+            *base_payload["kinds"][dense_width:],
+        ],
     }

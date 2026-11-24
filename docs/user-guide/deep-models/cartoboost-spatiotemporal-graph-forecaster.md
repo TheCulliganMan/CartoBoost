@@ -1,10 +1,16 @@
+---
+sidebar_label: Spatiotemporal graph forecaster
+---
+
 import {DeepModelWasmExample} from '@site/src/components/ModelingLabClient';
 
-# CartoBoost SpatioTemporalGraphForecaster
+# Spatiotemporal Graph Forecaster
 
-Use `SpatioTemporalGraphForecaster` when node-time targets live on directed
-weighted edges and the graph is part of the forecast hypothesis. It is the
-generic deep-model facade for graph sequence forecasting.
+Forecast node histories on a directed, weighted graph with
+`SpatioTemporalGraphForecaster`. For taxi-zone demand, the graph describes
+connections between pickup areas and the target matrix holds each zone's
+history. Use this entry point when both time and directed neighborhood context
+belong in the forecast.
 
 ## Python Example
 
@@ -26,7 +32,7 @@ target = np.array(
 )
 
 frame = GraphTemporalFrame(
-    node_ids=["node_a", "node_b", "node_c"],
+    node_ids=["PULocationID:161", "PULocationID:236", "PULocationID:132"],
     timestamps=list(range(target.shape[0])),
     target=target,
     indptr=[0, 2, 3, 3],
@@ -45,7 +51,10 @@ model.fit(frame)
 forecast = model.predict(2)
 ```
 
-## Browser WASM Example
+## Interactive Example
+
+Run the small example to inspect inputs and model behavior. It is a browser
+demonstration, not a benchmark on held-out taxi trips.
 
 <DeepModelWasmExample model="SpatioTemporalGraphForecaster" />
 

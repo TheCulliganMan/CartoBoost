@@ -213,6 +213,8 @@ def decode_stable_forecast_artifact(
         raise ValueError(f"stable forecast artifact is missing required fields: {missing}")
     if not isinstance(raw["payload"], Mapping):
         raise ValueError("stable forecast artifact payload must be an object")
+    if raw["schema_hash"] != schema_hash_for_payload(raw["payload"]):
+        raise ValueError("stable forecast artifact schema_hash does not match its payload")
     return dict(raw)
 
 
@@ -247,6 +249,8 @@ def decode_stable_model_artifact(
             raise ValueError(f"stable artifact is missing required fields: {missing}")
         if not isinstance(raw["payload"], Mapping):
             raise ValueError("stable artifact payload must be an object")
+        if raw["schema_hash"] != schema_hash_for_payload(raw["payload"]):
+            raise ValueError("stable artifact schema_hash does not match its payload")
         return dict(raw)
 
     artifact_type = raw.get("artifact_type")
@@ -310,7 +314,12 @@ def dump_model_artifact(model: Any, *, purpose: str = "model") -> dict[str, Any]
 
 
 def load_model_artifact(payload: Mapping[str, Any]) -> Any:
-    """Load a model serialized by ``dump_model_artifact``."""
+    """Load a trusted model serialized by ``dump_model_artifact``.
+
+    This generic estimator protocol imports the recorded Python class and calls
+    its loader. Only use artifacts from a trusted source: third-party loaders
+    can execute code and are not constrained by CartoBoost's JSON validation.
+    """
 
     cls = getattr(import_module(str(payload["module"])), str(payload["class"]))
     load = getattr(cls, "load", None)

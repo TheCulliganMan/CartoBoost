@@ -1,10 +1,15 @@
+---
+sidebar_label: Service-time residual model
+---
+
 import {DeepModelWasmExample} from '@site/src/components/ModelingLabClient';
 
-# CartoBoost ServiceTimeResidualModel
+# Service-Time Residual Model
 
-Use `ServiceTimeResidualModel` when you already have a required baseline
-numeric estimate and want CartoBoost to learn the residual correction. The
-final prediction is the baseline plus the learned residual.
+Improve an existing trip-duration estimate with `ServiceTimeResidualModel`.
+The model learns the remaining error from measured features and adds that
+correction to the required baseline. Keeping the baseline and residual visible
+makes it straightforward to check whether the correction helps.
 
 ## Python Example
 
@@ -30,7 +35,10 @@ prediction = model.predict(rows, return_interval=True)
 model.save("service-residual.json")
 ```
 
-## Browser WASM Example
+## Interactive Example
+
+Run the small example to inspect inputs and model behavior. It is a browser
+demonstration, not a benchmark on held-out taxi trips.
 
 <DeepModelWasmExample model="ServiceTimeResidualModel" />
 

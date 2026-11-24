@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..config import Backend
-from ._native import dumps, loads, require_native
+from ._native import require_native
 
 
 class ChoiceSetTransformer:
@@ -25,15 +25,15 @@ class ChoiceSetTransformer:
         self.backend = str(backend)
 
     def score(self, candidates: list[dict[str, Any]]) -> dict[str, Any]:
-        report = require_native("deep_choice_set_transformer_report_value")
+        report = require_native("deep_choice_set_transformer_report_records")
         rows = self._with_outside_options(candidates)
         payload = report(
-            dumps(rows),
+            rows,
             self.temperature,
             self.monotone_candidate_value,
             self.backend,
         )
-        return loads(payload)
+        return payload
 
     def predict_proba(self, candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return self.score(candidates)["predictions"]
@@ -55,9 +55,9 @@ class ChoiceSetTransformer:
         }
 
     def _with_outside_options(self, candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        rows = [dict(row) for row in candidates]
         if not self.outside_option:
-            return rows
+            return candidates
+        rows = [dict(row) for row in candidates]
         decisions = sorted({str(row.get("decision_id", "")) for row in rows})
         for decision_id in decisions:
             rows.append(

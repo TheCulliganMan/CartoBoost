@@ -1,14 +1,19 @@
 # General Utilities
 
-CartoBoost includes numerical utilities that can be used without building a
-`CartoBoostRegressor` or a forecasting `ForecastFrame`. Use these when you have
-a plain Python sequence, a small spatial interpolation problem, or an
-intermittent-demand sequence and want a direct result.
+Run a small calculation without constructing a full estimator. These utilities
+accept numeric sequences or coordinates and return forecasts, filtered states,
+interpolated values, or diagnostics.
 
-These functions are useful for scientific checks and ablations: they let you
-compare a full estimator or forecasting wrapper against the same underlying
-method on a simple zone sequence, route panel, or coordinate interpolation
-problem.
+| Your input | Useful starting point |
+| --- | --- |
+| A noisy sequence of taxi pickup counts | [Local-level Kalman](#local-level-kalman) |
+| A sequence with a changing trend | [Local-linear-trend Kalman](#local-linear-trend-kalman) |
+| Measurements at pickup locations | [Ordinary kriging](#ordinary-kriging) |
+| Mostly zero counts with occasional demand | [Intermittent demand](#intermittent-demand) |
+| A known prefix and an external demand profile | [Sequence reference utilities](#sequence-reference-utilities) |
+
+Use the [forecasting API](forecasting.md) when you need timestamped panels,
+rolling-origin evaluation, or reusable model artifacts.
 
 ```python
 import cartoboost as cb
@@ -61,8 +66,8 @@ Available entry points:
 Use local-level Kalman filtering when the signal is a noisy measurement of a
 slowly moving level and there is no explicit trend term.
 
-Example: a location counter reads a stable hourly demand level with small
-noise, and you want a smoothed level plus a short flat forecast.
+For example, smooth noisy hourly pickup counts around a steady demand level,
+then project that level over a short horizon.
 
 ```python
 import cartoboost as cb
@@ -141,11 +146,9 @@ plt.savefig("target/examples/local_level_kalman_utility.png", dpi=160)
 
 ## Local-Linear-Trend Kalman
 
-Use local-linear Kalman filtering when the series has a level and a slope. This
-matches load, traffic, or pickup counts that drift over time.
-
-Example: daily pickup demand is increasing by about two trips per day, with
-noise.
+Use local-linear Kalman filtering when both the level and slope matter. For
+example, daily pickup demand might rise by about two trips per day while each
+observation fluctuates around that trend.
 
 ```python
 import cartoboost as cb
@@ -382,11 +385,9 @@ KrigingForecaster(
 ## Intermittent Demand
 
 Use Croston-family utilities when demand is non-negative and contains many
-zeros. They are useful for sparse demand requests, low-volume parts, or rare
-lane/customer activity.
-
-Example: a low-volume lane has several zero-demand days and occasional
-orders.
+zeros. A low-volume taxi lane may have several days with no trips followed
+by occasional pickup demand. These methods model the gaps and positive
+observations explicitly.
 
 ```python
 import cartoboost as cb
@@ -457,10 +458,10 @@ forecast = cb.series_forecast(
 
 ## Geotemporal Forecast Utilities
 
-CartoBoost also exposes reusable utilities for geotemporal model diagnostics
-and uncertainty control. These are lower-level primitives for model authors and
-benchmark harnesses when a workflow needs calibrated intervals, residual-state
-correction, regime detection, or probability calibration.
+Combine these primitives when your workflow needs calibrated intervals,
+residual-state correction, regime detection, or probability calibration. They
+operate on supplied observations and predictions, so you control the evaluation
+window and the information available at each cutoff.
 
 | Primitive family | Use |
 | --- | --- |

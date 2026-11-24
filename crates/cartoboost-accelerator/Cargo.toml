@@ -1,7 +1,8 @@
 [package]
 name = "cartoboost-accelerator"
-version = "0.3.12"
+version = "0.3.13"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "Cycle-free accelerator runtime and tensor kernels for CartoBoost"
 
@@ -40,3 +41,11 @@ hip = ["rocm"]
 metal = ["dep:metal", "dep:objc"]
 webgpu = ["dep:futures-channel", "dep:wgpu"]
 directml = ["webgpu", "dep:windows"]
+
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "accelerator"
+path = "../../benches/accelerator.rs"
+harness = false

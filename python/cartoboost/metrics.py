@@ -58,12 +58,22 @@ def conformal_residual_quantile(
 
     _validate_alpha(alpha)
     y_true_arr, y_pred_arr = _paired_vectors(y_true, y_pred, "y_true", "y_pred")
-    scores = np.abs(y_true_arr - y_pred_arr)
-    if scores.size == 0:
+    if y_true_arr.size == 0:
         raise ValueError("calibration data must contain at least one row")
-
-    quantile_level = min(1.0, np.ceil((scores.size + 1) * (1.0 - alpha)) / scores.size)
-    return float(np.quantile(scores, quantile_level, method="higher"))
+    # The helper receives calibration rows only. Use a relative, disjoint layout
+    # for the native ordering contract; callers still own chronological splitting.
+    calibration_end = int(y_true_arr.size) + 1
+    return float(
+        _native.prob_split_conformal_residual_quantile_arrays(
+            y_true_arr,
+            y_pred_arr,
+            float(alpha),
+            1,
+            1,
+            calibration_end,
+            calibration_end,
+        )
+    )
 
 
 def calibrated_intervals(
@@ -126,12 +136,12 @@ def pinball_loss(
     if weights is not None and weights.shape != y_true_arr.shape:
         raise ValueError("sample_weight must have the same length as y_true")
     return float(
-        _native.prob_pinball_loss_value(
-            y_true_arr.tolist(),
-            y_pred_arr.tolist(),
+        _native.prob_pinball_loss_arrays(
+            y_true_arr,
+            y_pred_arr,
             float(quantile),
             str(backend),
-            None if weights is None else weights.tolist(),
+            weights,
         )
     )
 
@@ -159,12 +169,12 @@ def interval_coverage(
     if weights is not None and weights.shape != y_true_arr.shape:
         raise ValueError("sample_weight must have the same length as y_true")
     return float(
-        _native.prob_interval_coverage_value(
-            y_true_arr.tolist(),
-            lower_arr.tolist(),
-            upper_arr.tolist(),
+        _native.prob_interval_coverage_arrays(
+            y_true_arr,
+            lower_arr,
+            upper_arr,
             str(backend),
-            None if weights is None else weights.tolist(),
+            weights,
         )
     )
 
@@ -191,11 +201,11 @@ def mean_interval_width(
     if weights is not None and weights.shape != lower_arr.shape:
         raise ValueError("sample_weight must have the same length as lower")
     return float(
-        _native.prob_mean_interval_width_value(
-            lower_arr.tolist(),
-            upper_arr.tolist(),
+        _native.prob_mean_interval_width_arrays(
+            lower_arr,
+            upper_arr,
             str(backend),
-            None if weights is None else weights.tolist(),
+            weights,
         )
     )
 
@@ -249,11 +259,11 @@ def brier_score(
     if weights is not None and weights.shape != target.shape:
         raise ValueError("sample_weight must have the same length as y_true")
     return float(
-        _native.prob_brier_score_value(
-            target.tolist(),
-            proba.tolist(),
+        _native.prob_brier_score_arrays(
+            target,
+            proba,
             str(backend),
-            None if weights is None else weights.tolist(),
+            weights,
         )
     )
 
@@ -280,13 +290,14 @@ def roc_auc(
     binary = np.asarray([value == positive for value in truth.tolist()], dtype=int)
     if np.unique(binary).size != 2:
         raise ValueError("ROC-AUC requires both positive and negative labels")
-    if sample_weight is not None:
-        return _weighted_binary_auc(binary, scores, sample_weight)
-    ranks = _average_ranks(scores)
-    pos_ranks = ranks[binary == 1]
-    n_pos = float(pos_ranks.size)
-    n_neg = float(scores.size - pos_ranks.size)
-    return float((np.sum(pos_ranks) - n_pos * (n_pos + 1.0) / 2.0) / (n_pos * n_neg))
+    weights = None if sample_weight is None else _as_float_vector(sample_weight, "sample_weight")
+    if weights is not None and weights.shape != scores.shape:
+        raise ValueError("sample_weight must match y_score")
+    return float(
+        _native.binary_roc_auc_value(
+            binary.tolist(), scores.tolist(), None if weights is None else weights.tolist()
+        )
+    )
 
 
 def pr_auc(
@@ -770,39 +781,6 @@ def _unique_in_order(values: list[object]) -> list[object]:
     return unique
 
 
-def _average_ranks(values: np.ndarray) -> np.ndarray:
-    order = np.argsort(values, kind="mergesort")
-    ranks = np.empty(values.shape[0], dtype=float)
-    start = 0
-    while start < values.shape[0]:
-        stop = start + 1
-        while stop < values.shape[0] and values[order[stop]] == values[order[start]]:
-            stop += 1
-        ranks[order[start:stop]] = (start + 1 + stop) / 2.0
-        start = stop
-    return ranks
-
-
-def _weighted_binary_auc(binary: np.ndarray, scores: np.ndarray, sample_weight: object) -> float:
-    weights = _as_float_vector(sample_weight, "sample_weight")
-    if weights.shape != scores.shape:
-        raise ValueError("sample_weight must match y_score")
-    if np.any(weights < 0.0):
-        raise ValueError("sample_weight must be non-negative")
-    pos_mask = binary == 1
-    neg_mask = ~pos_mask
-    pos_weight = float(np.sum(weights[pos_mask]))
-    neg_weight = float(np.sum(weights[neg_mask]))
-    if pos_weight <= 0.0 or neg_weight <= 0.0:
-        raise ValueError("weighted ROC-AUC requires positive weight for both labels")
-    total = 0.0
-    for pos_score, pos_w in zip(scores[pos_mask], weights[pos_mask], strict=True):
-        wins = np.sum(weights[neg_mask] * (pos_score > scores[neg_mask]))
-        ties = 0.5 * np.sum(weights[neg_mask] * (pos_score == scores[neg_mask]))
-        total += float(pos_w) * float(wins + ties)
-    return total / (pos_weight * neg_weight)
-
-
 def _ranking_inputs(
     relevance: object,
     scores: object,
@@ -822,8 +800,10 @@ def _ranking_inputs(
             [(int(start), int(stop)) for start, stop in zip(starts, stops, strict=True)],
         )
     if group_values.shape[0] != rel.shape[0]:
-        sizes = [int(value) for value in group_values.tolist()]
-        if any(size <= 0 for size in sizes) or sum(sizes) != rel.shape[0]:
+        sizes = _try_group_sizes(group_values)
+        if sizes is None:
+            raise ValueError("group sizes must be positive integers")
+        if sum(sizes) != rel.shape[0]:
             raise ValueError("group sizes must be positive and sum to row count")
         stops = np.cumsum(sizes)
         starts = np.concatenate([[0], stops[:-1]])
@@ -856,7 +836,7 @@ def _try_group_sizes(values: np.ndarray) -> list[int] | None:
             return None
         try:
             size = int(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return None
         if size != value or size <= 0:
             return None

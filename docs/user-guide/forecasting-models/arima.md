@@ -2,16 +2,18 @@ import {ForecastModelExample} from '@site/src/components/ModelingLabClient';
 
 # ARIMA And AutoARIMA
 
-ARIMA models are useful when a series is mostly explained by recent
-values, recent forecast errors, and one or two rounds of differencing.
-CartoBoost exposes bounded, non-seasonal ARIMA models:
+Forecast a regular series from recent values, recent errors, and differencing.
+ARIMA is a useful local comparison when taxi demand has short-range dependence
+that persistence or a seasonal baseline does not capture.
 
-- `ArimaForecaster` fits one fixed `(p, d, q)` order.
-- `AutoARIMAForecaster` searches a bounded deterministic grid of `(p, d, q)`
-  candidates and refits the selected order.
+- `ArimaForecaster` fits the fixed `(p, d, q)` order you choose.
+- `AutoARIMAForecaster` selects from a bounded, deterministic non-seasonal grid.
 - `cartoboost.utilities.arima_forecast` and
-  `cartoboost.utilities.auto_arima_forecast` provide the
-  same model behavior for quick single-series utility calls.
+  `cartoboost.utilities.auto_arima_forecast` expose the same behavior for
+  single-series calls.
+
+These APIs are non-seasonal. Compare them with seasonal naive and ETS when
+daily or weekly recurrence dominates.
 
 ## Interactive Example
 
@@ -32,18 +34,15 @@ coordinates should smooth nearby locations. Prefer seasonal naive, ETS, or
 Theta when daily or weekly seasonality dominates and the non-seasonal ARIMA
 scope is too narrow.
 
-## Scientific Role
+## What The Model Learns {#scientific-role}
 
-ARIMA is a local serial-dependence model. It is the right scientific choice
-when the hypothesis is that a single series can be forecast from its own recent
-values, its recent errors, and a bounded amount of differencing. It does not
-explain the series with geography, shared panel behavior, or known future
-covariates.
+ARIMA describes one series through its own history. Differencing removes a
+local trend; autoregressive terms use past values; moving-average terms use
+past errors. Geographic relationships and known-future covariates are outside
+this model's inputs.
 
-Choose fixed ARIMA when the order is part of the experiment or has already been
-validated. Choose AutoARIMA when you want a reproducible bounded search over
-non-seasonal `(p, d, q)` candidates, then still choose the deployed model by
-held-out or rolling-origin error.
+Use a fixed order when it is already justified. Use AutoARIMA to compare a
+bounded set of orders, then assess the selected model on an external holdout.
 
 ## Assumptions And Failure Modes
 

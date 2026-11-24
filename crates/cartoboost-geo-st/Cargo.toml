@@ -1,7 +1,8 @@
 [package]
 name = "cartoboost-geo-st"
-version = "0.3.12"
+version = "0.3.13"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
@@ -9,10 +10,10 @@ cartoboost-neural = { path = "../cartoboost-neural" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-rayon = "1.11"
+rayon.workspace = true
 
 [dev-dependencies]
-tempfile = "3"
+tempfile.workspace = true
 
 [features]
 default = []

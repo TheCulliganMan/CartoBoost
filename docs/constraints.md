@@ -1,18 +1,21 @@
 # Constraints
 
-Monotonic constraints force predictions to move in a declared direction as a
-dense feature increases. They are useful when the direction is a modeling
-requirement, such as price increasing with distance or demand decreasing with
-travel time.
+Encode a relationship your model must respect. A **monotonic constraint** controls
+how predictions change as one dense feature increases. An **interaction
+constraint** controls which features can appear together along a tree branch.
 
-Interaction constraints restrict which feature combinations may appear together
-along a tree branch. They are useful when a route, corridor, or lane forecast
-should allow known families of effects while preventing unsupported cross-family
-interactions.
+For taxi fare, a defensible rule might require predictions to increase with trip
+distance while other inputs stay fixed. A route model might allow interactions
+within location features and within time features, but keep those groups separate.
+Choose the rule from the problem, then test it on held-out trips.
 
-Use constraints as scientific assumptions, not as tuning decoration. A
-constraint should be defensible before training and should survive checks on
-held-out taxi trips, route groups, and time blocks.
+| You need to control | Use | Check after fitting |
+| --- | --- | --- |
+| The direction of a feature's effect | `monotonic_constraints` | Vary that feature alone and inspect predictions. |
+| Feature combinations within a branch | `BoosterConfig.interaction_constraints` | Inspect branches for disallowed combinations. |
+
+For the surrounding training workflow, see [Parameters](user-guide/parameters.md)
+and [Spatial validation](user-guide/spatial-cv-best-practices.md).
 
 ## Usage
 

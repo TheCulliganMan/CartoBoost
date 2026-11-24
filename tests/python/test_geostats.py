@@ -58,6 +58,30 @@ def test_nearest_neighbor_gp_save_load_preserves_predictions(tmp_path):
     np.testing.assert_allclose(loaded.predict(None, coords=coords), before)
 
 
+@pytest.mark.parametrize("precomputed", [False, True])
+def test_nearest_neighbor_gp_artifact_owns_training_snapshot(tmp_path, precomputed):
+    coords = np.array([[0.0, 0.0], [0.4, 0.0], [0.8, 0.0]])
+    y = np.array([1.0, 1.5, 2.0])
+    data = (
+        np.linalg.norm(coords[:, None, :] - coords[None, :, :], axis=2) if precomputed else coords
+    )
+    key = "distance_matrix" if precomputed else "coords"
+    query = data.copy()
+    model = NearestNeighborGPRegressor(range=0.5, n_neighbors=2).fit(None, y, **{key: data})
+    expected = model.predict(None, **{key: query}, return_var=True)
+    data[:] = 99.0
+    y[:] = -200.0
+
+    path = tmp_path / "nngp.json"
+    model.save(path)
+    restored = NearestNeighborGPRegressor.load(path)
+
+    for estimator in (model, restored):
+        actual = estimator.predict(None, **{key: query}, return_var=True)
+        np.testing.assert_array_equal(actual[0], expected[0])
+        np.testing.assert_array_equal(actual[1], expected[1])
+
+
 def test_nearest_neighbor_gp_accepts_and_persists_metric_distance_matrix(tmp_path):
     lanes = np.array([[0.0, 0.0, 2.0, 0.0], [0.2, 0.0, 2.2, 0.0], [3.0, 0.0, 5.0, 0.0]])
     distances = directional_lane_distance_matrix(lanes, origin_weight=2.0)
@@ -185,6 +209,59 @@ def test_residual_nngp_adds_base_prediction_and_returns_std():
     assert pred.shape == y.shape
     assert np.all(std >= 0.0)
     assert model.score(X, y, coords=coords) >= 0.0
+
+
+@pytest.mark.parametrize("clone_behavior", ["custom_estimator", "unavailable", "same_object"])
+def test_residual_nngp_fits_independent_copy_of_custom_estimator(monkeypatch, clone_behavior):
+    import cartoboost.geostats as geostats
+
+    class RecordingMeanRegressor(MeanRegressor):
+        def __init__(self):
+            self.fit_calls = []
+            self.mean_ = 99.0
+
+        def fit(self, X, y):
+            self.fit_calls.append(float(np.mean(y)))
+            return super().fit(X, y)
+
+    if clone_behavior == "unavailable":
+
+        def missing_clone(estimator):
+            raise ImportError("sklearn is unavailable")
+
+        monkeypatch.setattr(geostats, "clone", missing_clone)
+    elif clone_behavior == "same_object":
+        monkeypatch.setattr(geostats, "clone", lambda estimator: estimator)
+    original = RecordingMeanRegressor()
+    coords = np.array([[0.0, 0.0], [0.3, 0.0], [0.6, 0.0]])
+    y = np.array([2.0, 2.4, 1.8])
+
+    model = ResidualNNGPRegressor(original).fit(coords[:, :1], y, coords=coords)
+
+    assert model.base_estimator_ is not original
+    assert original.fit_calls == []
+    assert original.mean_ == 99.0
+    assert model.base_estimator_.fit_calls == [pytest.approx(np.mean(y))]
+    assert model.base_estimator_.mean_ == pytest.approx(np.mean(y))
+    assert np.isfinite(model.predict(coords[:, :1], coords=coords)).all()
+
+
+@pytest.mark.parametrize("copy_behavior", ["raises", "same_object"])
+def test_residual_nngp_rejects_uncopyable_estimator_before_fitting(copy_behavior):
+    class UncopyableMeanRegressor(MeanRegressor):
+        def __deepcopy__(self, memo):
+            if copy_behavior == "raises":
+                raise RuntimeError("cannot copy estimator")
+            return self
+
+    original = UncopyableMeanRegressor()
+    model = ResidualNNGPRegressor(original)
+
+    with pytest.raises(ValueError, match="independent"):
+        model.fit([[0.0], [1.0]], [2.0, 3.0], coords=[[0.0, 0.0], [1.0, 0.0]])
+
+    assert not hasattr(original, "mean_")
+    assert not hasattr(model, "base_estimator_")
 
 
 @pytest.mark.parametrize("backend", available_backends("pairwise_distance"))

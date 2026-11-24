@@ -1,37 +1,28 @@
 # Neural Embeddings
 
-Neural embeddings turn repeated identifiers into learned numeric features. For
-example, pickup zones, route pairs, or zone-hour IDs can learn residual effects
-that remain after distance, time, and other measured features are included.
-Import these tools from `cartoboost.neural`.
+Turn repeated identifiers into learned numeric representations. Pickup zones,
+dropoff zones, route pairs, and zone-hour IDs can carry fare or duration patterns
+that remain after distance and time features are accounted for. Import these
+tools from `cartoboost.neural`.
 
-Start with the [neural model guides](user-guide/neural-models/index.md) to
-choose a workflow. Return here for input shapes, unseen-ID behavior, generated
-features, and saved-model details.
+| Workflow | Entry point | Result |
+| --- | --- | --- |
+| Predict directly from IDs and optional dense inputs | `NeuralEmbeddingStandaloneRegressor` | A fitted supervised embedding model. |
+| Generate embedding columns | `NeuralEmbeddingFeatures` | Features for a downstream estimator. |
+| Fit an embedding-enhanced tabular model | `NeuralEmbeddingRegressor` | A combined feature-generation and regression workflow. |
 
-Choose between two entry points:
-
-- `NeuralEmbeddingStandaloneRegressor` for direct supervised ID embedding
-  regression;
-- `NeuralEmbeddingFeatures` and `NeuralEmbeddingRegressor` for feature
-  generation or neural-augmented tabular workflows.
-
-Use neural embeddings when stable identifiers carry repeated residual signal
-such as fare, duration, demand, or other structured effects that remain after
-the engineered features have done their work.
-
-They are weaker evidence for cold-start generalization. If a validation split
-holds out ids unseen during training, report the fallback behavior explicitly.
+The [neural model guides](user-guide/neural-models/index.md) explain when to
+choose each model. This page details inputs, unseen IDs, generated columns,
+and saved models. Repeated-ID accuracy and cold-ID accuracy answer different
+questions: inspect both before relying on an embedding model.
 
 ```mermaid
 flowchart LR
-    A["IDs + optional dense features"] --> B["Standalone neural model"]
-    B --> C["fit / predict / score"]
-    C --> D["Neural artifact"]
-
-    A --> E["Embedding feature lookup"]
-    E --> F["Dense embedding columns"]
-    F --> G["Downstream tabular model"]
+    A["IDs + optional dense inputs"] --> B["Standalone embedding model"]
+    B --> C["Predictions"]
+    A --> D["Embedding feature lookup"]
+    D --> E["Dense embedding columns"]
+    E --> F["Tabular model"]
 ```
 
 ## Standalone Neural Model
@@ -62,7 +53,7 @@ model = NeuralEmbeddingStandaloneRegressor(dim=4, n_estimators=20, random_state=
 model.fit(pickup_zone, log_fare, dense=dense)
 
 pred = model.predict(pickup_zone, dense=dense)
-mae = model.score(pickup_zone, log_fare, dense=dense)
+r2 = model.score(pickup_zone, log_fare, dense=dense)
 model.save("neural-standalone.json")
 ```
 
@@ -70,7 +61,7 @@ Direct inference contract:
 
 - `fit(ids, y, dense=None)` trains one supervised embedding model.
 - `predict(ids, dense=None)` returns one prediction per row.
-- `score(ids, y, dense=None)` reports mean absolute error.
+- `score(ids, y, dense=None)` reports R2.
 - `save(path)` and `load(path)` persist the complete standalone artifact.
 
 `ids` is a one-dimensional unsigned integer array. When `dense` is provided, it
@@ -142,9 +133,9 @@ model.fit(X, y, ids=ids)
 pred = model.predict(X, ids=ids)
 ```
 
-## Controls For Scientific Validity
+## Validation and unseen IDs {#controls-for-scientific-validity}
 
-Implemented controls:
+Control how embeddings learn from training rows and behave on unfamiliar IDs:
 
 - `oof_folds > 1` trains final-model embeddings with out-of-fold residuals, so
   the final model sees realistic embedding noise rather than fully in-sample
@@ -213,11 +204,10 @@ uv run python scripts/run_neural_embedding_benchmark.py \
   --output target/validation/neural_embedding_benchmark.json
 ```
 
-Record MAE or RMSE, fit time, predict time, split mode, ID definition, fallback
-strategy, embedding dimension, random seed, and baseline settings. Synthetic
-benchmark output is smoke evidence only; benchmark claims should come from the
-maintained benchmark protocols and real or clearly labeled generated acceptance
-data.
+Read the error and runtime together with the ID definition, split, fallback
+strategy, embedding dimension, and seed. The [neural embedding benchmark](benchmarks/neural-embedding-benchmark-latest.md)
+shows how the ranking changes between repeated and unseen IDs on a synthetic
+fixture.
 
 ## Failure Modes
 

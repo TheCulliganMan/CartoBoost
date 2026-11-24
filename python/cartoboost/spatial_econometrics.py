@@ -118,7 +118,7 @@ class _SpatialRegressionBase(ArtifactPersistenceMixin, RegressorMixin, BaseEstim
             row_standardize=bool(self.row_standardize),
         )
         model = self._native_cls(self.backend)
-        model.fit(x_array.tolist(), y_array.tolist(), weights._native)
+        model.fit_arrays(x_array, y_array, weights._native)
         self._model = model
         self.n_features_in_ = x_array.shape[1]
         self.n_samples_fit_ = x_array.shape[0]
@@ -144,7 +144,7 @@ class _SpatialRegressionBase(ArtifactPersistenceMixin, RegressorMixin, BaseEstim
             n_rows=x_array.shape[0],
             row_standardize=bool(self.row_standardize),
         )
-        return np.asarray(self._model.predict(x_array.tolist(), weights._native), dtype=float)
+        return self._model.predict_arrays(x_array, weights._native)
 
     def summary(self) -> dict[str, Any]:
         if self._model is None:
@@ -163,11 +163,9 @@ class _SpatialRegressionBase(ArtifactPersistenceMixin, RegressorMixin, BaseEstim
         truth = _as_1d_float_array(y, "y")
         if pred.shape[0] != truth.shape[0]:
             raise ValueError("prediction and y must contain the same number of rows")
-        residual_sum_squares = float(np.sum((truth - pred) ** 2))
-        total_sum_squares = float(np.sum((truth - np.mean(truth)) ** 2))
-        if total_sum_squares == 0.0:
-            return 1.0 if residual_sum_squares == 0.0 else 0.0
-        return 1.0 - residual_sum_squares / total_sum_squares
+        from . import _native
+
+        return float(_native.r_squared_arrays(truth, pred))
 
     def get_params(self, deep: bool = True) -> dict[str, Any]:
         del deep

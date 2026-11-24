@@ -18,6 +18,68 @@ except ModuleNotFoundError:  # pragma: no cover - Python 3.10 compatibility
     import tomli as tomllib
 
 
+def test_input_batch_benchmark_comparison_contract(tmp_path):
+    repo_root = Path(__file__).resolve().parents[2]
+    output = tmp_path / "batch.json"
+    subprocess.run(
+        [
+            sys.executable,
+            str(repo_root / "scripts" / "benchmark_input_batch_paths.py"),
+            "--compare-root",
+            str(repo_root / "python"),
+            "--formats",
+            "numpy",
+            "--operations",
+            "parse_fit,reg_predict,classifier_predict,rank_metrics",
+            "--sizes",
+            "1,32",
+            "--estimators",
+            "2",
+            "--repeats",
+            "1",
+            "--output",
+            str(output),
+        ],
+        cwd=repo_root,
+        check=True,
+    )
+    report = json.loads(output.read_text())
+    assert report["artifact_version"] == 2
+    assert len(report["cases"]) == 16
+    assert len(report["comparisons"]) == 8
+    assert {case["variant"] for case in report["cases"]} == {"baseline", "candidate"}
+    assert all(case["numpy_input_parity"] for case in report["cases"])
+    assert all(case["output_summary_parity"] for case in report["comparisons"])
+    assert all(case["rounded_output_digest_equal"] for case in report["comparisons"])
+    for case in report["cases"]:
+        if case["operation"] in {"reg_predict", "classifier_predict"}:
+            assert case["single_row_parity_rows"] == case["rows"]
+
+
+def test_input_batch_benchmark_rejects_empty_matrix(tmp_path):
+    repo_root = Path(__file__).resolve().parents[2]
+    output = tmp_path / "empty.json"
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(repo_root / "scripts" / "benchmark_input_batch_paths.py"),
+            "--operations",
+            "fit_regressor",
+            "--sizes",
+            "1",
+            "--output",
+            str(output),
+        ],
+        cwd=repo_root,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert completed.returncode != 0
+    assert "no valid benchmark cases" in completed.stderr
+    assert not output.exists()
+
+
 def test_python_base_install_keeps_integrations_optional():
     repo_root = Path(__file__).resolve().parents[2]
     metadata = tomllib.loads((repo_root / "pyproject.toml").read_text(encoding="utf-8"))["project"]

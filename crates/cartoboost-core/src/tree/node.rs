@@ -218,6 +218,67 @@ pub enum FuzzyKernel {
     Tricube,
 }
 
+// Small batches avoid Rayon setup; larger forests can still parallelize even
+// below the row threshold. Keep the PyO3 caller-dispatch gate in sync.
+pub(crate) fn prediction_is_small(rows: usize, work_per_row: usize) -> bool {
+    rows < 1024 && rows.saturating_mul(work_per_row.max(1)) < 16_384
+}
+
+pub(crate) fn map_prediction_rows<T: Send, F: Fn(usize) -> T + Send + Sync>(
+    rows: usize,
+    work_per_row: usize,
+    predict: F,
+) -> Vec<T> {
+    if prediction_is_small(rows, work_per_row) {
+        (0..rows).map(predict).collect()
+    } else {
+        (0..rows).into_par_iter().map(predict).collect()
+    }
+}
+
+pub(crate) fn validate_dense_prediction_matrix(
+    rows: usize,
+    cols: usize,
+    values: &[f64],
+    feature_count: usize,
+) -> Result<()> {
+    if rows == 0 {
+        return Err(CartoBoostError::InvalidInput(
+            "dataset must contain at least one row".to_string(),
+        ));
+    }
+    if cols == 0 {
+        return Err(CartoBoostError::InvalidInput(
+            "dataset must contain at least one column".to_string(),
+        ));
+    }
+    if rows.checked_mul(cols) != Some(values.len()) {
+        return Err(CartoBoostError::InvalidInput(format!(
+            "matrix shape {rows}x{cols} does not match {} values",
+            values.len()
+        )));
+    }
+    if has_non_finite_values(values) {
+        return Err(CartoBoostError::InvalidInput(
+            "dataset values must be finite".to_string(),
+        ));
+    }
+    if cols != feature_count {
+        return Err(CartoBoostError::InvalidInput(format!(
+            "X has {cols} features, but model expects {feature_count}"
+        )));
+    }
+    Ok(())
+}
+
+fn has_non_finite_values(values: &[f64]) -> bool {
+    if values.len() < 16_384 {
+        values.iter().any(|value| !value.is_finite())
+    } else {
+        values.par_iter().any(|value| !value.is_finite())
+    }
+}
+
 impl Model {
     /// Export ordinary axis-aligned constant-leaf trees for TreeSHAP consumers.
     ///
@@ -270,6 +331,13 @@ impl Model {
     }
 
     pub fn try_predict_one_dense(&self, row: &[f64]) -> Result<f64> {
+        if row.len() != self.feature_count {
+            return Err(CartoBoostError::InvalidInput(format!(
+                "row has {} features, but model expects {}",
+                row.len(),
+                self.feature_count
+            )));
+        }
         if self.requires_sparse_sets() {
             return Err(CartoBoostError::InvalidInput(
                 "dense prediction is not available for models with list-valued sparse splits"
@@ -304,20 +372,20 @@ impl Model {
     }
 
     pub fn try_predict_dataset_row(&self, x: &Dataset, row: usize) -> Result<f64> {
-        if self.requires_sparse_sets() && x.n_sparse_sets() == 0 {
-            return Err(CartoBoostError::InvalidInput(
-                "prediction requires sparse_sets for a model with list-valued sparse splits"
-                    .to_string(),
-            ));
+        self.validate_dataset_prediction_inputs(x)?;
+        if row >= x.n_rows() {
+            return Err(CartoBoostError::InvalidInput(format!(
+                "row index {row} is out of bounds for {} rows",
+                x.n_rows()
+            )));
         }
         Ok(self.predict_dataset_row(x, row))
     }
 
     pub fn predict(&self, x: &Dataset) -> Vec<f64> {
-        (0..x.n_rows())
-            .into_par_iter()
-            .map(|row| self.predict_dataset_row(x, row))
-            .collect()
+        map_prediction_rows(x.n_rows(), self.trees.len(), |row| {
+            self.predict_dataset_row(x, row)
+        })
     }
 
     pub fn try_predict(&self, x: &Dataset) -> Result<Vec<f64>> {
@@ -332,10 +400,27 @@ impl Model {
     }
 
     fn try_predict_cpu(&self, x: &Dataset) -> Result<Vec<f64>> {
-        (0..x.n_rows())
-            .into_par_iter()
-            .map(|row| self.try_predict_dataset_row(x, row))
-            .collect()
+        // Forest requirements are invariant across rows. Checking inside each
+        // row task repeatedly traversed every node before doing inference.
+        self.validate_dataset_prediction_inputs(x)?;
+        Ok(self.predict(x))
+    }
+
+    fn validate_dataset_prediction_inputs(&self, x: &Dataset) -> Result<()> {
+        if x.n_cols() != self.feature_count {
+            return Err(CartoBoostError::InvalidInput(format!(
+                "X has {} features, but model expects {}",
+                x.n_cols(),
+                self.feature_count
+            )));
+        }
+        if self.requires_sparse_sets() && x.n_sparse_sets() == 0 {
+            return Err(CartoBoostError::InvalidInput(
+                "prediction requires sparse_sets for a model with list-valued sparse splits"
+                    .to_string(),
+            ));
+        }
+        Ok(())
     }
 
     pub fn try_predict_with_backend(&self, x: &Dataset, backend: Option<&str>) -> Result<Vec<f64>> {
@@ -375,16 +460,10 @@ impl Model {
     }
 
     pub fn try_predict_additive(&self, x: &Dataset) -> Result<Vec<Vec<f64>>> {
-        if self.requires_sparse_sets() && x.n_sparse_sets() == 0 {
-            return Err(CartoBoostError::InvalidInput(
-                "prediction requires sparse_sets for a model with list-valued sparse splits"
-                    .to_string(),
-            ));
-        }
-        Ok((0..x.n_rows())
-            .into_par_iter()
-            .map(|row| self.predict_additive_dataset_row(x, row))
-            .collect())
+        self.validate_dataset_prediction_inputs(x)?;
+        Ok(map_prediction_rows(x.n_rows(), self.trees.len(), |row| {
+            self.predict_additive_dataset_row(x, row)
+        }))
     }
 
     pub fn try_predict_flat(
@@ -395,51 +474,7 @@ impl Model {
         sparse_offsets: &[Vec<usize>],
         sparse_ids: &[Vec<u64>],
     ) -> Result<Vec<f64>> {
-        if rows.checked_mul(cols) != Some(values.len()) {
-            return Err(CartoBoostError::InvalidInput(format!(
-                "matrix shape {rows}x{cols} does not match {} values",
-                values.len()
-            )));
-        }
-        if cols != self.feature_count {
-            return Err(CartoBoostError::InvalidInput(format!(
-                "X has {cols} features, but model expects {}",
-                self.feature_count
-            )));
-        }
-        if values.par_iter().any(|value| !value.is_finite()) {
-            return Err(CartoBoostError::InvalidInput(
-                "dataset values must be finite".to_string(),
-            ));
-        }
-        if sparse_offsets.len() != sparse_ids.len() {
-            return Err(CartoBoostError::InvalidInput(
-                "sparse_offsets and sparse_ids must contain the same number of columns".to_string(),
-            ));
-        }
-        if self.requires_sparse_sets() && sparse_offsets.is_empty() {
-            return Err(CartoBoostError::InvalidInput(
-                "prediction requires sparse_sets for a model with list-valued sparse splits"
-                    .to_string(),
-            ));
-        }
-        for (column, (offsets, ids)) in sparse_offsets.iter().zip(sparse_ids).enumerate() {
-            if offsets.len() != rows + 1 {
-                return Err(CartoBoostError::InvalidInput(format!(
-                    "sparse_offsets column {column} must have rows + 1 entries"
-                )));
-            }
-            if offsets.first().copied() != Some(0) || offsets.last().copied() != Some(ids.len()) {
-                return Err(CartoBoostError::InvalidInput(format!(
-                    "sparse_offsets column {column} must span sparse_ids exactly"
-                )));
-            }
-            if offsets.windows(2).any(|window| window[0] > window[1]) {
-                return Err(CartoBoostError::InvalidInput(format!(
-                    "sparse_offsets column {column} must be non-decreasing"
-                )));
-            }
-        }
+        self.validate_flat_prediction_inputs(rows, cols, values, sparse_offsets, sparse_ids)?;
         if let Some(value) = self.constant_prediction() {
             return Ok(vec![value; rows]);
         }
@@ -469,18 +504,15 @@ impl Model {
         sparse_ids: &[Vec<u64>],
     ) -> Result<Vec<Vec<f64>>> {
         self.validate_flat_prediction_inputs(rows, cols, values, sparse_offsets, sparse_ids)?;
-        Ok((0..rows)
-            .into_par_iter()
-            .map(|row| {
-                let mut additive = Vec::with_capacity(self.trees.len() + 1);
-                additive.push(self.init_prediction);
-                additive.extend(self.trees.iter().map(|tree| {
-                    self.learning_rate
-                        * tree.predict_flat_row(cols, values, sparse_offsets, sparse_ids, row)
-                }));
-                additive
-            })
-            .collect())
+        Ok(map_prediction_rows(rows, self.trees.len(), |row| {
+            let mut additive = Vec::with_capacity(self.trees.len() + 1);
+            additive.push(self.init_prediction);
+            additive.extend(self.trees.iter().map(|tree| {
+                self.learning_rate
+                    * tree.predict_flat_row(cols, values, sparse_offsets, sparse_ids, row)
+            }));
+            additive
+        }))
     }
 
     pub fn validate_flat_prediction_inputs(
@@ -503,7 +535,7 @@ impl Model {
                 self.feature_count
             )));
         }
-        if values.par_iter().any(|value| !value.is_finite()) {
+        if has_non_finite_values(values) {
             return Err(CartoBoostError::InvalidInput(
                 "dataset values must be finite".to_string(),
             ));
@@ -520,7 +552,7 @@ impl Model {
             ));
         }
         for (column, (offsets, ids)) in sparse_offsets.iter().zip(sparse_ids).enumerate() {
-            if offsets.len() != rows + 1 {
+            if rows.checked_add(1) != Some(offsets.len()) {
                 return Err(CartoBoostError::InvalidInput(format!(
                     "sparse_offsets column {column} must have rows + 1 entries"
                 )));
@@ -557,7 +589,7 @@ impl Model {
                 self.feature_count
             )));
         }
-        if values.par_iter().any(|value| !value.is_finite()) {
+        if has_non_finite_values(values) {
             return Err(CartoBoostError::InvalidInput(
                 "dataset values must be finite".to_string(),
             ));
@@ -588,6 +620,18 @@ impl Model {
         sparse_offsets: &[Vec<usize>],
         sparse_ids: &[Vec<u64>],
     ) -> Vec<f64> {
+        if prediction_is_small(rows, self.trees.len()) {
+            return (0..rows)
+                .map(|row| {
+                    let mut prediction = self.init_prediction;
+                    for tree in &self.trees {
+                        prediction += self.learning_rate
+                            * tree.predict_flat_row(cols, values, sparse_offsets, sparse_ids, row);
+                    }
+                    self.transform_prediction(prediction)
+                })
+                .collect();
+        }
         let mut predictions = vec![self.init_prediction; rows];
         for tree in &self.trees {
             predictions
@@ -633,6 +677,28 @@ impl Model {
         values: &[f64],
         stumps: &[AxisStump],
     ) -> Vec<f64> {
+        if prediction_is_small(rows, self.trees.len()) {
+            return (0..rows)
+                .map(|row| {
+                    let mut prediction = self.init_prediction;
+                    for stump in stumps {
+                        let value = values[row * cols + stump.feature];
+                        let goes_left = if value.is_finite() {
+                            value <= stump.threshold
+                        } else {
+                            stump.missing_goes_left
+                        };
+                        prediction += self.learning_rate
+                            * if goes_left {
+                                stump.left_value
+                            } else {
+                                stump.right_value
+                            };
+                    }
+                    self.transform_prediction(prediction)
+                })
+                .collect();
+        }
         let mut predictions = vec![self.init_prediction; rows];
         for stump in stumps {
             let scaled_left = self.learning_rate * stump.left_value;
@@ -809,18 +875,14 @@ impl FlatAxisPredictor {
         if rows >= 10_000 && self.trees.len() >= 32 {
             return self.predict_flat_tree_major(rows, cols, values);
         }
-        (0..rows)
-            .into_par_iter()
-            .map(|row| {
-                let row_offset = row * cols;
-                let mut prediction = self.init_prediction;
-                for tree in &self.trees {
-                    prediction +=
-                        self.learning_rate * predict_flat_axis_tree(tree, values, row_offset);
-                }
-                self.prediction_transform.apply(prediction)
-            })
-            .collect()
+        map_prediction_rows(rows, self.trees.len(), |row| {
+            let row_offset = row * cols;
+            let mut prediction = self.init_prediction;
+            for tree in &self.trees {
+                prediction += self.learning_rate * predict_flat_axis_tree(tree, values, row_offset);
+            }
+            self.prediction_transform.apply(prediction)
+        })
     }
 
     fn predict_flat_tree_major(&self, rows: usize, cols: usize, values: &[f64]) -> Vec<f64> {
@@ -856,13 +918,27 @@ impl Model {
 
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         let model: Model = crate::serialize::load_json(path)?;
-        if model.artifact_version != MODEL_ARTIFACT_VERSION {
+        model.validate_loaded()?;
+        Ok(model)
+    }
+
+    pub(crate) fn validate_loaded(&self) -> Result<()> {
+        if self.artifact_version != MODEL_ARTIFACT_VERSION {
             return Err(crate::CartoBoostError::InvalidInput(format!(
                 "unsupported model artifact version {}",
-                model.artifact_version
+                self.artifact_version
             )));
         }
-        Ok(model)
+        if !self.init_prediction.is_finite() || !self.learning_rate.is_finite() {
+            return Err(CartoBoostError::InvalidInput(
+                "model prediction parameters must be finite".to_string(),
+            ));
+        }
+        crate::serialize::validate_model_layout(
+            self.feature_count,
+            self.feature_schema.as_ref(),
+            &self.trees,
+        )
     }
 
     pub fn save_weights(&self, path: impl AsRef<Path>) -> Result<()> {
@@ -870,18 +946,50 @@ impl Model {
     }
 
     pub fn load_weights(path: impl AsRef<Path>) -> Result<Self> {
-        let model = crate::serialize::load_weights_json(path)?;
-        if model.artifact_version != MODEL_ARTIFACT_VERSION {
-            return Err(crate::CartoBoostError::InvalidInput(format!(
-                "unsupported model artifact version {}",
-                model.artifact_version
-            )));
-        }
-        Ok(model)
+        crate::serialize::load_weights_json(path)
     }
 }
 
 impl Tree {
+    pub(crate) fn validate_model_layout(
+        &self,
+        feature_count: usize,
+        sparse_count: Option<usize>,
+    ) -> Result<()> {
+        let invalid = |message: &str| CartoBoostError::InvalidInput(message.to_string());
+        let mut pending = vec![&self.root];
+        while let Some(node) = pending.pop() {
+            match node {
+                Node::Leaf { value, .. } => {
+                    if !value.is_finite() {
+                        return Err(invalid("model leaf value must be finite"));
+                    }
+                }
+                Node::LinearLeaf { model, .. } => {
+                    if model.features.len() != model.coefficients.len()
+                        || model
+                            .features
+                            .iter()
+                            .any(|&feature| feature >= feature_count)
+                        || !model.intercept.is_finite()
+                        || model.coefficients.iter().any(|value| !value.is_finite())
+                    {
+                        return Err(invalid(
+                            "model linear leaf has invalid features or coefficients",
+                        ));
+                    }
+                }
+                Node::Branch {
+                    split, left, right, ..
+                } => {
+                    split.validate_model_layout(feature_count, sparse_count)?;
+                    pending.push(right);
+                    pending.push(left);
+                }
+            }
+        }
+        Ok(())
+    }
     pub fn predict_one(&self, row: &[f64]) -> f64 {
         self.root.predict_one(row)
     }
@@ -1025,8 +1133,7 @@ impl Node {
         match self {
             Node::Leaf { value, .. } => *value,
             Node::LinearLeaf { model, .. } => {
-                let dense = dense_row(x, row);
-                model.predict(&dense).unwrap_or(model.intercept)
+                model.predict(x.dense_row(row)).unwrap_or(model.intercept)
             }
             Node::Branch {
                 split, left, right, ..
@@ -1052,8 +1159,10 @@ impl Node {
         match self {
             Node::Leaf { value, .. } => *value,
             Node::LinearLeaf { model, .. } => {
-                let dense = flat_dense_row(cols, values, row);
-                model.predict(&dense).unwrap_or(model.intercept)
+                let start = row * cols;
+                model
+                    .predict(&values[start..start + cols])
+                    .unwrap_or(model.intercept)
             }
             Node::Branch {
                 split, left, right, ..
@@ -1103,6 +1212,67 @@ fn predict_flat_axis_tree(nodes: &[FlatAxisNode], values: &[f64], row_offset: us
 }
 
 impl Split {
+    fn validate_model_layout(
+        &self,
+        feature_count: usize,
+        sparse_count: Option<usize>,
+    ) -> Result<()> {
+        let invalid = |message: &str| CartoBoostError::InvalidInput(message.to_string());
+        let check_feature = |feature: usize| {
+            if feature < feature_count {
+                Ok(())
+            } else {
+                Err(invalid("model split feature index is out of bounds"))
+            }
+        };
+        match self {
+            Self::Axis { feature, .. } | Self::SparseSetContainsAny { feature, .. } => {
+                check_feature(*feature)
+            }
+            Self::Diagonal2D {
+                x_feature,
+                y_feature,
+                ..
+            }
+            | Self::Gaussian2D {
+                x_feature,
+                y_feature,
+                ..
+            } => {
+                check_feature(*x_feature)?;
+                check_feature(*y_feature)
+            }
+            Self::PeriodicInterval {
+                feature, period, ..
+            } => {
+                check_feature(*feature)?;
+                if !period.is_finite() || *period <= 0.0 {
+                    return Err(invalid(
+                        "model periodic split must have a positive finite period",
+                    ));
+                }
+                Ok(())
+            }
+            Self::SparseListContainsAny { sparse_feature, .. } => {
+                if *sparse_feature == usize::MAX
+                    || sparse_count.is_some_and(|count| *sparse_feature >= count)
+                {
+                    return Err(invalid("model sparse split feature index is out of bounds"));
+                }
+                Ok(())
+            }
+            Self::Fuzzy {
+                base, bandwidth, ..
+            } => {
+                if !bandwidth.is_finite() || *bandwidth < 0.0 {
+                    return Err(invalid(
+                        "model fuzzy split bandwidth must be finite and non-negative",
+                    ));
+                }
+                base.validate_model_layout(feature_count, sparse_count)
+            }
+        }
+    }
     pub fn goes_left(&self, row: &[f64]) -> bool {
         let weights = self.branch_weights(row);
         weights.left >= weights.right
@@ -1130,12 +1300,10 @@ impl Split {
                 bandwidth,
                 kernel,
                 ..
-            } => {
-                let dense = dense_row(x, row);
-                base.signed_distance_dataset_row(x, row, &dense)
-                    .map(|distance| fuzzy_weights(distance, *bandwidth, *kernel))
-                    .unwrap_or_else(|| base.hard_branch_weights_dataset_row(x, row))
-            }
+            } => base
+                .signed_distance(x.dense_row(row))
+                .map(|distance| fuzzy_weights(distance, *bandwidth, *kernel))
+                .unwrap_or_else(|| base.hard_branch_weights_dataset_row(x, row)),
             _ => self.hard_branch_weights_dataset_row(x, row),
         }
     }
@@ -1226,21 +1394,6 @@ impl Split {
             Split::SparseSetContainsAny { .. }
             | Split::SparseListContainsAny { .. }
             | Split::Fuzzy { .. } => None,
-        }
-    }
-
-    fn signed_distance_dataset_row(
-        &self,
-        x: &Dataset,
-        row_index: usize,
-        dense_row: &[f64],
-    ) -> Option<f64> {
-        match self {
-            Split::SparseListContainsAny { .. } => None,
-            _ => {
-                let _ = (x, row_index);
-                self.signed_distance(dense_row)
-            }
         }
     }
 
@@ -1526,10 +1679,6 @@ impl Split {
     }
 }
 
-fn dense_row(x: &Dataset, row: usize) -> Vec<f64> {
-    (0..x.n_cols()).map(|col| x.get(row, col)).collect()
-}
-
 fn weighted_child_prediction(
     weights: BranchWeights,
     left: impl FnOnce() -> f64,
@@ -1548,11 +1697,6 @@ fn flat_get(cols: usize, values: &[f64], row: usize, col: usize) -> Option<f64> 
     (col < cols)
         .then(|| values.get(row * cols + col).copied())
         .flatten()
-}
-
-fn flat_dense_row(cols: usize, values: &[f64], row: usize) -> Vec<f64> {
-    let start = row * cols;
-    values[start..start + cols].to_vec()
 }
 
 fn encoded_sparse_contains_any(

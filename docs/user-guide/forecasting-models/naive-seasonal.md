@@ -2,8 +2,10 @@ import {ForecastModelExample} from '@site/src/components/ModelingLabClient';
 
 # Naive And Seasonal Naive
 
-Naive and seasonal naive models are the first baselines to run for forecasting.
-They are intentionally simple and make leakage problems easier to spot.
+`NaiveForecaster` repeats the last
+observation; `SeasonalNaiveForecaster` repeats the last complete cycle. For
+hourly taxi pickups, these answer two useful questions: does the latest level
+persist, and does yesterday's pattern repeat?
 
 ## Interactive Example
 
@@ -32,20 +34,15 @@ from the latest timestamp in the input frame. `SeasonalNaiveForecaster` still
 requires observed finite targets at every regular step because its
 `season_length` indexes previous rows in a complete seasonal cycle.
 
-## Scientific Role
+## What The Model Learns {#scientific-role}
 
-These models are not weak because they are simple; they are the control group.
-They encode two clear hypotheses:
+These baselines isolate persistence and recurrence. Naive tests whether the
+latest observation is enough. Seasonal naive tests whether the same point in
+the previous cycle is enough.
 
-| Hypothesis | Model | What a scientist learns |
-| --- | --- | --- |
-| Demand persists from the most recent observation. | Naive | Whether short-horizon inertia explains the target. |
-| Demand repeats by a fixed cycle. | Seasonal naive | Whether the calendar phase explains the target without learned parameters. |
-
-Choose naive or seasonal naive when you need an auditable baseline, a leakage
-check, or a minimum bar for a richer model. A model that does not clear
-seasonal naive on recurring hourly demand may only be restating the cycle with
-more machinery.
+For hourly pickups, compare both on the same 24-hour holdout as a richer model.
+A gain over naive alone can simply reflect a daily cycle that seasonal naive
+already captures. Neither model estimates a relationship from covariates.
 
 ## Assumptions And Failure Modes
 
@@ -61,6 +58,22 @@ explicitly; the season length is never shortened to make the model run. A
 season length that is numerically feasible but does not match the data cadence
 still produces the wrong comparison, so verify both the declared frequency and
 cycle definition.
+
+## Prediction Intervals
+
+Set `prediction_interval_levels=(0.8, 0.95)` to return symmetric Gaussian
+residual intervals alongside point forecasts. Naive estimates the root mean
+square of consecutive training differences and scales it by `sqrt(horizon)`.
+Seasonal naive uses differences one season apart and scales by
+`sqrt(ceil(horizon / season_length))`. Each series needs at least two residuals. Naive uses only intact one-step
+observed pairs when targets are missing and includes elapsed steps since the
+last observation in horizon scaling. Seasonal naive requires a regular
+training history with observed finite targets.
+
+These intervals assume Gaussian innovations; they are not held-out conformal
+intervals or a distribution-free coverage guarantee. Levels and fitted residual
+scales persist through save/load. The default empty level list returns point
+forecasts only.
 
 ## Python Example
 
@@ -139,7 +152,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from cartoboost.forecasting import ForecastFrame, NaiveForecaster, SeasonalNaiveForecaster
 
-    train = hourly_zone_demand.groupby("zone_id", sort=False).head(96)
+train = hourly_zone_demand.groupby("zone_id", sort=False).head(96)
 frame = ForecastFrame.from_pandas(
     train,
     timestamp_col="timestamp",
@@ -242,6 +255,14 @@ These models do not learn trend, holiday effects, disruption, zone spillover,
 or graph structure. That limitation is useful: when they perform well, the
 repeated cycle is strong; when they fail, the residuals show where richer
 forecasting models need to explain the system.
+
+## Use When
+
+| Your task | Start with |
+| --- | --- |
+| Compare against the latest observed level | `NaiveForecaster` |
+| Compare against the last daily or weekly cycle | `SeasonalNaiveForecaster` |
+| Smooth a gradually changing level and cycle | [ETS](ets.md) |
 
 ## Limitations
 

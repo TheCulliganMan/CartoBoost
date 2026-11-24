@@ -702,7 +702,7 @@ pub fn backend_layer_norm_f32(
 ) -> Result<Vec<f32>> {
     if rows == 0
         || width == 0
-        || values.len() != rows * width
+        || rows.checked_mul(width) != Some(values.len())
         || gamma.len() != width
         || beta.len() != width
         || values
@@ -821,7 +821,7 @@ fn cpu_adamw_step_f32(
 pub(crate) fn validate_csr_row_inputs(indptr: &[u32], values: &[f32]) -> Result<()> {
     if indptr.len() < 2
         || indptr[0] != 0
-        || indptr.last().copied() != Some(values.len() as u32)
+        || indptr.last().map(|value| *value as usize) != Some(values.len())
         || indptr.windows(2).any(|pair| pair[0] > pair[1])
         || values.iter().any(|value| !value.is_finite())
     {
@@ -845,10 +845,14 @@ fn cpu_csr_row_softmax_f32(indptr: &[u32], logits: &[f32]) -> Result<Vec<f32>> {
             .fold(f32::NEG_INFINITY, f32::max);
         let denominator = range
             .clone()
-            .map(|edge| (logits[edge] - maximum).exp())
+            .map(|edge| {
+                let weight = (logits[edge] - maximum).exp();
+                weights[edge] = weight;
+                weight
+            })
             .sum::<f32>();
         for edge in range {
-            weights[edge] = (logits[edge] - maximum).exp() / denominator;
+            weights[edge] /= denominator;
         }
     }
     Ok(weights)
@@ -880,12 +884,17 @@ pub(crate) fn validate_csr_diffusion_inputs(
     channels: usize,
     values: &[f32],
 ) -> Result<()> {
+    let stride = indptr
+        .len()
+        .checked_sub(1)
+        .and_then(|nodes| nodes.checked_mul(channels))
+        .filter(|stride| *stride > 0);
     if indptr.len() < 2
         || indptr[0] != 0
-        || indptr.last().copied() != Some(indices.len() as u32)
+        || indptr.last().map(|value| *value as usize) != Some(indices.len())
         || indices.len() != weights.len()
         || channels == 0
-        || !values.len().is_multiple_of((indptr.len() - 1) * channels)
+        || stride.is_none_or(|stride| values.len() % stride != 0)
         || indptr.windows(2).any(|pair| pair[0] > pair[1])
         || indices
             .iter()
@@ -1449,6 +1458,7 @@ fn cpu_train_tanh_mlp_f32(
     let b1 = hidden_size * input_size;
     let w2 = b1 + hidden_size;
     let b2 = w2 + hidden_size;
+    let mut activations = vec![0.0; hidden_size];
     for _ in 0..epochs {
         for (row, target) in inputs.iter().zip(targets) {
             let mut prediction = parameters[b2];
@@ -1457,16 +1467,14 @@ fn cpu_train_tanh_mlp_f32(
                 for input in 0..input_size {
                     value += parameters[hidden * input_size + input] * row[input];
                 }
-                prediction += value.tanh() * parameters[w2 + hidden];
+                let activation = value.tanh();
+                activations[hidden] = activation;
+                prediction += activation * parameters[w2 + hidden];
             }
             let error_gradient = 2.0 * (prediction - target);
             parameters[b2] -= learning_rate * error_gradient;
             for hidden in 0..hidden_size {
-                let mut value = parameters[b1 + hidden];
-                for input in 0..input_size {
-                    value += parameters[hidden * input_size + input] * row[input];
-                }
-                let activation = value.tanh();
+                let activation = activations[hidden];
                 let output_weight = parameters[w2 + hidden];
                 parameters[w2 + hidden] -= learning_rate * error_gradient * activation;
                 let gradient = error_gradient * output_weight * (1.0 - activation * activation);
@@ -1514,8 +1522,11 @@ pub(crate) fn validate_tanh_mlp_training_inputs(
             "tanh-MLP training inputs and targets must be finite and rectangular".to_string(),
         ));
     }
-    let expected = hidden_size * input_size + hidden_size + hidden_size + 1;
-    if parameters.len() != expected || parameters.iter().any(|value| !value.is_finite()) {
+    let expected = input_size
+        .checked_add(2)
+        .and_then(|width| hidden_size.checked_mul(width))
+        .and_then(|count| count.checked_add(1));
+    if expected != Some(parameters.len()) || parameters.iter().any(|value| !value.is_finite()) {
         return Err(AcceleratorError::InvalidArgument(
             "tanh-MLP parameter vector has an invalid shape or non-finite value".to_string(),
         ));
@@ -1573,7 +1584,7 @@ pub(crate) fn validate_dense_layer_inputs(
             "dense layer features and biases must be non-empty".to_string(),
         ));
     }
-    if weights.len() != cols * biases.len() {
+    if cols.checked_mul(biases.len()) != Some(weights.len()) {
         return Err(AcceleratorError::InvalidArgument(
             "dense layer weights length must equal input width times output width".to_string(),
         ));
@@ -1663,15 +1674,16 @@ fn cpu_dense_layer_f32(
     Ok(features
         .iter()
         .map(|row| {
-            (0..out_dim)
-                .map(|out| {
-                    let mut value = biases[out];
-                    for (input, &feature) in row.iter().enumerate() {
-                        value += feature * weights[input * out_dim + out];
-                    }
-                    value
-                })
-                .collect::<Vec<_>>()
+            let mut output = biases.to_vec();
+            // Weights are input-major. Walking one contiguous weight row at
+            // a time avoids strided reads and lets independent outputs SIMD,
+            // while retaining the input accumulation order for every output.
+            for (&feature, input_weights) in row.iter().zip(weights.chunks_exact(out_dim)) {
+                for (value, &weight) in output.iter_mut().zip(input_weights) {
+                    *value += feature * weight;
+                }
+            }
+            output
         })
         .collect())
 }
@@ -2433,6 +2445,104 @@ fn rocm_train_tanh_mlp_f32(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn oversized_tensor_dimensions_return_errors_without_panicking() {
+        let cpu = select_backend(Some("cpu")).unwrap();
+        assert!(backend_csr_diffusion_f32(&cpu, &[0, 0, 0], &[], &[], usize::MAX, &[],).is_err());
+        assert!(backend_layer_norm_f32(&cpu, &[], usize::MAX, 2, &[], &[]).is_err());
+        assert!(backend_train_tanh_mlp_f32(
+            &cpu,
+            &[vec![1.0]],
+            &[0.0],
+            usize::MAX,
+            1,
+            0.01,
+            &mut [],
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn cpu_dense_accumulation_preserves_output_major_reference_exactly() {
+        let cpu = select_backend(Some("cpu")).unwrap();
+        for (inputs, outputs) in [(1, 1), (7, 11), (32, 32), (129, 67)] {
+            let features = (0..9)
+                .map(|row| {
+                    (0..inputs)
+                        .map(|col| ((row * inputs + col) as f32 * 0.13).sin())
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            let weights = (0..inputs * outputs)
+                .map(|index| (index as f32 * 0.17).cos())
+                .collect::<Vec<_>>();
+            let biases = (0..outputs)
+                .map(|index| index as f32 * 0.01)
+                .collect::<Vec<_>>();
+            let expected = features
+                .iter()
+                .map(|row| {
+                    (0..outputs)
+                        .map(|output| {
+                            let mut value = biases[output];
+                            for (input, &feature) in row.iter().enumerate() {
+                                value += feature * weights[input * outputs + output];
+                            }
+                            value
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                backend_dense_layer_f32(&cpu, &features, &weights, &biases).unwrap(),
+                expected,
+            );
+        }
+    }
+
+    #[test]
+    fn cpu_softmax_preserves_stability_and_empty_rows() {
+        let cpu = select_backend(Some("cpu")).unwrap();
+        let weights =
+            backend_csr_row_softmax_f32(&cpu, &[0, 0, 3, 4, 4], &[1000.0, 1001.0, -1000.0, -999.0])
+                .unwrap();
+        assert_eq!(weights[2], 0.0);
+        assert_eq!(weights[3], 1.0);
+        assert!((weights[..3].iter().sum::<f32>() - 1.0).abs() < 1.0e-7);
+        assert!((weights[1] / weights[0] - std::f32::consts::E).abs() < 1.0e-6);
+        assert!(backend_csr_row_softmax_f32(&cpu, &[0, 0], &[])
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn cpu_tanh_training_preserves_reference_parameters_exactly() {
+        let inputs = (0..7)
+            .map(|row| {
+                (0..5)
+                    .map(|col| ((row * 5 + col) as f32 * 0.1).sin())
+                    .collect()
+            })
+            .collect::<Vec<Vec<f32>>>();
+        let targets = (0..7).map(|row| row as f32 * 0.05).collect::<Vec<_>>();
+        let mut expected = (0..3 * 5 + 3 + 3 + 1)
+            .map(|index| (index as f32 * 0.17).cos() * 0.1)
+            .collect::<Vec<_>>();
+        let mut actual = expected.clone();
+        reference_tanh_mlp_train(&inputs, &targets, 3, 4, 0.01, &mut expected);
+        backend_train_tanh_mlp_f32(
+            &select_backend(Some("cpu")).unwrap(),
+            &inputs,
+            &targets,
+            3,
+            4,
+            0.01,
+            &mut actual,
+        )
+        .unwrap();
+        assert_eq!(actual, expected);
+    }
 
     #[test]
     fn backend_aliases_share_the_complete_capability_contract() {

@@ -58,8 +58,21 @@ _STANDALONE_EXPORTS = {
     "HinSageLinkPredictor",
 }
 
+_NATIVE_ENCODERS = {
+    "Node2VecEncoder",
+    "GraphSageEncoder",
+    "HeteroGraphSageEncoder",
+    "HinSageEncoder",
+}
+
 
 def __getattr__(name: str) -> object:
+    if name in _NATIVE_ENCODERS:
+        from .. import _native
+
+        value = getattr(_native, name)
+        globals()[name] = value
+        return value
     if name in _STANDALONE_EXPORTS:
         from .. import standalone
 
@@ -98,6 +111,10 @@ __all__ = [
     "HeteroGraphSageFeatureEncoder",
     "HinSageFeatureEncoder",
     "Node2VecFeatureEncoder",
+    "Node2VecEncoder",
+    "GraphSageEncoder",
+    "HeteroGraphSageEncoder",
+    "HinSageEncoder",
     "Node2VecStandaloneRegressor",
     "GraphSageStandaloneRegressor",
     "HeteroGraphSageStandaloneRegressor",

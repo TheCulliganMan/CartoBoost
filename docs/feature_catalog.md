@@ -1,22 +1,22 @@
-# CartoBoost Feature Catalog
+# Feature Catalog
 
-This page summarizes CartoBoost feature surfaces and the modeling reasons to use
-them. Detailed API contracts live in the linked topic pages and in the Python
-API reference.
+Find the input representation, model control, or diagnostic that matches your
+question. Start with the structure in the data: trip distance is numeric, hour
+wraps around, a route can cross several cells, and pickup-to-dropoff connections
+have a direction.
 
-Choose features by the effect you need to measure:
+| Signal in your data | Start here |
+| --- | --- |
+| Distance, coordinates, fare components, recent counts | [Dense features and schemas](feature_schema.md) |
+| Hour-of-day and weekday cycles | [Temporal-spatial modeling](spatial_modeling.md) |
+| Several zones, cells, or route memberships per row | [Sparse features](sparse_features.md) |
+| Connections between pickup and dropoff zones | [Graph features](graph-features.md) |
+| Repeated identifiers with residual signal | [Neural embeddings](neural-features.md) |
+| Contributions to a fitted prediction | [SHAP explanations](shap.md) |
 
-- dense numeric features for scalar facts such as distance, fare components,
-  coordinates, and recent counts;
-- periodic features for cyclic time such as hour of day or day of week;
-- sparse sets for rows that belong to several zones, cells, hierarchies, or
-  route memberships;
-- graph features when relationships among zones, routes, and time buckets are
-  the signal;
-- neural embeddings when stable high-cardinality IDs carry repeated residual
-  behavior;
-- SHAP explanations when you need an additive audit of how fitted features
-  contributed to predictions.
+The tables below map these choices to concrete APIs. For model selection, use
+[Choose a model](user-guide/model-types.md); for signatures and return values,
+use the [Python reference](reference/python-api.md).
 
 ## CartoBoost Regressor
 
@@ -203,7 +203,7 @@ See [CLI Reference](reference/cli.md) and [Forecasting](forecasting.md).
 
 ## CartoBoost Quality And Benchmark Reporting
 
-Benchmark claims should name the dataset, target, split, feature set, metric,
-model settings, and whether data is synthetic, generated acceptance data, or
-real benchmark data. For graph and neural features, keep standalone-model claims
-separate from feature-generation claims.
+The [benchmark reports](benchmarks/index.md) pair results with their data,
+splits, model settings, timings, and reproducible commands. Real NYC TLC
+comparisons and synthetic mechanism checks are labeled separately. Graph and
+neural results also distinguish direct models from generated-feature workflows.

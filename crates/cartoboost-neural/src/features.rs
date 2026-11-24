@@ -15,7 +15,7 @@ impl NeuralFeatureBlock {
                 "embedding dimension must be greater than zero".to_string(),
             ));
         }
-        if !values.len().is_multiple_of(dim) {
+        if values.len() % dim != 0 {
             let row_count = values.len() / dim;
             return Err(NeuralError::InvalidRowCount {
                 expected: row_count.saturating_mul(dim),

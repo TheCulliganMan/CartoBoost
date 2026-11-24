@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from typing import Any
 
 import numpy as np
@@ -35,16 +34,14 @@ class GeoTemporalDiffusionScenarioModel:
     def generate(self, point_forecast: Any, edges: Any) -> dict[str, Any]:
         panel = _panel(point_forecast, "point_forecast")
         edge_list = _edges(edges)
-        generate = require_native("prob_diffusion_scenario_generate_value")
-        output = json.loads(
-            generate(
-                panel.tolist(),
-                edge_list,
-                self.scenario_count,
-                self.diffusion_steps,
-                self.shock_scale,
-                self.backend,
-            )
+        generate = require_native("prob_diffusion_scenario_generate_arrays")
+        output = generate(
+            panel,
+            edge_list,
+            self.scenario_count,
+            self.diffusion_steps,
+            self.shock_scale,
+            self.backend,
         )
         self.metadata_ = dict(output["metadata"])
         self.backend_ = str(self.metadata_["backend_selected"])

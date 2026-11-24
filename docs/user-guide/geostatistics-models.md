@@ -2,21 +2,22 @@ import {GeostatisticsModelExample} from '@site/src/components/ModelingLabClient'
 
 # Gaussian-Process Geostatistics
 
-Import these models from `cartoboost.geostats`.
+Interpolate a spatial target and its uncertainty with
+`NearestNeighborGPRegressor`, or correct a tabular model's spatial errors with
+`ResidualNNGPRegressor`. Both are available from `cartoboost.geostats`.
 
-Use `NearestNeighborGPRegressor` when each observation has a point coordinate
-and the target should be interpolated with uncertainty. It is a scalable
-probabilistic spatial regressor: prediction uses local nearest-neighbor
-Gaussian process conditionals instead of solving one global kriging system.
+The point model conditions on nearby observations instead of solving one global
+kriging system. The residual model fits a base estimator, learns a spatial
+field from `y - base.predict(X)`, and adds that correction at prediction time.
 
-Use `ResidualNNGPRegressor` when a tabular model explains the main signal and a
-spatial residual field remains. The base estimator fits `X`; CartoBoost then
-fits an NNGP on `y - base.predict(X)` at the training coordinates and adds that
-spatial correction at prediction time.
+## Interactive Example
+
+Inspect interpolation and uncertainty on a small browser example. This is an
+input/output demonstration, not measured evidence on held-out taxi data.
 
 <GeostatisticsModelExample title="Nearest-neighbor GP browser interpolation" />
 
-## Python API
+## Python Example
 
 ```python
 import numpy as np
@@ -116,3 +117,26 @@ For maps, score a grid of projected coordinates, render the mean as the
 surface, and render `std` or interval width as the uncertainty layer.
 
 The implementation runs on CPU and does not require GPU support.
+
+## Use When
+
+| Your task | Start with |
+| --- | --- |
+| Interpolate a point target with local uncertainty | `NearestNeighborGPRegressor` |
+| Correct spatial errors left by a tabular predictor | `ResidualNNGPRegressor` |
+| Forecast coordinate-linked time series | [Kriging](forecasting-models/kriging.md) |
+| Explain dependence between neighboring areas | [Spatial Econometrics](spatial-econometrics.md) |
+
+## Validation
+
+Hold out spatial blocks or buffered regions and score the same coordinates for
+all candidates. Compare the residual model with its base estimator alone.
+Report RMSE and MAE alongside interval coverage and width; a plausible surface
+is not sufficient evidence of accurate interpolation.
+
+## Limitations
+
+- Distance units must match the coordinate system and covariance parameters.
+- Duplicate coordinates require an explicit aggregation or modeling decision.
+- Sparse neighborhoods and extrapolation beyond observed geography weaken predictions.
+- Gaussian-process uncertainty reflects the fitted assumptions; check coverage on held-out locations.

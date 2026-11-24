@@ -22,6 +22,12 @@ allow = [
     "Zlib",
 ]
 
+# The existing fuzz harness bundles LLVM's libFuzzer under its NCSA license.
+# Keep this allowance specific to the development-only fuzzing dependency.
+[[licenses.exceptions]]
+name = "libfuzzer-sys"
+allow = ["NCSA"]
+
 [bans]
 multiple-versions = "warn"
 wildcards = "allow"

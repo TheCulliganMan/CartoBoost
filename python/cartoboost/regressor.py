@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import tempfile
+import warnings
 from collections.abc import Iterable
 from numbers import Integral, Real
 from pathlib import Path
@@ -187,15 +188,15 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
         if hasattr(self, "_constant_prediction_value_"):
             delattr(self, "_constant_prediction_value_")
         targets_array = _as_1d_float_array(y)
+        weights_array = _as_sample_weight_array(sample_weight, targets_array.shape[0])
         dense_array, categorical_encoder, feature_names = _fit_transform_categorical_features(
             X,
             targets_array,
             feature_schema,
-            sample_weight=sample_weight,
+            sample_weight=weights_array,
         )
         if dense_array.shape[0] != targets_array.shape[0]:
             raise ValueError("X and y must contain the same number of rows")
-        weights_array = _as_sample_weight_array(sample_weight, targets_array.shape[0])
         loss_params = _resolved_loss_params(
             self.loss,
             self.quantile_alpha,
@@ -209,6 +210,7 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
             feature_schema,
             categorical_encoder,
             dense_array.shape[1],
+            sparse_names,
         )
         schema_json = _rust_feature_schema_json(
             encoded_feature_schema,
@@ -317,34 +319,8 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
             getattr(model, "requires_sparse_sets", bool(sparse_columns))
         )
         if int(self.max_depth) == 0 and self.leaf_predictor == "constant" and not self.fuzzy:
-            training_targets = _training_targets(
-                targets_array.tolist(),
-                self.loss,
-                float(loss_params["log_offset"]),
-            )
-            if weights_array is None:
-                self._constant_prediction_value_ = _initial_value(
-                    training_targets,
-                    None,
-                    self.loss,
-                    float(loss_params["quantile_alpha"]),
-                )
-            else:
-                weight_sum = float(np.sum(weights_array))
-                self._constant_prediction_value_ = (
-                    _initial_value(
-                        training_targets,
-                        weights_array.tolist(),
-                        self.loss,
-                        float(loss_params["quantile_alpha"]),
-                    )
-                    if weight_sum > 0.0
-                    else 0.0
-                )
-            self._constant_prediction_value_ = _inverse_prediction(
-                self._constant_prediction_value_,
-                self.loss,
-            )
+            # Cache the native fitted value; loss semantics remain owned by Rust.
+            self._constant_prediction_value_ = float(model.predict_arrays(dense_array[:1])[0])
         self.is_fitted_ = True
         return self
 
@@ -451,6 +427,9 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
                 "cartoboost._native model is missing the typed feature-contribution binding; "
                 "rebuild the native extension with `maturin develop`"
             )
+        predict_contributions = getattr(
+            self._model, "predict_feature_contributions_numpy", predict_contributions
+        )
         encoded_values = np.asarray(predict_contributions(dense_array), dtype=float)
         encoded_shape = (dense_array.shape[0], dense_array.shape[1] + 1)
         if encoded_values.shape != encoded_shape:
@@ -479,7 +458,7 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
         """Return negative RMSE for sklearn-style higher-is-better scoring."""
 
         pred = np.asarray(self.predict(X, sparse_sets=sparse_sets), dtype=float)
-        truth = np.asarray(y, dtype=float)
+        truth = _as_1d_float_array(y)
         if truth.ndim != 1 or pred.shape[0] != truth.shape[0]:
             raise ValueError("X predictions and y must have the same number of rows")
         return -float(np.sqrt(np.mean((truth - pred) ** 2)))
@@ -497,8 +476,11 @@ class CartoBoostRegressor(RegressorMixin, BaseEstimator):
             sparse_sets,
         )
         if hasattr(self._model, "predict_additive_arrays"):
+            predict_additive = getattr(
+                self._model, "predict_additive_numpy", self._model.predict_additive_arrays
+            )
             return np.asarray(
-                self._model.predict_additive_arrays(
+                predict_additive(
                     dense_array,
                     sparse_offsets,
                     sparse_ids,
@@ -919,7 +901,6 @@ def _explanation_value(value: ExplanationAlgorithm | ExplanationDecomposition | 
 
 
 def _shape_2d(values: Any) -> tuple[int, int]:
-    values = _to_numpy(values)
     shape = getattr(values, "shape", None)
     if shape is not None and len(shape) == 2:
         rows, cols = int(shape[0]), int(shape[1])
@@ -928,6 +909,7 @@ def _shape_2d(values: Any) -> tuple[int, int]:
         if cols == 0:
             raise ValueError("X rows must contain at least one feature")
         return rows, cols
+    values = _to_numpy(values)
     try:
         array = np.asarray(values)
     except (TypeError, ValueError) as exc:
@@ -942,9 +924,8 @@ def _shape_2d(values: Any) -> tuple[int, int]:
 
 
 def _as_2d_float_array(values: Any, *, check_finite: bool = True) -> np.ndarray:
-    values = _to_numpy(values)
     try:
-        array = np.asarray(values, dtype=np.float64, order="C")
+        array = np.asarray(_to_numeric_numpy(values), dtype=np.float64, order="C")
     except (TypeError, ValueError) as exc:
         raise ValueError("X must be a rectangular 2D array") from exc
     if array.ndim != 2:
@@ -967,12 +948,30 @@ def _fit_transform_categorical_features(
     low_cardinality_threshold: int = 16,
     smoothing: float = 10.0,
 ) -> tuple[np.ndarray, dict[str, Any] | None, list[str] | None]:
-    feature_names = _feature_names(values) or _feature_names_from_schema(feature_schema, values)
-    raw = _as_2d_object_array(values)
-    dense_kinds = _dense_feature_kinds(feature_schema, raw.shape[1])
-    categorical_indices = _categorical_feature_indices(values, raw, dense_kinds)
+    materialized = _to_numpy(values, numeric=feature_schema is None)
+    try:
+        array = np.asarray(materialized)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("X must be a rectangular 2D array") from exc
+    feature_names = _feature_names(values) or _feature_names_from_schema(feature_schema, array)
+    if array.ndim != 2:
+        raise ValueError("X must be a rectangular 2D array")
+    dense_kinds = _dense_feature_kinds(feature_schema, array.shape[1])
+    dtype_names = (
+        _column_dtype_names(values, array) if getattr(values, "columns", None) is not None else []
+    )
+    # A table is materialized once. Numeric buffers bypass object boxing while
+    # explicit schemas and categorical dataframe dtypes retain their native encoding.
+    if (
+        array.dtype.kind in "biuf"
+        and not any(_is_categorical_kind(kind) or _is_ordinal_kind(kind) for kind in dense_kinds)
+        and not any(_is_categorical_dtype(name) for name in dtype_names)
+    ):
+        return _as_2d_float_array(array, check_finite=True), None, feature_names
+    raw = _as_2d_object_array(materialized)
+    categorical_indices = _categorical_feature_indices(values, raw, dense_kinds, dtype_names)
     if not categorical_indices:
-        return _as_2d_float_array(values, check_finite=True), None, feature_names
+        return _as_2d_float_array(array, check_finite=True), None, feature_names
 
     targets_array = np.asarray(targets, dtype=np.float64)
     weights_array = (
@@ -985,18 +984,30 @@ def _fit_transform_categorical_features(
     )
     name_lookup = feature_names or [f"feature_{idx}" for idx in range(raw.shape[1])]
     categorical_set = set(categorical_indices)
-    native_rows = _native_categorical_rows(raw, categorical_set)
     schema_json = json.dumps(
         _native_categorical_input_schema(name_lookup, dense_kinds, categorical_set)
     )
-    encoded_rows, encoder_json = _native_categorical_fit_transform(
-        native_rows,
-        targets_array.tolist(),
-        schema_json,
-        None if weights_array is None else weights_array.tolist(),
-        int(low_cardinality_threshold),
-        float(smoothing),
-    )
+    fit_arrays = getattr(_native_module, "categorical_fit_transform_arrays", None)
+    if callable(fit_arrays):
+        numeric, categorical_columns = _native_categorical_columns(raw, categorical_set)
+        encoded_rows, encoder_json = fit_arrays(
+            numeric,
+            categorical_columns,
+            np.ascontiguousarray(targets_array, dtype=np.float64),
+            schema_json,
+            weights_array,
+            int(low_cardinality_threshold),
+            float(smoothing),
+        )
+    else:
+        encoded_rows, encoder_json = _native_categorical_fit_transform(
+            _native_categorical_rows(raw, categorical_set),
+            targets_array.tolist(),
+            schema_json,
+            None if weights_array is None else weights_array.tolist(),
+            int(low_cardinality_threshold),
+            float(smoothing),
+        )
     encoded = np.asarray(encoded_rows, dtype=np.float64)
     encoder = json.loads(encoder_json)
     return np.ascontiguousarray(encoded, dtype=np.float64), encoder, feature_names
@@ -1016,8 +1027,13 @@ def _transform_categorical_features(
         )
     if _is_native_categorical_encoder(encoder):
         column_indices = {int(column["index"]) for column in encoder.get("columns", [])}
-        native_rows = _native_categorical_rows(raw, column_indices)
-        encoded_rows = _native_categorical_transform(native_rows, json.dumps(encoder))
+        transform_arrays = getattr(_native_module, "categorical_transform_arrays", None)
+        if callable(transform_arrays):
+            numeric, categorical_columns = _native_categorical_columns(raw, column_indices)
+            encoded_rows = transform_arrays(numeric, categorical_columns, json.dumps(encoder))
+        else:
+            native_rows = _native_categorical_rows(raw, column_indices)
+            encoded_rows = _native_categorical_transform(native_rows, json.dumps(encoder))
         return np.ascontiguousarray(np.asarray(encoded_rows, dtype=np.float64))
     column_encoders = {int(column["index"]): column for column in encoder["columns"]}
     encoded_columns: list[np.ndarray] = []
@@ -1093,6 +1109,7 @@ def _encoded_feature_schema(
     feature_schema: Any | None,
     categorical_encoder: dict[str, Any] | None,
     dense_width: int,
+    sparse_names: list[str] | None = None,
 ) -> Any | None:
     if not categorical_encoder:
         return feature_schema
@@ -1118,9 +1135,15 @@ def _encoded_feature_schema(
             encoded_kinds.append(FeatureKind.NUMERIC)
     if len(encoded_kinds) != dense_width:
         encoded_kinds = [FeatureKind.NUMERIC for _ in range(dense_width)]
+    sparse_names = list(sparse_names or [])
+    sparse_kinds = [FeatureKind.SPARSE_SET for _ in sparse_names]
+    if feature_schema is not None:
+        original_schema = _rust_feature_schema_payload(feature_schema, original_width, sparse_names)
+        sparse_names = original_schema["names"][original_width:]
+        sparse_kinds = original_schema["kinds"][original_width:]
     return {
-        "names": list(categorical_encoder["encoded_feature_names"]),
-        "kinds": encoded_kinds,
+        "names": [*categorical_encoder["encoded_feature_names"], *sparse_names],
+        "kinds": [*encoded_kinds, *sparse_kinds],
     }
 
 
@@ -1137,6 +1160,34 @@ def _native_categorical_rows(raw: np.ndarray, categorical_indices: set[int]) -> 
                 encoded_row.append(str(value))
         rows.append(encoded_row)
     return rows
+
+
+def _native_categorical_columns(
+    raw: np.ndarray, categorical_indices: set[int]
+) -> tuple[np.ndarray, list[tuple[int, list[str]]]]:
+    numeric = np.empty(raw.shape, dtype=np.float64)
+    categorical_columns = []
+    complex_warning = getattr(np, "exceptions", np).ComplexWarning
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", complex_warning)
+        for index in range(raw.shape[1]):
+            if index in categorical_indices:
+                # Rust ignores these positions and reads the corresponding token column.
+                numeric[:, index] = 0.0
+                categorical_columns.append(
+                    (index, [_category_token(value) for value in raw[:, index].tolist()])
+                )
+            else:
+                try:
+                    # Scalar conversion rejects datetime/timedelta units, while the
+                    # warning filter prevents NumPy complex scalars losing their
+                    # imaginary component during real-valued conversion.
+                    numeric[:, index] = np.fromiter(
+                        map(float, raw[:, index]), dtype=np.float64, count=raw.shape[0]
+                    )
+                except (TypeError, ValueError, OverflowError, complex_warning) as exc:
+                    raise ValueError(f"feature {index} must contain real numeric values") from exc
+    return numeric, categorical_columns
 
 
 def _native_categorical_input_schema(
@@ -1182,16 +1233,17 @@ def _categorical_feature_indices(
     original_values: Any,
     raw: np.ndarray,
     dense_kinds: list[Any],
+    dtypes: list[str] | None = None,
 ) -> list[int]:
     indices: list[int] = []
-    dtypes = _column_dtype_names(original_values)
+    dtypes = _column_dtype_names(original_values, raw) if dtypes is None else dtypes
     for idx in range(raw.shape[1]):
         kind = dense_kinds[idx] if idx < len(dense_kinds) else None
         if _is_categorical_kind(kind) or _is_ordinal_kind(kind):
             indices.append(idx)
             continue
         dtype_name = dtypes[idx] if idx < len(dtypes) else ""
-        if dtype_name == "category" or dtype_name.startswith("string"):
+        if _is_categorical_dtype(dtype_name):
             indices.append(idx)
             continue
         if not _column_is_numeric(raw[:, idx]):
@@ -1203,11 +1255,18 @@ def _dense_feature_kinds(feature_schema: Any | None, dense_width: int) -> list[A
     if feature_schema is None:
         return [FeatureKind.NUMERIC for _ in range(dense_width)]
     if hasattr(feature_schema, "to_rust_payload"):
+        metadata = feature_schema.to_dict() if hasattr(feature_schema, "to_dict") else {}
+        sparse_names = [
+            _schema_entry_name(entry, idx, "sparse_set")
+            for idx, entry in enumerate(metadata.get("sparse_sets", []))
+        ]
         try:
-            payload = feature_schema.to_rust_payload(dense_width, [])
+            payload = feature_schema.to_rust_payload(dense_width, sparse_names)
             return list(payload.get("kinds", []))[:dense_width]
         except ValueError:
             return [FeatureKind.NUMERIC for _ in range(dense_width)]
+    if hasattr(feature_schema, "to_dict"):
+        feature_schema = feature_schema.to_dict()
     if isinstance(feature_schema, dict) and "names" in feature_schema and "kinds" in feature_schema:
         return [_rust_feature_kind(kind) for kind in feature_schema["kinds"][:dense_width]]
     if isinstance(feature_schema, dict) and "dense" in feature_schema:
@@ -1220,15 +1279,20 @@ def _dense_feature_kinds(feature_schema: Any | None, dense_width: int) -> list[A
     return [FeatureKind.NUMERIC for _ in range(dense_width)]
 
 
-def _column_dtype_names(values: Any) -> list[str]:
+def _column_dtype_names(values: Any, materialized: np.ndarray | None = None) -> list[str]:
     columns = getattr(values, "columns", None)
     dtypes = getattr(values, "dtypes", None)
     if columns is not None and dtypes is not None:
         if not isinstance(dtypes, dict):
             return [str(dtype) for dtype in list(dtypes)]
         return [str(dtypes[column]) for column in columns]
-    array = np.asarray(_to_numpy(values))
+    array = np.asarray(_to_numpy(values)) if materialized is None else materialized
     return [str(array[:, idx].dtype) for idx in range(array.shape[1])]
+
+
+def _is_categorical_dtype(name: str) -> bool:
+    name = name.lower()
+    return name in {"category", "categorical"} or name.startswith(("string", "enum("))
 
 
 def _is_categorical_kind(kind: Any) -> bool:
@@ -1272,15 +1336,6 @@ def _category_token(value: Any) -> str:
     return f"{type(value).__name__}:{value}"
 
 
-def _weighted_mean(values: np.ndarray, weights: np.ndarray | None) -> float:
-    if weights is None:
-        return float(np.mean(values))
-    total = float(np.sum(weights))
-    if total <= 0.0:
-        return float(np.mean(values))
-    return float(np.dot(values, weights) / total)
-
-
 def _target_mean_mapping(
     tokens: list[str],
     targets: np.ndarray,
@@ -1312,21 +1367,22 @@ def _feature_names_from_schema(feature_schema: Any | None, values: Any) -> list[
     if feature_schema is None:
         return None
     try:
-        width = _as_2d_object_array(values).shape[1]
+        width = _shape_2d(values)[1]
     except ValueError:
         return None
+    if hasattr(feature_schema, "to_dict"):
+        feature_schema = feature_schema.to_dict()
     if hasattr(feature_schema, "to_rust_payload"):
         try:
             names = list(feature_schema.to_rust_payload(width, []).get("names", []))
         except ValueError:
             return None
     elif isinstance(feature_schema, dict) and "names" in feature_schema:
-        names = list(feature_schema.get("names", []))
+        names = list(feature_schema.get("names", []))[:width]
     elif isinstance(feature_schema, dict) and "dense" in feature_schema:
         names = [
-            str(entry.get("name", f"feature_{idx}"))
+            _schema_entry_name(entry, idx, "feature")
             for idx, entry in enumerate(feature_schema.get("dense", []))
-            if isinstance(entry, dict)
         ]
     else:
         return None
@@ -1336,9 +1392,8 @@ def _feature_names_from_schema(feature_schema: Any | None, values: Any) -> list[
 
 
 def _as_1d_float_array(values: Any) -> np.ndarray:
-    values = _to_numpy(values)
     try:
-        rows = np.asarray(values, dtype=np.float64)
+        rows = np.asarray(_to_numeric_numpy(values), dtype=np.float64)
     except (TypeError, ValueError) as exc:
         raise ValueError("y must be a 1D numeric array") from exc
     if rows.ndim == 2 and rows.shape[1] == 1:
@@ -1355,9 +1410,8 @@ def _as_1d_float_array(values: Any) -> np.ndarray:
 def _as_sample_weight_array(values: Any | None, expected: int) -> np.ndarray | None:
     if values is None:
         return None
-    values = _to_numpy(values)
     try:
-        weights = np.asarray(values, dtype=np.float64)
+        weights = np.asarray(_to_numeric_numpy(values), dtype=np.float64)
     except (TypeError, ValueError) as exc:
         raise ValueError("sample_weight must be a 1D numeric array") from exc
     if weights.ndim == 2 and weights.shape[1] == 1:
@@ -1388,7 +1442,15 @@ def _resolve_splitters(
                 feature_schema.to_dict() if hasattr(feature_schema, "to_dict") else feature_schema
             )
             if isinstance(schema, dict):
-                entries = list(schema.get("dense", [])) + list(schema.get("sparse_sets", []))
+                entries = (
+                    [{"kind": kind} for kind in schema["kinds"]]
+                    if "names" in schema and "kinds" in schema
+                    else list(schema.get("dense", []))
+                )
+                entries.extend(
+                    {"kind": _schema_entry_kind(entry, FeatureKind.SPARSE_SET)}
+                    for entry in schema.get("sparse_sets", [])
+                )
             elif isinstance(schema, (list, tuple)):
                 entries = list(schema)
         kinds: set[str] = set()
@@ -1406,11 +1468,13 @@ def _resolve_splitters(
         # keep the structured policy bounded while periodic and sparse-set
         # candidates still use the declared schema kinds below.
         candidates = ["axis_histogram"]
+        sparse_candidates = ["sparse_set"] if any("sparse" in kind for kind in kinds) else []
         # At very large qualification scale, histogram candidates provide the
-        # bounded native path.  Declared spatial/periodic candidates remain
-        # enabled for interactive and benchmark-sized panels below this limit.
+        # bounded dense path. Sparse lists still need their membership splitter;
+        # their IDs have no equivalent dense representation. Spatial/periodic
+        # candidates remain enabled below this limit.
         if n_rows is not None and n_rows >= 100_000:
-            return candidates
+            return candidates + sparse_candidates
         if any("periodic" in kind for kind in kinds):
             candidates.append("periodic_time")
         if any(
@@ -1421,8 +1485,7 @@ def _resolve_splitters(
             # declared periodic/sparse features and never searches arbitrary
             # numeric feature pairs.
             candidates.extend(("diagonal_2d", "gaussian_2d"))
-        if any("sparse" in kind for kind in kinds):
-            candidates.append("sparse_set")
+        candidates.extend(sparse_candidates)
         return candidates
     return ["auto"]
 
@@ -1524,11 +1587,64 @@ def _is_empty_sparse_sets(values: Any | None) -> bool:
         return False
 
 
-def _to_numpy(values: Any) -> Any:
-    duckdb_array = _duckdb_to_numpy(values)
+def _to_numeric_numpy(values: Any) -> Any:
+    if isinstance(values, np.ndarray):
+        if values.dtype.kind == "c":
+            raise ValueError("numeric inputs must contain real values")
+        return values
+    if type(values).__module__.startswith("pandas") and hasattr(values, "to_numpy"):
+        # Known-numeric inputs need no dtype-discovery Series. Pandas preserves
+        # float64 buffers here and converts nullable values in one materialization.
+        complex_warning = getattr(np, "exceptions", np).ComplexWarning
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", complex_warning)
+                return values.to_numpy(dtype=np.float64, na_value=np.nan)
+        except complex_warning as exc:
+            raise ValueError("numeric inputs must contain real values") from exc
+    array = _to_numpy(values, numeric=True)
+    if isinstance(array, np.ndarray) and array.dtype.kind == "c":
+        raise ValueError("numeric inputs must contain real values")
+    return array
+
+
+def _to_numpy(values: Any, *, numeric: bool = False) -> Any:
+    if isinstance(values, np.ndarray):
+        return values
+    column_converter = getattr(values, "_cartoboost_to_numpy", None)
+    if callable(column_converter):
+        return column_converter(numeric=numeric)
+    duckdb_array = _duckdb_to_numpy(values, numeric=numeric)
     if duckdb_array is not None:
         return duckdb_array
     if hasattr(values, "to_numpy"):
+        module = type(values).__module__
+        if module.startswith("pandas"):
+            dtypes = getattr(values, "dtypes", None)
+            dtypes = list(dtypes) if getattr(values, "ndim", 1) == 2 else [dtypes]
+            if any(not isinstance(dtype, np.dtype) for dtype in dtypes):
+                # Preserve integer/category token types while giving nullable
+                # numeric values the same missing-value representation as NumPy.
+                dtype = (
+                    np.float64
+                    if numeric
+                    and all(
+                        getattr(dtype, "kind", None) in {"b", "i", "u", "f"} for dtype in dtypes
+                    )
+                    else object
+                )
+                return values.to_numpy(dtype=dtype, na_value=np.nan)
+            if not numeric and _integer_promotion_needs_objects(
+                dtypes, lambda index: values.iloc[:, index]
+            ):
+                return values.to_numpy(dtype=object)
+        if module.startswith("polars") and getattr(values, "columns", None) is not None:
+            if not numeric and _integer_promotion_needs_objects(
+                [str(dtype).lower() for dtype in values.dtypes],
+                lambda index: values.get_column(values.columns[index]),
+            ):
+                return _object_column_stack([column.to_numpy() for column in values.iter_columns()])
+            return values.to_numpy(order="c")
         return values.to_numpy()
     return values
 
@@ -1546,28 +1662,71 @@ def _tabular_column_mapping(values: Any) -> dict[str, Any] | None:
 def _duckdb_column_mapping(values: Any) -> dict[str, Any] | None:
     if not _looks_like_duckdb(values):
         return None
-    columns = [str(column) for column in getattr(values, "columns", [])]
-    if not columns:
-        return None
     if hasattr(values, "fetchnumpy"):
         fetched = values.fetchnumpy()
-        return {name: fetched[name] for name in columns}
+        if fetched is None:
+            raise ValueError("DuckDB input does not contain an available result set")
+        columns = [str(column) for column in getattr(values, "columns", fetched.keys())]
+        result = {}
+        for name in columns:
+            column = fetched[name]
+            if np.ma.isMaskedArray(column):
+                if np.any(column.mask):
+                    # Floating promotion would irreversibly round large integer IDs.
+                    dtype = np.float64 if column.dtype.kind in "bf" else object
+                    column = column.astype(dtype).filled(np.nan)
+                else:
+                    column = column.data
+            result[name] = column
+        return result
     frame = _duckdb_to_dataframe(values)
     if frame is not None:
         return {str(name): frame[name] for name in frame.columns}
     return None
 
 
-def _duckdb_to_numpy(values: Any) -> np.ndarray | None:
+def _integer_promotion_needs_objects(dtypes: Any, column_at: Any) -> bool:
+    """Detect mixed-column promotion that would merge distinct integer category IDs."""
+    try:
+        dtypes = [np.dtype(dtype) for dtype in dtypes]
+        common = np.result_type(*dtypes)
+    except TypeError:
+        return False
+    if common.kind != "f":
+        return False
+    exact_limit = 2 ** (np.finfo(common).nmant + 1)
+    for index, dtype in enumerate(dtypes):
+        if dtype.kind in "iu" and np.iinfo(dtype).max > exact_limit:
+            column = column_at(index)
+            if len(column):
+                lower, upper = column.min(), column.max()
+                if lower is not None and upper is not None:
+                    if lower < -exact_limit or upper > exact_limit:
+                        return True
+    return False
+
+
+def _object_column_stack(columns: list[Any]) -> np.ndarray:
+    result = np.empty((len(columns[0]), len(columns)), dtype=object)
+    for index, column in enumerate(columns):
+        result[:, index] = column
+    return result
+
+
+def _column_stack(columns: list[Any], *, numeric: bool = False) -> np.ndarray:
+    if not numeric and _integer_promotion_needs_objects(
+        [column.dtype for column in columns], columns.__getitem__
+    ):
+        return _object_column_stack(columns)
+    return np.column_stack(columns)
+
+
+def _duckdb_to_numpy(values: Any, *, numeric: bool = False) -> np.ndarray | None:
     if not _looks_like_duckdb(values):
         return None
-    if hasattr(values, "fetchnumpy"):
-        fetched = values.fetchnumpy()
-        columns = [str(column) for column in getattr(values, "columns", fetched.keys())]
-        return np.column_stack([fetched[name] for name in columns])
-    frame = _duckdb_to_dataframe(values)
-    if frame is not None and hasattr(frame, "to_numpy"):
-        return frame.to_numpy()
+    columns = _duckdb_column_mapping(values)
+    if columns is not None:
+        return _column_stack(list(columns.values()), numeric=numeric)
     if hasattr(values, "fetchall"):
         return np.asarray(values.fetchall(), dtype=object)
     return None
@@ -1603,6 +1762,8 @@ def _sequence_values(values: Any) -> Any:
 
 
 def _normalize_sparse_id(value: Any) -> int:
+    if type(value) is int:
+        return value
     if isinstance(value, bool):
         raise ValueError("sparse_sets IDs must be non-negative integers")
     if isinstance(value, Integral):
@@ -2039,62 +2200,3 @@ def _resolved_loss_params(
         "huber_delta": float(params.get("delta", params.get("huber_delta", huber_delta))),
         "log_offset": float(params.get("offset", params.get("log_offset", log_offset))),
     }
-
-
-def _training_targets(values: list[float], loss: str, log_offset: float) -> list[float]:
-    if loss not in {"log_l2", "log", "log_squared_error"}:
-        return values
-    if any(value + log_offset <= 0.0 for value in values):
-        raise ValueError("log_l2 targets must be greater than -log_offset")
-    return [math.log(value + log_offset) for value in values]
-
-
-def _inverse_prediction(prediction: float, loss: str) -> float:
-    if loss in {"log_l2", "log", "log_squared_error"}:
-        return math.expm1(prediction)
-    return prediction
-
-
-def _initial_value(
-    values: list[float],
-    weights: list[float] | None,
-    loss: str,
-    quantile_alpha: float,
-) -> float:
-    resolved_weights = weights or [1.0 for _ in values]
-    return _leaf_value(values, resolved_weights, loss, quantile_alpha)
-
-
-def _leaf_value(
-    values: list[float], weights: list[float], loss: str, quantile_alpha: float
-) -> float:
-    if loss in {"quantile", "pinball"}:
-        return _weighted_quantile(values, weights, quantile_alpha)
-    if loss in {"l1", "mae", "absolute_error", "least_absolute_deviation", "lad"}:
-        return _weighted_quantile(values, weights, 0.5)
-    return _weighted_mean(values, weights)
-
-
-def _weighted_quantile(values: list[float], weights: list[float], alpha: float) -> float:
-    pairs = sorted(
-        (value, weight)
-        for value, weight in zip(values, weights, strict=True)
-        if math.isfinite(value) and math.isfinite(weight) and weight > 0.0
-    )
-    if not pairs:
-        return 0.0
-    total_weight = sum(weight for _, weight in pairs)
-    threshold = alpha * total_weight
-    cumulative = 0.0
-    for value, weight in pairs:
-        cumulative += weight
-        if cumulative >= threshold:
-            return float(value)
-    return float(pairs[-1][0])
-
-
-def _weighted_mean(values: list[float], weights: list[float]) -> float:
-    weight_sum = sum(weights)
-    if weight_sum <= 0.0:
-        return 0.0
-    return sum(value * weight for value, weight in zip(values, weights, strict=True)) / weight_sum

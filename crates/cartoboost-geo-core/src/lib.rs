@@ -237,7 +237,16 @@ impl SpatialWeights {
             let start = self.indptr[row];
             let end = self.indptr[row + 1];
             let sum: f64 = out.data[start..end].iter().sum();
-            if sum > 0.0 {
+            if sum.is_infinite() {
+                let maximum = out.data[start..end].iter().copied().fold(0.0, f64::max);
+                let scaled_sum = out.data[start..end]
+                    .iter()
+                    .map(|value| value / maximum)
+                    .sum::<f64>();
+                for value in &mut out.data[start..end] {
+                    *value = (*value / maximum) / scaled_sum;
+                }
+            } else if sum > 0.0 {
                 for value in &mut out.data[start..end] {
                     *value /= sum;
                 }
@@ -431,6 +440,17 @@ pub fn spatial_block_cv(
             "n_folds must be between 2 and row count".to_string(),
         ));
     }
+    if coords.x.len() != coords.y.len()
+        || coords
+            .x
+            .iter()
+            .chain(&coords.y)
+            .any(|value| !value.is_finite())
+    {
+        return Err(GeoCoreError::InvalidInput(
+            "coordinates must have matching lengths and finite values".to_string(),
+        ));
+    }
     let mut order: Vec<usize> = (0..coords.len()).collect();
     order.sort_by(|a, b| {
         coords.x[*a]
@@ -473,7 +493,15 @@ pub fn buffered_spatial_cv_with_backend(
     }
     let base = spatial_block_cv(coords, n_folds, meta.clone(), split_id.clone())?;
     let backend = geo_distance_backend(backend)?;
-    let distance_matrix = pairwise_coordinate_distances(coords, &backend)?;
+    // CPU filtering can stop at the first point inside the buffer and does not
+    // need the quadratic query-by-observation matrix used by accelerators.
+    let distance_matrix = if backend.selected != "cpu"
+        && coords.len().saturating_mul(coords.len()) >= GEO_PAIRWISE_DISPATCH_MIN_PAIRS
+    {
+        Some(pairwise_coordinate_distances(coords, &backend)?)
+    } else {
+        None
+    };
     let mut folds = Vec::new();
     for fold in base.folds {
         let test = fold.test_indices;
@@ -482,7 +510,11 @@ pub fn buffered_spatial_cv_with_backend(
             .into_iter()
             .filter(|idx| {
                 !test.iter().any(|test_idx| {
-                    distance_matrix[*idx * coords.len() + *test_idx] <= buffer_distance
+                    let separation = distance_matrix.as_ref().map_or_else(
+                        || distance(coords, *idx, *test_idx),
+                        |matrix| matrix[*idx * coords.len() + *test_idx],
+                    );
+                    separation <= buffer_distance
                 })
             })
             .collect();
@@ -590,15 +622,34 @@ pub fn rolling_origin_panel_split(
     for (idx, entity) in panel.entity_ids.iter().enumerate() {
         by_entity.entry(entity).or_default().push(idx);
     }
+    if let Some(time) = &panel.time {
+        if time.len() != panel.len() {
+            return Err(GeoCoreError::InvalidInput(
+                "time length must match entity ids".to_string(),
+            ));
+        }
+        for indices in by_entity.values_mut() {
+            indices.sort_by_key(|index| time.timestamps[*index]);
+            if indices
+                .windows(2)
+                .any(|pair| time.timestamps[pair[0]] == time.timestamps[pair[1]])
+            {
+                return Err(GeoCoreError::InvalidInput(
+                    "rolling panel split requires distinct timestamps within each entity"
+                        .to_string(),
+                ));
+            }
+        }
+    }
     let min_len = by_entity.values().map(Vec::len).min().unwrap_or(0);
-    if min_len < min_train_size + horizon {
+    if min_train_size > min_len || horizon > min_len - min_train_size {
         return Err(GeoCoreError::InvalidInput(
             "not enough panel rows for requested horizon".to_string(),
         ));
     }
     let mut folds = Vec::new();
     let mut origin = min_train_size;
-    while origin + horizon <= min_len {
+    while origin <= min_len - horizon {
         let mut train = Vec::new();
         let mut test = Vec::new();
         for indices in by_entity.values() {
@@ -612,7 +663,10 @@ pub fn rolling_origin_panel_split(
             train_indices: train,
             test_indices: test,
         });
-        origin += step;
+        let Some(next_origin) = origin.checked_add(step) else {
+            break;
+        };
+        origin = next_origin;
     }
     manifest(
         split_id,
@@ -635,7 +689,10 @@ pub fn spatial_temporal_blocked_split(
 ) -> Result<SplitManifest> {
     if coords.len() != time.len()
         || coords.len() != meta.row_count
-        || min_train_time + horizon > time.len()
+        || min_train_time == 0
+        || horizon == 0
+        || min_train_time > time.len()
+        || horizon > time.len() - min_train_time
     {
         return Err(GeoCoreError::InvalidInput(
             "coordinate, time, and temporal split sizes are inconsistent".to_string(),
@@ -644,6 +701,11 @@ pub fn spatial_temporal_blocked_split(
     let spatial = spatial_block_cv(coords, n_spatial_folds, meta.clone(), split_id.clone())?;
     let mut ordered: Vec<usize> = (0..time.len()).collect();
     ordered.sort_by_key(|idx| time.timestamps[*idx]);
+    if time.timestamps[ordered[min_train_time - 1]] >= time.timestamps[ordered[min_train_time]] {
+        return Err(GeoCoreError::InvalidInput(
+            "temporal split boundary must separate distinct timestamps".to_string(),
+        ));
+    }
     let train_time: BTreeSet<usize> = ordered[..min_train_time].iter().copied().collect();
     let test_time: BTreeSet<usize> = ordered[min_train_time..min_train_time + horizon]
         .iter()
@@ -696,7 +758,7 @@ fn validate_csr(
     node_ids: Option<&Vec<String>>,
 ) -> Result<()> {
     if n_nodes == 0
-        || indptr.len() != n_nodes + 1
+        || n_nodes.checked_add(1) != Some(indptr.len())
         || indptr.first() != Some(&0)
         || indptr.last() != Some(&indices.len())
     {
@@ -1466,5 +1528,87 @@ mod tests {
         assert_eq!(a, b);
         assert_eq!(a.hash().unwrap(), b.hash().unwrap());
         assert!(a.hash().unwrap().starts_with("sha256:"));
+    }
+
+    #[test]
+    fn rolling_panel_split_orders_shuffled_timestamps_and_rejects_duplicates() {
+        let time = TimeIndex::new(
+            ["2024-01-03", "2024-01-01", "2024-01-02"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            None,
+            None,
+        )
+        .expect("time index");
+        let mut panel = PanelIndex::new(vec!["PU100".to_string(); 3], Some(time)).expect("panel");
+        let manifest =
+            rolling_origin_panel_split(&panel, 2, 1, 1, meta(3), "time".into()).expect("split");
+        assert_eq!(manifest.folds[0].train_indices, vec![1, 2]);
+        assert_eq!(manifest.folds[0].test_indices, vec![0]);
+        let time = panel.time.as_mut().expect("time");
+        time.timestamps[0] = time.timestamps[1];
+        assert!(rolling_origin_panel_split(&panel, 2, 1, 1, meta(3), "time".into()).is_err());
+    }
+
+    #[test]
+    fn rolling_panel_split_handles_extreme_sizes_without_overflow() {
+        let panel = PanelIndex::new(vec!["PU100".to_string(); 3], None).expect("panel");
+        assert!(
+            rolling_origin_panel_split(&panel, usize::MAX, 2, 1, meta(3), "time".into()).is_err()
+        );
+        assert!(
+            rolling_origin_panel_split(&panel, 2, usize::MAX, 1, meta(3), "time".into()).is_err()
+        );
+        let folds = rolling_origin_panel_split(&panel, 1, 1, usize::MAX, meta(3), "time".into())
+            .expect("one fold");
+        assert_eq!(folds.folds.len(), 1);
+    }
+
+    #[test]
+    fn buffered_spatial_cpu_matches_pairwise_reference() {
+        let coords = CoordinateMatrix::new(
+            vec![0.0, 0.5, 1.0, 2.0, 2.5, 4.0, 5.0, 7.0],
+            vec![0.0; 8],
+            None,
+            None,
+        )
+        .expect("coordinates");
+        let base = spatial_block_cv(&coords, 2, meta(8), "buffer".into()).expect("base");
+        let actual = buffered_spatial_cv(&coords, 2, 0.75, meta(8), "buffer".into())
+            .expect("buffered folds");
+        for (expected, actual) in base.folds.iter().zip(&actual.folds) {
+            let train = expected
+                .train_indices
+                .iter()
+                .copied()
+                .filter(|index| {
+                    expected
+                        .test_indices
+                        .iter()
+                        .all(|other| distance(&coords, *index, *other) > 0.75)
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(actual.train_indices, train);
+            assert_eq!(actual.test_indices, expected.test_indices);
+        }
+    }
+
+    #[test]
+    fn spatial_normalization_preserves_large_finite_weights() {
+        let weights =
+            SpatialWeights::from_edges(3, vec![(0, 1, f64::MAX), (0, 2, f64::MAX)], false)
+                .expect("finite weights");
+        assert_eq!(weights.row_normalize().data, vec![0.5, 0.5]);
+    }
+
+    #[test]
+    fn temporal_spatial_split_rejects_a_shared_boundary_timestamp() {
+        let coords = CoordinateMatrix::new(vec![0.0, 1.0, 2.0, 3.0], vec![0.0; 4], None, None)
+            .expect("coordinates");
+        let time = TimeIndex::new(vec!["2024-01-01".into(); 4], None, None).expect("timestamps");
+        let error = spatial_temporal_blocked_split(&coords, &time, 2, 2, 2, meta(4), "time".into())
+            .expect_err("shared timestamp would leak");
+        assert!(error.to_string().contains("distinct timestamps"));
     }
 }

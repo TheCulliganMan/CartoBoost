@@ -1,4 +1,5 @@
 import cartoboost.regressor as regressor_module
+import numpy as np
 import pytest
 from cartoboost import CartoBoostRegressor
 
@@ -27,8 +28,10 @@ def test_sample_weight_is_passed_to_native_when_supported(monkeypatch):
         def __init__(self, **params):
             calls["params"] = params
 
-        def fit(self, rows, targets, sample_weight=None):
+        def fit_arrays(self, rows, targets, sample_weight, offsets, ids, schema):
             calls["fit"] = (rows, targets, sample_weight)
+            assert offsets == ids == []
+            assert schema is None
 
         def predict(self, rows):
             return [0.0 for _ in rows]
@@ -38,11 +41,15 @@ def test_sample_weight_is_passed_to_native_when_supported(monkeypatch):
     model = CartoBoostRegressor(n_estimators=1)
     model.fit([[0.0], [1.0]], [0.0, 1.0], sample_weight=[0.25, 0.75])
 
-    assert calls["fit"] == ([[0.0], [1.0]], [0.0, 1.0], [0.25, 0.75])
+    for actual, expected in zip(
+        calls["fit"], ([[0.0], [1.0]], [0.0, 1.0], [0.25, 0.75]), strict=True
+    ):
+        assert isinstance(actual, np.ndarray)
+        np.testing.assert_array_equal(actual, expected)
     assert model._backend_used == "rust"
 
 
-def test_native_backend_requires_sample_weight_support(monkeypatch):
+def test_native_backend_requires_typed_array_training_support(monkeypatch):
     class NativeWithoutWeights:
         def __init__(self, **params):
             pass
@@ -54,5 +61,5 @@ def test_native_backend_requires_sample_weight_support(monkeypatch):
 
     model = CartoBoostRegressor(max_depth=1)
 
-    with pytest.raises(NotImplementedError, match="sample_weight"):
+    with pytest.raises(RuntimeError, match="missing the typed fit_arrays binding"):
         model.fit([[0.0], [1.0]], [0.0, 10.0], sample_weight=[1.0, 3.0])

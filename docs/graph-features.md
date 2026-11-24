@@ -1,31 +1,28 @@
 # Graph Models And Features
 
-Use graph models when connections between locations or entities carry signal
-that ordinary row features miss. For taxi data, a directed pickup-to-dropoff
-network can represent route frequency, travel patterns, or relationships
-between zones. Import these tools from `cartoboost.graph`.
+Model the connections between observations. A directed pickup-to-dropoff network
+can capture relationships among taxi zones that distance and hour alone miss.
+Import graph tools from `cartoboost.graph`.
 
-Start with the [graph model guides](user-guide/graph-models/index.md) to choose
-a model. Return here for input shapes, directionality, generated features, and
-saved-model behavior.
+Choose how the graph enters your workflow:
 
-Graph support has two entry points:
+| Workflow | Output | Use when |
+| --- | --- | --- |
+| Standalone graph model | Predictions from the graph model itself | You want to evaluate a graph model directly. |
+| Graph feature generator | Dense columns for another estimator | You want to test whether graph information improves a tabular model. |
 
-- **Standalone graph models** fit, predict, score, save, and load directly.
-- **Graph feature generators** produce dense columns for another estimator.
-
-Keep direction explicit. Source-target facts are usually not interchangeable
-with the reverse edge.
+Start with the [graph model guides](user-guide/graph-models/index.md) for model
+selection and runnable examples. This reference covers input shapes, directed
+edges, feature generation, and persistence. Preserve source and target roles:
+a trip from JFK to Midtown is a different observation from the reverse route.
 
 ```mermaid
 flowchart LR
-    A["Typed graph + node features"] --> B["CartoBoost graph model"]
-    B --> C["fit / predict / score"]
-    C --> D["Graph artifact"]
-
-    A --> E["Graph feature transformer"]
-    E --> F["Dense graph columns"]
-    F --> G["Downstream tabular model"]
+    A["Graph + node features"] --> B["Standalone graph model"]
+    B --> C["Predictions"]
+    A --> D["Graph feature transformer"]
+    D --> E["Dense graph columns"]
+    E --> F["Tabular model"]
 ```
 
 ## Choosing A Graph Family
@@ -37,10 +34,9 @@ flowchart LR
 | HeteroGraphSAGE | Relation IDs matter, but you do not need a strict node-type schema. | Typed edges with relation-aware aggregation. |
 | HinSAGE | Node types and relation triples are part of the causal or measurement design. | Typed nodes, typed relation triples, validation of source and target node types, and relation-aware sampling. |
 
-The distinction matters for interpretation. Node2Vec asks whether observed flow
-contexts alone explain residual variation. GraphSAGE-style models ask whether
-node attributes and neighbor aggregation explain the variation. HinSAGE asks
-whether typed scientific relations are valid modeling structure.
+Node2Vec learns from observed graph topology. GraphSAGE adds node attributes
+and neighbor aggregation; HinSAGE makes node and relation types explicit.
+Choose the family that matches the information you actually have.
 
 ## CartoBoost Graph Models
 
@@ -139,7 +135,7 @@ report = predictor.report(candidate_pairs, labels=[1, 0], query_ids=[0, 0], k=1)
 
 `report` can include AUC, average precision, and per-query ranking metrics.
 
-## Direction Is A Scientific Contract
+## Preserve direction {#direction-is-a-scientific-contract}
 
 Movement is usually asymmetric. Access rules, routing constraints, congestion,
 and direction can all make `source -> target` meaningfully different from
@@ -192,9 +188,8 @@ include:
 - `source_target_affinity`
 - `target_source_affinity`
 
-Generic package names are source-target oriented. Domain-specific labels such
-as pickup/dropoff, origin/destination, or route-market names should be added in
-the feature-engineering layer above CartoBoost.
+The APIs call these roles `source` and `target`. For taxi data, map pickup to
+source and dropoff to target consistently in features, graphs, and evaluation.
 
 ## Node2Vec Details
 

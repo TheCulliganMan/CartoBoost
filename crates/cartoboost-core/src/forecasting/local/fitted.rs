@@ -40,7 +40,7 @@ impl ThetaForecaster {
             .into_iter()
             .flatten()
             .collect();
-        ForecastResult::new(predictions)
+        residual_interval_result(predictions, self.intervals.as_ref(), 0)
     }
 }
 
@@ -110,6 +110,16 @@ impl FittedLocalState {
     }
 }
 
+// ForecastFrame owns canonical series/time ordering. Borrow those contiguous
+// histories while fitting; only the resulting fitted state needs ownership.
+fn borrowed_histories(frame: &ForecastFrame) -> Vec<(&String, &[ForecastRow])> {
+    frame
+        .rows()
+        .chunk_by(|left, right| left.series_id == right.series_id)
+        .map(|history| (&history[0].series_id, history))
+        .collect()
+}
+
 impl FittedETSState {
     fn from_frame(
         frame: &ForecastFrame,
@@ -119,11 +129,7 @@ impl FittedETSState {
         season_length: Option<usize>,
         damping_phi: f64,
     ) -> Result<Self> {
-        let local = FittedLocalState::from_frame(frame);
-        let series = local
-            .history_by_series
-            .iter()
-            .collect::<Vec<_>>()
+        let series = borrowed_histories(frame)
             .into_par_iter()
             .map(|(series_id, history)| {
                 Ok((
@@ -175,11 +181,7 @@ impl FittedETSState {
 
 impl FittedArimaState {
     fn from_frame(frame: &ForecastFrame, p: usize, d: usize, q: usize) -> Result<Self> {
-        let local = FittedLocalState::from_frame(frame);
-        let series = local
-            .history_by_series
-            .iter()
-            .collect::<Vec<_>>()
+        let series = borrowed_histories(frame)
             .into_par_iter()
             .map(|(series_id, history)| {
                 Ok((
@@ -235,24 +237,26 @@ impl FittedArimaState {
 
 impl FittedPiecewiseLinearSeasonalState {
     fn from_frame(frame: &ForecastFrame, config: PiecewiseLinearSeasonalConfig) -> Result<Self> {
-        Self::from_frame_with_anchor(frame, frame, config)
+        Self::from_frame_with_anchor(frame, frame, config, &BTreeMap::new())
     }
 
     fn from_frame_with_anchor(
         frame: &ForecastFrame,
         anchor_frame: &ForecastFrame,
         config: PiecewiseLinearSeasonalConfig,
+        standardization_overrides: &BTreeMap<String, PiecewiseRegressorStandardizationOverride>,
     ) -> Result<Self> {
-        let local = FittedLocalState::from_frame(frame);
-        let series = local
-            .history_by_series
-            .iter()
-            .collect::<Vec<_>>()
+        let series = borrowed_histories(frame)
             .into_par_iter()
             .map(|(series_id, history)| {
                 Ok((
                     series_id.clone(),
-                    FittedPiecewiseLinearSeasonalSeries::fit(series_id, history, &config)?,
+                    FittedPiecewiseLinearSeasonalSeries::fit(
+                        series_id,
+                        history,
+                        &config,
+                        standardization_overrides,
+                    )?,
                 ))
             })
             .collect::<Result<BTreeMap<_, _>>>()?;
@@ -299,6 +303,7 @@ impl FittedPiecewiseLinearSeasonalSeries {
         series_id: &str,
         history: &[ForecastRow],
         config: &PiecewiseLinearSeasonalConfig,
+        standardization_overrides: &BTreeMap<String, PiecewiseRegressorStandardizationOverride>,
     ) -> Result<Self> {
         if history.len() < 2 {
             return Err(CartoBoostError::InvalidInput(format!(
@@ -318,7 +323,8 @@ impl FittedPiecewiseLinearSeasonalSeries {
             &elapsed,
             config,
         )?;
-        let regressor_stats = piecewise_regressor_stats(history, config)?;
+        let regressor_stats =
+            piecewise_regressor_stats(history, config, standardization_overrides)?;
         let feature_count = piecewise_linear_seasonal_feature_count(config, changepoints.len());
         let trend_coefficients =
             fit_piecewise_trend_coefficients(history, &elapsed, &changepoints, config)?;
@@ -408,6 +414,8 @@ impl FittedPiecewiseLinearSeasonalSeries {
         } else {
             0.0
         };
+        let feature_plan = PiecewiseFeaturePlan::new(config);
+        let mut residual_features = vec![0.0; feature_count];
         let residuals = history
             .iter()
             .zip(elapsed.iter())
@@ -415,10 +423,11 @@ impl FittedPiecewiseLinearSeasonalSeries {
                 let bounds = piecewise_bounds(None, Some(&row.covariates), None, config)?;
                 Ok(row.target
                     - inverse_piecewise_target(
-                        predict_piecewise_linear_value(
+                        predict_piecewise_linear_value_with_buffer(
                             t,
                             &coefficients,
                             &PiecewiseLinearFeatureContext {
+                                feature_plan: Some(&feature_plan),
                                 series_id: None,
                                 timestamp: row.timestamp,
                                 covariates: Some(&row.covariates),
@@ -434,6 +443,7 @@ impl FittedPiecewiseLinearSeasonalSeries {
                                 config,
                                 regressor_stats: Some(&regressor_stats),
                             },
+                            &mut residual_features,
                         )?,
                         bounds,
                         config,
@@ -468,6 +478,7 @@ impl FittedPiecewiseLinearSeasonalSeries {
         let bounds = piecewise_bounds(Some(series_id), None, Some(step), config)?;
         let component_multiplier = self.component_multiplier(elapsed_days, bounds, config);
         let context = PiecewiseLinearFeatureContext {
+            feature_plan: None,
             series_id: Some(series_id),
             timestamp,
             covariates: None,
@@ -480,6 +491,28 @@ impl FittedPiecewiseLinearSeasonalSeries {
         let mut features =
             vec![0.0; piecewise_linear_seasonal_feature_count(config, self.changepoints.len())];
         fill_piecewise_linear_seasonal_features(&mut features, elapsed_days, &context)?;
+        self.component_record_from_features(
+            series_id,
+            elapsed_days,
+            timestamp,
+            step,
+            bounds,
+            &features,
+            config,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn component_record_from_features(
+        &self,
+        series_id: &str,
+        elapsed_days: f64,
+        timestamp: chrono::NaiveDateTime,
+        step: usize,
+        bounds: PiecewiseBounds,
+        features: &[f64],
+        config: &PiecewiseLinearSeasonalConfig,
+    ) -> Result<Value> {
         let linear_predictor = features
             .iter()
             .zip(self.coefficients.iter())
@@ -501,14 +534,14 @@ impl FittedPiecewiseLinearSeasonalSeries {
             + trend_adjustment
             + residual_shock;
         let components = piecewise_component_contributions(
-            &features,
+            features,
             &self.coefficients,
             self.changepoints.len(),
             config,
         )?;
         Ok(json!({
             "series_id": series_id,
-            "timestamp": timestamp.format("%Y-%m-%dT%H:%M:%S").to_string(),
+            "timestamp": timestamp.format("%Y-%m-%dT%H:%M:%S%.f").to_string(),
             "horizon": step,
             "prediction": prediction,
             "trend": trend,
@@ -566,6 +599,7 @@ impl FittedPiecewiseLinearSeasonalSeries {
         let bounds = piecewise_bounds(None, Some(&row.covariates), None, config)?;
         let component_multiplier = self.component_multiplier(elapsed, bounds, config);
         let context = PiecewiseLinearFeatureContext {
+            feature_plan: None,
             series_id: Some(series_id),
             timestamp: row.timestamp,
             covariates: Some(&row.covariates),
@@ -595,7 +629,7 @@ impl FittedPiecewiseLinearSeasonalSeries {
         )?;
         Ok(json!({
             "series_id": series_id,
-            "timestamp": row.timestamp.format("%Y-%m-%dT%H:%M:%S").to_string(),
+            "timestamp": row.timestamp.format("%Y-%m-%dT%H:%M:%S%.f").to_string(),
             "index": idx,
             "actual": row.target,
             "fitted": fitted,
@@ -656,23 +690,27 @@ impl FittedPiecewiseLinearSeasonalSeries {
         if !scale.is_finite() || scale <= 0.0 {
             return Ok(Vec::new());
         }
-        let bounds = piecewise_bounds(Some(series_id), None, Some(step), config)?;
-        let linear_predictor = predict_piecewise_linear_value(
-            elapsed_days,
-            &self.coefficients,
-            &PiecewiseLinearFeatureContext {
-                series_id: Some(series_id),
-                timestamp,
-                covariates: None,
-                horizon_step: Some(step),
-                component_multiplier: self.component_multiplier(elapsed_days, bounds, config),
-                changepoints: &self.changepoints,
-                config,
-                regressor_stats: Some(&self.regressor_stats),
-            },
-        )?;
-        let derivative =
-            inverse_piecewise_target_derivative(linear_predictor, bounds, config).abs();
+        let derivative = if config.growth == PiecewiseLinearGrowth::Logistic {
+            let bounds = piecewise_bounds(Some(series_id), None, Some(step), config)?;
+            let linear_predictor = predict_piecewise_linear_value(
+                elapsed_days,
+                &self.coefficients,
+                &PiecewiseLinearFeatureContext {
+                    feature_plan: None,
+                    series_id: Some(series_id),
+                    timestamp,
+                    covariates: None,
+                    horizon_step: Some(step),
+                    component_multiplier: self.component_multiplier(elapsed_days, bounds, config),
+                    changepoints: &self.changepoints,
+                    config,
+                    regressor_stats: Some(&self.regressor_stats),
+                },
+            )?;
+            inverse_piecewise_target_derivative(linear_predictor, bounds, config).abs()
+        } else {
+            1.0
+        };
         if !derivative.is_finite() || derivative <= 0.0 {
             return Ok(Vec::new());
         }
@@ -737,7 +775,34 @@ impl FittedPiecewiseLinearSeasonalSeries {
         bounds: PiecewiseBounds,
         config: &PiecewiseLinearSeasonalConfig,
     ) -> Result<PiecewisePredictionTerms> {
+        let mut features = vec![0.0; self.feature_count];
+        let feature_plan = PiecewiseFeaturePlan::new(config);
+        self.prediction_terms_with_features_at(
+            series_id,
+            elapsed_days,
+            timestamp,
+            step,
+            bounds,
+            config,
+            &mut features,
+            &feature_plan,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn prediction_terms_with_features_at(
+        &self,
+        series_id: &str,
+        elapsed_days: f64,
+        timestamp: chrono::NaiveDateTime,
+        step: usize,
+        bounds: PiecewiseBounds,
+        config: &PiecewiseLinearSeasonalConfig,
+        features: &mut [f64],
+        feature_plan: &PiecewiseFeaturePlan,
+    ) -> Result<PiecewisePredictionTerms> {
         let context = PiecewiseLinearFeatureContext {
+            feature_plan: Some(feature_plan),
             series_id: Some(series_id),
             timestamp,
             covariates: None,
@@ -747,9 +812,7 @@ impl FittedPiecewiseLinearSeasonalSeries {
             config,
             regressor_stats: Some(&self.regressor_stats),
         };
-        let mut features =
-            vec![0.0; piecewise_linear_seasonal_feature_count(config, self.changepoints.len())];
-        fill_piecewise_linear_seasonal_features(&mut features, elapsed_days, &context)?;
+        fill_piecewise_linear_seasonal_features(features, elapsed_days, &context)?;
         let linear_predictor = features
             .iter()
             .zip(self.coefficients.iter())
@@ -772,7 +835,7 @@ impl FittedPiecewiseLinearSeasonalSeries {
             && !self.coefficient_covariance.is_empty()
             && self.transformed_residual_scale > 0.0
         {
-            quadratic_form(&features, &self.coefficient_covariance).max(0.0)
+            quadratic_form(features, &self.coefficient_covariance).max(0.0)
         } else {
             0.0
         };
@@ -816,6 +879,49 @@ impl FittedPiecewiseLinearSeasonalSeries {
         linear_trend_draw: f64,
         config: &PiecewiseLinearSeasonalConfig,
     ) -> Value {
+        let (prediction, residual_draw, coefficient_draw) = self.predictive_sample_values(
+            series_id,
+            step,
+            sample,
+            mean,
+            linear_predictor,
+            bounds,
+            residual_scale,
+            coefficient_scale,
+            linear_coefficient_scale,
+            trend_draw,
+            linear_trend_draw,
+            config,
+        );
+        json!({
+            "series_id": series_id,
+            "timestamp": timestamp.format("%Y-%m-%dT%H:%M:%S%.f").to_string(),
+            "horizon": step,
+            "sample": sample,
+            "prediction": prediction,
+            "mean": mean,
+            "residual_draw": residual_draw,
+            "coefficient_draw": coefficient_draw,
+            "trend_draw": trend_draw,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn predictive_sample_values(
+        &self,
+        series_id: &str,
+        step: usize,
+        sample: usize,
+        mean: f64,
+        linear_predictor: f64,
+        bounds: PiecewiseBounds,
+        residual_scale: f64,
+        coefficient_scale: f64,
+        linear_coefficient_scale: f64,
+        trend_draw: f64,
+        linear_trend_draw: f64,
+        config: &PiecewiseLinearSeasonalConfig,
+    ) -> (f64, f64, f64) {
         let series_hash = stable_hash64(series_id.as_bytes());
         let residual_z = deterministic_standard_normal(
             config.uncertainty_seed ^ series_hash ^ 0x8f6b_3c2d_19e0_a457,
@@ -846,17 +952,7 @@ impl FittedPiecewiseLinearSeasonalSeries {
                 mean + residual_draw + coefficient_draw + trend_draw
             }
         };
-        json!({
-            "series_id": series_id,
-            "timestamp": timestamp.format("%Y-%m-%dT%H:%M:%S").to_string(),
-            "horizon": step,
-            "sample": sample,
-            "prediction": prediction,
-            "mean": mean,
-            "residual_draw": residual_draw,
-            "coefficient_draw": coefficient_draw,
-            "trend_draw": trend_draw,
-        })
+        (prediction, residual_draw, coefficient_draw)
     }
 
     fn component_multiplier(
@@ -1047,7 +1143,7 @@ fn piecewise_prediction_quantiles(
             let value = clamp_piecewise_logistic_interior_value(value, bounds, config);
             json!({
                 "series_id": prediction.series_id.clone(),
-                "timestamp": prediction.timestamp.format("%Y-%m-%dT%H:%M:%S").to_string(),
+                "timestamp": prediction.timestamp.format("%Y-%m-%dT%H:%M:%S%.f").to_string(),
                 "horizon": prediction.horizon,
                 "quantile": level,
                 "prediction": value,
@@ -1146,7 +1242,7 @@ fn quantile_from_sorted(values: &[f64], probability: f64) -> f64 {
     }
 }
 
-fn inverse_standard_normal_cdf(probability: f64) -> f64 {
+pub(crate) fn inverse_standard_normal_cdf(probability: f64) -> f64 {
     const A: [f64; 6] = [
         -3.969_683_028_665_376e1,
         2.209_460_984_245_205e2,
@@ -1282,11 +1378,7 @@ impl FittedKalmanState {
         trend_process_variance: f64,
         observation_variance: f64,
     ) -> Result<Self> {
-        let local = FittedLocalState::from_frame(frame);
-        let series = local
-            .history_by_series
-            .iter()
-            .collect::<Vec<_>>()
+        let series = borrowed_histories(frame)
             .into_par_iter()
             .map(|(series_id, history)| {
                 Ok((
@@ -1314,11 +1406,7 @@ impl FittedLocalLevelKalmanState {
         level_process_variance: f64,
         observation_variance: f64,
     ) -> Result<Self> {
-        let local = FittedLocalState::from_frame(frame);
-        let series = local
-            .history_by_series
-            .iter()
-            .collect::<Vec<_>>()
+        let series = borrowed_histories(frame)
             .into_par_iter()
             .map(|(series_id, history)| {
                 Ok((
@@ -1399,9 +1487,8 @@ impl FittedKrigingState {
         frame: &ForecastFrame,
         coordinates: &BTreeMap<String, (f64, f64)>,
     ) -> Result<Self> {
-        let local = FittedLocalState::from_frame(frame);
         let mut levels = BTreeMap::new();
-        for (series_id, history) in &local.history_by_series {
+        for (series_id, history) in borrowed_histories(frame) {
             if !coordinates.contains_key(series_id) {
                 return Err(CartoBoostError::InvalidInput(format!(
                     "missing kriging coordinate for series {series_id}"
@@ -1438,11 +1525,11 @@ impl FittedSpatialPiecewiseKrigingState {
         let mut base = PiecewiseLinearSeasonalForecaster::new(piecewise_config)?;
         base.fit(&modeled_frame)?;
         let base_fitted = base.fitted.as_ref().ok_or_else(not_fitted)?;
-        let local = FittedLocalState::from_frame(&modeled_frame);
+        let histories = borrowed_histories(&modeled_frame);
         let mut residual_levels = BTreeMap::new();
         let mut residual_observation_series = Vec::new();
         let mut cutoff_timestamps = BTreeMap::new();
-        for (series_id, history) in &local.history_by_series {
+        for (series_id, history) in histories {
             let fitted_series = base_fitted.series.get(series_id).ok_or_else(|| {
                 CartoBoostError::InvalidInput(format!(
                     "missing fitted base series for spatial piecewise kriging series {series_id}"
@@ -1541,35 +1628,33 @@ impl FittedSpatialPiecewiseKrigingState {
                 config.kriging_config,
                 Some(&backend.selected),
             ) {
-                    Ok(mut predictions) => {
-                        let mut prediction = predictions.remove(0);
-                        prediction.neighbor_indices = prediction
-                            .neighbor_indices
-                            .iter()
-                            .map(|local_idx| training_rows[*local_idx].0)
-                            .collect();
-                        SpatialKrigingCorrection {
-                            prediction,
-                            used_neighbor_fallback: false,
-                        }
+                Ok(mut predictions) => {
+                    let mut prediction = predictions.remove(0);
+                    prediction.neighbor_indices = prediction
+                        .neighbor_indices
+                        .iter()
+                        .map(|local_idx| training_rows[*local_idx].0)
+                        .collect();
+                    SpatialKrigingCorrection {
+                        prediction,
+                        used_neighbor_fallback: false,
                     }
-                    Err(error)
-                        if config.allow_neighbor_fallback && is_neighbor_rule_error(&error) =>
-                    {
-                        SpatialKrigingCorrection {
-                            prediction: crate::utilities::KrigingPrediction {
-                                x: target.0,
-                                y: target.1,
-                                mean: 0.0,
-                                variance: residual_level_variance(&self.residual_levels),
-                                weights: Vec::new(),
-                                neighbor_indices: Vec::new(),
-                            },
-                            used_neighbor_fallback: true,
-                        }
+                }
+                Err(error) if config.allow_neighbor_fallback && is_neighbor_rule_error(&error) => {
+                    SpatialKrigingCorrection {
+                        prediction: crate::utilities::KrigingPrediction {
+                            x: target.0,
+                            y: target.1,
+                            mean: 0.0,
+                            variance: residual_level_variance(&self.residual_levels),
+                            weights: Vec::new(),
+                            neighbor_indices: Vec::new(),
+                        },
+                        used_neighbor_fallback: true,
                     }
-                    Err(error) => return Err(error),
-                };
+                }
+                Err(error) => return Err(error),
+            };
             corrections.insert(series_id.clone(), correction);
         }
         Ok(corrections)
@@ -1782,11 +1867,7 @@ impl FittedThetaState {
         alpha: f64,
         seasonality: Option<ThetaSeasonality>,
     ) -> Result<Self> {
-        let local = FittedLocalState::from_frame(frame);
-        let series = local
-            .history_by_series
-            .iter()
-            .collect::<Vec<_>>()
+        let series = borrowed_histories(frame)
             .into_par_iter()
             .map(|(series_id, history)| {
                 Ok((
@@ -1900,4 +1981,3 @@ impl Ord for OrderedF64 {
             .expect("theta grid scores are finite")
     }
 }
-

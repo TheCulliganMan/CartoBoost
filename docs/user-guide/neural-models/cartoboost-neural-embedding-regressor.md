@@ -1,10 +1,15 @@
+---
+sidebar_label: Embedding + tree regressor
+---
+
 import {NeuralModelExample} from '@site/src/components/ModelingLabClient';
 
 # CartoBoost NeuralEmbeddingRegressor
 
-Use `NeuralEmbeddingRegressor` when you want one wrapper that learns ID
-embeddings, appends them to the dense row features, and fits a CartoBoost
-regressor.
+Train ID embeddings and a boosted regressor through one object with
+`NeuralEmbeddingRegressor`. Learned vectors are appended to the dense features,
+so repeated pickup-zone or route identity can contribute alongside trip
+distance, hour, and other measurements.
 
 ## When To Use
 
@@ -15,6 +20,9 @@ regressor.
 - You can validate repeated-ID and cold-ID behavior separately.
 
 ## Interactive Example
+
+Run the small example to inspect inputs and model behavior. It is a browser
+demonstration, not a benchmark on held-out taxi trips.
 
 <NeuralModelExample title="Neural embedding regressor browser model" pipeline="embedding" />
 

@@ -1,5 +1,6 @@
 use crate::{CartoBoostError, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FeatureKind {
@@ -55,13 +56,14 @@ impl FeatureSchema {
                 self.kinds.len()
             )));
         }
+        let mut seen = HashSet::with_capacity(self.names.len());
         for (idx, name) in self.names.iter().enumerate() {
             if name.trim().is_empty() {
                 return Err(CartoBoostError::InvalidInput(format!(
                     "feature schema name at index {idx} must not be empty"
                 )));
             }
-            if self.names[..idx].iter().any(|old| old == name) {
+            if !seen.insert(name.as_str()) {
                 return Err(CartoBoostError::InvalidInput(format!(
                     "feature schema contains duplicate feature name '{name}'"
                 )));

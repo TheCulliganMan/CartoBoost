@@ -2685,12 +2685,6 @@ impl MlpState {
         let operations = self.max_layer_ops().saturating_mul(inputs.len());
         let cpu_backend = panel_dense_cpu_fallback(backend, operations)?;
         let execution_backend = cpu_backend.as_ref().unwrap_or(backend);
-        if execution_backend.selected == "cpu" {
-            return inputs
-                .iter()
-                .map(|input| self.forward(input, execution_backend))
-                .collect();
-        }
         let mut activations = inputs
             .iter()
             .map(|input| padded_input(input, self.input_width))
@@ -2856,6 +2850,18 @@ pub fn fit_dense_regressor_with_backend(
             "dense regressor weight_decay must be finite and non-negative".to_string(),
         ));
     }
+    if examples.is_empty()
+        || examples.iter().any(|(input, target)| {
+            input.len() != config.input_width
+                || target.len() != config.output_width
+                || input.iter().chain(target).any(|value| !value.is_finite())
+        })
+    {
+        return Err(NeuralError::InvalidArgument(
+            "dense regressor examples must be non-empty, finite, and match input/output widths"
+                .to_string(),
+        ));
+    }
     let backend = select_backend_for(backend, BackendOperation::Dense)?;
     let panel_config = NeuralPanelConfig {
         epochs: config.epochs,
@@ -2924,6 +2930,9 @@ fn train_mlp(
                     delta.iter().copied().enumerate().take(layer.biases.len())
                 {
                     for in_idx in 0..layer.weights[out_idx].len() {
+                        // Propagate through the parameters that produced this
+                        // forward pass, before the optimizer changes them.
+                        previous_delta[in_idx] += delta_value * layer.weights[out_idx][in_idx];
                         let grad = delta_value * previous[in_idx]
                             + config.weight_decay * layer.weights[out_idx][in_idx];
                         adamw_update(
@@ -2937,7 +2946,6 @@ fn train_mlp(
                             beta2,
                             eps,
                         );
-                        previous_delta[in_idx] += delta_value * layer.weights[out_idx][in_idx];
                     }
                     adamw_update(
                         &mut layer.biases[out_idx],
@@ -3496,6 +3504,90 @@ fn split_lane(series_id: &str) -> (Option<&str>, Option<&str>) {
 #[cfg(test)]
 mod dispatch_tests {
     use super::*;
+
+    #[test]
+    fn dense_regressor_rejects_invalid_training_examples() {
+        let config = DenseRegressorConfig {
+            input_width: 2,
+            output_width: 1,
+            hidden_layers: vec![2],
+            epochs: 1,
+            learning_rate: 0.01,
+            weight_decay: 0.0,
+            seed: 7,
+        };
+        for examples in [
+            vec![],
+            vec![(vec![1.0], vec![2.0])],
+            vec![(vec![1.0, 2.0], vec![])],
+            vec![(vec![1.0, 2.0], vec![3.0, 4.0])],
+            vec![(vec![f64::NAN, 2.0], vec![3.0])],
+            vec![(vec![1.0, 2.0], vec![f64::INFINITY])],
+        ] {
+            assert!(fit_dense_regressor(&config, examples).is_err());
+        }
+    }
+
+    #[test]
+    fn dense_regressor_first_step_matches_finite_difference_gradient() {
+        let config = DenseRegressorConfig {
+            input_width: 2,
+            output_width: 1,
+            hidden_layers: vec![3],
+            epochs: 1,
+            learning_rate: 2.0,
+            weight_decay: 0.0,
+            seed: 17,
+        };
+        let input = vec![1.0, -2.0];
+        let target = -0.75;
+        let initial = MlpState::initialized(2, 1, &[3], config.seed);
+        let trained = fit_dense_regressor(&config, vec![(input.clone(), vec![target])]).unwrap();
+        let loss = |net: &MlpState| (net.forward_cpu(&input)[0] - target).powi(2);
+        let epsilon = 1.0e-6;
+        let mut checked_nonzero = 0;
+        for layer in 0..initial.layers.len() {
+            for output in 0..initial.layers[layer].biases.len() {
+                for feature in 0..initial.layers[layer].weights[output].len() {
+                    let mut plus = initial.clone();
+                    let mut minus = initial.clone();
+                    plus.layers[layer].weights[output][feature] += epsilon;
+                    minus.layers[layer].weights[output][feature] -= epsilon;
+                    let gradient = (loss(&plus) - loss(&minus)) / (2.0 * epsilon);
+                    checked_nonzero += usize::from(gradient.abs() > 1.0e-6);
+                    let expected = initial.layers[layer].weights[output][feature]
+                        - config.learning_rate * gradient / (gradient.abs() + 1.0e-8);
+                    assert!(
+                        (trained.layers[layer].weights[output][feature] - expected).abs() < 1.0e-6,
+                        "gradient mismatch at layer {layer}, output {output}, feature {feature}"
+                    );
+                }
+            }
+        }
+        assert!(
+            checked_nonzero > 3,
+            "exercise both hidden and output layers"
+        );
+    }
+
+    #[test]
+    fn panel_cpu_batch_preserves_scalar_predictions_exactly() {
+        let net = MlpState::initialized(7, 3, &[11, 5], 41);
+        let cpu = select_backend_for(Some("cpu"), BackendOperation::Dense).unwrap();
+        let inputs = (0..37)
+            .map(|row| {
+                (0..7)
+                    .map(|column| ((row * 7 + column) as f64 * 0.019).cos())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let expected = inputs
+            .iter()
+            .map(|input| net.forward(input, &cpu).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(net.forward_batch(&inputs, &cpu).unwrap(), expected);
+        assert!(net.forward_batch(&[], &cpu).unwrap().is_empty());
+    }
 
     #[test]
     fn panel_dense_inference_avoids_small_device_launches() {

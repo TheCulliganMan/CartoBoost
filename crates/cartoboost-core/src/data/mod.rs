@@ -10,7 +10,7 @@ mod weights;
 
 pub use categorical::{
     CategoricalColumnEncoder, CategoricalEncoder, CategoricalEncodingConfig,
-    CategoricalEncodingStrategy,
+    CategoricalEncodingStrategy, CategoricalInputColumn,
 };
 pub use feature_schema::{FeatureKind, FeatureSchema};
 pub use matrix::{Dataset, SampleRef};

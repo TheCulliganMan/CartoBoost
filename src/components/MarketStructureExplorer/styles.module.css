@@ -40,3 +40,96 @@
 .h3Caption { color: var(--ifm-color-emphasis-700); font-size: 0.82rem; margin: 0; }
 @media (max-width: 640px) { .mapShell { height: 360px; } .detail, .bottomGrid { align-items: stretch; grid-template-columns: 1fr; } .detail { display: grid; } .metricGrid { justify-content: space-between; } .controls { align-items: start; flex-direction: column; } .surfaceNote { max-width: 11rem; } }
 @media (max-width: 640px) { .h3MapShell { height: 460px; } .h3Hint { margin-left: 0; } .h3Controls label { width: 100%; } .h3Note { max-width: 12rem; } }
+
+/* Match the field guide while preserving map and forecast color scales. */
+.explorer,
+.h3Explorer {
+  color: var(--cb-text);
+  min-width: 0;
+}
+
+.controls,
+.h3Controls {
+  background: var(--cb-surface);
+  border: 2px solid var(--cb-border);
+  padding: 0.9rem 1rem;
+}
+
+.controls select {
+  background: var(--cb-bg);
+  border: 2px solid var(--cb-border);
+  border-radius: 0;
+  color: var(--cb-text);
+  min-height: 2.5rem;
+  padding: 0.4rem 0.65rem;
+}
+
+.controls select:focus-visible,
+.h3Controls input:focus-visible,
+.relationships button:focus-visible {
+  outline: 3px solid var(--cb-accent);
+  outline-offset: 3px;
+}
+
+.hint,
+.eyebrow,
+.h3Hint,
+.h3Caption,
+.h3Controls label,
+.relationships span,
+.metricGrid small {
+  color: var(--cb-muted);
+  font-size: 0.825rem;
+}
+
+.eyebrow { font-family: var(--ifm-font-family-monospace); }
+.mapShell,
+.h3MapShell {
+  border: 2px solid var(--cb-border);
+  border-radius: 0;
+  box-shadow: 4px 4px 0 #171817;
+}
+
+.legend,
+.h3Legend,
+.surfaceNote,
+.h3Note {
+  background: #171817;
+  backdrop-filter: none;
+  border: 1px solid #f8f9f4;
+  border-radius: 0;
+  color: #f8f9f4;
+  font-size: 0.75rem;
+  max-width: calc(100% - 2rem);
+}
+
+.surfaceNote span,
+.h3Note span { color: #c9cec1; }
+.legend,
+.h3Legend { flex-wrap: wrap; }
+.h3Note { max-width: min(18rem, calc(100% - 2rem)); }
+
+.detail {
+  background: var(--cb-surface);
+  border: 2px solid var(--cb-border);
+  color: var(--cb-text);
+}
+
+.bottomGrid > div {
+  background: var(--cb-surface);
+  border-top: 2px solid var(--cb-border);
+  padding-top: 0.75rem;
+  min-width: 0;
+}
+
+.relationships li { border-bottom: 1px solid var(--cb-line); padding-block: 0.35rem; }
+.relationships button { font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
+.h3Controls input { accent-color: var(--cb-accent); }
+.empty { color: var(--cb-muted); }
+
+@media (max-width: 640px) {
+  .controls select { max-width: 100%; }
+  .surfaceNote { max-width: 11rem; }
+  .h3Note { max-width: 12rem; }
+  .metricGrid { flex-wrap: wrap; }
+}

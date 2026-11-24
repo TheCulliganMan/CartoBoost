@@ -5,6 +5,7 @@ from pathlib import Path
 import cartoboost.tensorboard as tensorboard
 import pytest
 from cartoboost import CartoBoostRegressor
+from cartoboost._native import CartoBoostRegressor as NativeCartoBoostRegressor
 
 
 @pytest.mark.parametrize("model_kind", ["regressor", "classifier"])
@@ -215,7 +216,7 @@ def test_native_backend_save_weights_roundtrip_is_versioned_json(tmp_path: Path)
     assert payload["artifact_type"] == "cartoboost.weights"
     assert payload["weights_artifact_version"] == 1
     assert payload["model_artifact_version"] == 1
-    assert payload["backend"] == "rust"
+    assert payload["backend"] == "cpu"
     assert loaded.predict([[0.0], [3.0]]) == pytest.approx(predictions)
     restored = pickle.loads(pickle.dumps(regressor))
     assert restored.predict([[0.0], [3.0]]) == pytest.approx(predictions)
@@ -241,7 +242,7 @@ def test_predict_before_fit_raises():
 
 
 def test_rust_backend_accepts_special_splitters():
-    regressor = CartoBoostRegressor(
+    regressor = NativeCartoBoostRegressor(
         n_estimators=1,
         learning_rate=1.0,
         max_depth=1,
@@ -268,7 +269,7 @@ def test_rust_backend_accepts_linear_fuzzy_and_sparse_options():
         linear_leaf_features=["0"],
         l2_regularization=0.0,
     )
-    sparse = CartoBoostRegressor(
+    sparse = NativeCartoBoostRegressor(
         n_estimators=1,
         learning_rate=1.0,
         max_depth=1,

@@ -1,30 +1,29 @@
 # Model Benchmark Suite
 
-## Bottom Line
+External baselines have lower RMSE than `cartoboost` on all four primary
+comparisons in this run. Ridge leads on diabetes, HistGradientBoosting on the
+California housing sample, and XGBoost on the two karate graph splits.
 
-The standard model suite is a bounded regression benchmark for checking
-ordinary tabular behavior, public graph-regression plumbing, validation-search
-discipline, timing, and artifact reporting before making broader claims.
+The suite uses three inner-validation candidates per tunable model family,
+then scores the selected model on an untouched outer holdout. The primary run
+uses seed 42 and a 5,000-row housing sample; repeat runs use seeds 42, 43, and 44.
+The small graph datasets are diagnostics, not evidence of broad graph quality.
 
-The current maintained public run uses seed 42, a 5,000-row deterministic sample
-for California housing, and an equal-budget inner-validation search with three
-candidates per tunable model family before final holdout scoring. It requests
-LightGBM, XGBoost, CatBoost, scikit-learn HistGradientBoosting, RandomForest,
-ExtraTrees, Ridge, mean, and graph-specific diagnostic rows where applicable.
-The artifact also repeats the same protocol with seeds 42, 43, and 44 for
-comparison intervals.
+LightGBM, XGBoost, CatBoost, HistGradientBoosting, RandomForest, ExtraTrees,
+Ridge, and mean all completed in the recorded Python 3.13 environment.
 
-This run does not support a CartoBoost winner claim. The best completed
-external baseline has lower RMSE than the single current-code `cartoboost` row
-on diabetes, California housing, karate random, and karate group holdout.
-CartoBoost is close to XGBoost on the California housing sample, but
-HistGradientBoosting is clearly lower RMSE in this maintained run.
+## Comparison Summary
 
-The refreshed artifact records a comparability audit in both JSON and Markdown.
-Every tunable requested model uses three inner-validation candidates, no model
-selects on outer test labels, and all requested external baselines complete in
-the local Python 3.13 benchmark environment: LightGBM, XGBoost, CatBoost,
-HistGradientBoosting, RandomForest, ExtraTrees, Ridge, and mean.
+For each regression split, this table compares the single primary `cartoboost`
+row with the lowest-RMSE external baseline that finished under the same split
+and global benchmark settings.
+
+| Workload / split | CartoBoost RMSE | CartoBoost WAPE | Best external baseline | External RMSE | External WAPE | RMSE delta | R2 delta | Result |
+| --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | --- |
+| Diabetes / random | 54.3467 | 0.2875 | Ridge | 51.5180 | 0.2657 | +2.8287 | -0.0470 | External lower RMSE |
+| California housing / random | 0.6301 | 0.2264 | HistGradientBoosting | 0.5958 | 0.2138 | +0.0342 | -0.0307 | External lower RMSE |
+| Karate / random | 0.2665 | 0.2210 | XGBoost | 0.0488 | 0.0409 | +0.2177 | -1.1713 | External lower RMSE |
+| Karate / group holdout | 0.2661 | 0.1695 | XGBoost | 0.2584 | 0.1157 | +0.0077 | -0.0393 | External lower RMSE |
 
 ## Reproduce
 
@@ -98,19 +97,6 @@ comparability audit, and output artifact sizes for this run: `results.json`
 | California housing | `sklearn.datasets.fetch_california_housing` deterministic 5,000-row seed-42 sample from the 20,640-row public California housing dataset. | 5,000 | 8 | `d0f75cd29b2fa35166c72d168c78cd2f206ab5b1c2d6a29e38437c55d3fa77ad` |
 | Karate | Embedded Zachary karate club edge list and post-split labels from the benchmark harness constants. | 78 | 5 | `069058a0030b0e4859fbfb8254bc70c9f73eceb83c0fad5e2f1eba22352a6824` |
 
-## Comparison Summary
-
-For each regression split, this table compares the single primary `cartoboost`
-row with the lowest-RMSE external baseline that finished under the same split
-and global benchmark settings.
-
-| Workload / split | CartoBoost RMSE | CartoBoost WAPE | Best external baseline | External RMSE | External WAPE | RMSE delta | R2 delta | Result |
-| --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | --- |
-| Diabetes / random | 54.3467 | 0.2875 | Ridge | 51.5180 | 0.2657 | +2.8287 | -0.0470 | External lower RMSE |
-| California housing / random | 0.6301 | 0.2264 | HistGradientBoosting | 0.5958 | 0.2138 | +0.0342 | -0.0307 | External lower RMSE |
-| Karate / random | 0.2665 | 0.2210 | XGBoost | 0.0488 | 0.0409 | +0.2177 | -1.1713 | External lower RMSE |
-| Karate / group holdout | 0.2661 | 0.1695 | XGBoost | 0.2584 | 0.1157 | +0.0077 | -0.0393 | External lower RMSE |
-
 ## Repeated Comparison
 
 The repeated comparison uses seeds 42, 43, and 44 with the same model roster,
@@ -143,10 +129,12 @@ tables are in `docs/assets/model_benchmarks_public/results.md`.
 
 ## Interpretation
 
-Use this page to diagnose benchmark plumbing, leakage-safe selection, and
-model-family behavior. The maintained run now uses equal-budget validation
-search for every tunable family, but it is still a bounded single-seed
-benchmark. External baselines are stronger on every maintained split, so any
-reusable CartoBoost model improvement should be justified by larger real-data
-evidence and then rerun through this fixed protocol before public claims
-change.
+The primary comparisons favor the external baselines. Repeat intervals also
+favor the external baselines on diabetes and California housing; the small
+karate datasets have mixed intervals. These results show that CartoBoost's
+structured modeling options do not imply an advantage on every tabular or
+graph-shaped problem.
+
+The datasets are small, the search budget is three candidates per tunable
+family, and timings come from one environment. For taxi-specific evidence,
+read the [NYC taxi comparison](nyc-taxi.md).

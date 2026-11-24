@@ -7,7 +7,8 @@ import numpy as np
 
 from .._artifacts import ArtifactPersistenceMixin
 from ..config import Backend, ChoiceStrEnum
-from ._native import dumps, loads, require_native
+from ..regressor import _to_numeric_numpy, _to_numpy
+from ._native import loads, require_native
 from .choice import ChoiceSetTransformer
 from .flow import flow_uncertainty_report
 from .frames import ResponseCurveFrame
@@ -29,9 +30,9 @@ class ResponseCurveModel(ArtifactPersistenceMixin):
         self.is_fitted_ = False
 
     def fit(self, frame: ResponseCurveFrame) -> ResponseCurveModel:
-        fit = require_native("deep_response_curve_fit_value")
+        fit = require_native("deep_response_curve_fit_records")
         self._artifact_json = fit(
-            dumps(frame.rows),
+            frame.rows,
             self.response_type,
             self.monotone,
             _choice_value(self.backend),
@@ -43,11 +44,12 @@ class ResponseCurveModel(ArtifactPersistenceMixin):
 
     def predict_curve(self, frame: ResponseCurveFrame) -> list[dict[str, Any]]:
         self._check_is_fitted()
-        predict = require_native("deep_response_curve_predict_value")
-        return loads(predict(self._artifact_json, dumps(frame.rows)))
+        predict = require_native("deep_response_curve_predict_records")
+        return predict(self._artifact_json, frame.rows)
 
     def predict_response(self, frame: ResponseCurveFrame) -> np.ndarray:
-        return np.asarray([row["response_score"] for row in self.predict_curve(frame)], dtype=float)
+        self._check_is_fitted()
+        return require_native("deep_response_curve_predict_arrays")(self._artifact_json, frame.rows)
 
     def best_candidate(
         self,
@@ -84,12 +86,9 @@ class ResponseCurveModel(ArtifactPersistenceMixin):
         return report
 
     def score(self, frame: ResponseCurveFrame) -> float:
-        pred = np.asarray(
-            [
-                row.get("response_probability", row["response_score"])
-                for row in self.predict_curve(frame)
-            ],
-            dtype=float,
+        self._check_is_fitted()
+        pred = require_native("deep_response_curve_predict_arrays")(
+            self._artifact_json, frame.rows, probability=True
         )
         actual = np.asarray([row["response"] for row in frame.rows], dtype=float)
         return float(np.mean((actual - pred) ** 2))
@@ -145,10 +144,19 @@ class EventOutcomeModel(ArtifactPersistenceMixin):
         self.is_fitted_ = False
 
     def fit(self, features: Any, labels: Any) -> EventOutcomeModel:
-        fit = require_native("deep_event_outcome_fit_value")
+        fit = require_native("deep_event_outcome_fit_arrays")
+        feature_array = _event_feature_matrix(features)
+        label_values = _to_numpy(labels)
+        if not isinstance(label_values, (np.ndarray, list, tuple)) and not hasattr(
+            label_values, "__array__"
+        ):
+            label_values = np.fromiter(label_values, dtype=np.float64)
+        label_array = np.asarray(label_values, dtype=np.float64)
+        if label_array.ndim != 1:
+            raise ValueError("labels must be a one-dimensional array")
         self._artifact_json = fit(
-            dumps(np.asarray(features, dtype=float).tolist()),
-            list(map(float, labels)),
+            feature_array,
+            label_array,
             _choice_value(self.backend),
         )
         self.metadata_ = loads(self._artifact_json)
@@ -157,16 +165,22 @@ class EventOutcomeModel(ArtifactPersistenceMixin):
 
     def predict_proba(self, features: Any) -> np.ndarray:
         self._check_is_fitted()
-        predict = require_native("deep_event_outcome_predict_value")
-        rows = loads(
-            predict(self._artifact_json, dumps(np.asarray(features, dtype=float).tolist()))
+        predict = require_native("deep_event_outcome_predict_arrays")
+        return np.asarray(
+            predict(self._artifact_json, _event_feature_matrix(features)), dtype=float
         )
-        return np.asarray([row["calibrated_probability"] for row in rows], dtype=float)
 
     def calibration_report(self, features: Any, labels: Any) -> dict[str, float]:
         probs = self.predict_proba(features)
-        actual = np.asarray(labels, dtype=float)
-        return {"brier": float(np.mean((actual - probs) ** 2))}
+        actual = np.asarray(_to_numeric_numpy(labels), dtype=float)
+        if actual.ndim != 1 or actual.shape != probs.shape:
+            raise ValueError("labels must be one-dimensional and match prediction row counts")
+        if np.any((actual != 0.0) & (actual != 1.0)):
+            # Soft targets are accepted by fit. Retain their squared-error score
+            # through the native regression metric; binary Brier is stricter.
+            metric = require_native("forecast_evaluate_metrics_arrays")(actual, probs)
+            return {"brier": float(metric.rmse**2)}
+        return {"brier": float(require_native("prob_brier_score_arrays")(actual, probs))}
 
     def choice_set_report(self, candidates: list[dict[str, Any]], features: Any) -> dict[str, Any]:
         probs = self.predict_proba(features)
@@ -213,26 +227,41 @@ class ServiceTimeResidualModel:
         self.is_fitted_ = False
 
     def fit(self, rows: list[dict[str, Any]]) -> ServiceTimeResidualModel:
-        fit = require_native("deep_service_residual_fit_value")
-        self._artifact_json = fit(dumps(rows), _choice_value(self.backend))
+        rows = self._baseline_rows(rows)
+        fit = require_native("deep_service_residual_fit_records")
+        self._artifact_json = fit(rows, _choice_value(self.backend))
         self.metadata_ = loads(self._artifact_json)
-        self.metadata_["regime_moe"] = _service_regime_report(rows, self.baseline_col)
-        self.metadata_["flow_uncertainty_head"] = _service_flow_report(rows, self.baseline_col)
+        self.metadata_["regime_moe"] = _service_regime_report(rows, "baseline_value")
+        self.metadata_["flow_uncertainty_head"] = _service_flow_report(rows, "baseline_value")
         self.is_fitted_ = True
         return self
 
     def predict(self, rows: list[dict[str, Any]], *, return_interval: bool = False) -> Any:
         self._check_is_fitted()
-        predict = require_native("deep_service_residual_predict_value")
-        out = loads(predict(self._artifact_json, dumps(rows)))
-        if return_interval:
-            return out
-        return np.asarray([row["prediction"] for row in out], dtype=float)
+        name = (
+            "deep_service_residual_predict_records"
+            if return_interval
+            else "deep_service_residual_predict_arrays"
+        )
+        return require_native(name)(self._artifact_json, self._baseline_rows(rows))
 
     def score(self, rows: list[dict[str, Any]]) -> float:
         pred = self.predict(rows)
         actual = np.asarray([row["actual_value"] for row in rows], dtype=float)
         return float(np.sqrt(np.mean((actual - pred) ** 2)))
+
+    def _baseline_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if self.baseline_col == "baseline_value":
+            return rows
+        result = []
+        for row in rows:
+            if self.baseline_col in row:
+                result.append(dict(row, baseline_value=row[self.baseline_col]))
+            elif "baseline_value" in row:
+                result.append(row)
+            else:
+                raise ValueError(f"rows must contain {self.baseline_col!r} or 'baseline_value'")
+        return result
 
     def _check_is_fitted(self) -> None:
         if not self.is_fitted_:
@@ -243,6 +272,13 @@ def _choice_value(value: str | ChoiceStrEnum) -> str:
     if isinstance(value, ChoiceStrEnum):
         return value.value
     return str(value)
+
+
+def _event_feature_matrix(values: Any) -> np.ndarray:
+    array = np.asarray(_to_numeric_numpy(values), dtype=np.float64)
+    if array.ndim != 2:
+        raise ValueError("features must be a two-dimensional array")
+    return array
 
 
 def _response_regime_report(rows: list[dict[str, Any]]) -> dict[str, Any]:

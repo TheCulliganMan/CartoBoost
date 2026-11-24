@@ -2,10 +2,10 @@ import {ForecastModelExample} from '@site/src/components/ModelingLabClient';
 
 # ETS
 
-`ETSForecaster` is the exponential smoothing forecaster for level, additive
-trend, and optional additive seasonality. It is a good fit when a series has a
-stable seasonal pattern and recent observations should update the state
-smoothly instead of forcing abrupt step changes.
+Track a changing level, trend, and repeating seasonal pattern with
+`ETSForecaster`. For hourly taxi demand, these components describe the current
+pickup baseline, gradual movement, and hour-of-day variation. CartoBoost's ETS
+models use additive components; seasonal changes are amounts, not percentages.
 
 ## Interactive Example
 
@@ -33,17 +33,14 @@ If the main signal is a sudden intervention, a moving event calendar, or
 cross-panel spillover, compare ETS against a lag model with calendar features
 and against spatial models where appropriate.
 
-## Scientific Role
+## What The Model Learns {#scientific-role}
 
-ETS is appropriate when the scientist can explain the series as an evolving
-baseline, a gradual drift, and a repeatable additive seasonal effect. For panel
-data, that means questions like: "How much of this count is the current
-baseline, how much is a slow movement in that baseline, and how much is the
-hour-of-day lift or drag?"
+ETS updates three interpretable quantities: the current level, its gradual
+trend, and a repeating additive seasonal effect. For hourly pickup demand,
+the seasonal component can explain the recurring lift at the same hour.
 
-Choose ETS when component interpretability matters. The fitted level, trend,
-seasonal component, fitted values, and residuals let you inspect whether the
-model is explaining a stable cycle or merely smoothing over missing causes.
+Inspect fitted values and residuals beside the components. A smooth forecast
+can still miss a known event or a changing zone effect.
 
 ## Assumptions And Failure Modes
 
@@ -269,6 +266,14 @@ Compare ETS against seasonal naive at the same season length. For hourly taxi
 demand, try daily (`24`) and weekly (`168`) season lengths when the data window
 is long enough for stable validation. Record RMSE, MAE, the train/test split,
 the horizon, and the smoothing parameters used for any benchmark claim.
+
+## Use When
+
+| Your task | Start with |
+| --- | --- |
+| Level, trend, and additive seasonality explain the series | ETS |
+| Use the previous cycle without estimating components | [Seasonal naive](naive-seasonal.md) |
+| Named events, changepoints, or regressors matter | [Piecewise linear seasonal](piecewise-linear-seasonal.md) |
 
 ## Limitations
 

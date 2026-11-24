@@ -21,13 +21,12 @@ from .._native import (
     Node2VecEncoder as _NativeNode2VecEncoder,
 )
 from .._native import (
-    graph_compute_directional_features as _native_compute_directional_features,
+    graph_compute_directional_features_arrays as _native_compute_directional_features,
 )
 from ..config import Backend
 from .builder import (
     HeterogeneousGraph,
     HomogeneousGraph,
-    ensure_node_features_shape,
     materialize_source_target_pair_nodes,
     normalize_heterogeneous_graph,
     normalize_homogeneous_graph,
@@ -84,10 +83,10 @@ def _compute_homogeneous_directional_features(
 
     args = (
         int(node_count),
-        [(int(source), int(target)) for source, target in edges],
-        np.asarray(embeddings, dtype=np.float32).tolist(),
-        None if edge_weights is None else [float(value) for value in edge_weights],
-        None if edge_timestamps is None else [float(value) for value in edge_timestamps],
+        _graph_edge_array(edges),
+        np.asarray(embeddings, dtype=np.float32),
+        None if edge_weights is None else np.asarray(edge_weights, dtype=np.float32),
+        None if edge_timestamps is None else np.asarray(edge_timestamps, dtype=np.float32),
         str(feature_prefix),
         list(directionality_cfg.directional_features),
     )
@@ -121,11 +120,20 @@ def _align_edge_values(
     values: Sequence[float] | None,
     source_edge_count: int,
     normalized_edge_count: int,
+    *,
+    homogeneous_edges: Sequence[tuple[Any, Any]] | None = None,
+    directed: bool = True,
 ) -> list[float] | None:
     if values is None:
         return None
     if len(values) != source_edge_count:
         raise ValueError("edge value length must match edge count")
+    if homogeneous_edges is not None and not directed:
+        return [
+            float(value)
+            for (source, target), value in zip(homogeneous_edges, values, strict=True)
+            for _ in range(1 if source == target else 2)
+        ]
     if normalized_edge_count == source_edge_count:
         return [float(value) for value in values]
     if source_edge_count == 0 or normalized_edge_count % source_edge_count != 0:
@@ -236,8 +244,10 @@ class GraphSageFeatureEncoder:
             node_count=node_count,
             directed=directed,
         )
-        feature_rows = ensure_node_features_shape(node_features, graph.node_count)
-        emb = self._encoder.fit(graph.node_count, graph.edges, feature_rows)
+        feature_rows = _graph_feature_array(node_features, graph.node_count)
+        emb = self._encoder.fit_arrays(
+            graph.node_count, _graph_edge_array(graph.edges), feature_rows
+        )
         self.graph = graph
         return GraphFeatureBundle(
             embeddings=emb,
@@ -252,10 +262,10 @@ class GraphSageFeatureEncoder:
     ) -> GraphFeatureBundle:
         if self.graph is None:
             raise RuntimeError("GraphSageFeatureEncoder must be fitted first")
-        feature_rows = ensure_node_features_shape(node_features, len(self.graph.node_ids))
-        emb = self._encoder.encode_graph(
+        feature_rows = _graph_feature_array(node_features, len(self.graph.node_ids))
+        emb = self._encoder.encode_graph_arrays(
             self.graph.node_count,
-            self.graph.edges,
+            _graph_edge_array(self.graph.edges),
             feature_rows,
         )
         return GraphFeatureBundle(
@@ -379,11 +389,13 @@ class Node2VecFeatureEncoder:
             node_count=node_count,
             directed=directed,
         )
-        weights = _align_edge_values(edge_weights, len(edges), len(graph.edges))
-        emb = self._encoder.fit(
+        weights = _align_edge_values(
+            edge_weights, len(edges), len(graph.edges), homogeneous_edges=edges, directed=directed
+        )
+        emb = self._encoder.fit_arrays(
             graph.node_count,
-            graph.edges,
-            weights,
+            _graph_edge_array(graph.edges),
+            None if weights is None else np.asarray(weights, dtype=np.float32),
         )
         self.graph = graph
         return GraphFeatureBundle(
@@ -408,7 +420,7 @@ class Node2VecFeatureEncoder:
     def encode(self) -> GraphFeatureBundle:
         if self.graph is None:
             raise RuntimeError("Node2VecFeatureEncoder must be fitted first")
-        emb = self._encoder.encode()
+        emb = self._encoder.encode_arrays()
         return GraphFeatureBundle(
             embeddings=emb,
             node_ids=list(self.graph.node_ids),
@@ -469,10 +481,10 @@ class HinSageFeatureEncoder:
         edges: Sequence[tuple[int, int, int]],
         node_types: Sequence[int],
     ) -> GraphFeatureBundle:
-        feature_rows = ensure_node_features_shape(node_features, len(node_types))
-        emb = self._encoder.fit(
-            [int(node_type) for node_type in node_types],
-            [(int(source), int(target), int(relation)) for source, target, relation in edges],
+        feature_rows = _graph_feature_array(node_features, len(node_types))
+        emb = self._encoder.fit_arrays(
+            _graph_node_type_array(node_types),
+            _graph_edge_array(edges, typed=True),
             feature_rows,
         )
         return GraphFeatureBundle(
@@ -488,7 +500,7 @@ class HinSageFeatureEncoder:
         )
 
     def encode(self, node_features: Sequence[Sequence[float]]) -> GraphFeatureBundle:
-        emb = self._encoder.encode([list(row) for row in node_features])
+        emb = self._encoder.encode_arrays(_graph_feature_array(node_features, len(node_features)))
         return GraphFeatureBundle(
             embeddings=emb,
             feature_names=[f"hinsage_{index:02d}" for index in range(len(emb[0]))],
@@ -501,11 +513,11 @@ class HinSageFeatureEncoder:
         embeddings: Sequence[Sequence[float]],
         pairs: Sequence[tuple[int, int]],
     ) -> GraphFeatureBundle:
-        values = self._encoder.link_embeddings(
-            [list(row) for row in embeddings],
-            [(int(source), int(target)) for source, target in pairs],
+        values = self._encoder.link_embeddings_arrays(
+            _graph_feature_array(embeddings, len(embeddings)),
+            _graph_edge_array(pairs),
         )
-        width = len(values[0]) if values else 0
+        width = values.shape[1]
         return GraphFeatureBundle(
             embeddings=values,
             feature_names=[f"hinsage_link_{index:02d}" for index in range(width)],
@@ -609,8 +621,10 @@ class HeteroGraphSageFeatureEncoder:
                 backend=_backend_value(self.config.backend),
             )
 
-        feature_rows = ensure_node_features_shape(node_features, graph.node_count)
-        emb = self._encoder.fit(graph.node_count, graph.edges, feature_rows)
+        feature_rows = _graph_feature_array(node_features, graph.node_count)
+        emb = self._encoder.fit_arrays(
+            graph.node_count, _graph_edge_array(graph.edges, typed=True), feature_rows
+        )
         self.graph = graph
         return GraphFeatureBundle(
             embeddings=emb,
@@ -629,10 +643,10 @@ class HeteroGraphSageFeatureEncoder:
     ) -> GraphFeatureBundle:
         if self.graph is None:
             raise RuntimeError("HeteroGraphSageFeatureEncoder must be fitted first")
-        feature_rows = ensure_node_features_shape(node_features, len(self.graph.node_ids))
-        emb = self._encoder.encode_graph(
+        feature_rows = _graph_feature_array(node_features, len(self.graph.node_ids))
+        emb = self._encoder.encode_graph_arrays(
             self.graph.node_count,
-            self.graph.edges,
+            _graph_edge_array(self.graph.edges, typed=True),
             feature_rows,
         )
         return GraphFeatureBundle(
@@ -901,7 +915,7 @@ class GraphFeatureTransformer:
             node_count=node_count,
             directed=directed,
         )
-        ensure_node_features_shape(feature_rows, graph.node_count)
+        _graph_feature_array(feature_rows, graph.node_count)
         directionality = DirectionalityConfig.from_config(directionality)
         directionality.validate(directed=directed)
         bundle = encoder.fit(
@@ -917,8 +931,20 @@ class GraphFeatureTransformer:
             edges=graph.edges,
             embeddings=bundle.embeddings,
             feature_prefix=directionality.directional_feature_prefix,
-            edge_weights=_align_edge_values(edge_weights, len(edges), len(graph.edges)),
-            edge_timestamps=_align_edge_values(edge_timestamps, len(edges), len(graph.edges)),
+            edge_weights=_align_edge_values(
+                edge_weights,
+                len(edges),
+                len(graph.edges),
+                homogeneous_edges=edges,
+                directed=directed,
+            ),
+            edge_timestamps=_align_edge_values(
+                edge_timestamps,
+                len(edges),
+                len(graph.edges),
+                homogeneous_edges=edges,
+                directed=directed,
+            ),
             backend=self.backend,
         )
         if directional_features.size == 0:
@@ -962,8 +988,20 @@ class GraphFeatureTransformer:
             edges=graph.edges,
             embeddings=bundle.embeddings,
             feature_prefix=directional_feature_prefix,
-            edge_weights=_align_edge_values(edge_weights, len(edges), len(graph.edges)),
-            edge_timestamps=_align_edge_values(edge_timestamps, len(edges), len(graph.edges)),
+            edge_weights=_align_edge_values(
+                edge_weights,
+                len(edges),
+                len(graph.edges),
+                homogeneous_edges=edges,
+                directed=directed,
+            ),
+            edge_timestamps=_align_edge_values(
+                edge_timestamps,
+                len(edges),
+                len(graph.edges),
+                homogeneous_edges=edges,
+                directed=directed,
+            ),
             backend=self.backend,
         )
         if directional_features.size == 0:
@@ -1092,3 +1130,28 @@ class GraphFeatureTransformer:
         if directional_features.size == 0:
             return bundle
         return bundle.with_directional_features(directional_features, directional_names)
+
+
+def _graph_feature_array(features: Any, node_count: int) -> np.ndarray:
+    values = features if hasattr(features, "__array__") else list(features)
+    array = np.asarray(values, dtype=np.float32)
+    if len(array) != node_count:
+        raise ValueError(f"expected {node_count} feature rows, got {len(array)}")
+    if array.ndim != 2:
+        raise ValueError("node_features must be 2D")
+    return array
+
+
+def _graph_edge_array(edges: Any, *, typed: bool = False) -> np.ndarray:
+    # Lazy import avoids the standalone -> graph.eval import cycle.
+    from ..standalone import _edge_pairs_array, _typed_edges_array
+
+    if len(edges) == 0:
+        return np.empty((0, 3 if typed else 2), dtype=np.uintp)
+    return _typed_edges_array(edges) if typed else _edge_pairs_array(edges)
+
+
+def _graph_node_type_array(node_types: Any) -> np.ndarray:
+    from ..standalone import _usize_array
+
+    return _usize_array(node_types, "node_types")

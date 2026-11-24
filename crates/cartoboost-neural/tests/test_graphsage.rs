@@ -6,6 +6,44 @@ use cartoboost_neural::{
 use tempfile::tempdir;
 
 #[test]
+fn graph_encoders_reject_invalid_optimizer_values() {
+    for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -0.1] {
+        for (learning_rate, l2_regularization) in [(value, 0.0), (0.01, value)] {
+            assert!(GraphSageEncoder::new(
+                GraphSageConfig {
+                    learning_rate,
+                    l2_regularization,
+                    ..GraphSageConfig::default()
+                },
+                2,
+            )
+            .is_err());
+            assert!(HeteroGraphSageEncoder::new(
+                HeteroGraphSageConfig {
+                    learning_rate,
+                    l2_regularization,
+                    ..HeteroGraphSageConfig::default()
+                },
+                2,
+                1,
+            )
+            .is_err());
+            assert!(HinSageEncoder::new(
+                HinSageConfig {
+                    learning_rate,
+                    l2_regularization,
+                    ..HinSageConfig::default()
+                },
+                2,
+                1,
+                vec![(0, 0, 0)],
+            )
+            .is_err());
+        }
+    }
+}
+
+#[test]
 fn fits_graphsage_homogeneous_graph_and_tracks_loss_curve() {
     let graph = HomogeneousGraph::from_directed_edges(5, &[(0, 1), (1, 2), (2, 3), (3, 4), (4, 0)])
         .expect("graph should build");

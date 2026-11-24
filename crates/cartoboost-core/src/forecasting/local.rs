@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use super::conformal::{residual_interval_result, ResidualForecastIntervals};
 use crate::forecasting::{
     ForecastFrame, ForecastFrequency, ForecastIntervalPrediction, ForecastPrediction,
     ForecastPredictionDetail, ForecastResult, ForecastRow, Forecaster,
@@ -17,6 +18,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 const MAX_ARIMA_ORDER: usize = 8;
 const MAX_ARIMA_COLUMNS: usize = MAX_ARIMA_ORDER * 2 + 1;
@@ -26,12 +28,16 @@ const PIECEWISE_LINEAR_SEASONAL_ARTIFACT_VERSION: u32 = 1;
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NaiveForecaster {
     fitted: Option<FittedLocalState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    intervals: Option<ResidualForecastIntervals>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SeasonalNaiveForecaster {
     season_length: usize,
     fitted: Option<FittedLocalState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    intervals: Option<ResidualForecastIntervals>,
 }
 
 #[derive(Debug, Clone)]
@@ -53,6 +59,7 @@ pub struct ThetaForecaster {
     alpha: f64,
     seasonality: Option<ThetaSeasonality>,
     fitted: Option<FittedThetaState>,
+    intervals: Option<ResidualForecastIntervals>,
 }
 
 #[derive(Debug, Clone)]
@@ -65,6 +72,7 @@ pub struct OptimizedThetaForecaster {
     validation_window: Option<usize>,
     validation_scores: Vec<ThetaValidationScore>,
     fitted: Option<ThetaForecaster>,
+    intervals: Option<ResidualForecastIntervals>,
 }
 
 #[derive(Debug, Clone)]
@@ -180,7 +188,14 @@ pub enum SpatialPiecewiseKrigingMode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PiecewiseLinearSeasonalForecaster {
     config: PiecewiseLinearSeasonalConfig,
-    fitted: Option<FittedPiecewiseLinearSeasonalState>,
+    #[serde(
+        default,
+        serialize_with = "serialize_piecewise_fitted",
+        deserialize_with = "deserialize_piecewise_fitted"
+    )]
+    fitted: Option<Arc<FittedPiecewiseLinearSeasonalState>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    regressor_standardization_by_name: BTreeMap<String, PiecewiseRegressorStandardizationOverride>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -277,6 +292,14 @@ pub enum PiecewiseLinearFitLoss {
 pub enum PiecewiseLinearRegressorStandardization {
     None,
     Auto,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum PiecewiseRegressorStandardizationOverride {
+    None,
+    Auto,
+    Standardize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -441,6 +464,7 @@ struct PiecewiseLinearFeatureContext<'a> {
     changepoints: &'a [f64],
     config: &'a PiecewiseLinearSeasonalConfig,
     regressor_stats: Option<&'a BTreeMap<String, PiecewiseLinearRegressorStats>>,
+    feature_plan: Option<&'a PiecewiseFeaturePlan>,
 }
 
 struct PiecewiseLinearFitResult {

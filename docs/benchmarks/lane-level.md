@@ -1,7 +1,12 @@
 # Lane-Level Acceptance
 
-Lane-level checks exercise combined dense, temporal, spatial, and sparse
-route-cell behavior on deterministic synthetic data.
+Inspect how spatial, temporal, and sparse features work together on a controlled
+taxi-lane dataset. The fixture contains 16 origin–destination lanes, each with
+24 hourly observations, and exposes only observable features to the model.
+
+These are deterministic synthetic checks. Use the [taxi zone result table](taxi-zone.md)
+for measured errors and the [NYC taxi benchmarks](nyc-taxi.md) for real-trip
+comparisons.
 
 ## Command
 
@@ -33,7 +38,7 @@ Generated outputs live under `docs/assets/lane_level_tests/`:
 
 - `acceptance_metrics.json`
 - `acceptance_metrics.md`
-- `route_midpoint_cartometry.png`
+- `route_midpoint_geometry.png`
 - `hour_profile.png`
 - `lane_heatmap.png`
 
@@ -49,6 +54,5 @@ The lane-level dataset is intended to show whether CartoBoost captures:
 - Spatial route cartometry behavior.
 - Combined split behavior when several feature families are present.
 
-It is not a production quality benchmark. Any broader benchmark claim needs a
-documented dataset, feature handling, baseline configuration, and repeated-run
-summary.
+The fixture isolates these mechanisms by construction. It does not measure
+accuracy on real trips or compare CartoBoost with external production baselines.

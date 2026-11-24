@@ -1,3 +1,9 @@
+mod causal_arrays;
+mod deep_arrays;
+mod metrics;
+mod neural_arrays;
+mod regime;
+
 use cartoboost_core::data::{FeatureSchema, SparseSetColumn};
 use cartoboost_core::forecasting::{
     calendar_profile_candidate_prediction as core_calendar_profile_candidate_prediction,
@@ -222,15 +228,18 @@ use cartoboost_spatial_econ::{
     spatial_weights_from_coo, SpatialEconError, SpatialModelKind, SpatialRegressionModel,
     SpatialWeights,
 };
+use numpy::ndarray::{Array2, Dimension};
 use numpy::{
-    Element, IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3,
-    PyUntypedArrayMethods,
+    Element, IntoPyArray, PyArray1, PyArray2, PyReadonlyArray, PyReadonlyArray1, PyReadonlyArray2,
+    PyReadonlyArray3, PyUntypedArrayMethods,
 };
 use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyModule, PyType};
+use pyo3::types::{PyAny, PyDict, PyList, PyModule, PyType};
+use pyo3::IntoPyObjectExt;
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use serde_json::{json, Value};
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
@@ -243,6 +252,8 @@ type PyPortfolioDecisionRow = (String, String, f64, f64, f64);
 type PyKrigingPrediction = (f64, f64, f64, Vec<f64>);
 type PyDetailedKrigingPrediction = (f64, f64, f64, f64, Vec<f64>, Vec<usize>);
 type PyNngpPrediction = (Vec<f64>, Vec<f64>, Vec<Vec<usize>>);
+type PyForecastSamples<'py> = (Vec<String>, Vec<String>, Bound<'py, PyArray2<f64>>);
+
 type PyPiecewiseEvent = (String, String, Option<i32>, Option<i32>);
 type PyPiecewiseSeasonality = (
     String,
@@ -778,6 +789,59 @@ macro_rules! native_spatial_regressor {
                 })
             }
 
+            fn fit_arrays(
+                &mut self,
+                py: Python<'_>,
+                x: PyReadonlyArray2<'_, f64>,
+                y: PyReadonlyArray1<'_, f64>,
+                spatial_weights: &NativeSpatialWeights,
+            ) -> PyResult<()> {
+                let cols = x.shape()[1];
+                if cols == 0 {
+                    return Err(PyValueError::new_err("X must contain at least one feature"));
+                }
+                let x = numpy_row_major(&x)?;
+                let y = numpy_row_major(&y)?;
+                let model = py
+                    .detach(|| {
+                        SpatialRegressionModel::fit_with_backend(
+                            $kind,
+                            x.chunks_exact(cols).map(|row| row.to_vec()).collect(),
+                            y.to_vec(),
+                            &spatial_weights.weights,
+                            Some(&self.backend),
+                        )
+                    })
+                    .map_err(to_py_spatial_error)?;
+                self.model = Some(model);
+                Ok(())
+            }
+
+            fn predict_arrays<'py>(
+                &self,
+                py: Python<'py>,
+                x: PyReadonlyArray2<'_, f64>,
+                spatial_weights: &NativeSpatialWeights,
+            ) -> PyResult<Bound<'py, numpy::PyArray1<f64>>> {
+                let model = self.model.as_ref().ok_or_else(|| {
+                    PyRuntimeError::new_err(format!("{} is not fitted", $py_name))
+                })?;
+                let cols = x.shape()[1];
+                if cols == 0 {
+                    return Err(PyValueError::new_err("X must contain at least one feature"));
+                }
+                let x = numpy_row_major(&x)?;
+                let output = py
+                    .detach(|| {
+                        model.predict(
+                            x.chunks_exact(cols).map(|row| row.to_vec()).collect(),
+                            &spatial_weights.weights,
+                        )
+                    })
+                    .map_err(to_py_spatial_error)?;
+                Ok(output.into_pyarray(py))
+            }
+
             fn coefficients(&self) -> PyResult<Vec<f64>> {
                 let model = self.model.as_ref().ok_or_else(|| {
                     PyRuntimeError::new_err(format!("{} is not fitted", $py_name))
@@ -967,7 +1031,7 @@ impl NativeForecastFrame {
             .map(|row| {
                 (
                     row.series_id.clone(),
-                    row.timestamp.format("%Y-%m-%dT%H:%M:%S").to_string(),
+                    row.timestamp.format("%Y-%m-%dT%H:%M:%S%.f").to_string(),
                     row.target,
                 )
             })
@@ -1032,6 +1096,15 @@ impl NativeForecastResult {
             .map_err(to_py_value_error)
     }
 
+    fn records(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let mut payload = py.detach(|| self.result.to_json_value());
+        let records = payload
+            .get_mut("records")
+            .ok_or_else(|| PyRuntimeError::new_err("forecast result is missing records"))?
+            .take();
+        json_value_to_python(py, records)
+    }
+
     fn columns(&self) -> Vec<String> {
         self.result.result_columns()
     }
@@ -1043,7 +1116,10 @@ impl NativeForecastResult {
             .map(|prediction| {
                 (
                     prediction.series_id.clone(),
-                    prediction.timestamp.format("%Y-%m-%dT%H:%M:%S").to_string(),
+                    prediction
+                        .timestamp
+                        .format("%Y-%m-%dT%H:%M:%S%.f")
+                        .to_string(),
                     prediction.horizon,
                     prediction.model.clone(),
                     prediction.mean,
@@ -1318,6 +1394,31 @@ fn forecast_evaluate_metrics(
     mase_seasonality: Option<usize>,
 ) -> PyResult<NativeForecastMetricSet> {
     NativeForecastMetricSet::evaluate(py, forecast, actuals, training_actuals, mase_seasonality)
+}
+
+#[pyfunction]
+#[pyo3(signature = (actuals, predictions, training_actuals=None, mase_seasonality=None))]
+fn forecast_evaluate_metrics_arrays(
+    py: Python<'_>,
+    actuals: PyReadonlyArray1<'_, f64>,
+    predictions: PyReadonlyArray1<'_, f64>,
+    training_actuals: Option<PyReadonlyArray1<'_, f64>>,
+    mase_seasonality: Option<usize>,
+) -> PyResult<NativeForecastMetricSet> {
+    let actuals = numpy_row_major(&actuals)?;
+    let predictions = numpy_row_major(&predictions)?;
+    let training = training_actuals.as_ref().map(numpy_row_major).transpose()?;
+    let metrics = py
+        .detach(|| {
+            cartoboost_core::forecasting::evaluate_forecast_arrays(
+                actuals.as_ref(),
+                predictions.as_ref(),
+                training.as_deref().unwrap_or(&[]),
+                mase_seasonality,
+            )
+        })
+        .map_err(to_py_value_error)?;
+    Ok(NativeForecastMetricSet { metrics })
 }
 
 #[pyclass(name = "BacktestFoldResult")]
@@ -2326,7 +2427,9 @@ impl NativeNaiveForecaster {
     fn new(prediction_interval_levels: Option<Vec<f64>>) -> PyResult<Self> {
         validate_interval_levels(prediction_interval_levels.as_deref())?;
         Ok(Self {
-            model: CoreNaiveForecaster::new(),
+            model: CoreNaiveForecaster::new()
+                .with_prediction_interval_levels(prediction_interval_levels.unwrap_or_default())
+                .map_err(to_py_value_error)?,
         })
     }
 
@@ -2377,7 +2480,13 @@ impl NativeSeasonalNaiveForecaster {
     fn new(season_length: usize, prediction_interval_levels: Option<Vec<f64>>) -> PyResult<Self> {
         validate_interval_levels(prediction_interval_levels.as_deref())?;
         Ok(Self {
-            model: CoreSeasonalNaiveForecaster::new(season_length).map_err(to_py_value_error)?,
+            model: CoreSeasonalNaiveForecaster::new(season_length)
+                .and_then(|model| {
+                    model.with_prediction_interval_levels(
+                        prediction_interval_levels.unwrap_or_default(),
+                    )
+                })
+                .map_err(to_py_value_error)?,
         })
     }
 
@@ -2444,6 +2553,11 @@ impl NativeThetaForecaster {
         let seasonality = parse_theta_seasonality(season_length, seasonality)?;
         Ok(Self {
             model: CoreThetaForecaster::with_seasonality(theta, alpha, seasonality)
+                .and_then(|model| {
+                    model.with_prediction_interval_levels(
+                        prediction_interval_levels.unwrap_or_default(),
+                    )
+                })
                 .map_err(to_py_value_error)?,
         })
     }
@@ -2487,6 +2601,10 @@ impl NativeOptimizedThetaForecaster {
                 alpha_grid.unwrap_or_else(|| vec![0.1, 0.2, 0.4, 0.6, 0.8]),
                 seasonality,
             )
+            .and_then(|model| {
+                model
+                    .with_prediction_interval_levels(prediction_interval_levels.unwrap_or_default())
+            })
             .map_err(to_py_value_error)?,
         })
     }
@@ -2563,7 +2681,8 @@ impl NativePiecewiseLinearSeasonalForecaster {
         floor_regressor=None,
         fit_loss="squared",
         huber_delta=1.345,
-        irls_iterations=5
+        irls_iterations=5,
+        regressor_standardization_by_name=None
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -2616,6 +2735,7 @@ impl NativePiecewiseLinearSeasonalForecaster {
         fit_loss: &str,
         huber_delta: f64,
         irls_iterations: usize,
+        regressor_standardization_by_name: Option<BTreeMap<String, String>>,
     ) -> PyResult<Self> {
         validate_interval_levels(prediction_interval_levels.as_deref())?;
         validate_interval_levels(quantile_levels.as_deref())?;
@@ -2676,9 +2796,33 @@ impl NativePiecewiseLinearSeasonalForecaster {
             cap_regressor,
             floor_regressor,
         };
-        Ok(Self {
-            model: CorePiecewiseLinearSeasonalForecaster::new(config).map_err(to_py_value_error)?,
-        })
+        let mut model =
+            CorePiecewiseLinearSeasonalForecaster::new(config).map_err(to_py_value_error)?;
+        if let Some(overrides) = regressor_standardization_by_name {
+            model
+                .set_regressor_standardization_by_name(overrides)
+                .map_err(to_py_value_error)?;
+        }
+        Ok(Self { model })
+    }
+
+    fn set_regressor_standardization_by_name(
+        &mut self,
+        overrides: BTreeMap<String, String>,
+    ) -> PyResult<()> {
+        self.model
+            .set_regressor_standardization_by_name(overrides)
+            .map_err(to_py_value_error)
+    }
+
+    fn regressor_standardization_by_name(&self) -> BTreeMap<String, String> {
+        self.model.regressor_standardization_by_name()
+    }
+
+    fn unfitted_clone(&self) -> Self {
+        Self {
+            model: self.model.unfitted_clone(),
+        }
     }
 
     fn fit(&mut self, py: Python<'_>, frame: &NativeForecastFrame) -> PyResult<()> {
@@ -2712,7 +2856,7 @@ impl NativePiecewiseLinearSeasonalForecaster {
             trend_adjustments_by_series,
         )?;
         match (future_timestamps, future_timestamps_by_series) {
-            (None, None) => predict_forecaster_py(py, &model, horizon),
+            (None, None) => predict_forecaster_py(py, model.as_ref(), horizon),
             (Some(timestamps), None) => {
                 let schedule = piecewise_shared_future_timestamps(&model, timestamps, horizon)?;
                 forecast_to_py(py.detach(|| model.predict_at_timestamps(schedule)))
@@ -2728,6 +2872,48 @@ impl NativePiecewiseLinearSeasonalForecaster {
         }
     }
 
+    #[pyo3(signature = (horizon, future_regressors=None, future_regressors_by_series=None, prediction_interval_levels=None, uncertainty_samples=None, trend_adjustments=None, trend_adjustments_by_series=None, future_timestamps=None, future_timestamps_by_series=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn predict_with_components(
+        &self,
+        py: Python<'_>,
+        horizon: usize,
+        future_regressors: Option<BTreeMap<String, Vec<f64>>>,
+        future_regressors_by_series: Option<BTreeMap<String, BTreeMap<String, Vec<f64>>>>,
+        prediction_interval_levels: Option<Vec<f64>>,
+        uncertainty_samples: Option<usize>,
+        trend_adjustments: Option<BTreeMap<usize, f64>>,
+        trend_adjustments_by_series: Option<BTreeMap<String, BTreeMap<usize, f64>>>,
+        future_timestamps: Option<Vec<String>>,
+        future_timestamps_by_series: Option<BTreeMap<String, Vec<String>>>,
+    ) -> PyResult<(NativeForecastResult, String)> {
+        validate_interval_levels(prediction_interval_levels.as_deref())?;
+        let model = piecewise_model_with_prediction_overrides(
+            &self.model,
+            future_regressors,
+            future_regressors_by_series,
+            prediction_interval_levels,
+            None,
+            uncertainty_samples,
+            trend_adjustments,
+            trend_adjustments_by_series,
+        )?;
+        let schedule = piecewise_optional_prediction_schedule(
+            &model,
+            horizon,
+            future_timestamps,
+            future_timestamps_by_series,
+        )?;
+        let (result, components) = py
+            .detach(|| match schedule {
+                None => model.predict_with_components(horizon),
+                Some(schedule) => model.predict_with_components_at_timestamps(schedule),
+            })
+            .map_err(to_py_value_error)?;
+        let components = serde_json::to_string(&components).map_err(to_py_json_error)?;
+        Ok((NativeForecastResult { result }, components))
+    }
+
     fn metadata_json(&self) -> PyResult<String> {
         serde_json::to_string(&self.model.metadata())
             .map_err(|err| PyRuntimeError::new_err(err.to_string()))
@@ -2738,7 +2924,8 @@ impl NativePiecewiseLinearSeasonalForecaster {
             .map_err(to_py_value_error)
     }
 
-    #[pyo3(signature = (horizon, future_regressors=None, future_regressors_by_series=None, trend_adjustments=None, trend_adjustments_by_series=None))]
+    #[pyo3(signature = (horizon, future_regressors=None, future_regressors_by_series=None, trend_adjustments=None, trend_adjustments_by_series=None, future_timestamps=None, future_timestamps_by_series=None))]
+    #[allow(clippy::too_many_arguments)]
     fn components_json(
         &self,
         py: Python<'_>,
@@ -2747,6 +2934,8 @@ impl NativePiecewiseLinearSeasonalForecaster {
         future_regressors_by_series: Option<BTreeMap<String, BTreeMap<String, Vec<f64>>>>,
         trend_adjustments: Option<BTreeMap<usize, f64>>,
         trend_adjustments_by_series: Option<BTreeMap<String, BTreeMap<usize, f64>>>,
+        future_timestamps: Option<Vec<String>>,
+        future_timestamps_by_series: Option<BTreeMap<String, Vec<String>>>,
     ) -> PyResult<String> {
         let model = piecewise_model_with_prediction_overrides(
             &self.model,
@@ -2758,8 +2947,23 @@ impl NativePiecewiseLinearSeasonalForecaster {
             trend_adjustments,
             trend_adjustments_by_series,
         )?;
-        py.detach(|| model.predict_components_json_string(horizon))
-            .map_err(to_py_value_error)
+        let schedule = piecewise_optional_prediction_schedule(
+            &model,
+            horizon,
+            future_timestamps,
+            future_timestamps_by_series,
+        )?;
+        match schedule {
+            None => py
+                .detach(|| model.predict_components_json_string(horizon))
+                .map_err(to_py_value_error),
+            Some(schedule) => {
+                let payload = py
+                    .detach(|| model.predict_components_at_timestamps_json_value(schedule))
+                    .map_err(to_py_value_error)?;
+                serde_json::to_string(&payload).map_err(to_py_json_error)
+            }
+        }
     }
 
     fn history_components_json(&self, py: Python<'_>) -> PyResult<String> {
@@ -2767,7 +2971,7 @@ impl NativePiecewiseLinearSeasonalForecaster {
             .map_err(to_py_value_error)
     }
 
-    #[pyo3(signature = (horizon, future_regressors=None, future_regressors_by_series=None, uncertainty_samples=None, trend_adjustments=None, trend_adjustments_by_series=None))]
+    #[pyo3(signature = (horizon, future_regressors=None, future_regressors_by_series=None, uncertainty_samples=None, trend_adjustments=None, trend_adjustments_by_series=None, future_timestamps=None, future_timestamps_by_series=None))]
     #[allow(clippy::too_many_arguments)]
     fn samples_json(
         &self,
@@ -2778,6 +2982,8 @@ impl NativePiecewiseLinearSeasonalForecaster {
         uncertainty_samples: Option<usize>,
         trend_adjustments: Option<BTreeMap<usize, f64>>,
         trend_adjustments_by_series: Option<BTreeMap<String, BTreeMap<usize, f64>>>,
+        future_timestamps: Option<Vec<String>>,
+        future_timestamps_by_series: Option<BTreeMap<String, Vec<String>>>,
     ) -> PyResult<String> {
         let model = piecewise_model_with_prediction_overrides(
             &self.model,
@@ -2789,8 +2995,70 @@ impl NativePiecewiseLinearSeasonalForecaster {
             trend_adjustments,
             trend_adjustments_by_series,
         )?;
-        py.detach(|| model.predict_samples_json_string(horizon))
-            .map_err(to_py_value_error)
+        let schedule = piecewise_optional_prediction_schedule(
+            &model,
+            horizon,
+            future_timestamps,
+            future_timestamps_by_series,
+        )?;
+        match schedule {
+            None => py
+                .detach(|| model.predict_samples_json_string(horizon))
+                .map_err(to_py_value_error),
+            Some(schedule) => {
+                let payload = py
+                    .detach(|| model.predict_samples_at_timestamps_json_value(schedule))
+                    .map_err(to_py_value_error)?;
+                serde_json::to_string(&payload).map_err(to_py_json_error)
+            }
+        }
+    }
+    #[pyo3(signature = (horizon, future_regressors=None, future_regressors_by_series=None, uncertainty_samples=None, trend_adjustments=None, trend_adjustments_by_series=None, future_timestamps=None, future_timestamps_by_series=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn samples_arrays<'py>(
+        &self,
+        py: Python<'py>,
+        horizon: usize,
+        future_regressors: Option<BTreeMap<String, Vec<f64>>>,
+        future_regressors_by_series: Option<BTreeMap<String, BTreeMap<String, Vec<f64>>>>,
+        uncertainty_samples: Option<usize>,
+        trend_adjustments: Option<BTreeMap<usize, f64>>,
+        trend_adjustments_by_series: Option<BTreeMap<String, BTreeMap<usize, f64>>>,
+        future_timestamps: Option<Vec<String>>,
+        future_timestamps_by_series: Option<BTreeMap<String, Vec<String>>>,
+    ) -> PyResult<PyForecastSamples<'py>> {
+        let model = piecewise_model_with_prediction_overrides(
+            &self.model,
+            future_regressors,
+            future_regressors_by_series,
+            None,
+            None,
+            uncertainty_samples,
+            trend_adjustments,
+            trend_adjustments_by_series,
+        )?;
+        let schedule = piecewise_optional_prediction_schedule(
+            &model,
+            horizon,
+            future_timestamps,
+            future_timestamps_by_series,
+        )?;
+        let sample_count = model.config().uncertainty_samples;
+        let (series_ids, timestamps, values) = py
+            .detach(|| match schedule {
+                None => model.predict_samples_array(horizon),
+                Some(schedule) => model.predict_samples_array_at_timestamps(schedule),
+            })
+            .map_err(to_py_value_error)?;
+        let values = rows_into_numpy(py, values, sample_count)?;
+        Ok((
+            series_ids,
+            timestamps
+                .into_iter()
+                .map(format_forecast_timestamp)
+                .collect(),
+            values,
+        ))
     }
 
     #[pyo3(signature = (horizon, quantile_levels=None, future_regressors=None, future_regressors_by_series=None, uncertainty_samples=None, trend_adjustments=None, trend_adjustments_by_series=None))]
@@ -2840,7 +3108,22 @@ fn piecewise_model_with_prediction_overrides(
     uncertainty_samples: Option<usize>,
     trend_adjustments: Option<BTreeMap<usize, f64>>,
     trend_adjustments_by_series: Option<BTreeMap<String, BTreeMap<usize, f64>>>,
-) -> PyResult<CorePiecewiseLinearSeasonalForecaster> {
+) -> PyResult<Cow<'_, CorePiecewiseLinearSeasonalForecaster>> {
+    let config = model.config();
+    if future_regressors.is_none()
+        && future_regressors_by_series.is_none()
+        && trend_adjustments.is_none()
+        && trend_adjustments_by_series.is_none()
+        && interval_levels
+            .as_ref()
+            .is_none_or(|levels| levels == &config.interval_levels)
+        && quantile_levels
+            .as_ref()
+            .is_none_or(|levels| levels == &config.quantile_levels)
+        && uncertainty_samples.is_none_or(|samples| samples == config.uncertainty_samples)
+    {
+        return Ok(Cow::Borrowed(model));
+    }
     let mut model = model.clone();
     model
         .update_config(|config| {
@@ -2867,7 +3150,27 @@ fn piecewise_model_with_prediction_overrides(
             }
         })
         .map_err(to_py_value_error)?;
-    Ok(model)
+    Ok(Cow::Owned(model))
+}
+
+fn piecewise_optional_prediction_schedule(
+    model: &CorePiecewiseLinearSeasonalForecaster,
+    horizon: usize,
+    timestamps: Option<Vec<String>>,
+    timestamps_by_series: Option<BTreeMap<String, Vec<String>>>,
+) -> PyResult<Option<BTreeMap<String, Vec<chrono::NaiveDateTime>>>> {
+    match (timestamps, timestamps_by_series) {
+        (None, None) => Ok(None),
+        (Some(timestamps), None) => {
+            piecewise_shared_future_timestamps(model, timestamps, horizon).map(Some)
+        }
+        (None, Some(timestamps)) => {
+            piecewise_future_timestamps_by_series(timestamps, horizon).map(Some)
+        }
+        (Some(_), Some(_)) => Err(PyValueError::new_err(
+            "pass either future_timestamps or future_timestamps_by_series, not both",
+        )),
+    }
 }
 
 fn piecewise_shared_future_timestamps(
@@ -3886,6 +4189,15 @@ impl NativeDcrnnForecaster {
             .map_err(to_py_geo_st_error)
     }
 
+    fn predict_arrays<'py>(
+        &self,
+        py: Python<'py>,
+        horizon: usize,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let rows = self.predict(py, horizon)?;
+        PyArray2::from_vec2(py, &rows).map_err(|error| PyValueError::new_err(error.to_string()))
+    }
+
     fn backtest(
         &self,
         py: Python<'_>,
@@ -3999,6 +4311,15 @@ impl NativeSTAEformerForecaster {
             .map_err(to_py_geo_st_error)
     }
 
+    fn predict_arrays<'py>(
+        &self,
+        py: Python<'py>,
+        horizon: usize,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let rows = self.predict(py, horizon)?;
+        PyArray2::from_vec2(py, &rows).map_err(|error| PyValueError::new_err(error.to_string()))
+    }
+
     fn score(&self, py: Python<'_>, actual: Vec<Vec<f64>>) -> PyResult<f64> {
         py.detach(|| self.model.score(&actual))
             .map_err(to_py_geo_st_error)
@@ -4081,6 +4402,15 @@ impl NativeGraphWaveNetForecaster {
             .map_err(to_py_geo_st_error)
     }
 
+    fn predict_arrays<'py>(
+        &self,
+        py: Python<'py>,
+        horizon: usize,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let rows = self.predict(py, horizon)?;
+        PyArray2::from_vec2(py, &rows).map_err(|error| PyValueError::new_err(error.to_string()))
+    }
+
     fn score(&self, py: Python<'_>, actual: Vec<Vec<f64>>) -> PyResult<f64> {
         py.detach(|| self.model.score(&actual))
             .map_err(to_py_geo_st_error)
@@ -4147,6 +4477,15 @@ impl NativePropagationDelayGraphForecaster {
     fn predict(&self, py: Python<'_>, horizon: usize) -> PyResult<Vec<Vec<f64>>> {
         py.detach(|| self.model.predict(horizon))
             .map_err(to_py_geo_st_error)
+    }
+
+    fn predict_arrays<'py>(
+        &self,
+        py: Python<'py>,
+        horizon: usize,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let rows = self.predict(py, horizon)?;
+        PyArray2::from_vec2(py, &rows).map_err(|error| PyValueError::new_err(error.to_string()))
     }
 
     fn score(&self, py: Python<'_>, actual: Vec<Vec<f64>>) -> PyResult<f64> {
@@ -4315,14 +4654,41 @@ impl NativePaperGraphTransformerForecaster {
             .map_err(to_py_geo_st_error)
     }
 
+    fn predict_arrays<'py>(
+        &self,
+        py: Python<'py>,
+        horizon: usize,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let rows = self.predict(py, horizon)?;
+        PyArray2::from_vec2(py, &rows).map_err(|error| PyValueError::new_err(error.to_string()))
+    }
+
     fn predict_owned(&self, py: Python<'_>, horizon: usize) -> PyResult<Vec<Vec<f64>>> {
         py.detach(|| self.model.predict_owned(horizon))
             .map_err(to_py_geo_st_error)
     }
 
+    fn predict_owned_arrays<'py>(
+        &self,
+        py: Python<'py>,
+        horizon: usize,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let rows = self.predict_owned(py, horizon)?;
+        PyArray2::from_vec2(py, &rows).map_err(|error| PyValueError::new_err(error.to_string()))
+    }
+
     fn predict_median(&self, py: Python<'_>, horizon: usize) -> PyResult<Vec<Vec<f64>>> {
         py.detach(|| self.model.predict_median(horizon))
             .map_err(to_py_geo_st_error)
+    }
+
+    fn predict_median_arrays<'py>(
+        &self,
+        py: Python<'py>,
+        horizon: usize,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let rows = self.predict_median(py, horizon)?;
+        PyArray2::from_vec2(py, &rows).map_err(|error| PyValueError::new_err(error.to_string()))
     }
 
     #[pyo3(signature = (horizon, calibration_actual, calibration_median, alpha=0.1))]
@@ -5401,6 +5767,10 @@ impl NativeCartoBoostLagForecaster {
                 cartoboost_core::forecasting::GlobalForecastSampleWeightMode::Uniform,
                 Some(backend),
             )
+            .and_then(|model| {
+                model
+                    .with_prediction_interval_levels(prediction_interval_levels.unwrap_or_default())
+            })
             .map_err(to_py_value_error)?,
         })
     }
@@ -6257,10 +6627,8 @@ impl NativeCartoBoostRegressor {
         feature_schema_json: Option<String>,
     ) -> PyResult<()> {
         let dataset = dataset_from_arrays(x, sparse_offsets, sparse_ids, feature_schema_json)?;
-        let targets = y.as_slice()?.to_vec();
-        let weights = sample_weight
-            .map(|array| array.as_slice().map(|slice| slice.to_vec()))
-            .transpose()?;
+        let targets = numpy_row_major(&y)?;
+        let weights = sample_weight.as_ref().map(numpy_row_major).transpose()?;
         let splitters = parse_splitters(&self.splitters)?;
         let leaf_predictor = parse_leaf_predictor(&self.leaf_predictor)?;
         let config = self.booster_config(splitters, leaf_predictor)?;
@@ -6314,8 +6682,16 @@ impl NativeCartoBoostRegressor {
             .ok_or_else(|| PyRuntimeError::new_err("CartoBoostRegressor is not fitted"))?;
         let dataset = dataset_from_parts(x, sparse_sets, None)?;
         let n_threads = self.n_threads;
-        py.detach(|| run_with_optional_threads(n_threads, || model.try_predict(&dataset)))
-            .map_err(to_py_value_error)
+        py.detach(|| {
+            run_prediction_with_optional_threads(
+                n_threads,
+                dataset.n_rows(),
+                dataset.n_rows().saturating_mul(dataset.n_cols()),
+                model.trees.len(),
+                || model.try_predict(&dataset),
+            )
+        })
+        .map_err(to_py_value_error)
     }
 
     #[pyo3(signature = (x, sparse_offsets=None, sparse_ids=None))]
@@ -6333,28 +6709,35 @@ impl NativeCartoBoostRegressor {
         let shape = x.shape();
         let rows = shape[0];
         let cols = shape[1];
-        let values = x.as_slice()?;
+        let row_major = numpy_row_major(&x)?;
+        let values = row_major.as_ref();
         let offsets = sparse_offsets.unwrap_or_default();
         let ids = sparse_ids.unwrap_or_default();
         let n_threads = self.n_threads;
         let predictions = py
             .detach(|| {
-                run_with_optional_threads(n_threads, || {
-                    // Sparse inputs may be supplied by a caller even when
-                    // the fitted forest never selected a sparse split.  In
-                    // that case they do not affect routing and should not
-                    // disable the dense flat predictor fast path.
-                    if !model.requires_sparse_sets() {
-                        if let Some(predictor) = &self.flat_axis_predictor {
-                            model.validate_dense_flat_prediction_inputs(rows, cols, values)?;
-                            Ok(predictor.predict_flat(rows, cols, values))
+                run_prediction_with_optional_threads(
+                    n_threads,
+                    rows,
+                    values.len(),
+                    model.trees.len(),
+                    || {
+                        // Sparse inputs may be supplied by a caller even when
+                        // the fitted forest never selected a sparse split.  In
+                        // that case they do not affect routing and should not
+                        // disable the dense flat predictor fast path.
+                        if !model.requires_sparse_sets() {
+                            if let Some(predictor) = &self.flat_axis_predictor {
+                                model.validate_dense_flat_prediction_inputs(rows, cols, values)?;
+                                Ok(predictor.predict_flat(rows, cols, values))
+                            } else {
+                                model.try_predict_flat(rows, cols, values, &offsets, &ids)
+                            }
                         } else {
                             model.try_predict_flat(rows, cols, values, &offsets, &ids)
                         }
-                    } else {
-                        model.try_predict_flat(rows, cols, values, &offsets, &ids)
-                    }
-                })
+                    },
+                )
             })
             .map_err(to_py_value_error)?;
         Ok(predictions.into_pyarray(py))
@@ -6383,8 +6766,16 @@ impl NativeCartoBoostRegressor {
             .ok_or_else(|| PyRuntimeError::new_err("CartoBoostRegressor is not fitted"))?;
         let dataset = dataset_from_parts(x, sparse_sets, None)?;
         let n_threads = self.n_threads;
-        py.detach(|| run_with_optional_threads(n_threads, || model.try_predict_additive(&dataset)))
-            .map_err(to_py_value_error)
+        py.detach(|| {
+            run_prediction_with_optional_threads(
+                n_threads,
+                dataset.n_rows(),
+                dataset.n_rows().saturating_mul(dataset.n_cols()),
+                model.trees.len(),
+                || model.try_predict_additive(&dataset),
+            )
+        })
+        .map_err(to_py_value_error)
     }
 
     #[pyo3(signature = (x, sparse_offsets=None, sparse_ids=None))]
@@ -6402,14 +6793,19 @@ impl NativeCartoBoostRegressor {
         let shape = x.shape();
         let rows = shape[0];
         let cols = shape[1];
-        let values = x.as_slice()?;
+        let row_major = numpy_row_major(&x)?;
+        let values = row_major.as_ref();
         let offsets = sparse_offsets.unwrap_or_default();
         let ids = sparse_ids.unwrap_or_default();
         let n_threads = self.n_threads;
         py.detach(|| {
-            run_with_optional_threads(n_threads, || {
-                model.try_predict_additive_flat(rows, cols, values, &offsets, &ids)
-            })
+            run_prediction_with_optional_threads(
+                n_threads,
+                rows,
+                values.len(),
+                model.trees.len(),
+                || model.try_predict_additive_flat(rows, cols, values, &offsets, &ids),
+            )
         })
         .map_err(to_py_value_error)
     }
@@ -6427,12 +6823,17 @@ impl NativeCartoBoostRegressor {
         let shape = x.shape();
         let rows = shape[0];
         let cols = shape[1];
-        let values = x.as_slice()?;
+        let row_major = numpy_row_major(&x)?;
+        let values = row_major.as_ref();
         let n_threads = self.n_threads;
         py.detach(|| {
-            run_with_optional_threads(n_threads, || {
-                model.try_predict_feature_contributions_flat(rows, cols, values)
-            })
+            run_prediction_with_optional_threads(
+                n_threads,
+                rows,
+                values.len(),
+                model.trees.len().saturating_mul(64),
+                || model.try_predict_feature_contributions_flat(rows, cols, values),
+            )
         })
         .map_err(to_py_value_error)
     }
@@ -6455,6 +6856,40 @@ impl NativeCartoBoostRegressor {
             .ok_or_else(|| PyRuntimeError::new_err("CartoBoostRegressor is not fitted"))?;
         let ensemble = model.tree_shap_ensemble().map_err(to_py_value_error)?;
         serde_json::to_string(&ensemble).map_err(to_py_json_error)
+    }
+
+    #[pyo3(signature = (x, sparse_offsets=None, sparse_ids=None))]
+    fn predict_additive_numpy<'py>(
+        &self,
+        py: Python<'py>,
+        x: PyReadonlyArray2<'_, f64>,
+        sparse_offsets: Option<Vec<Vec<usize>>>,
+        sparse_ids: Option<Vec<Vec<u64>>>,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let values = self.predict_additive_arrays(py, x, sparse_offsets, sparse_ids)?;
+        let columns = self
+            .model
+            .as_ref()
+            .expect("prediction requires fitted model")
+            .trees
+            .len()
+            + 1;
+        rows_into_numpy(py, values, columns)
+    }
+
+    fn predict_feature_contributions_numpy<'py>(
+        &self,
+        py: Python<'py>,
+        x: PyReadonlyArray2<'_, f64>,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let values = self.predict_feature_contributions_arrays(py, x)?;
+        let columns = self
+            .model
+            .as_ref()
+            .expect("prediction requires fitted model")
+            .feature_count
+            + 1;
+        rows_into_numpy(py, values, columns)
     }
 
     fn save(&self, py: Python<'_>, path: PathBuf) -> PyResult<()> {
@@ -7284,10 +7719,8 @@ impl NativeCartoBoostClassifier {
         feature_schema_json: Option<String>,
     ) -> PyResult<()> {
         let dataset = dataset_from_arrays(x, sparse_offsets, sparse_ids, feature_schema_json)?;
-        let targets = y.as_slice()?.to_vec();
-        let weights = sample_weight
-            .map(|array| array.as_slice().map(|slice| slice.to_vec()))
-            .transpose()?;
+        let targets = numpy_row_major(&y)?;
+        let weights = sample_weight.as_ref().map(numpy_row_major).transpose()?;
         let config = self.classifier_config()?;
         let n_threads = self.n_threads;
         let backend = self.backend.clone();
@@ -7319,8 +7752,20 @@ impl NativeCartoBoostClassifier {
             .ok_or_else(|| PyRuntimeError::new_err("CartoBoostClassifier is not fitted"))?;
         let dataset = dataset_from_parts(x, sparse_sets, None)?;
         let n_threads = self.n_threads;
-        py.detach(|| run_with_optional_threads(n_threads, || model.predict(&dataset)))
-            .map_err(to_py_value_error)
+        py.detach(|| {
+            run_prediction_with_optional_threads(
+                n_threads,
+                dataset.n_rows(),
+                dataset.n_rows().saturating_mul(dataset.n_cols()),
+                model
+                    .trees
+                    .len()
+                    .max(1)
+                    .saturating_mul(model.output_dimension()),
+                || model.predict(&dataset),
+            )
+        })
+        .map_err(to_py_value_error)
     }
 
     #[pyo3(signature = (x, sparse_offsets=None, sparse_ids=None))]
@@ -7335,10 +7780,46 @@ impl NativeCartoBoostClassifier {
             .model
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("CartoBoostClassifier is not fitted"))?;
+        if sparse_offsets.as_ref().is_none_or(Vec::is_empty)
+            && sparse_ids.as_ref().is_none_or(Vec::is_empty)
+        {
+            let shape = x.shape();
+            let rows = shape[0];
+            let cols = shape[1];
+            let row_major = numpy_row_major(&x)?;
+            let values = row_major.as_ref();
+            return py
+                .detach(|| {
+                    run_prediction_with_optional_threads(
+                        self.n_threads,
+                        rows,
+                        values.len(),
+                        model
+                            .trees
+                            .len()
+                            .max(1)
+                            .saturating_mul(model.output_dimension()),
+                        || model.predict_dense(rows, cols, values),
+                    )
+                })
+                .map_err(to_py_value_error);
+        }
         let dataset = dataset_from_arrays(x, sparse_offsets, sparse_ids, None)?;
         let n_threads = self.n_threads;
-        py.detach(|| run_with_optional_threads(n_threads, || model.predict(&dataset)))
-            .map_err(to_py_value_error)
+        py.detach(|| {
+            run_prediction_with_optional_threads(
+                n_threads,
+                dataset.n_rows(),
+                dataset.n_rows().saturating_mul(dataset.n_cols()),
+                model
+                    .trees
+                    .len()
+                    .max(1)
+                    .saturating_mul(model.output_dimension()),
+                || model.predict(&dataset),
+            )
+        })
+        .map_err(to_py_value_error)
     }
 
     #[pyo3(signature = (x, sparse_sets=None))]
@@ -7354,8 +7835,20 @@ impl NativeCartoBoostClassifier {
             .ok_or_else(|| PyRuntimeError::new_err("CartoBoostClassifier is not fitted"))?;
         let dataset = dataset_from_parts(x, sparse_sets, None)?;
         let n_threads = self.n_threads;
-        py.detach(|| run_with_optional_threads(n_threads, || model.predict_proba(&dataset)))
-            .map_err(to_py_value_error)
+        py.detach(|| {
+            run_prediction_with_optional_threads(
+                n_threads,
+                dataset.n_rows(),
+                dataset.n_rows().saturating_mul(dataset.n_cols()),
+                model
+                    .trees
+                    .len()
+                    .max(1)
+                    .saturating_mul(model.output_dimension()),
+                || model.predict_proba(&dataset),
+            )
+        })
+        .map_err(to_py_value_error)
     }
 
     #[pyo3(signature = (x, sparse_offsets=None, sparse_ids=None))]
@@ -7370,10 +7863,46 @@ impl NativeCartoBoostClassifier {
             .model
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("CartoBoostClassifier is not fitted"))?;
+        if sparse_offsets.as_ref().is_none_or(Vec::is_empty)
+            && sparse_ids.as_ref().is_none_or(Vec::is_empty)
+        {
+            let shape = x.shape();
+            let rows = shape[0];
+            let cols = shape[1];
+            let row_major = numpy_row_major(&x)?;
+            let values = row_major.as_ref();
+            return py
+                .detach(|| {
+                    run_prediction_with_optional_threads(
+                        self.n_threads,
+                        rows,
+                        values.len(),
+                        model
+                            .trees
+                            .len()
+                            .max(1)
+                            .saturating_mul(model.output_dimension()),
+                        || model.predict_proba_dense(rows, cols, values),
+                    )
+                })
+                .map_err(to_py_value_error);
+        }
         let dataset = dataset_from_arrays(x, sparse_offsets, sparse_ids, None)?;
         let n_threads = self.n_threads;
-        py.detach(|| run_with_optional_threads(n_threads, || model.predict_proba(&dataset)))
-            .map_err(to_py_value_error)
+        py.detach(|| {
+            run_prediction_with_optional_threads(
+                n_threads,
+                dataset.n_rows(),
+                dataset.n_rows().saturating_mul(dataset.n_cols()),
+                model
+                    .trees
+                    .len()
+                    .max(1)
+                    .saturating_mul(model.output_dimension()),
+                || model.predict_proba(&dataset),
+            )
+        })
+        .map_err(to_py_value_error)
     }
 
     #[pyo3(signature = (x, sparse_sets=None))]
@@ -7389,8 +7918,121 @@ impl NativeCartoBoostClassifier {
             .ok_or_else(|| PyRuntimeError::new_err("CartoBoostClassifier is not fitted"))?;
         let dataset = dataset_from_parts(x, sparse_sets, None)?;
         let n_threads = self.n_threads;
-        py.detach(|| run_with_optional_threads(n_threads, || model.decision_function(&dataset)))
-            .map_err(to_py_value_error)
+        py.detach(|| {
+            run_prediction_with_optional_threads(
+                n_threads,
+                dataset.n_rows(),
+                dataset.n_rows().saturating_mul(dataset.n_cols()),
+                model
+                    .trees
+                    .len()
+                    .max(1)
+                    .saturating_mul(model.output_dimension()),
+                || model.decision_function(&dataset),
+            )
+        })
+        .map_err(to_py_value_error)
+    }
+
+    #[pyo3(signature = (x, sparse_offsets=None, sparse_ids=None))]
+    fn decision_function_arrays(
+        &self,
+        py: Python<'_>,
+        x: PyReadonlyArray2<'_, f64>,
+        sparse_offsets: Option<Vec<Vec<usize>>>,
+        sparse_ids: Option<Vec<Vec<u64>>>,
+    ) -> PyResult<Vec<Vec<f64>>> {
+        let model = self
+            .model
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("CartoBoostClassifier is not fitted"))?;
+        if sparse_offsets.as_ref().is_none_or(Vec::is_empty)
+            && sparse_ids.as_ref().is_none_or(Vec::is_empty)
+        {
+            let shape = x.shape();
+            let rows = shape[0];
+            let cols = shape[1];
+            let row_major = numpy_row_major(&x)?;
+            let values = row_major.as_ref();
+            return py
+                .detach(|| {
+                    run_prediction_with_optional_threads(
+                        self.n_threads,
+                        rows,
+                        values.len(),
+                        model
+                            .trees
+                            .len()
+                            .max(1)
+                            .saturating_mul(model.output_dimension()),
+                        || model.decision_function_dense(rows, cols, values),
+                    )
+                })
+                .map_err(to_py_value_error);
+        }
+        let dataset = dataset_from_arrays(x, sparse_offsets, sparse_ids, None)?;
+        let n_threads = self.n_threads;
+        py.detach(|| {
+            run_prediction_with_optional_threads(
+                n_threads,
+                dataset.n_rows(),
+                dataset.n_rows().saturating_mul(dataset.n_cols()),
+                model
+                    .trees
+                    .len()
+                    .max(1)
+                    .saturating_mul(model.output_dimension()),
+                || model.decision_function(&dataset),
+            )
+        })
+        .map_err(to_py_value_error)
+    }
+
+    #[pyo3(signature = (x, sparse_offsets=None, sparse_ids=None))]
+    fn predict_numpy<'py>(
+        &self,
+        py: Python<'py>,
+        x: PyReadonlyArray2<'_, f64>,
+        sparse_offsets: Option<Vec<Vec<usize>>>,
+        sparse_ids: Option<Vec<Vec<u64>>>,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        self.predict_arrays(py, x, sparse_offsets, sparse_ids)
+            .map(|values| values.into_pyarray(py))
+    }
+
+    #[pyo3(signature = (x, sparse_offsets=None, sparse_ids=None))]
+    fn predict_proba_numpy<'py>(
+        &self,
+        py: Python<'py>,
+        x: PyReadonlyArray2<'_, f64>,
+        sparse_offsets: Option<Vec<Vec<usize>>>,
+        sparse_ids: Option<Vec<Vec<u64>>>,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let values = self.predict_proba_arrays(py, x, sparse_offsets, sparse_ids)?;
+        let columns = self
+            .model
+            .as_ref()
+            .expect("prediction requires fitted model")
+            .class_values
+            .len();
+        rows_into_numpy(py, values, columns)
+    }
+
+    #[pyo3(signature = (x, sparse_offsets=None, sparse_ids=None))]
+    fn decision_function_numpy<'py>(
+        &self,
+        py: Python<'py>,
+        x: PyReadonlyArray2<'_, f64>,
+        sparse_offsets: Option<Vec<Vec<usize>>>,
+        sparse_ids: Option<Vec<Vec<u64>>>,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let values = self.decision_function_arrays(py, x, sparse_offsets, sparse_ids)?;
+        let columns = self
+            .model
+            .as_ref()
+            .expect("prediction requires fitted model")
+            .output_dimension();
+        rows_into_numpy(py, values, columns)
     }
 
     fn save(&self, py: Python<'_>, path: PathBuf) -> PyResult<()> {
@@ -7894,10 +8536,8 @@ impl NativeCartoBoostRanker {
         feature_schema_json: Option<String>,
     ) -> PyResult<()> {
         let dataset = dataset_from_arrays(x, sparse_offsets, sparse_ids, feature_schema_json)?;
-        let targets = y.as_slice()?.to_vec();
-        let weights = sample_weight
-            .map(|array| array.as_slice().map(|slice| slice.to_vec()))
-            .transpose()?;
+        let targets = numpy_row_major(&y)?;
+        let weights = sample_weight.as_ref().map(numpy_row_major).transpose()?;
         let config = self.ranker_config()?;
         let n_threads = self.n_threads;
         let backend = self.backend.clone();
@@ -7930,8 +8570,16 @@ impl NativeCartoBoostRanker {
             .ok_or_else(|| PyRuntimeError::new_err("CartoBoostRanker is not fitted"))?;
         let dataset = dataset_from_parts(x, sparse_sets, None)?;
         let n_threads = self.n_threads;
-        py.detach(|| run_with_optional_threads(n_threads, || model.predict(&dataset)))
-            .map_err(to_py_value_error)
+        py.detach(|| {
+            run_prediction_with_optional_threads(
+                n_threads,
+                dataset.n_rows(),
+                dataset.n_rows().saturating_mul(dataset.n_cols()),
+                model.trees.len().saturating_mul(4),
+                || model.predict(&dataset),
+            )
+        })
+        .map_err(to_py_value_error)
     }
 
     #[pyo3(signature = (x, sparse_offsets=None, sparse_ids=None))]
@@ -7946,10 +8594,38 @@ impl NativeCartoBoostRanker {
             .model
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("CartoBoostRanker is not fitted"))?;
+        if sparse_offsets.as_ref().is_none_or(Vec::is_empty)
+            && sparse_ids.as_ref().is_none_or(Vec::is_empty)
+        {
+            let shape = x.shape();
+            let rows = shape[0];
+            let cols = shape[1];
+            let row_major = numpy_row_major(&x)?;
+            let values = row_major.as_ref();
+            return py
+                .detach(|| {
+                    run_prediction_with_optional_threads(
+                        self.n_threads,
+                        rows,
+                        values.len(),
+                        model.trees.len().saturating_mul(4),
+                        || model.predict_dense(rows, cols, values),
+                    )
+                })
+                .map_err(to_py_value_error);
+        }
         let dataset = dataset_from_arrays(x, sparse_offsets, sparse_ids, None)?;
         let n_threads = self.n_threads;
-        py.detach(|| run_with_optional_threads(n_threads, || model.predict(&dataset)))
-            .map_err(to_py_value_error)
+        py.detach(|| {
+            run_prediction_with_optional_threads(
+                n_threads,
+                dataset.n_rows(),
+                dataset.n_rows().saturating_mul(dataset.n_cols()),
+                model.trees.len().saturating_mul(4),
+                || model.predict(&dataset),
+            )
+        })
+        .map_err(to_py_value_error)
     }
 
     #[pyo3(signature = (x, y, groups, sparse_sets=None))]
@@ -7989,23 +8665,28 @@ impl NativeCartoBoostRanker {
         sparse_offsets: Option<Vec<Vec<usize>>>,
         sparse_ids: Option<Vec<Vec<u64>>>,
     ) -> PyResult<BTreeMap<String, f64>> {
-        let model = self
-            .model
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("CartoBoostRanker is not fitted"))?;
-        let dataset = dataset_from_arrays(x, sparse_offsets, sparse_ids, None)?;
-        let targets = y.as_slice()?.to_vec();
-        let n_threads = self.n_threads;
+        let targets = numpy_row_major(&y)?;
+        let scores = self.predict_arrays(py, x, sparse_offsets, sparse_ids)?;
         let metrics = py
-            .detach(|| {
-                run_with_optional_threads(n_threads, || model.metrics(&dataset, &targets, &groups))
-            })
+            .detach(|| cartoboost_core::booster::ranking_metrics(&targets, &scores, &groups))
             .map_err(to_py_value_error)?;
         Ok(BTreeMap::from([
             ("ndcg".to_string(), metrics.ndcg),
             ("map".to_string(), metrics.map),
             ("mrr".to_string(), metrics.mrr),
         ]))
+    }
+
+    #[pyo3(signature = (x, sparse_offsets=None, sparse_ids=None))]
+    fn predict_numpy<'py>(
+        &self,
+        py: Python<'py>,
+        x: PyReadonlyArray2<'_, f64>,
+        sparse_offsets: Option<Vec<Vec<usize>>>,
+        sparse_ids: Option<Vec<Vec<u64>>>,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        self.predict_arrays(py, x, sparse_offsets, sparse_ids)
+            .map(|values| values.into_pyarray(py))
     }
 
     fn save(&self, py: Python<'_>, path: PathBuf) -> PyResult<()> {
@@ -8361,6 +9042,119 @@ fn categorical_transform(rows: Vec<Vec<String>>, encoder_json: String) -> PyResu
     Ok(dataset_to_rows(&dataset))
 }
 
+// Reuse the same core encoder for typed tables and legacy all-string rows.
+fn with_typed_categorical_columns<T>(
+    rows: usize,
+    cols: usize,
+    values: &[f64],
+    token_columns: &[(usize, Vec<String>)],
+    run: impl FnOnce(&[cartoboost_core::data::CategoricalInputColumn<'_>]) -> Result<T, CartoBoostError>,
+) -> Result<T, CartoBoostError> {
+    use cartoboost_core::data::CategoricalInputColumn;
+    let mut tokens = BTreeMap::new();
+    for (index, column) in token_columns {
+        if *index >= cols || column.len() != rows || tokens.insert(*index, column).is_some() {
+            return Err(CartoBoostError::InvalidInput(
+                "categorical token columns require unique in-range indices and matching row counts"
+                    .to_string(),
+            ));
+        }
+    }
+    let numeric = (0..cols)
+        .map(|column| {
+            if tokens.contains_key(&column) {
+                Vec::new()
+            } else {
+                (0..rows)
+                    .map(|row| values[row * cols + column])
+                    .collect::<Vec<_>>()
+            }
+        })
+        .collect::<Vec<_>>();
+    let columns = numeric
+        .iter()
+        .enumerate()
+        .map(|(index, column)| {
+            tokens.get(&index).map_or_else(
+                || CategoricalInputColumn::Numeric(column),
+                |tokens| CategoricalInputColumn::Tokens(tokens),
+            )
+        })
+        .collect::<Vec<_>>();
+    run(&columns)
+}
+
+fn dataset_into_numpy<'py>(py: Python<'py>, dataset: Dataset) -> Bound<'py, PyArray2<f64>> {
+    Array2::from_shape_fn((dataset.n_rows(), dataset.n_cols()), |(row, column)| {
+        dataset.get(row, column)
+    })
+    .into_pyarray(py)
+}
+
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (numeric, categorical_columns, targets, feature_schema_json=None, sample_weight=None, low_cardinality_threshold=16, smoothing=10.0))]
+fn categorical_fit_transform_arrays<'py>(
+    py: Python<'py>,
+    numeric: PyReadonlyArray2<'_, f64>,
+    categorical_columns: Vec<(usize, Vec<String>)>,
+    targets: PyReadonlyArray1<'_, f64>,
+    feature_schema_json: Option<String>,
+    sample_weight: Option<PyReadonlyArray1<'_, f64>>,
+    low_cardinality_threshold: usize,
+    smoothing: f64,
+) -> PyResult<(Bound<'py, PyArray2<f64>>, String)> {
+    let rows = numeric.shape()[0];
+    let cols = numeric.shape()[1];
+    let numeric = numpy_row_major(&numeric)?;
+    let targets = numpy_row_major(&targets)?;
+    let weights = sample_weight.as_ref().map(numpy_row_major).transpose()?;
+    let schema = feature_schema_json
+        .map(|payload| serde_json::from_str::<FeatureSchema>(&payload))
+        .transpose()
+        .map_err(|error| PyValueError::new_err(format!("invalid feature_schema: {error}")))?;
+    let (dataset, encoder) = py
+        .detach(|| {
+            with_typed_categorical_columns(rows, cols, &numeric, &categorical_columns, |columns| {
+                CategoricalEncoder::fit_transform_typed_columns(
+                    columns,
+                    &targets,
+                    schema.as_ref(),
+                    weights.as_deref(),
+                    CategoricalEncodingConfig {
+                        low_cardinality_threshold,
+                        smoothing,
+                    },
+                )
+            })
+        })
+        .map_err(to_py_value_error)?;
+    let encoder_json = serde_json::to_string(&encoder).map_err(to_py_json_error)?;
+    Ok((dataset_into_numpy(py, dataset), encoder_json))
+}
+
+#[pyfunction]
+fn categorical_transform_arrays<'py>(
+    py: Python<'py>,
+    numeric: PyReadonlyArray2<'_, f64>,
+    categorical_columns: Vec<(usize, Vec<String>)>,
+    encoder_json: String,
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let rows = numeric.shape()[0];
+    let cols = numeric.shape()[1];
+    let numeric = numpy_row_major(&numeric)?;
+    let encoder: CategoricalEncoder = serde_json::from_str(&encoder_json)
+        .map_err(|error| PyValueError::new_err(format!("invalid categorical encoder: {error}")))?;
+    let dataset = py
+        .detach(|| {
+            with_typed_categorical_columns(rows, cols, &numeric, &categorical_columns, |columns| {
+                encoder.transform_typed_columns(columns)
+            })
+        })
+        .map_err(to_py_value_error)?;
+    Ok(dataset_into_numpy(py, dataset))
+}
+
 /// Validate a serialized feature schema using the Rust core contract.
 ///
 /// Python wrappers normalize ergonomic schema declarations, but the final
@@ -8479,6 +9273,55 @@ struct NativeNeuralEmbeddingFeatures {
 
 #[pymethods]
 impl NativeNeuralEmbeddingFeatures {
+    fn transform_arrays<'py>(
+        &self,
+        py: Python<'py>,
+        ids: PyReadonlyArray1<'_, u64>,
+    ) -> PyResult<Bound<'py, PyArray2<f32>>> {
+        let table = self
+            .table
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("transform called before fit or load"))?;
+
+        let ids = numpy_row_major(&ids)?;
+        let block = py
+            .detach(|| table.encode_ids(&ids, "neural_embedding"))
+            .map_err(|err| PyValueError::new_err(err.to_string()))?;
+        neural_arrays::flat_matrix(py, ids.len(), block.dim, block.values)
+    }
+
+    fn fit_transform_arrays<'py>(
+        &mut self,
+        py: Python<'py>,
+        ids: PyReadonlyArray1<'_, u64>,
+        target: PyReadonlyArray1<'_, f64>,
+    ) -> PyResult<Bound<'py, PyArray2<f32>>> {
+        let ids = numpy_row_major(&ids)?;
+        let target: Vec<f32> = numpy_row_major(&target)?
+            .iter()
+            .copied()
+            .map(|value| value as f32)
+            .collect();
+        let random_state = self.random_state.map(|value| value as u64);
+        let (table, block) = py
+            .detach(|| {
+                let table = fit_embedding_table_with_options_and_backend(
+                    self.dim,
+                    &ids,
+                    &target,
+                    self.fallback.clone(),
+                    random_state,
+                    self.support_prior_strength,
+                    Some(&self.backend),
+                )?;
+                let block = table.encode_ids(&ids, "neural_embedding")?;
+                Ok::<_, cartoboost_neural::NeuralError>((table, block))
+            })
+            .map_err(|err| PyValueError::new_err(err.to_string()))?;
+        self.table = Some(table);
+        neural_arrays::flat_matrix(py, ids.len(), block.dim, block.values)
+    }
+
     #[new]
     #[pyo3(signature = (dim, fallback="global_mean_vector", random_state=None, parent_resolution=None, support_prior_strength=1.0, backend="cpu"))]
     fn new(
@@ -8518,9 +9361,8 @@ impl NativeNeuralEmbeddingFeatures {
         ids: PyReadonlyArray1<'_, u64>,
         target: PyReadonlyArray1<'_, f64>,
     ) -> PyResult<()> {
-        let ids = ids.as_slice()?.to_vec();
-        let target: Vec<f32> = target
-            .as_slice()?
+        let ids = numpy_row_major(&ids)?;
+        let target: Vec<f32> = numpy_row_major(&target)?
             .iter()
             .copied()
             .map(|value| value as f32)
@@ -8551,9 +9393,8 @@ impl NativeNeuralEmbeddingFeatures {
         ids: PyReadonlyArray1<'_, u64>,
         target: PyReadonlyArray1<'_, f64>,
     ) -> PyResult<Vec<Vec<f32>>> {
-        let ids = ids.as_slice()?.to_vec();
-        let target: Vec<f32> = target
-            .as_slice()?
+        let ids = numpy_row_major(&ids)?;
+        let target: Vec<f32> = numpy_row_major(&target)?
             .iter()
             .copied()
             .map(|value| value as f32)
@@ -8589,7 +9430,7 @@ impl NativeNeuralEmbeddingFeatures {
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("transform called before fit or load"))?;
 
-        let ids = ids.as_slice()?.to_vec();
+        let ids = numpy_row_major(&ids)?;
         let block = py
             .detach(|| table.encode_ids(&ids, "neural_embedding"))
             .map_err(|err| PyValueError::new_err(err.to_string()))?;
@@ -8708,6 +9549,57 @@ struct NativeGraphSageEncoder {
 
 #[pymethods]
 impl NativeGraphSageEncoder {
+    #[pyo3(signature = (node_count, edges, node_features))]
+    fn fit_arrays<'py>(
+        &mut self,
+        py: Python<'py>,
+        node_count: usize,
+        edges: PyReadonlyArray2<'_, usize>,
+        node_features: PyReadonlyArray2<'_, f32>,
+    ) -> PyResult<Bound<'py, PyArray2<f32>>> {
+        let edges = neural_arrays::pairs(edges)?;
+        let node_features = neural_arrays::rows(node_features)?;
+        let graph = HomogeneousGraph::from_directed_edges(node_count, &edges)
+            .map_err(to_py_neural_error)?;
+        let mut model = GraphSageEncoder::new(self.config.clone(), self.encoder.input_dim())
+            .map_err(to_py_neural_error)?;
+        let embedding = py
+            .detach(|| model.fit(&graph, &node_features))
+            .map_err(to_py_neural_error)?;
+        self.encoder = model;
+        neural_arrays::matrix(py, embedding.into_inner(), self.encoder.output_dim())
+    }
+
+    fn encode_arrays<'py>(
+        &self,
+        py: Python<'py>,
+        node_features: PyReadonlyArray2<'_, f32>,
+    ) -> PyResult<Bound<'py, PyArray2<f32>>> {
+        let node_features = neural_arrays::rows(node_features)?;
+        let embedding = py
+            .detach(|| self.encoder.encode(&node_features))
+            .map_err(to_py_neural_error)?;
+        neural_arrays::matrix(py, embedding.into_inner(), self.encoder.output_dim())
+    }
+
+    #[pyo3(signature = (node_count, edges, node_features))]
+    fn encode_graph_arrays<'py>(
+        &self,
+        py: Python<'py>,
+        node_count: usize,
+        edges: PyReadonlyArray2<'_, usize>,
+        node_features: PyReadonlyArray2<'_, f32>,
+    ) -> PyResult<Bound<'py, PyArray2<f32>>> {
+        let edges = neural_arrays::pairs(edges)?;
+        let node_features = neural_arrays::rows(node_features)?;
+        let graph = HomogeneousGraph::from_directed_edges(node_count, &edges)
+            .map_err(to_py_neural_error)?;
+        let embedding = py
+            .detach(|| self.encoder.encode_graph(&graph, &node_features))
+            .map_err(to_py_neural_error)?;
+        neural_arrays::matrix(py, embedding.into_inner(), self.encoder.output_dim())
+    }
+
     #[new]
     #[pyo3(signature = (input_dim, hidden_dims=None, epochs=20, learning_rate=0.05, negative_samples=4, seed=0x5A17_9A4E_7F33_C0DE, add_self_loop=true, l2_regularization=1e-5, backend=None))]
     #[allow(clippy::too_many_arguments)]
@@ -8876,6 +9768,33 @@ struct NativeNode2VecEncoder {
 
 #[pymethods]
 impl NativeNode2VecEncoder {
+    #[pyo3(signature = (node_count, edges, edge_weights=None))]
+    fn fit_arrays<'py>(
+        &mut self,
+        py: Python<'py>,
+        node_count: usize,
+        edges: PyReadonlyArray2<'_, usize>,
+        edge_weights: Option<PyReadonlyArray1<'_, f32>>,
+    ) -> PyResult<Bound<'py, PyArray2<f32>>> {
+        let edges = neural_arrays::pairs(edges)?;
+        let edge_weights = edge_weights.as_ref().map(numpy_row_major).transpose()?;
+        let backend = self.encoder.backend().selected.clone();
+        let mut model = Node2VecEncoder::new_with_backend(self.config.clone(), Some(&backend))
+            .map_err(to_py_neural_error)?;
+        let embedding = py
+            .detach(|| model.fit(node_count, &edges, edge_weights.as_deref()))
+            .map_err(to_py_neural_error)?;
+        self.encoder = model;
+        neural_arrays::matrix(py, embedding.into_inner(), self.encoder.output_dim())
+    }
+
+    fn encode_arrays<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f32>>> {
+        let embedding = py
+            .detach(|| self.encoder.encode())
+            .map_err(to_py_neural_error)?;
+        neural_arrays::matrix(py, embedding.into_inner(), self.encoder.output_dim())
+    }
+
     #[new]
     #[pyo3(signature = (dim=16, walk_length=16, walks_per_node=8, window_size=5, epochs=3, learning_rate=0.025, min_learning_rate=0.0001, negative_samples=5, p=1.0, q=1.0, seed=0xA2B2_C2D2_E2F2_1234, l2_regularization=0.0, normalize=true, backend="cpu"))]
     #[allow(clippy::too_many_arguments)]
@@ -9026,6 +9945,35 @@ struct NativeStandaloneNeuralEmbeddingRegressor {
 
 #[pymethods]
 impl NativeStandaloneNeuralEmbeddingRegressor {
+    #[pyo3(signature = (ids, y, dense=None))]
+    fn fit_arrays<'py>(
+        &mut self,
+        py: Python<'py>,
+        ids: PyReadonlyArray1<'_, u64>,
+        y: PyReadonlyArray1<'_, f64>,
+        dense: Option<PyReadonlyArray2<'_, f64>>,
+    ) -> PyResult<()> {
+        let ids = numpy_row_major(&ids)?;
+        let y = numpy_row_major(&y)?;
+        let dense = dense.map(neural_arrays::rows).transpose()?;
+        py.detach(|| self.model.fit(&ids, &y, dense.as_deref()))
+            .map_err(to_py_neural_error)
+    }
+
+    #[pyo3(signature = (ids, dense=None))]
+    fn predict_arrays<'py>(
+        &self,
+        py: Python<'py>,
+        ids: PyReadonlyArray1<'_, u64>,
+        dense: Option<PyReadonlyArray2<'_, f64>>,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let ids = numpy_row_major(&ids)?;
+        let dense = dense.map(neural_arrays::rows).transpose()?;
+        py.detach(|| self.model.predict(&ids, dense.as_deref()))
+            .map_err(to_py_neural_error)
+            .map(|values| values.into_pyarray(py))
+    }
+
     #[new]
     #[pyo3(signature = (dim, fallback="global_mean_vector", random_state=None, support_prior_strength=1.0, n_estimators=80, learning_rate=0.07, max_depth=4, min_samples_leaf=2, min_gain=0.0, backend=None))]
     #[allow(clippy::too_many_arguments)]
@@ -9114,6 +10062,58 @@ struct NativeStandaloneNode2VecRegressor {
 
 #[pymethods]
 impl NativeStandaloneNode2VecRegressor {
+    #[pyo3(signature = (node_count, edges, row_nodes, y, row_targets=None, dense=None, edge_weights=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn fit_arrays<'py>(
+        &mut self,
+        py: Python<'py>,
+        node_count: usize,
+        edges: PyReadonlyArray2<'_, usize>,
+        row_nodes: PyReadonlyArray1<'_, usize>,
+        y: PyReadonlyArray1<'_, f64>,
+        row_targets: Option<PyReadonlyArray1<'_, usize>>,
+        dense: Option<PyReadonlyArray2<'_, f64>>,
+        edge_weights: Option<PyReadonlyArray1<'_, f32>>,
+    ) -> PyResult<()> {
+        let edges = neural_arrays::pairs(edges)?;
+        let row_nodes = numpy_row_major(&row_nodes)?;
+        let y = numpy_row_major(&y)?;
+        let row_targets = row_targets.as_ref().map(numpy_row_major).transpose()?;
+        let dense = dense.map(neural_arrays::rows).transpose()?;
+        let edge_weights = edge_weights.as_ref().map(numpy_row_major).transpose()?;
+        py.detach(|| {
+            self.model.fit(
+                node_count,
+                &edges,
+                edge_weights.as_deref(),
+                &row_nodes,
+                row_targets.as_deref(),
+                dense.as_deref(),
+                &y,
+            )
+        })
+        .map_err(to_py_neural_error)
+    }
+
+    #[pyo3(signature = (row_nodes, row_targets=None, dense=None))]
+    fn predict_arrays<'py>(
+        &self,
+        py: Python<'py>,
+        row_nodes: PyReadonlyArray1<'_, usize>,
+        row_targets: Option<PyReadonlyArray1<'_, usize>>,
+        dense: Option<PyReadonlyArray2<'_, f64>>,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let row_nodes = numpy_row_major(&row_nodes)?;
+        let row_targets = row_targets.as_ref().map(numpy_row_major).transpose()?;
+        let dense = dense.map(neural_arrays::rows).transpose()?;
+        py.detach(|| {
+            self.model
+                .predict(&row_nodes, row_targets.as_deref(), dense.as_deref())
+        })
+        .map_err(to_py_neural_error)
+        .map(|values| values.into_pyarray(py))
+    }
+
     #[new]
     #[pyo3(signature = (dim=16, walk_length=16, walks_per_node=8, window_size=5, epochs=3, learning_rate=0.025, min_learning_rate=0.0001, negative_samples=5, p=1.0, q=1.0, seed=0xA2B2_C2D2_E2F2_1234, l2_regularization=0.0, normalize=true, n_estimators=80, booster_learning_rate=0.07, max_depth=4, min_samples_leaf=2, min_gain=0.0, backend=None))]
     #[allow(clippy::too_many_arguments)]
@@ -9241,6 +10241,62 @@ struct NativeStandaloneGraphSageRegressor {
 
 #[pymethods]
 impl NativeStandaloneGraphSageRegressor {
+    #[pyo3(signature = (node_features, edges, row_nodes, y, row_targets=None, dense=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn fit_arrays<'py>(
+        &mut self,
+        py: Python<'py>,
+        node_features: PyReadonlyArray2<'_, f32>,
+        edges: PyReadonlyArray2<'_, usize>,
+        row_nodes: PyReadonlyArray1<'_, usize>,
+        y: PyReadonlyArray1<'_, f64>,
+        row_targets: Option<PyReadonlyArray1<'_, usize>>,
+        dense: Option<PyReadonlyArray2<'_, f64>>,
+    ) -> PyResult<()> {
+        let node_features = neural_arrays::rows(node_features)?;
+        let edges = neural_arrays::pairs(edges)?;
+        let row_nodes = numpy_row_major(&row_nodes)?;
+        let y = numpy_row_major(&y)?;
+        let row_targets = row_targets.as_ref().map(numpy_row_major).transpose()?;
+        let dense = dense.map(neural_arrays::rows).transpose()?;
+        py.detach(|| {
+            self.model.fit(
+                &node_features,
+                &edges,
+                &row_nodes,
+                row_targets.as_deref(),
+                dense.as_deref(),
+                &y,
+            )
+        })
+        .map_err(to_py_neural_error)
+    }
+
+    #[pyo3(signature = (node_features, row_nodes, row_targets=None, dense=None))]
+    fn predict_arrays<'py>(
+        &self,
+        py: Python<'py>,
+        node_features: PyReadonlyArray2<'_, f32>,
+        row_nodes: PyReadonlyArray1<'_, usize>,
+        row_targets: Option<PyReadonlyArray1<'_, usize>>,
+        dense: Option<PyReadonlyArray2<'_, f64>>,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let node_features = neural_arrays::rows(node_features)?;
+        let row_nodes = numpy_row_major(&row_nodes)?;
+        let row_targets = row_targets.as_ref().map(numpy_row_major).transpose()?;
+        let dense = dense.map(neural_arrays::rows).transpose()?;
+        py.detach(|| {
+            self.model.predict(
+                &node_features,
+                &row_nodes,
+                row_targets.as_deref(),
+                dense.as_deref(),
+            )
+        })
+        .map_err(to_py_neural_error)
+        .map(|values| values.into_pyarray(py))
+    }
+
     #[new]
     #[pyo3(signature = (input_dim, hidden_dims=None, epochs=20, learning_rate=0.05, negative_samples=4, seed=0x5A17_9A4E_7F33_C0DE, add_self_loop=true, l2_regularization=1e-5, n_estimators=80, booster_learning_rate=0.07, max_depth=4, min_samples_leaf=2, min_gain=0.0, backend=None))]
     #[allow(clippy::too_many_arguments)]
@@ -9370,6 +10426,62 @@ struct NativeStandaloneHeteroGraphSageRegressor {
 
 #[pymethods]
 impl NativeStandaloneHeteroGraphSageRegressor {
+    #[pyo3(signature = (node_features, edges, row_nodes, y, row_targets=None, dense=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn fit_arrays<'py>(
+        &mut self,
+        py: Python<'py>,
+        node_features: PyReadonlyArray2<'_, f32>,
+        edges: PyReadonlyArray2<'_, usize>,
+        row_nodes: PyReadonlyArray1<'_, usize>,
+        y: PyReadonlyArray1<'_, f64>,
+        row_targets: Option<PyReadonlyArray1<'_, usize>>,
+        dense: Option<PyReadonlyArray2<'_, f64>>,
+    ) -> PyResult<()> {
+        let node_features = neural_arrays::rows(node_features)?;
+        let edges = neural_arrays::triples(edges)?;
+        let row_nodes = numpy_row_major(&row_nodes)?;
+        let y = numpy_row_major(&y)?;
+        let row_targets = row_targets.as_ref().map(numpy_row_major).transpose()?;
+        let dense = dense.map(neural_arrays::rows).transpose()?;
+        py.detach(|| {
+            self.model.fit(
+                &node_features,
+                &edges,
+                &row_nodes,
+                row_targets.as_deref(),
+                dense.as_deref(),
+                &y,
+            )
+        })
+        .map_err(to_py_neural_error)
+    }
+
+    #[pyo3(signature = (node_features, row_nodes, row_targets=None, dense=None))]
+    fn predict_arrays<'py>(
+        &self,
+        py: Python<'py>,
+        node_features: PyReadonlyArray2<'_, f32>,
+        row_nodes: PyReadonlyArray1<'_, usize>,
+        row_targets: Option<PyReadonlyArray1<'_, usize>>,
+        dense: Option<PyReadonlyArray2<'_, f64>>,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let node_features = neural_arrays::rows(node_features)?;
+        let row_nodes = numpy_row_major(&row_nodes)?;
+        let row_targets = row_targets.as_ref().map(numpy_row_major).transpose()?;
+        let dense = dense.map(neural_arrays::rows).transpose()?;
+        py.detach(|| {
+            self.model.predict(
+                &node_features,
+                &row_nodes,
+                row_targets.as_deref(),
+                dense.as_deref(),
+            )
+        })
+        .map_err(to_py_neural_error)
+        .map(|values| values.into_pyarray(py))
+    }
+
     #[new]
     #[pyo3(signature = (input_dim, relation_count, hidden_dims=None, epochs=20, learning_rate=0.05, negative_samples=4, seed=0x0D1A_2A3B_4C5D_6E7F, l2_regularization=1e-5, n_estimators=80, booster_learning_rate=0.07, max_depth=4, min_samples_leaf=2, min_gain=0.0, backend=None))]
     #[allow(clippy::too_many_arguments)]
@@ -9499,6 +10611,65 @@ struct NativeStandaloneHinSageRegressor {
 
 #[pymethods]
 impl NativeStandaloneHinSageRegressor {
+    #[pyo3(signature = (node_features, node_types, edges, row_nodes, y, row_targets=None, dense=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn fit_arrays<'py>(
+        &mut self,
+        py: Python<'py>,
+        node_features: PyReadonlyArray2<'_, f32>,
+        node_types: PyReadonlyArray1<'_, usize>,
+        edges: PyReadonlyArray2<'_, usize>,
+        row_nodes: PyReadonlyArray1<'_, usize>,
+        y: PyReadonlyArray1<'_, f64>,
+        row_targets: Option<PyReadonlyArray1<'_, usize>>,
+        dense: Option<PyReadonlyArray2<'_, f64>>,
+    ) -> PyResult<()> {
+        let node_features = neural_arrays::rows(node_features)?;
+        let node_types = numpy_row_major(&node_types)?;
+        let edges = neural_arrays::triples(edges)?;
+        let row_nodes = numpy_row_major(&row_nodes)?;
+        let y = numpy_row_major(&y)?;
+        let row_targets = row_targets.as_ref().map(numpy_row_major).transpose()?;
+        let dense = dense.map(neural_arrays::rows).transpose()?;
+        py.detach(|| {
+            self.model.fit(
+                &node_features,
+                &node_types,
+                &edges,
+                &row_nodes,
+                row_targets.as_deref(),
+                dense.as_deref(),
+                &y,
+            )
+        })
+        .map_err(to_py_neural_error)
+    }
+
+    #[pyo3(signature = (node_features, row_nodes, row_targets=None, dense=None))]
+    fn predict_arrays<'py>(
+        &self,
+        py: Python<'py>,
+        node_features: PyReadonlyArray2<'_, f32>,
+        row_nodes: PyReadonlyArray1<'_, usize>,
+        row_targets: Option<PyReadonlyArray1<'_, usize>>,
+        dense: Option<PyReadonlyArray2<'_, f64>>,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let node_features = neural_arrays::rows(node_features)?;
+        let row_nodes = numpy_row_major(&row_nodes)?;
+        let row_targets = row_targets.as_ref().map(numpy_row_major).transpose()?;
+        let dense = dense.map(neural_arrays::rows).transpose()?;
+        py.detach(|| {
+            self.model.predict(
+                &node_features,
+                &row_nodes,
+                row_targets.as_deref(),
+                dense.as_deref(),
+            )
+        })
+        .map_err(to_py_neural_error)
+        .map(|values| values.into_pyarray(py))
+    }
+
     #[new]
     #[pyo3(signature = (input_dim, node_type_count, edge_type_triples, hidden_dims=None, epochs=20, learning_rate=0.05, negative_samples=4, seed=0xA11C_E5A6_5EED_1234, l2_regularization=1e-5, neighbor_samples=None, n_estimators=80, booster_learning_rate=0.07, max_depth=4, min_samples_leaf=2, min_gain=0.0, backend=None))]
     #[allow(clippy::too_many_arguments)]
@@ -9634,6 +10805,31 @@ struct NativeStandaloneNode2VecLinkPredictor {
 
 #[pymethods]
 impl NativeStandaloneNode2VecLinkPredictor {
+    #[pyo3(signature = (node_count, edges, edge_weights=None))]
+    fn fit_arrays<'py>(
+        &mut self,
+        py: Python<'py>,
+        node_count: usize,
+        edges: PyReadonlyArray2<'_, usize>,
+        edge_weights: Option<PyReadonlyArray1<'_, f32>>,
+    ) -> PyResult<()> {
+        let edges = neural_arrays::pairs(edges)?;
+        let edge_weights = edge_weights.as_ref().map(numpy_row_major).transpose()?;
+        py.detach(|| self.model.fit(node_count, &edges, edge_weights.as_deref()))
+            .map_err(to_py_neural_error)
+    }
+
+    fn predict_scores_arrays<'py>(
+        &self,
+        py: Python<'py>,
+        pairs: PyReadonlyArray2<'_, usize>,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let pairs = neural_arrays::pairs(pairs)?;
+        py.detach(|| self.model.predict_scores(&pairs))
+            .map_err(to_py_neural_error)
+            .map(|values| values.into_pyarray(py))
+    }
+
     #[new]
     #[pyo3(signature = (dim=16, walk_length=16, walks_per_node=8, window_size=5, epochs=3, learning_rate=0.025, min_learning_rate=0.0001, negative_samples=5, p=1.0, q=1.0, seed=0xA2B2_C2D2_E2F2_1234, l2_regularization=0.0, normalize=true, backend=None))]
     #[allow(clippy::too_many_arguments)]
@@ -9721,6 +10917,31 @@ struct NativeStandaloneGraphSageLinkPredictor {
 
 #[pymethods]
 impl NativeStandaloneGraphSageLinkPredictor {
+    fn fit_arrays<'py>(
+        &mut self,
+        py: Python<'py>,
+        node_features: PyReadonlyArray2<'_, f32>,
+        edges: PyReadonlyArray2<'_, usize>,
+    ) -> PyResult<()> {
+        let node_features = neural_arrays::rows(node_features)?;
+        let edges = neural_arrays::pairs(edges)?;
+        py.detach(|| self.model.fit(&node_features, &edges))
+            .map_err(to_py_neural_error)
+    }
+
+    fn predict_scores_arrays<'py>(
+        &self,
+        py: Python<'py>,
+        node_features: PyReadonlyArray2<'_, f32>,
+        pairs: PyReadonlyArray2<'_, usize>,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let node_features = neural_arrays::rows(node_features)?;
+        let pairs = neural_arrays::pairs(pairs)?;
+        py.detach(|| self.model.predict_scores(&node_features, &pairs))
+            .map_err(to_py_neural_error)
+            .map(|values| values.into_pyarray(py))
+    }
+
     #[new]
     #[pyo3(signature = (input_dim, hidden_dims=None, epochs=20, learning_rate=0.05, negative_samples=4, seed=0x5A17_9A4E_7F33_C0DE, add_self_loop=true, l2_regularization=1e-5, backend=None))]
     #[allow(clippy::too_many_arguments)]
@@ -9809,6 +11030,31 @@ struct NativeStandaloneHeteroGraphSageLinkPredictor {
 
 #[pymethods]
 impl NativeStandaloneHeteroGraphSageLinkPredictor {
+    fn fit_arrays<'py>(
+        &mut self,
+        py: Python<'py>,
+        node_features: PyReadonlyArray2<'_, f32>,
+        edges: PyReadonlyArray2<'_, usize>,
+    ) -> PyResult<()> {
+        let node_features = neural_arrays::rows(node_features)?;
+        let edges = neural_arrays::triples(edges)?;
+        py.detach(|| self.model.fit(&node_features, &edges))
+            .map_err(to_py_neural_error)
+    }
+
+    fn predict_scores_arrays<'py>(
+        &self,
+        py: Python<'py>,
+        node_features: PyReadonlyArray2<'_, f32>,
+        pairs: PyReadonlyArray2<'_, usize>,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let node_features = neural_arrays::rows(node_features)?;
+        let pairs = neural_arrays::pairs(pairs)?;
+        py.detach(|| self.model.predict_scores(&node_features, &pairs))
+            .map_err(to_py_neural_error)
+            .map(|values| values.into_pyarray(py))
+    }
+
     #[new]
     #[pyo3(signature = (input_dim, relation_count, hidden_dims=None, epochs=20, learning_rate=0.05, negative_samples=4, seed=0x0D1A_2A3B_4C5D_6E7F, l2_regularization=1e-5, backend=None))]
     #[allow(clippy::too_many_arguments)]
@@ -9897,6 +11143,33 @@ struct NativeStandaloneHinSageLinkPredictor {
 
 #[pymethods]
 impl NativeStandaloneHinSageLinkPredictor {
+    fn fit_arrays<'py>(
+        &mut self,
+        py: Python<'py>,
+        node_features: PyReadonlyArray2<'_, f32>,
+        node_types: PyReadonlyArray1<'_, usize>,
+        edges: PyReadonlyArray2<'_, usize>,
+    ) -> PyResult<()> {
+        let node_features = neural_arrays::rows(node_features)?;
+        let node_types = numpy_row_major(&node_types)?;
+        let edges = neural_arrays::triples(edges)?;
+        py.detach(|| self.model.fit(&node_features, &node_types, &edges))
+            .map_err(to_py_neural_error)
+    }
+
+    fn predict_scores_arrays<'py>(
+        &self,
+        py: Python<'py>,
+        node_features: PyReadonlyArray2<'_, f32>,
+        pairs: PyReadonlyArray2<'_, usize>,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let node_features = neural_arrays::rows(node_features)?;
+        let pairs = neural_arrays::pairs(pairs)?;
+        py.detach(|| self.model.predict_scores(&node_features, &pairs))
+            .map_err(to_py_neural_error)
+            .map(|values| values.into_pyarray(py))
+    }
+
     #[new]
     #[pyo3(signature = (input_dim, node_type_count, edge_type_triples, hidden_dims=None, epochs=20, learning_rate=0.05, negative_samples=4, seed=0xA11C_E5A6_5EED_1234, l2_regularization=1e-5, neighbor_samples=None, backend=None))]
     #[allow(clippy::too_many_arguments)]
@@ -9992,6 +11265,77 @@ struct NativeHeteroGraphSageEncoder {
 
 #[pymethods]
 impl NativeHeteroGraphSageEncoder {
+    #[pyo3(signature = (node_count, edges, node_features))]
+    fn fit_arrays<'py>(
+        &mut self,
+        py: Python<'py>,
+        node_count: usize,
+        edges: PyReadonlyArray2<'_, usize>,
+        node_features: PyReadonlyArray2<'_, f32>,
+    ) -> PyResult<Bound<'py, PyArray2<f32>>> {
+        let edges = neural_arrays::triples(edges)?;
+        let node_features = neural_arrays::rows(node_features)?;
+        let typed_edges = edges
+            .into_iter()
+            .map(|(source, target, relation)| HeteroTypedEdge {
+                source,
+                target,
+                relation,
+            })
+            .collect::<Vec<_>>();
+        let graph = HeteroGraph::from_typed_edges(node_count, self.relation_count, &typed_edges)
+            .map_err(to_py_neural_error)?;
+        let mut model = HeteroGraphSageEncoder::new(
+            self.config.clone(),
+            self.encoder.input_dim(),
+            self.relation_count,
+        )
+        .map_err(to_py_neural_error)?;
+        let embedding = py
+            .detach(|| model.fit(&graph, &node_features))
+            .map_err(to_py_neural_error)?;
+        self.encoder = model;
+        neural_arrays::matrix(py, embedding.into_inner(), self.encoder.output_dim())
+    }
+
+    fn encode_arrays<'py>(
+        &self,
+        py: Python<'py>,
+        node_features: PyReadonlyArray2<'_, f32>,
+    ) -> PyResult<Bound<'py, PyArray2<f32>>> {
+        let node_features = neural_arrays::rows(node_features)?;
+        let embedding = py
+            .detach(|| self.encoder.encode(&node_features))
+            .map_err(to_py_neural_error)?;
+        neural_arrays::matrix(py, embedding.into_inner(), self.encoder.output_dim())
+    }
+
+    #[pyo3(signature = (node_count, edges, node_features))]
+    fn encode_graph_arrays<'py>(
+        &self,
+        py: Python<'py>,
+        node_count: usize,
+        edges: PyReadonlyArray2<'_, usize>,
+        node_features: PyReadonlyArray2<'_, f32>,
+    ) -> PyResult<Bound<'py, PyArray2<f32>>> {
+        let edges = neural_arrays::triples(edges)?;
+        let node_features = neural_arrays::rows(node_features)?;
+        let typed_edges = edges
+            .into_iter()
+            .map(|(source, target, relation)| HeteroTypedEdge {
+                source,
+                target,
+                relation,
+            })
+            .collect::<Vec<_>>();
+        let graph = HeteroGraph::from_typed_edges(node_count, self.relation_count, &typed_edges)
+            .map_err(to_py_neural_error)?;
+        let embedding = py
+            .detach(|| self.encoder.encode_graph(&graph, &node_features))
+            .map_err(to_py_neural_error)?;
+        neural_arrays::matrix(py, embedding.into_inner(), self.encoder.output_dim())
+    }
+
     #[new]
     #[pyo3(signature = (input_dim, relation_count, hidden_dims=None, epochs=20, learning_rate=0.05, negative_samples=4, seed=0x0D1A_2A3B_4C5D_6E7F, l2_regularization=1e-5, backend=None))]
     #[allow(clippy::too_many_arguments)]
@@ -10157,6 +11501,110 @@ struct NativeHinSageEncoder {
 
 #[pymethods]
 impl NativeHinSageEncoder {
+    #[pyo3(signature = (node_types, edges, node_features))]
+    fn fit_arrays<'py>(
+        &mut self,
+        py: Python<'py>,
+        node_types: PyReadonlyArray1<'_, usize>,
+        edges: PyReadonlyArray2<'_, usize>,
+        node_features: PyReadonlyArray2<'_, f32>,
+    ) -> PyResult<Bound<'py, PyArray2<f32>>> {
+        let node_types = numpy_row_major(&node_types)?;
+        let edges = neural_arrays::triples(edges)?;
+        let node_features = neural_arrays::rows(node_features)?;
+        let typed_edges = edges
+            .into_iter()
+            .map(|(source, target, relation)| HeteroTypedEdge {
+                source,
+                target,
+                relation,
+            })
+            .collect::<Vec<_>>();
+        let graph = HinSageGraph::from_typed_schema(
+            node_types.into_owned(),
+            self.node_type_count,
+            self.edge_type_triples.len(),
+            self.edge_type_triples.clone(),
+            typed_edges,
+        )
+        .map_err(to_py_neural_error)?;
+        let mut model = HinSageEncoder::new(
+            self.config.clone(),
+            self.encoder.input_dim(),
+            self.node_type_count,
+            self.edge_type_triples.clone(),
+        )
+        .map_err(to_py_neural_error)?;
+        let embedding = py
+            .detach(|| model.fit(&graph, &node_features))
+            .map_err(to_py_neural_error)?;
+        self.encoder = model;
+        neural_arrays::matrix(py, embedding.into_inner(), self.encoder.output_dim())
+    }
+
+    fn encode_arrays<'py>(
+        &self,
+        py: Python<'py>,
+        node_features: PyReadonlyArray2<'_, f32>,
+    ) -> PyResult<Bound<'py, PyArray2<f32>>> {
+        let node_features = neural_arrays::rows(node_features)?;
+        let embedding = py
+            .detach(|| self.encoder.encode(&node_features))
+            .map_err(to_py_neural_error)?;
+        neural_arrays::matrix(py, embedding.into_inner(), self.encoder.output_dim())
+    }
+
+    #[pyo3(signature = (node_types, edges, node_features))]
+    fn encode_graph_arrays<'py>(
+        &self,
+        py: Python<'py>,
+        node_types: PyReadonlyArray1<'_, usize>,
+        edges: PyReadonlyArray2<'_, usize>,
+        node_features: PyReadonlyArray2<'_, f32>,
+    ) -> PyResult<Bound<'py, PyArray2<f32>>> {
+        let node_types = numpy_row_major(&node_types)?;
+        let edges = neural_arrays::triples(edges)?;
+        let node_features = neural_arrays::rows(node_features)?;
+        let typed_edges = edges
+            .into_iter()
+            .map(|(source, target, relation)| HeteroTypedEdge {
+                source,
+                target,
+                relation,
+            })
+            .collect::<Vec<_>>();
+        let graph = HinSageGraph::from_typed_schema(
+            node_types.into_owned(),
+            self.node_type_count,
+            self.edge_type_triples.len(),
+            self.edge_type_triples.clone(),
+            typed_edges,
+        )
+        .map_err(to_py_neural_error)?;
+        let embedding = py
+            .detach(|| self.encoder.encode_graph(&graph, &node_features))
+            .map_err(to_py_neural_error)?;
+        neural_arrays::matrix(py, embedding.into_inner(), self.encoder.output_dim())
+    }
+
+    fn link_embeddings_arrays<'py>(
+        &self,
+        py: Python<'py>,
+        embeddings: PyReadonlyArray2<'_, f32>,
+        pairs: PyReadonlyArray2<'_, usize>,
+    ) -> PyResult<Bound<'py, PyArray2<f32>>> {
+        let embeddings = neural_arrays::rows(embeddings)?;
+        let pairs = neural_arrays::pairs(pairs)?;
+        let values = py
+            .detach(|| self.encoder.link_embeddings(&embeddings, &pairs))
+            .map_err(to_py_neural_error)?;
+        neural_arrays::matrix(
+            py,
+            values,
+            embeddings.first().map_or(0, |row| row.len()) * 4,
+        )
+    }
+
     #[new]
     #[pyo3(signature = (input_dim, node_type_count, edge_type_triples, hidden_dims=None, epochs=20, learning_rate=0.05, negative_samples=4, seed=0xA11C_E5A6_5EED_1234, l2_regularization=1e-5, neighbor_samples=None, backend=None))]
     #[allow(clippy::too_many_arguments)]
@@ -10891,6 +12339,32 @@ fn prob_pinball_loss_value(
 }
 
 #[pyfunction]
+#[pyo3(signature = (actual, prediction, quantile, backend=None, sample_weight=None))]
+fn prob_pinball_loss_arrays(
+    py: Python<'_>,
+    actual: PyReadonlyArray1<'_, f64>,
+    prediction: PyReadonlyArray1<'_, f64>,
+    quantile: f64,
+    backend: Option<&str>,
+    sample_weight: Option<PyReadonlyArray1<'_, f64>>,
+) -> PyResult<f64> {
+    let actual = numpy_row_major(&actual)?;
+    let prediction = numpy_row_major(&prediction)?;
+    let weights = sample_weight.as_ref().map(numpy_row_major).transpose()?;
+    let backend = backend.map(str::to_owned);
+    py.detach(move || {
+        core_prob_pinball_loss(
+            &actual,
+            &prediction,
+            quantile,
+            backend.as_deref(),
+            weights.as_deref(),
+        )
+    })
+    .map_err(to_py_value_error)
+}
+
+#[pyfunction]
 #[pyo3(signature = (actual, lower, upper, backend=None, sample_weight=None))]
 fn prob_interval_coverage_value(
     py: Python<'_>,
@@ -10914,6 +12388,33 @@ fn prob_interval_coverage_value(
 }
 
 #[pyfunction]
+#[pyo3(signature = (actual, lower, upper, backend=None, sample_weight=None))]
+fn prob_interval_coverage_arrays(
+    py: Python<'_>,
+    actual: PyReadonlyArray1<'_, f64>,
+    lower: PyReadonlyArray1<'_, f64>,
+    upper: PyReadonlyArray1<'_, f64>,
+    backend: Option<&str>,
+    sample_weight: Option<PyReadonlyArray1<'_, f64>>,
+) -> PyResult<f64> {
+    let actual = numpy_row_major(&actual)?;
+    let lower = numpy_row_major(&lower)?;
+    let upper = numpy_row_major(&upper)?;
+    let weights = sample_weight.as_ref().map(numpy_row_major).transpose()?;
+    let backend = backend.map(str::to_owned);
+    py.detach(move || {
+        core_prob_interval_coverage(
+            &actual,
+            &lower,
+            &upper,
+            backend.as_deref(),
+            weights.as_deref(),
+        )
+    })
+    .map_err(to_py_value_error)
+}
+
+#[pyfunction]
 #[pyo3(signature = (lower, upper, backend=None, sample_weight=None))]
 fn prob_mean_interval_width_value(
     py: Python<'_>,
@@ -10925,6 +12426,25 @@ fn prob_mean_interval_width_value(
     let backend = backend.map(str::to_owned);
     py.detach(move || {
         core_prob_mean_interval_width(&lower, &upper, backend.as_deref(), sample_weight.as_deref())
+    })
+    .map_err(to_py_value_error)
+}
+
+#[pyfunction]
+#[pyo3(signature = (lower, upper, backend=None, sample_weight=None))]
+fn prob_mean_interval_width_arrays(
+    py: Python<'_>,
+    lower: PyReadonlyArray1<'_, f64>,
+    upper: PyReadonlyArray1<'_, f64>,
+    backend: Option<&str>,
+    sample_weight: Option<PyReadonlyArray1<'_, f64>>,
+) -> PyResult<f64> {
+    let lower = numpy_row_major(&lower)?;
+    let upper = numpy_row_major(&upper)?;
+    let weights = sample_weight.as_ref().map(numpy_row_major).transpose()?;
+    let backend = backend.map(str::to_owned);
+    py.detach(move || {
+        core_prob_mean_interval_width(&lower, &upper, backend.as_deref(), weights.as_deref())
     })
     .map_err(to_py_value_error)
 }
@@ -10945,6 +12465,30 @@ fn prob_brier_score_value(
             &probabilities,
             backend.as_deref(),
             sample_weight.as_deref(),
+        )
+    })
+    .map_err(to_py_value_error)
+}
+
+#[pyfunction]
+#[pyo3(signature = (targets, probabilities, backend=None, sample_weight=None))]
+fn prob_brier_score_arrays(
+    py: Python<'_>,
+    targets: PyReadonlyArray1<'_, f64>,
+    probabilities: PyReadonlyArray1<'_, f64>,
+    backend: Option<&str>,
+    sample_weight: Option<PyReadonlyArray1<'_, f64>>,
+) -> PyResult<f64> {
+    let targets = numpy_row_major(&targets)?;
+    let probabilities = numpy_row_major(&probabilities)?;
+    let weights = sample_weight.as_ref().map(numpy_row_major).transpose()?;
+    let backend = backend.map(str::to_owned);
+    py.detach(move || {
+        core_prob_brier_score(
+            &targets,
+            &probabilities,
+            backend.as_deref(),
+            weights.as_deref(),
         )
     })
     .map_err(to_py_value_error)
@@ -11095,6 +12639,36 @@ fn prob_split_conformal_residual_quantile_value(
 
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
+fn prob_split_conformal_residual_quantile_arrays(
+    py: Python<'_>,
+    actual: PyReadonlyArray1<'_, f64>,
+    prediction: PyReadonlyArray1<'_, f64>,
+    alpha: f64,
+    train_end_exclusive: usize,
+    calibration_start: usize,
+    calibration_end_exclusive: usize,
+    test_start: usize,
+) -> PyResult<f64> {
+    let actual = numpy_row_major(&actual)?;
+    let prediction = numpy_row_major(&prediction)?;
+    py.detach(|| {
+        core_prob_split_conformal_residual_quantile(
+            &actual,
+            &prediction,
+            alpha,
+            CoreProbSplitOrder {
+                train_end_exclusive,
+                calibration_start,
+                calibration_end_exclusive,
+                test_start,
+            },
+        )
+    })
+    .map_err(to_py_value_error)
+}
+
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
 fn prob_weighted_conformal_residual_quantile_value(
     actual: Vec<f64>,
     prediction: Vec<f64>,
@@ -11117,6 +12691,39 @@ fn prob_weighted_conformal_residual_quantile_value(
             test_start,
         },
     )
+    .map_err(to_py_value_error)
+}
+
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn prob_weighted_conformal_residual_quantile_arrays(
+    py: Python<'_>,
+    actual: PyReadonlyArray1<'_, f64>,
+    prediction: PyReadonlyArray1<'_, f64>,
+    weights: PyReadonlyArray1<'_, f64>,
+    alpha: f64,
+    train_end_exclusive: usize,
+    calibration_start: usize,
+    calibration_end_exclusive: usize,
+    test_start: usize,
+) -> PyResult<f64> {
+    let actual = numpy_row_major(&actual)?;
+    let prediction = numpy_row_major(&prediction)?;
+    let weights = numpy_row_major(&weights)?;
+    py.detach(|| {
+        core_prob_weighted_conformal_residual_quantile(
+            &actual,
+            &prediction,
+            &weights,
+            alpha,
+            CoreProbSplitOrder {
+                train_end_exclusive,
+                calibration_start,
+                calibration_end_exclusive,
+                test_start,
+            },
+        )
+    })
     .map_err(to_py_value_error)
 }
 
@@ -12244,6 +13851,38 @@ fn validate_n_threads(n_threads: Option<usize>) -> PyResult<()> {
     Ok(())
 }
 
+// Keep small prediction calls on the caller: all core row paths below this
+// threshold are serial, as is finite-value validation below 16,384 elements.
+fn run_prediction_with_optional_threads<T, F>(
+    n_threads: Option<usize>,
+    rows: usize,
+    elements: usize,
+    work_per_row: usize,
+    f: F,
+) -> Result<T, CartoBoostError>
+where
+    T: Send,
+    F: FnOnce() -> Result<T, CartoBoostError> + Send,
+{
+    if rows < 1024 && elements < 16_384 && rows.saturating_mul(work_per_row.max(1)) < 16_384 {
+        f()
+    } else {
+        run_with_optional_threads(n_threads, f)
+    }
+}
+
+fn rows_into_numpy<'py>(
+    py: Python<'py>,
+    rows: Vec<Vec<f64>>,
+    columns: usize,
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let shape = (rows.len(), columns);
+    let values = rows.into_iter().flatten().collect();
+    Array2::from_shape_vec(shape, values)
+        .map(|array| array.into_pyarray(py))
+        .map_err(|error| PyRuntimeError::new_err(format!("invalid native output shape: {error}")))
+}
+
 fn run_with_optional_threads<T, F>(n_threads: Option<usize>, f: F) -> Result<T, CartoBoostError>
 where
     T: Send,
@@ -12254,10 +13893,13 @@ where
     // application with a single worker before CartoBoost is imported.
     // Constructing a cached pool here makes the default genuinely use the
     // machine’s available CPUs while preserving an explicit user override.
+    static DEFAULT_THREADS: OnceLock<usize> = OnceLock::new();
     let n_threads = n_threads.unwrap_or_else(|| {
-        std::thread::available_parallelism()
-            .map(|count| count.get())
-            .unwrap_or(1)
+        *DEFAULT_THREADS.get_or_init(|| {
+            std::thread::available_parallelism()
+                .map(|count| count.get())
+                .unwrap_or(1)
+        })
     });
     static THREAD_POOLS: OnceLock<Mutex<HashMap<usize, Arc<ThreadPool>>>> = OnceLock::new();
     let pools = THREAD_POOLS.get_or_init(|| Mutex::new(HashMap::new()));
@@ -12482,7 +14124,7 @@ fn dataset_from_arrays(
     let shape = x.shape();
     let rows = shape[0];
     let cols = shape[1];
-    let values = x.as_slice()?.to_vec();
+    let values = numpy_row_major(&x)?.into_owned();
     let dataset = Dataset::from_flat(rows, cols, values).map_err(to_py_value_error)?;
     let sparse_sets = encoded_sparse_sets(rows, sparse_offsets, sparse_ids)?
         .into_iter()
@@ -12989,6 +14631,40 @@ fn round_half_even(value: f64, precision: usize) -> f64 {
     sign * rounded / factor
 }
 
+fn json_value_to_python(py: Python<'_>, value: Value) -> PyResult<Py<PyAny>> {
+    match value {
+        Value::Null => Ok(py.None()),
+        Value::Bool(value) => value.into_py_any(py),
+        Value::String(value) => value.into_py_any(py),
+        Value::Number(value) => {
+            if let Some(value) = value.as_i64() {
+                value.into_py_any(py)
+            } else if let Some(value) = value.as_u64() {
+                value.into_py_any(py)
+            } else {
+                value
+                    .as_f64()
+                    .ok_or_else(|| PyRuntimeError::new_err("invalid JSON number"))?
+                    .into_py_any(py)
+            }
+        }
+        Value::Array(values) => {
+            let output = PyList::empty(py);
+            for value in values {
+                output.append(json_value_to_python(py, value)?)?;
+            }
+            Ok(output.into_any().unbind())
+        }
+        Value::Object(values) => {
+            let output = PyDict::new(py);
+            for (key, value) in values {
+                output.set_item(key, json_value_to_python(py, value)?)?;
+            }
+            Ok(output.into_any().unbind())
+        }
+    }
+}
+
 fn to_py_value_error(err: CartoBoostError) -> PyErr {
     PyValueError::new_err(err.to_string())
 }
@@ -13031,6 +14707,18 @@ fn to_py_geostats_error(err: cartoboost_geostats::GeostatsError) -> PyErr {
     PyValueError::new_err(err.to_string())
 }
 
+// NumPy's as_slice accepts both C and Fortran contiguous storage. Native
+// matrix consumers use logical row-major order, regardless of input strides.
+fn numpy_row_major<'a, T: Element + Clone, D: Dimension>(
+    array: &'a PyReadonlyArray<'_, T, D>,
+) -> PyResult<Cow<'a, [T]>> {
+    if array.is_c_contiguous() {
+        Ok(Cow::Borrowed(array.as_slice()?))
+    } else {
+        Ok(Cow::Owned(array.as_array().iter().cloned().collect()))
+    }
+}
+
 fn coords_from_array(coords: PyReadonlyArray2<'_, f64>) -> PyResult<Vec<[f64; 2]>> {
     let shape = coords.shape();
     if shape.len() != 2 || shape[1] != 2 {
@@ -13038,7 +14726,7 @@ fn coords_from_array(coords: PyReadonlyArray2<'_, f64>) -> PyResult<Vec<[f64; 2]
             "coords must be a two-column array with shape (n, 2)",
         ));
     }
-    let values = coords.as_slice()?;
+    let values = numpy_row_major(&coords)?;
     // Shape validation guarantees complete rows; chunks supports Rust 1.85.
     Ok(values
         .chunks(shape[1])
@@ -13051,12 +14739,12 @@ fn rows_from_numpy_2d<T: Element + Clone>(
     name: &str,
 ) -> PyResult<Vec<Vec<T>>> {
     let shape = array.shape();
-    if shape.len() != 2 {
+    if shape.len() != 2 || shape[1] == 0 {
         return Err(PyValueError::new_err(format!(
-            "{name} must be two-dimensional"
+            "{name} must be two-dimensional with a nonzero feature width"
         )));
     }
-    let values = array.as_slice()?;
+    let values = numpy_row_major(&array)?;
     Ok(values
         .chunks_exact(shape[1])
         .map(|row| row.to_vec())
@@ -13068,13 +14756,15 @@ fn rows_from_numpy_3d<T: Element + Clone>(
     name: &str,
 ) -> PyResult<Vec<Vec<Vec<T>>>> {
     let shape = array.shape();
-    if shape.len() != 3 {
+    if shape.len() != 3 || shape[1] == 0 || shape[2] == 0 {
         return Err(PyValueError::new_err(format!(
-            "{name} must be three-dimensional"
+            "{name} must be three-dimensional with nonzero node and feature widths"
         )));
     }
-    let values = array.as_slice()?;
-    let row_width = shape[1] * shape[2];
+    let values = numpy_row_major(&array)?;
+    let row_width = shape[1]
+        .checked_mul(shape[2])
+        .ok_or_else(|| PyValueError::new_err(format!("{name} dimensions are too large")))?;
     Ok(values
         .chunks_exact(row_width)
         .map(|time| {
@@ -13092,7 +14782,7 @@ fn lanes_from_array(lanes: PyReadonlyArray2<'_, f64>) -> PyResult<Vec<[f64; 4]>>
             "directed lanes must have shape (n, 4): [O_LAT, O_LNG, D_LAT, D_LNG]",
         ));
     }
-    let values = lanes.as_slice()?;
+    let values = numpy_row_major(&lanes)?;
     // Shape validation guarantees complete rows; chunks supports Rust 1.85.
     Ok(values
         .chunks(shape[1])
@@ -13287,6 +14977,24 @@ fn deep_event_outcome_fit_value(
 }
 
 #[pyfunction]
+#[pyo3(signature = (features, labels, backend=None))]
+fn deep_event_outcome_fit_arrays(
+    py: Python<'_>,
+    features: PyReadonlyArray2<'_, f64>,
+    labels: PyReadonlyArray1<'_, f64>,
+    backend: Option<&str>,
+) -> PyResult<String> {
+    let features = rows_from_numpy_2d(features, "features")?;
+    let labels = numpy_row_major(&labels)?;
+    let backend = backend.map(str::to_owned);
+    py.detach(move || {
+        let artifact = core_deep_event_outcome_fit(&features, &labels, backend.as_deref())
+            .map_err(to_py_neural_error)?;
+        serde_json::to_string(&artifact).map_err(to_py_json_error)
+    })
+}
+
+#[pyfunction]
 fn deep_event_outcome_predict_value(
     py: Python<'_>,
     artifact_json: &str,
@@ -13300,6 +15008,27 @@ fn deep_event_outcome_predict_value(
             core_deep_event_outcome_predict(&artifact, &features).map_err(to_py_neural_error)?;
         serde_json::to_string(&predictions).map_err(to_py_json_error)
     })
+}
+
+#[pyfunction]
+fn deep_event_outcome_predict_arrays<'py>(
+    py: Python<'py>,
+    artifact_json: &str,
+    features: PyReadonlyArray2<'_, f64>,
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    let artifact: DeepEventArtifact =
+        serde_json::from_str(artifact_json).map_err(to_py_json_error)?;
+    let features = rows_from_numpy_2d(features, "features")?;
+    let probabilities = py.detach(move || {
+        core_deep_event_outcome_predict(&artifact, &features)
+            .map(|rows| {
+                rows.into_iter()
+                    .map(|row| row.calibrated_probability)
+                    .collect::<Vec<_>>()
+            })
+            .map_err(to_py_neural_error)
+    })?;
+    Ok(probabilities.into_pyarray(py))
 }
 
 #[pyfunction]
@@ -14208,6 +15937,18 @@ fn parse_graph_transformer_profile(value: &str) -> PyResult<CoreGraphTransformer
 // from re-enabling the GIL on import.
 #[pymodule(gil_used = false)]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(
+        prob_split_conformal_residual_quantile_arrays,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        prob_weighted_conformal_residual_quantile_arrays,
+        m
+    )?)?;
+    deep_arrays::register(m)?;
+    metrics::register(m)?;
+    causal_arrays::register(m)?;
+    regime::register(m)?;
     m.add_function(wrap_pyfunction!(model_manifest_json, m)?)?;
     m.add_class::<NativeCartoBoostRegressor>()?;
     m.add_class::<NativeQuantileRegressorSet>()?;
@@ -14225,7 +15966,9 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<NativeSpatialDurbinRegressor>()?;
     m.add_class::<NativeSpatialTwoStageLeastSquares>()?;
     m.add_function(wrap_pyfunction!(categorical_fit_transform, m)?)?;
+    m.add_function(wrap_pyfunction!(categorical_fit_transform_arrays, m)?)?;
     m.add_function(wrap_pyfunction!(categorical_transform, m)?)?;
+    m.add_function(wrap_pyfunction!(categorical_transform_arrays, m)?)?;
     m.add_function(wrap_pyfunction!(validate_feature_schema_json, m)?)?;
     m.add_function(wrap_pyfunction!(geo_spatial_block_cv, m)?)?;
     m.add_function(wrap_pyfunction!(geo_buffered_spatial_cv, m)?)?;
@@ -14306,6 +16049,10 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     m.add_function(wrap_pyfunction!(utility_series_forecast, m)?)?;
     m.add_function(wrap_pyfunction!(graph_compute_directional_features, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        neural_arrays::graph_compute_directional_features_arrays,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(graph_validate_directed_metapath, m)?)?;
     m.add_function(wrap_pyfunction!(
         graph_materialize_source_target_pair_nodes,
@@ -14379,9 +16126,13 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
     m.add_function(wrap_pyfunction!(prob_pinball_loss_value, m)?)?;
+    m.add_function(wrap_pyfunction!(prob_pinball_loss_arrays, m)?)?;
     m.add_function(wrap_pyfunction!(prob_interval_coverage_value, m)?)?;
+    m.add_function(wrap_pyfunction!(prob_interval_coverage_arrays, m)?)?;
     m.add_function(wrap_pyfunction!(prob_mean_interval_width_value, m)?)?;
+    m.add_function(wrap_pyfunction!(prob_mean_interval_width_arrays, m)?)?;
     m.add_function(wrap_pyfunction!(prob_brier_score_value, m)?)?;
+    m.add_function(wrap_pyfunction!(prob_brier_score_arrays, m)?)?;
     m.add_function(wrap_pyfunction!(prob_crps_approximation_value, m)?)?;
     m.add_function(wrap_pyfunction!(prob_weighted_interval_score_value, m)?)?;
     m.add_function(wrap_pyfunction!(prob_pit_bins_value, m)?)?;
@@ -14486,6 +16237,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(weighted_overlay, m)?)?;
     m.add_function(wrap_pyfunction!(forecast_parse_frequency, m)?)?;
     m.add_function(wrap_pyfunction!(forecast_evaluate_metrics, m)?)?;
+    m.add_function(wrap_pyfunction!(forecast_evaluate_metrics_arrays, m)?)?;
     m.add_function(wrap_pyfunction!(graph_st_available_backends_value, m)?)?;
     m.add_function(wrap_pyfunction!(geostats_empirical_semivariogram_value, m)?)?;
     m.add_function(wrap_pyfunction!(
@@ -14497,7 +16249,9 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(deep_response_curve_fit_value, m)?)?;
     m.add_function(wrap_pyfunction!(deep_response_curve_predict_value, m)?)?;
     m.add_function(wrap_pyfunction!(deep_event_outcome_fit_value, m)?)?;
+    m.add_function(wrap_pyfunction!(deep_event_outcome_fit_arrays, m)?)?;
     m.add_function(wrap_pyfunction!(deep_event_outcome_predict_value, m)?)?;
+    m.add_function(wrap_pyfunction!(deep_event_outcome_predict_arrays, m)?)?;
     m.add_function(wrap_pyfunction!(deep_directional_pair_predict_value, m)?)?;
     m.add_function(wrap_pyfunction!(deep_directional_pair_fit_value, m)?)?;
     m.add_function(wrap_pyfunction!(
@@ -14553,4 +16307,42 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod prediction_dispatch_tests {
+    use super::*;
+
+    #[test]
+    fn ranker_dispatch_boundary_installs_requested_pool_consistently() {
+        let caller = ThreadPoolBuilder::new().num_threads(1).build().unwrap();
+        caller.install(|| {
+            for (rows, work_per_row, expected_threads) in [
+                (1, 128 * 4, 1),
+                (31, 128 * 4, 1),
+                (32, 128 * 4, 2),
+                (33, 128 * 4, 2),
+                (32, 128, 1),
+                (32, 16 * 4, 1),
+                (1024, 1, 2),
+            ] {
+                let actual = run_prediction_with_optional_threads(
+                    Some(2),
+                    rows,
+                    rows * 4,
+                    work_per_row,
+                    || Ok(rayon::current_num_threads()),
+                )
+                .unwrap();
+                assert_eq!(actual, expected_threads);
+            }
+            assert_eq!(
+                run_prediction_with_optional_threads(Some(1), 32, 128, 128 * 4, || {
+                    Ok(rayon::current_num_threads())
+                })
+                .unwrap(),
+                1
+            );
+        });
+    }
 }

@@ -13,6 +13,7 @@ import {
 } from './numberFormat';
 import MarketStructureExplorer, {marketExplorerDataFromPayload, type MarketStructureExplorerPayload} from '../MarketStructureExplorer';
 import styles from './styles.module.css';
+import {ForecastWorkerPool, runIsolatedForecast} from './forecastWorker';
 
 type ParsedTable = {
   columns: string[];
@@ -99,6 +100,8 @@ type WasmModule = {
   deepDirectionalPairPredict?: (rows: unknown) => unknown;
   deepServiceResidualFit?: (rows: unknown, backend?: string) => unknown;
   deepServiceResidualPredict?: (artifact: unknown, rows: unknown) => unknown;
+  deepInvertedTemporalFit?: (y: unknown, lookback: number, backend?: string) => unknown;
+  deepInvertedTemporalPredict?: (artifact: unknown, horizon: number, crossEntity: boolean) => unknown;
   deepTemporalEntityFit?: (y: unknown, lookback: number, horizon: number) => unknown;
   deepTemporalEntityPredict?: (artifact: unknown, horizon: number) => unknown;
   deepConditionalFlowFit?: (
@@ -485,7 +488,7 @@ const deepModelCatalog: DeepModelDefinition[] = [
   {id: 'EventOutcomeModel', label: 'Event outcome model', family: 'Decision', description: 'Scores event likelihood from structured operational features.', input: 'Feature rows + labels', output: 'Outcome probabilities', docsPath: '/docs/user-guide/deep-models/cartoboost-event-outcome-model'},
   {id: 'ServiceTimeResidualModel', label: 'Service-time residual model', family: 'Decision', description: 'Estimates residual service-time adjustments from route context.', input: 'Service rows', output: 'Residual corrections', docsPath: '/docs/user-guide/deep-models/cartoboost-service-time-residual-model'},
   {id: 'ChoiceSetTransformer', label: 'Choice-set transformer', family: 'Decision', description: 'Scores competing candidate actions within each decision set.', input: 'Candidate sets', output: 'Choice probabilities', docsPath: '/docs/user-guide/deep-models/cartoboost-choice-set-transformer'},
-  {id: 'RegimeMoEForecaster', label: 'Regime MoE forecaster', family: 'Forecasting', description: 'Routes observations across recurring, sparse, volatile, and hub-like regimes.', input: 'Context features + target', output: 'Expert mixture forecast', docsPath: '/docs/user-guide/deep-models/cartoboost-regime-moe-forecaster'},
+  {id: 'RegimeMoEForecaster', label: 'Regime MoE forecaster', family: 'Forecasting', description: 'Fits six expert features and reports their measured training error and usage.', input: 'Context features + target', output: 'Expert mixture forecast', docsPath: '/docs/user-guide/deep-models/cartoboost-regime-moe-forecaster'},
   {id: 'ConstrainedDecisionOptimizer', label: 'Constrained decision optimizer', family: 'Decision', description: 'Selects candidates subject to declared operational constraints.', input: 'Candidates + constraints', output: 'Selected actions', docsPath: '/docs/user-guide/deep-models/cartoboost-constrained-decision-optimizer'},
 ];
 
@@ -523,8 +526,8 @@ export function RegressionModelExample({
   return (
     <section
       style={{
-        border: '1px solid var(--ifm-color-emphasis-300)',
-        borderRadius: 8,
+        border: '2px solid var(--cb-border)',
+        borderRadius: 0,
         padding: '1rem',
         margin: '1rem 0',
       }}
@@ -580,8 +583,8 @@ export function DeepModelWasmExample({model}: {model: string}): React.ReactEleme
   return (
     <section
       style={{
-        border: '1px solid var(--ifm-color-emphasis-300)',
-        borderRadius: 8,
+        border: '2px solid var(--cb-border)',
+        borderRadius: 0,
         padding: '1rem',
         margin: '1rem 0',
       }}
@@ -636,7 +639,7 @@ export function MarketStructureWasmExample(): React.ReactElement {
   }, [wasmBinaryUrl, wasmJsUrl]);
 
   return (
-    <section style={{border: '1px solid var(--ifm-color-emphasis-300)', borderRadius: 8, padding: '1rem', margin: '1rem 0'}}>
+    <section style={{border: '2px solid var(--cb-border)', borderRadius: 0, padding: '1rem', margin: '1rem 0'}}>
       <div style={{display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap'}}>
         <div>
           <strong>Learned market structure explorer</strong>
@@ -751,12 +754,15 @@ function LSTTNH3ForecastDebugger({result}: {result: LSTTNDebuggerResult}): React
     if (!mapContainer.current || cells.length === 0) return undefined;
     let cancelled = false;
     void (async () => {
-      const [{default: maplibregl}, {MapboxOverlay}, {PolygonLayer, ArcLayer}] = await Promise.all([
+      const [maplibregl, {MapboxOverlay}, {PolygonLayer, ArcLayer}] = await Promise.all([
         import('maplibre-gl'),
         import('@deck.gl/mapbox'),
         import('@deck.gl/layers'),
       ]);
       if (cancelled || !mapContainer.current) return;
+      maplibregl.setWorkerUrl(
+        new URL('maplibre-gl/dist/maplibre-gl-worker.mjs', import.meta.url).href,
+      );
       const map = new maplibregl.Map({
         attributionControl: false,
         center: [-73.95, 40.73],
@@ -1280,9 +1286,15 @@ function runDeepModelWasmExample(wasmModule: WasmModule, model: string): unknown
       }
       return wasmModule.runGraphForecast(deepGraphForecastRequest());
     }
-    case 'TemporalEntityTransformer':
     case 'InvertedTemporalTransformer':
     case 'InvertedEntityTransformer': {
+      if (!wasmModule.deepInvertedTemporalFit || !wasmModule.deepInvertedTemporalPredict) {
+        throw new Error('CartoBoost inverted temporal Wasm exports are not available from this bundle.');
+      }
+      const artifact = wasmModule.deepInvertedTemporalFit(deepTemporalPanel(), 48, 'cpu');
+      return wasmModule.deepInvertedTemporalPredict(artifact, 12, true);
+    }
+    case 'TemporalEntityTransformer': {
       if (!wasmModule.deepTemporalEntityFit || !wasmModule.deepTemporalEntityPredict) {
         throw new Error('CartoBoost temporal entity Wasm exports are not available from this bundle.');
       }
@@ -1802,8 +1814,8 @@ export function ForecastModelExample({
   return (
     <section
       style={{
-        border: '1px solid var(--ifm-color-emphasis-300)',
-        borderRadius: 8,
+        border: '2px solid var(--cb-border)',
+        borderRadius: 0,
         padding: '1rem',
         margin: '1rem 0',
       }}
@@ -1892,8 +1904,8 @@ export function NeuralModelExample({pipeline, title}: NeuralModelExampleProps): 
   return (
     <section
       style={{
-        border: '1px solid var(--ifm-color-emphasis-300)',
-        borderRadius: 8,
+        border: '2px solid var(--cb-border)',
+        borderRadius: 0,
         padding: '1rem',
         margin: '1rem 0',
       }}
@@ -1951,8 +1963,8 @@ export function GeostatisticsModelExample({title}: {title: string}): React.React
   return (
     <section
       style={{
-        border: '1px solid var(--ifm-color-emphasis-300)',
-        borderRadius: 8,
+        border: '2px solid var(--cb-border)',
+        borderRadius: 0,
         padding: '1rem',
         margin: '1rem 0',
       }}
@@ -2028,8 +2040,8 @@ export function GeoFeatureExample({title}: {title: string}): React.ReactElement 
   return (
     <section
       style={{
-        border: '1px solid var(--ifm-color-emphasis-300)',
-        borderRadius: 8,
+        border: '2px solid var(--cb-border)',
+        borderRadius: 0,
         padding: '1rem',
         margin: '1rem 0',
       }}
@@ -2242,8 +2254,8 @@ export function ForecastModelRosterExample(): React.ReactElement {
   return (
     <section
       style={{
-        border: '1px solid var(--ifm-color-emphasis-300)',
-        borderRadius: 8,
+        border: '2px solid var(--cb-border)',
+        borderRadius: 0,
         padding: '1rem',
         margin: '1rem 0',
       }}
@@ -2547,7 +2559,7 @@ function ForecastExampleChart({records, table}: {records: ForecastRecord[]; tabl
   return (
     <figure style={{margin: '1rem 0'}}>
       <figcaption style={{fontWeight: 700, marginBottom: '0.35rem'}}>Recent actuals and browser forecast</figcaption>
-      <div style={{overflowX: 'auto', border: '1px solid var(--ifm-color-emphasis-200)', borderRadius: 8, padding: '0.5rem'}}>
+      <div style={{overflowX: 'auto', border: '1px solid var(--ifm-color-emphasis-200)', borderRadius: 0, padding: '0.5rem'}}>
         <svg
           role="img"
           aria-label="Recent actual values and forecast path"
@@ -2663,7 +2675,7 @@ function SpatialForecastExampleDiagnostics({records}: {records: ForecastRecord[]
       <h3 style={{fontSize: '1rem', marginBottom: '0.5rem'}}>Spatial forecast diagnostics</h3>
       <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '0.5rem'}}>
         {rows.map(([label, value]) => (
-          <div key={label} style={{border: '1px solid var(--ifm-color-emphasis-200)', borderRadius: 8, padding: '0.75rem'}}>
+          <div key={label} style={{border: '1px solid var(--ifm-color-emphasis-200)', borderRadius: 0, padding: '0.75rem'}}>
             <strong style={{display: 'block', fontSize: '0.85rem'}}>{label}</strong>
             <span>{value}</span>
           </div>
@@ -3703,11 +3715,11 @@ export default function ModelingLabClient(): React.ReactElement {
     <main className={styles.shell}>
       <section className={styles.header}>
         <div>
-          <span className={styles.eyebrow}>Browser-local modeling lab</span>
-          <h1>Model taxi demand, routes, and neural signals interactively</h1>
+          <span className={styles.eyebrow}>Interactive examples</span>
+          <h1>Modeling Lab</h1>
           <p>
-            Run CartoBoost forecasts, regression, graph models, and neural signals on taxi data.
-            Load a bundled sample or upload your own file for an interactive check.
+            Load a taxi sample or upload CSV, TSV, or Parquet. Select a model, inspect
+            its predictions, and export the configuration.
           </p>
         </div>
         <div className={styles.headerActions}>
@@ -5940,7 +5952,7 @@ function WebGlGeoMap({
     let cancelled = false;
     void (async () => {
       try {
-        const [{default: maplibregl}, {MapboxOverlay}, {ScatterplotLayer, ArcLayer}, {HeatmapLayer, ContourLayer, GridLayer}] = await Promise.all([
+        const [maplibregl, {MapboxOverlay}, {ScatterplotLayer, ArcLayer}, {HeatmapLayer, ContourLayer, GridLayer}] = await Promise.all([
           import('maplibre-gl'),
           import('@deck.gl/mapbox'),
           import('@deck.gl/layers'),
@@ -5961,6 +5973,9 @@ function WebGlGeoMap({
         const center = allCoordinates.reduce(
           (sum, coordinate) => [sum[0] + coordinate[0] / allCoordinates.length, sum[1] + coordinate[1] / allCoordinates.length] as [number, number],
           [0, 0] as [number, number],
+        );
+        maplibregl.setWorkerUrl(
+          new URL('maplibre-gl/dist/maplibre-gl-worker.mjs', import.meta.url).href,
         );
         const map = new maplibregl.Map({
           attributionControl: false,
@@ -6116,7 +6131,7 @@ function DirectSpatialRegionMap({regions, targetName}: {regions: SpatialRegion[]
     let cancelled = false;
     let map: any = null;
     void (async () => {
-      const [{default: maplibregl}, h3Module, s2Module] = await Promise.all([
+      const [maplibregl, h3Module, s2Module] = await Promise.all([
         import('maplibre-gl'),
         import('h3-js'),
         import('s2-geometry'),
@@ -6146,6 +6161,9 @@ function DirectSpatialRegionMap({regions, targetName}: {regions: SpatialRegion[]
       const featureCollection = {type: 'FeatureCollection' as const, features};
       const bounds = new maplibregl.LngLatBounds();
       features.forEach((feature) => geometryCoordinates(feature.geometry).forEach((coordinate) => bounds.extend(coordinate)));
+      maplibregl.setWorkerUrl(
+        new URL('maplibre-gl/dist/maplibre-gl-worker.mjs', import.meta.url).href,
+      );
       map = new maplibregl.Map({
         attributionControl: false,
         container: mapContainerRef.current,
@@ -8535,14 +8553,7 @@ let initializedWasmModule:
       promise: Promise<WasmModule>;
     }
   | null = null;
-let forecastWorkerClient: ForecastWorkerClient | null = null;
-
-type ForecastWorkerClient = {
-  key: string;
-  worker: Worker;
-  nextId: number;
-  pending: Map<number, {resolve: (value: ForecastResponse) => void; reject: (error: Error) => void}>;
-};
+const forecastWorkers = new ForecastWorkerPool<ForecastResponse>();
 
 async function getInitializedWasmModule(wasmJsUrl: string, wasmBinaryUrl: string) {
   const key = `${wasmJsUrl}\u0000${wasmBinaryUrl}`;
@@ -8557,10 +8568,13 @@ async function getInitializedWasmModule(wasmJsUrl: string, wasmBinaryUrl: string
       })(),
     };
   }
+  const initialization = initializedWasmModule;
   try {
-    return await initializedWasmModule.promise;
+    return await initialization.promise;
   } catch (error) {
-    initializedWasmModule = null;
+    if (initializedWasmModule === initialization) {
+      initializedWasmModule = null;
+    }
     throw error;
   }
 }
@@ -8672,15 +8686,7 @@ function buildBrowserForecastRequest({
 }
 
 function runForecastRequestInWorker(wasmJsUrl: string, wasmBinaryUrl: string, request: unknown): Promise<ForecastResponse> {
-  const absoluteWasmJsUrl = absoluteBrowserUrl(wasmJsUrl);
-  const absoluteWasmBinaryUrl = absoluteBrowserUrl(wasmBinaryUrl);
-  const client = getForecastWorkerClient(absoluteWasmJsUrl, absoluteWasmBinaryUrl);
-  const id = client.nextId;
-  client.nextId += 1;
-  return new Promise((resolve, reject) => {
-    client.pending.set(id, {resolve, reject});
-    client.worker.postMessage({id, wasmJsUrl: absoluteWasmJsUrl, wasmBinaryUrl: absoluteWasmBinaryUrl, request});
-  });
+  return forecastWorkers.run(absoluteBrowserUrl(wasmJsUrl), absoluteBrowserUrl(wasmBinaryUrl), request);
 }
 
 function runForecastRequestInIsolatedWorker(
@@ -8689,119 +8695,18 @@ function runForecastRequestInIsolatedWorker(
   request: unknown,
   timeoutMs = BACKTEST_FORECAST_TIMEOUT_MS,
 ): Promise<ForecastResponse> {
-  const absoluteWasmJsUrl = absoluteBrowserUrl(wasmJsUrl);
-  const absoluteWasmBinaryUrl = absoluteBrowserUrl(wasmBinaryUrl);
-  const worker = new Worker(URL.createObjectURL(new Blob([forecastWorkerSource], {type: 'text/javascript'})), {type: 'module'});
-  let settled = false;
-  return new Promise((resolve, reject) => {
-    const finish = (callback: () => void) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      window.clearTimeout(timeout);
-      worker.terminate();
-      callback();
-    };
-    const timeout = window.setTimeout(() => {
-      finish(() => reject(new Error(`forecast worker timed out after ${formatElapsedMs(timeoutMs)}`)));
-    }, timeoutMs);
-    worker.onmessage = (event: MessageEvent<{id: number; response?: ForecastResponse; error?: string}>) => {
-      const {response, error} = event.data;
-      if (error) {
-        finish(() => reject(new Error(error)));
-        return;
-      }
-      if (!response) {
-        finish(() => reject(new Error('forecast worker returned an empty response')));
-        return;
-      }
-      finish(() => resolve(response));
-    };
-    worker.onerror = (event) => {
-      finish(() => reject(new Error(event.message || 'forecast worker failed')));
-    };
-    worker.postMessage({id: 1, wasmJsUrl: absoluteWasmJsUrl, wasmBinaryUrl: absoluteWasmBinaryUrl, request});
-  });
+  return runIsolatedForecast(
+    absoluteBrowserUrl(wasmJsUrl),
+    absoluteBrowserUrl(wasmBinaryUrl),
+    request,
+    timeoutMs,
+    `forecast worker timed out after ${formatElapsedMs(timeoutMs)}`,
+  );
 }
 
 function absoluteBrowserUrl(url: string) {
   return new URL(url, window.location.href).toString();
 }
-
-function getForecastWorkerClient(wasmJsUrl: string, wasmBinaryUrl: string): ForecastWorkerClient {
-  const key = `${wasmJsUrl}\u0000${wasmBinaryUrl}`;
-  if (forecastWorkerClient?.key === key) {
-    return forecastWorkerClient;
-  }
-  forecastWorkerClient?.worker.terminate();
-  const worker = new Worker(URL.createObjectURL(new Blob([forecastWorkerSource], {type: 'text/javascript'})), {type: 'module'});
-  const pending: ForecastWorkerClient['pending'] = new Map();
-  worker.onmessage = (event: MessageEvent<{id: number; response?: ForecastResponse; error?: string}>) => {
-    const {id, response, error} = event.data;
-    const callbacks = pending.get(id);
-    if (!callbacks) {
-      return;
-    }
-    pending.delete(id);
-    if (error) {
-      callbacks.reject(new Error(error));
-      return;
-    }
-    if (!response) {
-      callbacks.reject(new Error('forecast worker returned an empty response'));
-      return;
-    }
-    callbacks.resolve(response);
-  };
-  worker.onerror = (event) => {
-    const message = event.message || 'forecast worker failed';
-    for (const callbacks of pending.values()) {
-      callbacks.reject(new Error(message));
-    }
-    pending.clear();
-  };
-  forecastWorkerClient = {key, worker, nextId: 1, pending};
-  return forecastWorkerClient;
-}
-
-const forecastWorkerSource = `
-let wasmKey = '';
-let wasmPromise = null;
-
-async function getWasmModule(wasmJsUrl, wasmBinaryUrl) {
-  const key = wasmJsUrl + '\\0' + wasmBinaryUrl;
-  if (wasmPromise && wasmKey === key) {
-    return wasmPromise;
-  }
-  wasmKey = key;
-  wasmPromise = (async () => {
-    const response = await fetch(wasmJsUrl, {cache: 'no-store'});
-    const contentType = response.headers.get('content-type') || '';
-    if (!response.ok || contentType.includes('text/html')) {
-      throw new Error('CartoBoost interactive model bundle is not available from this dev server.');
-    }
-    const blobUrl = URL.createObjectURL(
-      new Blob([await response.text()], {type: contentType.includes('javascript') ? contentType : 'text/javascript'}),
-    );
-    const wasmModule = await import(blobUrl);
-    URL.revokeObjectURL(blobUrl);
-    await wasmModule.default({module_or_path: wasmBinaryUrl});
-    return wasmModule;
-  })();
-  return wasmPromise;
-}
-
-self.onmessage = async (event) => {
-  const {id, wasmJsUrl, wasmBinaryUrl, request} = event.data;
-  try {
-    const wasmModule = await getWasmModule(wasmJsUrl, wasmBinaryUrl);
-    self.postMessage({id, response: wasmModule.runForecast(request)});
-  } catch (error) {
-    self.postMessage({id, error: error instanceof Error ? error.message : String(error)});
-  }
-};
-`;
 
 async function runBrowserRegression({
   wasmJsUrl,

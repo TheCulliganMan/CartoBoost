@@ -1,11 +1,19 @@
+---
+sidebar_label: Choice-set transformer
+---
+
 import {DeepModelWasmExample} from '@site/src/components/ModelingLabClient';
 
-# CartoBoost ChoiceSetTransformer
+# Choice-Set Transformer
 
-Use `ChoiceSetTransformer` when candidates compete within each decision set.
-It scores candidate value, candidate features, context features, optional
-entity or pair embeddings, and existing utility or probability fields, then
-returns utilities and softmax choice probabilities.
+Score competing candidates together with `ChoiceSetTransformer`. Use it when
+a taxi dispatch decision needs utilities and probabilities over its available
+pickup choices, including an optional outside option.
+
+The scorer combines candidate values, candidate and context features, optional
+entity or pair embeddings, and existing utility or probability fields. Its
+current architecture is utility scoring followed by softmax; the class name
+does not imply candidate-to-candidate attention.
 
 ## Python Example
 
@@ -27,10 +35,16 @@ aliases for this surface.
 
 ## Use When
 
-Use this model when candidates compete within a decision set and probabilities
-must sum within that set. Use `CartoBoostRanker` when only relative ordering is needed.
+| Your task | Start with |
+| --- | --- |
+| Probabilities across competing pickup candidates. | `ChoiceSetTransformer` |
+| Only the ordering within a query. | [CartoBoost Ranker](../boosting-models/cartoboost-ranker.md) |
+| A feasible choice under hard constraints. | [ConstrainedDecisionOptimizer](cartoboost-constrained-decision-optimizer.md) |
 
-## Browser WASM Example
+## Interactive Example
+
+Run the small example to inspect inputs and model behavior. It is a browser
+demonstration, not a benchmark on held-out taxi trips.
 
 <DeepModelWasmExample model="ChoiceSetTransformer" />
 

@@ -4,6 +4,21 @@ use super::{
 };
 use crate::data::{Dataset, SparseSetColumn};
 
+#[test]
+fn prediction_dispatch_accounts_for_ranker_work_at_small_batch_boundary() {
+    use super::node::prediction_is_small;
+
+    assert!(prediction_is_small(1, 128 * 4));
+    assert!(prediction_is_small(31, 128 * 4));
+    assert!(!prediction_is_small(32, 128 * 4));
+    assert!(!prediction_is_small(33, 128 * 4));
+    // Regression/classification retain their existing small-forest threshold.
+    assert!(prediction_is_small(32, 128));
+    assert!(prediction_is_small(32, 16 * 4));
+    assert!(!prediction_is_small(1024, 1));
+    assert!(!prediction_is_small(usize::MAX, usize::MAX));
+}
+
 fn assert_close(actual: f64, expected: f64) {
     assert!(
         (actual - expected).abs() < 1e-12,
@@ -505,4 +520,100 @@ fn flat_sparse_list_prediction_validates_offsets_and_matches_dataset_prediction(
     assert!(model
         .try_predict_flat(3, 1, &values, &sparse_offsets, &[vec![7]])
         .is_err());
+}
+
+#[test]
+fn dataset_fuzzy_and_linear_predictions_match_dense_rows_exactly() {
+    use crate::predictors::LinearLeafModel;
+    let rows = vec![
+        vec![-2.0, 1.0, 3.0],
+        vec![0.0, -1.0, 5.0],
+        vec![2.0, 2.0, 7.0],
+    ];
+    let dataset = Dataset::from_rows(rows.clone()).unwrap();
+    let base_splits = [
+        Split::Axis {
+            feature: 0,
+            threshold: 0.0,
+            missing_goes_left: true,
+        },
+        Split::Diagonal2D {
+            x_feature: 0,
+            y_feature: 1,
+            normal_x: 1.0,
+            normal_y: -1.0,
+            threshold: 0.0,
+            missing_goes_left: false,
+        },
+        Split::Gaussian2D {
+            x_feature: 0,
+            y_feature: 1,
+            center_x: 0.0,
+            center_y: 0.0,
+            radius: 2.0,
+            missing_goes_left: true,
+        },
+        Split::PeriodicInterval {
+            feature: 2,
+            period: 8.0,
+            start: 6.0,
+            end: 2.0,
+            missing_goes_left: false,
+        },
+    ];
+    for base in base_splits {
+        for kernel in [
+            FuzzyKernel::Linear,
+            FuzzyKernel::Gaussian,
+            FuzzyKernel::Exponential,
+            FuzzyKernel::Bisquare,
+            FuzzyKernel::Epanechnikov,
+            FuzzyKernel::Tricube,
+        ] {
+            let tree = Tree {
+                root: Node::Branch {
+                    split: Split::Fuzzy {
+                        base: Box::new(base.clone()),
+                        bandwidth: 4.0,
+                        kernel,
+                    },
+                    left: Box::new(Node::LinearLeaf {
+                        model: LinearLeafModel {
+                            intercept: 1.0,
+                            coefficients: vec![0.5, -0.25],
+                            features: vec![0, 2],
+                        },
+                        sample_weight_sum: 1.0,
+                        training_loss: 0.0,
+                    }),
+                    right: Box::new(Node::Leaf {
+                        value: -2.0,
+                        sample_weight_sum: 1.0,
+                        training_loss: 0.0,
+                    }),
+                    gain: 1.0,
+                    sample_weight_sum: 2.0,
+                },
+            };
+            for (row, dense) in rows.iter().enumerate() {
+                assert_eq!(
+                    tree.predict_dataset_row(&dataset, row),
+                    tree.predict_one(dense)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn checked_dataset_predictions_reject_wrong_width_and_row_index() {
+    let x = Dataset::from_rows(vec![vec![0.0], vec![1.0]]).unwrap();
+    let model = crate::Booster::new(crate::BoosterConfig::default())
+        .fit(&x, &[0.0, 1.0], None)
+        .unwrap();
+    let wrong_width = Dataset::from_rows(vec![vec![0.0, 1.0]]).unwrap();
+    assert!(model.try_predict(&wrong_width).is_err());
+    assert!(model.try_predict_additive(&wrong_width).is_err());
+    assert!(model.try_predict_dataset_row(&x, 2).is_err());
+    assert_eq!(model.try_predict(&x).unwrap(), model.predict(&x));
 }

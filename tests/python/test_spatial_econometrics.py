@@ -65,6 +65,76 @@ def _spatial_lag_target(
     )
 
 
+@pytest.mark.parametrize(
+    "model_class",
+    [
+        SpatialLagRegressor,
+        SpatialErrorRegressor,
+        SpatialDurbinRegressor,
+        SpatialTwoStageLeastSquares,
+    ],
+)
+def test_spatial_array_paths_preserve_legacy_and_changed_network_predictions(model_class, tmp_path):
+    weights, dense, x, noise = _identified_ring_fixture()
+    y = _spatial_lag_target(dense, x, noise, rho=0.35, beta=1.2)
+    features = np.column_stack([x[:, 0], np.sin(x[:, 0])])
+    model = model_class().fit(np.asfortranarray(features), y, spatial_weights=weights)
+    native = model._native_cls("cpu")
+    native.fit(features.tolist(), y.tolist(), weights._native)
+    original = np.asarray(native.predict(features.tolist(), weights._native))
+    for values in [
+        features,
+        np.asfortranarray(features),
+        features[::-1],
+        np.repeat(features, 2, axis=1)[:, ::2],
+    ]:
+        expected = np.asarray(native.predict(values.tolist(), weights._native))
+        np.testing.assert_array_equal(model.predict(values, spatial_weights=weights), expected)
+    np.testing.assert_array_equal(model.predict(features, spatial_weights=weights), original)
+    path = tmp_path / "spatial.json"
+    model.save(path)
+    restored = model_class.load(path)
+    np.testing.assert_array_equal(restored.predict(features, spatial_weights=weights), original)
+    # Full-network inference must invalidate cached solves for different CSR weights.
+    rows = np.arange(len(x))
+    for offset in [2, 3, 1]:
+        changed = SpatialWeights(len(x), len(x), rows, (rows + offset) % len(x), np.ones(len(x)))
+        w = np.zeros_like(dense)
+        w[rows, (rows + offset) % len(x)] = 1.0
+        structural = model.intercept_ + features @ model.coef_
+        if model.durbin_coef_.size:
+            structural += (w @ features) @ model.durbin_coef_
+        rho = model.diagnostics_.get("rho")
+        oracle = (
+            structural if rho is None else np.linalg.solve(np.eye(len(x)) - rho * w, structural)
+        )
+        for _ in range(2):
+            np.testing.assert_allclose(
+                model.predict(features, spatial_weights=changed), oracle, atol=1e-10, rtol=1e-10
+            )
+
+
+def test_native_r_squared_validates_and_matches_constant_target_conventions():
+    from cartoboost import _native
+
+    values = np.arange(12, dtype=float)
+    prediction = values * 0.7 + 0.5
+    expected = 1.0 - np.sum((values - prediction) ** 2) / np.sum((values - values.mean()) ** 2)
+    assert _native.r_squared_arrays(values[::-1], prediction[::-1]) == pytest.approx(expected)
+    assert _native.r_squared_arrays(np.ones(3), np.ones(3)) == 1.0
+    assert _native.r_squared_arrays(np.ones(3), np.zeros(3)) == 0.0
+    decimal = np.full(3, 0.1)
+    assert _native.r_squared_arrays(decimal, decimal) == 1.0
+    assert _native.r_squared_arrays(decimal, np.zeros(3)) == 0.0
+    for actual, pred in [
+        (values, prediction[:-1]),
+        (np.array([]), np.array([])),
+        (np.array([np.nan]), np.array([0.0])),
+    ]:
+        with pytest.raises(ValueError):
+            _native.r_squared_arrays(actual, pred)
+
+
 def test_spatial_lag_predicts_and_summarizes() -> None:
     weights, dense_weights, x, innovations = _identified_ring_fixture()
     y = _spatial_lag_target(dense_weights, x, innovations, rho=0.35, beta=1.2)

@@ -704,7 +704,10 @@ fn validate_prediction_shape(
     raw_predictions: &[f64],
     output_dimension: usize,
 ) -> Result<()> {
-    if output_dimension == 0 || raw_predictions.len() != targets.len() * output_dimension {
+    validate_targets(targets)?;
+    if output_dimension == 0
+        || targets.len().checked_mul(output_dimension) != Some(raw_predictions.len())
+    {
         return Err(CartoBoostError::InvalidInput(format!(
             "raw prediction length {} does not match {} targets with output dimension {}",
             raw_predictions.len(),
@@ -784,7 +787,7 @@ fn transform_predictions(
             .map(|raw_prediction| sigmoid(*raw_prediction))
             .collect()),
         PredictionTransformKind::Softmax => {
-            if output_dimension < 2 || !raw_predictions.len().is_multiple_of(output_dimension) {
+            if output_dimension < 2 || raw_predictions.len() % output_dimension != 0 {
                 return Err(CartoBoostError::InvalidInput(
                     "softmax predictions must be a row-major matrix with at least two outputs"
                         .to_string(),
@@ -979,7 +982,9 @@ fn group_ranges(groups: Option<&[usize]>, row_count: usize) -> Result<Vec<std::o
                 "ranking groups must be positive sizes".to_string(),
             ));
         }
-        let end = start + size;
+        let end = start.checked_add(size).ok_or_else(|| {
+            CartoBoostError::InvalidInput("ranking group sizes exceed target length".to_string())
+        })?;
         if end > row_count {
             return Err(CartoBoostError::InvalidInput(
                 "ranking group sizes exceed target length".to_string(),
@@ -1061,6 +1066,18 @@ fn discount(position: usize) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn objective_shapes_and_groups_reject_overflow_and_non_finite_targets() {
+        assert!(L2Objective
+            .gradients_hessians(&[f64::NAN], &[0.0], None, None)
+            .is_err());
+        assert!(L2Objective
+            .default_metric(&[f64::INFINITY], &[0.0], None)
+            .is_err());
+        assert!(validate_prediction_shape(&[0.0, 1.0], &[], usize::MAX).is_err());
+        assert!(group_ranges(Some(&[1, usize::MAX]), 2).is_err());
+    }
 
     #[test]
     fn l2_objective_initializes_weighted_mean_and_residuals() {

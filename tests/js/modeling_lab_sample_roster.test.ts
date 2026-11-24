@@ -8,6 +8,8 @@ import initParquet, {readParquet} from 'parquet-wasm/esm';
 
 import initCartoboost, {
   availableForecastModels,
+  deepInvertedTemporalFit,
+  deepInvertedTemporalPredict,
   runForecast,
 } from '../../static/wasm/cartoboost/cartoboost_wasm.js';
 
@@ -248,3 +250,25 @@ function runWithTimeout<T>(fn: () => T, timeoutMs: number, label: string): T {
   );
   return result;
 }
+
+
+test('inverted temporal Wasm preserves minimum-norm linear forecasts and artifact shapes', async () => {
+  await initCartoboost({
+    module_or_path: await readFile('static/wasm/cartoboost/cartoboost_wasm_bg.wasm'),
+  });
+  const panel = Array.from({length: 8}, (_, index) => [index + 1, 2 * (index + 1)]);
+  const artifact = deepInvertedTemporalFit(panel, 8, 'cpu') as {
+    attention_weights: number[][];
+    delta_coef: number[][];
+  };
+  assert.deepEqual(artifact.attention_weights.map((row) => row.length), [2, 2]);
+  assert.deepEqual(artifact.delta_coef.map((row) => row.length), [3, 3]);
+  const prediction = deepInvertedTemporalPredict(artifact, 2, true) as number[][];
+  assert.deepEqual(prediction.map((row) => row.length), [2, 2]);
+  const expected = [[9, 18], [10, 20]];
+  prediction.forEach((row, time) => row.forEach((value, entity) => {
+    assert.ok(Math.abs(value - expected[time][entity]) < 1e-10);
+  }));
+  assert.deepEqual(deepInvertedTemporalPredict(JSON.parse(JSON.stringify(artifact)), 2, true), prediction);
+  assert.throws(() => deepInvertedTemporalPredict({...artifact, attention_weights: [[1, 0]]}, 2, true));
+});

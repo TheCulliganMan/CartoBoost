@@ -7,8 +7,10 @@ pub mod features;
 pub mod forecasting;
 pub mod graph_features;
 pub mod graphsage;
+pub mod inverted_temporal;
 pub mod node2vec;
 pub mod operator;
+pub mod regime;
 pub mod standalone;
 mod trainer;
 

@@ -1,28 +1,24 @@
 # Sparse Features
 
-Sparse features are list-valued columns. Each row can contain zero or more
-non-negative integer IDs for pickup zones, dropoff zones, H3 cells, S2 cells,
-ZIP hierarchies, route corridors, or other memberships.
+Represent several memberships in one column. Each row contains zero or more
+non-negative integer IDs: taxi zones, H3 cells, S2 cells, ZIP parents, or route
+corridors. CartoBoost consumes these lists directly.
 
-They help when a taxi observation belongs to several scientific groups at once.
-A trip can be a member of a pickup zone, a dropoff zone, a pickup borough, a
-dropoff borough, an airport corridor, and a spatial cell hierarchy. Treating
-those memberships as a scalar numeric value would imply an artificial ordering;
-expanding them into a large one-hot matrix can be wasteful. CartoBoost consumes
-the lists directly.
+A taxi trip can cross multiple route cells and belong to both local and parent
+geographic regions. List-valued inputs preserve that structure without assigning
+an artificial numeric order to IDs or expanding every membership into a dense
+column.
 
-Use sparse sets for:
+| Membership | Encoding path |
+| --- | --- |
+| Existing zone or corridor IDs | Pass integer lists through `sparse_sets`. |
+| Named geographic labels | [Geographic ID helpers](#geographic-ids). |
+| ZIP and parent regions | [ZIP hierarchy helpers](#zip-and-hierarchy-features). |
+| Points or decoded routes in H3 cells | [H3 helpers](#h3-sparse-helpers); install `h3`. |
+| Points or decoded routes in S2 cells | [S2 helpers](#s2-sparse-helpers); install `s2sphere`. |
 
-- pickup/dropoff zone membership;
-- route or corridor tags;
-- parent geographic hierarchies such as ZIP5 to ZIP3 or H3/S2 parents;
-- multi-scale spatial context around pickup and dropoff coordinates;
-- experimental feature blocks that should remain distinct from dense numeric
-  coordinates or distances.
-
-Sparse sets are feature generation, not standalone models. They become part of
-the `CartoBoostRegressor` training data and must be supplied again at prediction
-time if the fitted model learned sparse-list splits.
+Sparse sets are model inputs. If a fitted model uses sparse-list splits, supply
+the same named columns when predicting, including after loading an artifact.
 
 ## Basic API
 

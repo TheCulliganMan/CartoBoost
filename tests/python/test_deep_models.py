@@ -327,48 +327,26 @@ def test_inverted_transformer_runs_without_removed_representation() -> None:
     assert model.predict().shape == (2, 2)
 
 
-def test_inverted_transformer_dispatches_peer_attention_to_backend(monkeypatch) -> None:
-    calls: list[str] = []
+def test_inverted_transformer_dispatches_fit_and_prediction_to_native(monkeypatch) -> None:
+    calls = []
+    original = temporal_module.require_native
 
-    monkeypatch.setattr(
-        temporal_module,
-        "workload_decision",
-        lambda backend, operation, workload_size, minimum_accelerated_size: {
-            "requested": backend,
-            "selected": backend,
-            "executed": "cuda",
-            "operation": operation,
-            "workload_size": workload_size,
-            "minimum_accelerated_size": minimum_accelerated_size,
-            "accelerated": True,
-            "fallback_reason": None,
-        },
-    )
+    def tracked(name):
+        function = original(name)
 
-    def accelerated_dense(features, weights, biases, backend=None):
-        calls.append(str(backend))
-        return np.asarray(features, dtype=np.float32) @ np.asarray(
-            weights, dtype=np.float32
-        ) + np.asarray(biases, dtype=np.float32)
+        def run(*args, **kwargs):
+            calls.append(name)
+            return function(*args, **kwargs)
 
-    monkeypatch.setattr(temporal_module, "dense_layer", accelerated_dense)
-    y = np.asarray(
-        [[step * 0.2 + entity for entity in range(4)] for step in range(8)],
-        dtype=float,
-    )
+        return run
+
+    monkeypatch.setattr(temporal_module, "require_native", tracked)
+    y = np.asarray([[step * 0.2 + entity for entity in range(4)] for step in range(8)])
     frame = EntityPanelFrame(y=y, timestamps=list(range(len(y))), entity_ids=list("abcd"))
-
-    model = InvertedTemporalTransformer(
-        lookback=6,
-        horizon=2,
-        backend="cuda",
-    ).fit(frame)
-    prediction = model.predict()
-
-    assert calls
-    assert set(calls) == {"cuda"}
-    assert prediction.shape == (2, 4)
-    assert model.metadata_["accelerated_operations"] == ["dense"]
+    model = InvertedTemporalTransformer(lookback=6, horizon=2, backend="cpu").fit(frame)
+    assert model.predict().shape == (2, 4)
+    assert calls == ["deep_inverted_temporal_fit_arrays", "deep_inverted_temporal_predict_arrays"]
+    assert model.metadata_["backend"]["executed"] == "cpu"
 
 
 def test_deep_frame_builders_reject_non_finite_values():
@@ -404,6 +382,41 @@ def test_deep_frame_builders_reject_non_finite_values():
             candidate_value_col="price",
             response_col="response",
         )
+
+
+@pytest.mark.parametrize("duplicate", [False, True])
+def test_entity_panel_rejects_ambiguous_cells_and_static_values(duplicate):
+    rows = [
+        {"ts": 0, "entity": "pickup-a", "target": 1.0, "area": 10.0},
+        {"ts": 0 if duplicate else 1, "entity": "pickup-a", "target": 2.0, "area": 11.0},
+    ]
+    with pytest.raises(ValueError, match="duplicate timestamp/entity|constant within each entity"):
+        EntityPanelFrame.from_pandas(
+            _Frame(rows),
+            timestamp_col="ts",
+            entity_col="entity",
+            target_col="target",
+            static_covariates=["area"],
+        )
+
+
+def test_entity_panel_preserves_aligned_static_covariates():
+    frame = EntityPanelFrame.from_pandas(
+        _Frame(
+            [
+                {"ts": time, "entity": entity, "target": time, "area": area}
+                for time in [1, 0]
+                for entity, area in [("pickup-b", 2.0), ("pickup-a", 1.0)]
+            ]
+        ),
+        timestamp_col="ts",
+        entity_col="entity",
+        target_col="target",
+        static_covariates=["area"],
+    )
+    assert frame.entity_ids == ["pickup-a", "pickup-b"]
+    np.testing.assert_array_equal(frame.static_x, [[1.0], [2.0]])
+    np.testing.assert_array_equal(frame.y, [[0.0, 0.0], [1.0, 1.0]])
 
 
 def test_temporal_entity_transformer_uses_native_attention_fit():
@@ -1018,6 +1031,95 @@ def test_choice_set_transformer_competes_candidates_and_reports_calibration():
     assert CounterfactualCandidateScorer is ChoiceSetTransformer
 
 
+@pytest.mark.parametrize("layout", ["contiguous", "fortran", "strided", "reversed"])
+def test_event_array_bindings_preserve_legacy_artifacts_and_predictions(layout):
+    from cartoboost import _native
+
+    features = np.arange(96, dtype=np.float64).reshape(32, 3) / 16.0
+    labels = (features[:, 0] >= 3.0).astype(np.float64)
+    if layout == "fortran":
+        features = np.asfortranarray(features)
+    elif layout == "strided":
+        features, labels = features[::2, ::2], labels[::2]
+    elif layout == "reversed":
+        features, labels = features[::-1, ::-1], labels[::-1]
+    legacy = _native.deep_event_outcome_fit_value(
+        json.dumps(features.tolist()), labels.tolist(), "cpu"
+    )
+    artifact = _native.deep_event_outcome_fit_arrays(features, labels, "cpu")
+    assert artifact == legacy
+
+    expected = np.array(
+        [
+            row["calibrated_probability"]
+            for row in json.loads(
+                _native.deep_event_outcome_predict_value(legacy, json.dumps(features.tolist()))
+            )
+        ]
+    )
+    actual = _native.deep_event_outcome_predict_arrays(legacy, features)
+    assert isinstance(actual, np.ndarray)
+    np.testing.assert_allclose(actual, expected, rtol=1e-14, atol=1e-14)
+    individual = np.concatenate(
+        [
+            _native.deep_event_outcome_predict_arrays(legacy, features[i : i + 1])
+            for i in range(len(features))
+        ]
+    )
+    np.testing.assert_array_equal(actual, individual)
+
+
+@pytest.mark.parametrize("kind", ["list", "numpy", "pandas", "polars", "duckdb"])
+def test_event_public_inputs_match_numpy(kind):
+    features = np.arange(48, dtype=np.float64).reshape(16, 3) / 16.0
+    labels = (features[:, 0] >= 1.5).astype(np.float64)
+    expected = EventOutcomeModel().fit(features, labels).predict_proba(features)
+    data = features
+    if kind == "list":
+        data = features.tolist()
+    elif kind == "pandas":
+        data = pytest.importorskip("pandas").DataFrame(
+            features, columns=["fare", "distance", "hour"]
+        )
+    elif kind == "polars":
+        data = pytest.importorskip("polars").DataFrame(
+            features, schema=["fare", "distance", "hour"]
+        )
+    elif kind == "duckdb":
+        pandas = pytest.importorskip("pandas")
+        data = pytest.importorskip("duckdb").from_df(
+            pandas.DataFrame(features, columns=["fare", "distance", "hour"])
+        )
+    actual = EventOutcomeModel().fit(data, labels.tolist()).predict_proba(data)
+    np.testing.assert_array_equal(actual, expected)
+
+
+def test_event_array_inputs_reject_invalid_dimensions():
+    with pytest.raises(ValueError, match="two-dimensional"):
+        EventOutcomeModel().fit([1.0, 2.0], [0.0, 1.0])
+    with pytest.raises(ValueError, match="one-dimensional"):
+        EventOutcomeModel().fit([[1.0], [2.0]], [[0.0], [1.0]])
+    model = EventOutcomeModel().fit([[1.0], [2.0]], [0.0, 1.0])
+    with pytest.raises(ValueError, match="two-dimensional"):
+        model.predict_proba([1.0, 2.0])
+
+
+@pytest.mark.parametrize("label_kind", ["generator", "iterator", "numeric_keys"])
+def test_event_fit_preserves_iterable_labels(label_kind):
+    features = [[0.0], [1.0]]
+    expected = EventOutcomeModel().fit(features, [0.0, 1.0]).predict_proba(features)
+    if label_kind == "generator":
+        labels = (value for value in [0.0, 1.0])
+    elif label_kind == "iterator":
+        labels = iter([0.0, 1.0])
+    else:
+        labels = {0.0: "no_event", 1.0: "event"}
+
+    actual = EventOutcomeModel().fit(features, labels).predict_proba(features)
+
+    np.testing.assert_array_equal(actual, expected)
+
+
 def test_event_residual_and_decision_wrappers_with_native():
     event = EventOutcomeModel().fit([[0.0], [1.0], [2.0], [3.0]], [0.0, 0.0, 1.0, 1.0])
     probs = event.predict_proba([[0.0], [3.0]])
@@ -1131,7 +1233,9 @@ def test_deep_backend_parameter_and_availability_delegate(monkeypatch):
                     "accelerated": True,
                 }
             ),
-            deep_response_curve_fit_value=lambda *args: calls.append(args) or json.dumps(artifact),
+            deep_response_curve_fit_records=lambda *args: (
+                calls.append(args) or json.dumps(artifact)
+            ),
         ),
     )
 
@@ -1154,3 +1258,349 @@ def test_deep_backend_parameter_and_availability_delegate(monkeypatch):
     assert model.metadata_["backend"]["selected"] == "cuda"
     assert available_deep_backends() == ["cpu", "cuda"]
     assert backend_dispatch_report("cuda", 4)["accelerated"] is True
+
+
+@pytest.mark.parametrize("dtype", ["float64", "int64", "Float64", "Int64"])
+def test_event_numeric_pandas_features_match_arrays_without_copying_float_buffer(dtype):
+    pd = pytest.importorskip("pandas")
+    from cartoboost.deep.response import _event_feature_matrix
+
+    expected = np.arange(12, dtype=np.float64).reshape(6, 2)
+    frame = pd.DataFrame(expected, columns=["fare", "distance"]).astype(dtype)
+    matrix = _event_feature_matrix(frame)
+    np.testing.assert_array_equal(matrix, expected)
+    if dtype == "float64":
+        assert np.shares_memory(matrix, frame.to_numpy())
+    model = EventOutcomeModel().fit(expected, [0, 0, 0, 1, 1, 1])
+    np.testing.assert_array_equal(model.predict_proba(frame), model.predict_proba(expected))
+    np.testing.assert_array_equal(
+        model.predict_proba(frame.iloc[:1]), model.predict_proba(expected[:1])
+    )
+
+
+def test_event_nullable_pandas_features_reject_missing_values():
+    pd = pytest.importorskip("pandas")
+    frame = pd.DataFrame({"fare": pd.Series([1.0, None], dtype="Float64")})
+    with pytest.raises(ValueError, match="finite"):
+        EventOutcomeModel().fit(frame, [0, 1])
+
+
+def test_continuous_response_score_uses_finite_response_scores():
+    rows = [
+        {"features": [float(i)], "candidate_value": float(i), "response": 1.0 + i * 2.0}
+        for i in range(8)
+    ]
+    model = ResponseCurveModel(response_type="continuous").fit(ResponseCurveFrame(rows))
+    predictions = model.predict_curve(ResponseCurveFrame(rows))
+    assert all(row["response_probability"] is None for row in predictions)
+    expected = np.mean(
+        [
+            (row["response"] - pred["response_score"]) ** 2
+            for row, pred in zip(rows, predictions, strict=True)
+        ]
+    )
+    assert np.isfinite(model.score(ResponseCurveFrame(rows)))
+    assert model.score(ResponseCurveFrame(rows)) == pytest.approx(expected)
+
+
+def test_decision_prediction_merge_preserves_decision_groups():
+    from cartoboost.deep.decision import _merge_predictions
+
+    rows = [{"decision_id": group, "candidate_id": "same"} for group in ["pickup", "dropoff"]]
+    predictions = [
+        dict(row, expected_utility=value) for row, value in zip(rows, [1.0, 9.0], strict=True)
+    ]
+    assert [row["expected_utility"] for row in _merge_predictions(rows, predictions)] == [1.0, 9.0]
+    assert [
+        row["expected_utility"]
+        for row in _merge_predictions(rows, [{"candidate_id": "same", "expected_utility": 3.0}])
+    ] == [3.0, 3.0]
+    assert all("expected_utility" not in row for row in rows)
+
+
+@pytest.mark.parametrize("layout", ["c", "f", "reverse", "stride"])
+def test_deep_numeric_transfers_match_legacy_full_outputs(layout):
+    from cartoboost import _native
+
+    x = np.arange(48, dtype=float).reshape(16, 3) / 13.0
+    if layout == "f":
+        x = np.asfortranarray(x)
+    elif layout == "reverse":
+        x = x[::-1]
+    elif layout == "stride":
+        x = x[::2, ::2]
+    target = np.sin(x[:, 0])
+    artifact = _native.prob_conditional_flow_fit_value(
+        x.tolist(), target.tolist(), [0.1, 0.5, 0.9], 7, "cpu"
+    )
+    assert json.loads(
+        _native.prob_conditional_flow_fit_arrays(x, target, [0.1, 0.5, 0.9], 7, "cpu")
+    ) == json.loads(artifact)
+    legacy = json.loads(
+        _native.prob_conditional_flow_predict_value(artifact, x.tolist(), target.tolist())
+    )
+    fast = _native.prob_conditional_flow_predict_arrays(artifact, x, target)
+    for key in ["samples", "joint_scenario_paths", "marginal_quantiles", "log_likelihood"]:
+        np.testing.assert_allclose(fast[key], legacy[key], rtol=1e-14, atol=1e-14)
+    assert fast["metrics"] == pytest.approx(legacy["metrics"])
+    assert fast["tail_risk_metrics"] == pytest.approx(legacy["tail_risk_metrics"])
+    edges = [(i, i + 1, 0.8) for i in range(x.shape[1] - 1)]
+    old = json.loads(
+        _native.prob_diffusion_scenario_generate_value(x.tolist(), edges, 5, 2, 0.4, "cpu")
+    )
+    new = _native.prob_diffusion_scenario_generate_arrays(x, edges, 5, 2, 0.4, "cpu")
+    for key in ["scenarios", "scenario_mean", "scenario_variance"]:
+        np.testing.assert_allclose(new[key], old[key], rtol=1e-14, atol=1e-14)
+    assert new["metadata"] == old["metadata"]
+    coordinates = np.column_stack([np.arange(x.shape[1]), np.zeros(x.shape[1])]).astype(float)
+    old = json.loads(
+        _native.deep_graph_neural_operator_predict_value(
+            json.dumps(x.tolist()), json.dumps(coordinates.tolist()), edges, "[]", 0.35, 0.08, "cpu"
+        )
+    )
+    new = _native.deep_graph_neural_operator_predict_arrays(
+        x, coordinates, edges, np.empty((0, 0)), 0.35, 0.08, "cpu"
+    )
+    for key in ["future_field", "residual_field", "uncertainty_field"]:
+        np.testing.assert_allclose(new[key], old[key], rtol=1e-14, atol=1e-14)
+    assert new["metadata"] == old["metadata"]
+
+
+def test_deep_record_transfers_match_legacy_and_preserve_metadata():
+    from cartoboost import _native
+
+    rows = [
+        {
+            "features": [float(i)],
+            "candidate_value": float(i),
+            "response": float(i % 2),
+            "candidate_id": str(i),
+            "group_id": "fare",
+            "metadata": {"nested": [1, True, None, {"text": "café"}]},
+        }
+        for i in range(6)
+    ]
+    old = _native.deep_response_curve_fit_value(json.dumps(rows), "binary", None, "cpu")
+    new = _native.deep_response_curve_fit_records(rows, "binary", None, "cpu")
+    assert json.loads(new) == json.loads(old)
+    pred = json.loads(_native.deep_response_curve_predict_value(old, json.dumps(rows)))
+    actual_records = _native.deep_response_curve_predict_records(old, rows)
+    assert actual_records == pred
+    assert list(actual_records[0]) == list(pred[0])
+    np.testing.assert_allclose(
+        _native.deep_response_curve_predict_arrays(old, rows),
+        [r["response_score"] for r in pred],
+        rtol=1e-14,
+    )
+    service = [
+        {"features": [float(i)], "baseline_value": 10.0 + i, "actual_value": 12.0 + 2 * i}
+        for i in range(6)
+    ]
+    old = _native.deep_service_residual_fit_value(json.dumps(service), "cpu")
+    assert json.loads(_native.deep_service_residual_fit_records(service, "cpu")) == json.loads(old)
+    pred = json.loads(_native.deep_service_residual_predict_value(old, json.dumps(service)))
+    actual_records = _native.deep_service_residual_predict_records(old, service)
+    assert actual_records == pred
+    assert list(actual_records[0]) == list(pred[0])
+    np.testing.assert_allclose(
+        _native.deep_service_residual_predict_arrays(old, service),
+        [r["prediction"] for r in pred],
+        rtol=1e-14,
+    )
+    candidates = [
+        {
+            "decision_id": "pickup",
+            "candidate_id": str(i),
+            "candidate_value": float(i),
+            "expected_utility": float(i),
+            "chosen": i == 2,
+            "extra": {"nested": [None, False, "fare"]},
+        }
+        for i in range(3)
+    ]
+    old = json.loads(
+        _native.deep_choice_set_transformer_report_value(json.dumps(candidates), 1.0, None, "cpu")
+    )
+    actual_report = _native.deep_choice_set_transformer_report_records(candidates, 1.0, None, "cpu")
+    assert actual_report == old
+    assert list(actual_report) == list(old)
+    assert list(actual_report["predictions"][0]) == list(old["predictions"][0])
+    old = json.loads(
+        _native.deep_constrained_decision_select_value(
+            json.dumps(candidates), "expected_utility", "{}", "raise", 0.0
+        )
+    )
+    assert (
+        _native.deep_constrained_decision_select_records(
+            candidates, "expected_utility", {}, "raise", 0.0
+        )
+        == old
+    )
+
+
+@pytest.mark.parametrize("kind", ["random", "constant", "collinear", "underdetermined"])
+def test_inverted_temporal_native_minimum_norm_matches_numpy(kind, tmp_path):
+    rng = np.random.default_rng(343)
+    y = rng.normal(size=(14, 4))
+    if kind == "constant":
+        y[:] = 3.0
+    elif kind == "collinear":
+        y = np.column_stack([np.arange(14.0) * factor for factor in [1.0, 2.0, 3.0, 4.0]])
+    elif kind == "underdetermined":
+        y = y[:3]
+    model = InvertedTemporalTransformer(lookback=len(y), horizon=3).fit(
+        EntityPanelFrame(y, list(range(len(y))), list("abcd"))
+    )
+    peers = y[1:-1] @ model.attention_weights_.T
+    for e in range(y.shape[1]):
+        design = np.column_stack(
+            [np.ones(len(y) - 2), np.diff(y[:, e])[:-1], peers[:, e] - y[1:-1, e]]
+        )
+        target = np.diff(y[:, e])[1:]
+        expected = np.linalg.lstsq(design, target, rcond=None)[0]
+        np.testing.assert_allclose(model.delta_coef_[e], expected, rtol=1e-9, atol=1e-9)
+        assert model.residual_scales_[e] == pytest.approx(
+            np.sqrt(np.mean((target - design @ expected) ** 2)), abs=1e-10
+        )
+    current = y[-1].copy()
+    delta = y[-1] - y[-2]
+    expected = []
+    for _ in range(3):
+        cross = current @ model.attention_weights_.T - current
+        delta = np.sum(
+            np.column_stack([np.ones(y.shape[1]), delta, cross]) * model.delta_coef_, axis=1
+        )
+        current = current + delta
+        expected.append(current.copy())
+    np.testing.assert_allclose(model.predict(), expected, rtol=1e-10, atol=1e-10)
+    path = tmp_path / "inverted.json"
+    model.save(path)
+    np.testing.assert_array_equal(InvertedTemporalTransformer.load(path).predict(), model.predict())
+    payload = json.loads(path.read_text())
+    payload.pop("residual_scales")
+    path.write_text(json.dumps(payload))
+    legacy = InvertedTemporalTransformer.load(path)
+    np.testing.assert_array_equal(legacy.predict(), model.predict())
+    with pytest.raises(ValueError, match="refit"):
+        legacy.predict_quantiles()
+
+
+@pytest.mark.parametrize("architecture", ["temporal_attention", "inverted_transformer"])
+def test_temporal_quantiles_and_backtests_use_fitted_residuals_and_heldout_folds(architecture):
+    from cartoboost import _native
+    from cartoboost.forecasting.splitters import RollingOriginSplitter
+
+    rng = np.random.default_rng(212)
+    y = np.column_stack([np.arange(18.0) / 7, np.sin(np.arange(18.0) / 4)]) + rng.normal(
+        0, 0.1, (18, 2)
+    )
+    frame = EntityPanelFrame(y, list(range(len(y))), ["pickup", "dropoff"])
+    model = TemporalEntityTransformer(lookback=6, horizon=2, architecture=architecture).fit(frame)
+    quantiles = model.predict_quantiles()
+    np.testing.assert_array_equal(quantiles[0.5], model.predict())
+    assert np.any(quantiles[0.9] > quantiles[0.1])
+    assert np.all(quantiles[0.1] <= quantiles[0.5]) and np.all(quantiles[0.5] <= quantiles[0.9])
+    splitter = RollingOriginSplitter(horizon=2, min_train_size=10, step=2, n_splits=2)
+    report = model.backtest(splitter)
+    assert len(report["folds"]) == 2
+    fold = report["folds"][0]
+    end = fold["train_end"]
+    isolated = TemporalEntityTransformer(lookback=6, horizon=2, architecture=architecture).fit(
+        EntityPanelFrame(y[: end + 1], list(range(end + 1)), ["pickup", "dropoff"])
+    )
+    np.testing.assert_allclose(fold["predictions"], isolated.predict(), rtol=1e-13, atol=1e-13)
+    actual = np.asarray(fold["actual"])
+    pred = np.asarray(fold["predictions"])
+    assert fold["rmse"] == pytest.approx(np.sqrt(np.mean((actual - pred) ** 2)))
+    altered = y.copy()
+    altered[end + 1 :] += 1000
+    model2 = TemporalEntityTransformer(lookback=6, horizon=2, architecture=architecture).fit(
+        EntityPanelFrame(altered, list(range(len(y))), ["pickup", "dropoff"])
+    )
+    np.testing.assert_array_equal(
+        model2.backtest(splitter)["folds"][0]["predictions"], fold["predictions"]
+    )
+    with pytest.raises(ValueError, match="held-out"):
+        _native.deep_temporal_entity_backtest_arrays(
+            y, [(list(range(10)), [9, 10])], 6, 2, "cpu", False
+        )
+
+
+def test_deep_record_metadata_matches_json_key_and_integer_handling():
+    from cartoboost import _native
+
+    rows = [
+        {
+            "decision_id": "pickup",
+            "candidate_id": "a",
+            "candidate_value": 1.0,
+            "expected_utility": 2.0,
+            "metadata": {1: 2**70, False: "flag", None: ["nested"]},
+        }
+    ]
+    expected = json.loads(
+        _native.deep_choice_set_transformer_report_value(json.dumps(rows), 1.0, None, "cpu")
+    )
+    assert _native.deep_choice_set_transformer_report_records(rows, 1.0, None, "cpu") == expected
+    rows[0]["metadata"]["cycle"] = rows
+    with pytest.raises(ValueError, match="cycle|depth"):
+        _native.deep_choice_set_transformer_report_records(rows, 1.0, None, "cpu")
+
+
+@pytest.mark.parametrize(
+    "architecture", ["pair_embedding_mlp", "pair_temporal_ssm", "pair_regime_moe"]
+)
+def test_directional_prediction_rejects_feature_width_mismatch(architecture):
+    rows = [
+        {
+            "source_id": "pickup",
+            "target_id": "dropoff",
+            "timestamp": i,
+            "features": [float(i)],
+            "target": float(i),
+        }
+        for i in range(6)
+    ]
+    model = DirectionalPairForecaster(architecture=architecture, epochs=2).fit(
+        DirectionalPairFrame(rows)
+    )
+    for features in [[], [1.0, 2.0], [float("nan")]]:
+        with pytest.raises(ValueError, match="finite|width"):
+            model.predict(DirectionalPairFrame([dict(rows[0], features=features)]))
+
+
+def test_service_residual_custom_baseline_and_legacy_fallback_are_consistent():
+    rows = [
+        {"features": [float(i)], "baseline_value": 10.0 + i, "actual_value": 12.0 + i * 1.3}
+        for i in range(8)
+    ]
+    expected = ServiceTimeResidualModel().fit(rows)
+    custom = [dict(row, scheduled_duration=row["baseline_value"]) for row in rows]
+    for row in custom:
+        row.pop("baseline_value")
+    model = ServiceTimeResidualModel(baseline_col="scheduled_duration").fit(custom)
+    np.testing.assert_array_equal(model.predict(custom), expected.predict(rows))
+    np.testing.assert_array_equal(model.predict(rows), expected.predict(rows))
+    assert model.predict(custom, return_interval=True) == expected.predict(
+        rows, return_interval=True
+    )
+    fallback = ServiceTimeResidualModel(baseline_col="scheduled_duration").fit(rows)
+    assert (
+        fallback.metadata_["flow_uncertainty_head"] == expected.metadata_["flow_uncertainty_head"]
+    )
+    conflicting = [dict(row, baseline_value=-999.0) for row in custom]
+    np.testing.assert_array_equal(model.predict(conflicting), expected.predict(rows))
+    assert all("baseline_value" not in row for row in custom)
+    with pytest.raises(ValueError, match="baseline_value"):
+        model.predict([{"features": [0.0]}])
+
+
+def test_event_calibration_rejects_broadcasting_and_matches_brier():
+    x = np.arange(8.0, dtype=float).reshape(4, 2)
+    y = np.array([0.0, 0.25, 0.75, 1.0])
+    model = EventOutcomeModel().fit(x, y)
+    prediction = model.predict_proba(x)
+    assert model.calibration_report(x, y)["brier"] == pytest.approx(np.mean((y - prediction) ** 2))
+    for invalid in [y.reshape(-1, 1), y[:1], float("nan")]:
+        with pytest.raises(ValueError, match="one-dimensional|row counts"):
+            model.calibration_report(x, invalid)

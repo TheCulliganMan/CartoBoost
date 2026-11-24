@@ -1,23 +1,23 @@
 # Python API Reference
 
-Use this page to find CartoBoost classes, methods, input shapes, return values,
-and import paths. If you are choosing a model or learning the workflow, begin
-with [Getting Started](../getting-started.md) or
-[Choose A Model](../user-guide/model-types.md).
+Find the class, method, input shape, and return value you need. The examples
+assume you have already prepared training and validation data. For a complete
+first fit, start with [Getting started](../getting-started.md); for model
+selection, use [Choose a model](../user-guide/model-types.md).
 
-The most common estimators—`CartoBoostRegressor`, `CartoBoostClassifier`, and
-`CartoBoostRanker`—are imported from `cartoboost`. Forecasting, validation,
-graph, neural, geostatistical, causal, probabilistic, plotting, and deep tools
-live in their named modules. See [Migrating to 0.3](../migration-v0.3.md) when
-updating older imports.
+Import boosting estimators from `cartoboost`. Other families are available
+through their named modules, including `cartoboost.forecasting`,
+`cartoboost.graph`, `cartoboost.neural`, and `cartoboost.deep`. Shipped families
+share the public package namespace; optional integrations load when used.
 
-This page lists the public Python entry points used to fit, evaluate, explain,
-and save CartoBoost regression, classification, ranking, forecasting,
-CartoBoost graph, and CartoBoost neural models.
-
-Examples assume that data preparation and train/validation splitting are
-already complete. Fit competing models on the same training rows and evaluate
-them on the same validation rows.
+| You are looking for | Jump to |
+| --- | --- |
+| Fit and predict on taxi-trip rows | [Regressor](#cartoboostcartoboostregressor), [classifier](#cartoboostcartoboostclassifier), or [ranker](#cartoboostcartoboostranker). |
+| Forecast pickup counts over time | [Forecasting](#cartoboostforecasting). |
+| Describe column roles | [Feature schema](#cartoboostschemafeatureschema). |
+| Explain a prediction | [SHAP helpers](#shap-helpers). |
+| Split data and measure error | [Validation manifests](#validation-manifests) and [metrics](#metric-and-diagnostic-helpers). |
+| Encode zones, cells, or routes | [Geo encoding](#geo-encoding-helpers). |
 
 ## Model-Choice Map
 
@@ -73,6 +73,7 @@ CartoBoostRegressor(
 | `fit(X, y, sample_weight=None, feature_schema=None, sparse_sets=None, eval_set=None)` | `self` | `eval_set` is accepted but currently ignored. |
 | `predict(X, sparse_sets=None, *, pred_contrib=False)` | `numpy.ndarray` | Normal predictions by default. With `pred_contrib=True`, returns original-feature path-dependent TreeSHAP values followed by the base value for supported hard axis trees. |
 | `predict_feature_contributions(X, sparse_sets=None)` | `numpy.ndarray` | Explicit equivalent of `predict(..., pred_contrib=True)`; does not require the optional SHAP dependency. |
+| `score(X, y, sparse_sets=None)` | `float` | Negative RMSE; higher is better. This differs from the R2 convention of some sklearn regressors. |
 | `predict_additive_values(X, sparse_sets=None)` | `numpy.ndarray` | Row sums equal `predict(X)`. |
 | `make_shap_explainer(background=None, decomposition="features", **kwargs)` | SHAP explainer | Without a background, formats native path-dependent feature contributions. `decomposition="weights"` requires a background and returns the exact initial-value/per-tree explainer. |
 | `explain_shap(X, background=None, decomposition="features", **kwargs)` | `shap.Explanation` | Background-free feature explanations use native path-dependent TreeSHAP; passing a background preserves interventional/general SHAP behavior. |
@@ -480,11 +481,11 @@ Probabilistic and conformal layer:
 | `weighted_conformal_residual_quantile`, `group_conformal_residual_quantiles`, `nearest_conformal_residual_quantiles` | Calibration primitives for weighted, group/H3/S2, spatial-block, and nearest-residual conformal workflows. |
 | `benchmark_calibration_report_fields` | Emits coverage by horizon, coverage by spatial block, width by horizon, and residual Moran's I after calibration for benchmark artifacts. |
 
-Do not report geo model quality without calibration and spatial residual
-diagnostics. At minimum, report interval coverage, interval width, horizon or
-spatial-block coverage, and residual Moran's I on holdout rows.
+For spatial predictions, inspect interval coverage and width alongside
+horizon or spatial-block coverage and residual Moran's I. Aggregate error alone
+can conceal a poorly calibrated region.
 
-Unified model registry and geo selector:
+Model registry and metadata:
 
 | Entry point | Notes |
 | --- | --- |
@@ -493,11 +494,10 @@ Unified model registry and geo selector:
 | `cartoboost.models.DataContract` / `ModelEvidenceCard` | Supported evidence-contract types; no automatic geo selector or stack is shipped in v0.3. |
 | `cartoboost.models.model_card(model)` | JSON-compatible params, lifecycle, and metadata summary for supported model families. |
 | `cartoboost.causal` / `cartoboost.prob` | Supported aliases for geo-causal and probabilistic model namespaces. |
-| `cartoboost.experimental` | Unstable research adapter namespace; adapters require explicit backends and are excluded from the stable registry. |
+| `cartoboost.experimental` | Research adapters with explicit backend requirements; model metadata describes their evidence and limitations. |
 
-Representation primitives and selective state-space models are not distributed in
-v0.3. The removed NumPy implementations have no import or compatibility namespace;
-any future return requires a native binding and real-data evidence.
+Representation primitives and selective state-space models are not distributed
+in this API. Use the listed model families and their documented input contracts.
 
 Inverted temporal transformer:
 
@@ -543,7 +543,7 @@ Advanced experimental neural operators:
 | Entry point | Notes |
 | --- | --- |
 | `cartoboost.deep.GraphNeuralOperator` | Native-backed spatial field operator for horizon-by-node fields with coordinates, optional directed weighted graph edges, and optional exogenous fields. It returns `future_field`, `residual_field`, `uncertainty_field`, and advanced experimental metadata. |
-| `cartoboost.deep.FourierGeoOperator` / `SpatioTemporalOperator` | Aliases for the same first-cut operator surface. |
+| `cartoboost.deep.FourierGeoOperator` / `SpatioTemporalOperator` | Aliases for the same spatial field operator. |
 | `GraphNeuralOperator.synthetic_benchmark()` | Runs the maintained smooth-field synthetic benchmark and reports operator RMSE, pointwise baseline RMSE, and improvement. |
 
 Choice-set candidate competition:
@@ -551,7 +551,7 @@ Choice-set candidate competition:
 | Entry point | Notes |
 | --- | --- |
 | `cartoboost.deep.ChoiceSetTransformer` | Native-backed candidate competition scorer. `score(candidates)` groups by `decision_id`, encodes candidate value, candidate features, context features, optional entity/pair embeddings, and existing utility/probability fields, then emits per-candidate utility and softmax choice probability. |
-| `cartoboost.deep.UtilityNet` / `NestedChoiceHead` / `CounterfactualCandidateScorer` | Aliases for the same choice-set surface in this first cut. |
+| `cartoboost.deep.UtilityNet` / `NestedChoiceHead` / `CounterfactualCandidateScorer` | Aliases for the same choice-set scorer. |
 | `counterfactual_best(candidates)` / `calibration_report(candidates)` | Returns best candidates by decision group and Brier/ECE metrics when binary `chosen` labels are supplied. |
 
 Optional foundation adapters:
@@ -562,16 +562,17 @@ Optional foundation adapters:
 | `cartoboost.foundation.TabPFNAdapter` / `TabPFNFeatureGenerator` / `PriorFittedBaseline` | Optional supported tabular foundation adapters with the same cache and dependency contract. |
 | `FoundationForecastFeatures.benchmark_with_without_features(...)` | Compares current predictions with and without foundation features and reports RMSE delta. Adapter caches include external dependency name, version when installed, model id, model hash, input hash, output shape, and explicit AutoGeo enablement metadata. |
 
-Python-owned JSON model artifacts include `artifact_type` and
-`artifact_version` fields. CI runs `scripts/check_artifact_compatibility.py` to
-verify nested version markers, save/load prediction drift, and explicit failure
-for unsupported artifact versions.
+JSON model artifacts include `artifact_type` and `artifact_version` fields.
+Loaders validate supported versions, including nested artifacts. See
+[Saving and loading models](../model_artifact.md) for persistence and
+prediction-input requirements.
 
-`ForecastRegistry.defaults()` lists additional forecasting implementations used
-by examples and browser workflows. The stable Python forecasting API includes `NaiveForecaster`,
-`SeasonalNaiveForecaster`, `CartoBoostLagForecaster`, `AutoForecaster`,
-`ForecastFrame`, and `ForecastResult`; other registry entries are supported
-implementations and are not part of the v0.3 source contract.
+`ForecastRegistry.defaults()` lists the forecasting implementations available
+to examples and browser workflows. Import forecasting classes from
+`cartoboost.forecasting`; the module exposes the local, global, ensemble, and
+probabilistic families alongside `ForecastFrame` and `ForecastResult`. Each
+[model guide](../user-guide/forecasting-models/index.md) documents its inputs,
+validation approach, and limitations.
 
 Plotting:
 
@@ -862,8 +863,8 @@ cartoboost.metrics.residual_morans_i(coordinates, residuals)
 cartoboost.metrics.spatial_cv_gap(random_cv_score, spatial_cv_score)
 ```
 
-Classification metrics are deterministic NumPy implementations for binary or
-multiclass probability checks where applicable. Ranking metrics accept either
+Classification metrics accept binary or multiclass probabilities where
+documented and call CartoBoost's native metric implementations. Ranking metrics accept either
 one global ranking, positive group sizes that sum to the row count, or
 contiguous query ids when the values do not form a valid size vector.
 `residual_morans_i` uses dense pairwise spatial weights and is intended for
@@ -871,9 +872,10 @@ validation samples.
 
 ## I/O
 
-File-format helpers are not part of the stable 0.3 source API. Use Python's
-standard `json` module or a dedicated dataframe/geospatial reader, then pass
-validated NumPy or dataframe inputs to the stable estimators.
+`cartoboost.io.read_geojson(path)` reads a UTF-8 JSON file into a dictionary.
+For tabular data, use NumPy or a dedicated dataframe reader, then pass the
+result to the estimator. Parsing a file does not validate its modeling semantics;
+check column roles, finite values, and row alignment before fitting.
 
 ## Geo Encoding Helpers
 

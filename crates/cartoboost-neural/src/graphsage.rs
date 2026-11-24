@@ -426,6 +426,7 @@ impl GraphSageEncoder {
         validate_input_dim(input_dim)?;
         validate_dimensions(&config.hidden_dims)?;
         validate_homogeneous_backend(&config.backend)?;
+        validate_optimizer(config.learning_rate, config.l2_regularization)?;
 
         let mut dims = Vec::with_capacity(config.hidden_dims.len() + 1);
         dims.push(input_dim);
@@ -676,6 +677,7 @@ impl HeteroGraphSageEncoder {
         validate_relation_count(relation_count)?;
         validate_dimensions(&config.hidden_dims)?;
         validate_homogeneous_backend(&config.backend)?;
+        validate_optimizer(config.learning_rate, config.l2_regularization)?;
 
         let mut dims = Vec::with_capacity(config.hidden_dims.len() + 1);
         dims.push(input_dim);
@@ -2100,6 +2102,20 @@ fn validate_homogeneous_backend(backend: &BackendSelection) -> Result<()> {
             backend.selected
         )))
     }
+}
+
+fn validate_optimizer(learning_rate: f32, l2_regularization: f32) -> Result<()> {
+    if !learning_rate.is_finite()
+        || learning_rate < 0.0
+        || !l2_regularization.is_finite()
+        || l2_regularization < 0.0
+    {
+        return Err(NeuralError::InvalidArgument(
+            "GraphSAGE learning rate and L2 regularization must be finite and non-negative"
+                .to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn validate_dimensions(hidden_dims: &[usize]) -> Result<()> {

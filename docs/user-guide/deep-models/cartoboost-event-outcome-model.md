@@ -1,10 +1,15 @@
+---
+sidebar_label: Event outcome model
+---
+
 import {DeepModelWasmExample} from '@site/src/components/ModelingLabClient';
 
-# CartoBoost EventOutcomeModel
+# Event Outcome Model
 
-Use `EventOutcomeModel` when the target is a binary event and the output should
-be a calibrated probability. It is for event risk, conversion, failure,
-completion, or acceptance probability when calibration matters.
+Estimate the probability of a binary event with `EventOutcomeModel`. Use it
+for a taxi-trip outcome such as exceeding a duration threshold when the
+probability itself drives a decision. The model exposes calibration reports
+alongside predictions so you can check how often predicted events occur.
 
 ## Python Example
 
@@ -19,7 +24,10 @@ report = model.calibration_report(features_holdout, event_holdout)
 model.save("event-outcome.json")
 ```
 
-## Browser WASM Example
+## Interactive Example
+
+Run the small example to inspect inputs and model behavior. It is a browser
+demonstration, not a benchmark on held-out taxi trips.
 
 <DeepModelWasmExample model="EventOutcomeModel" />
 

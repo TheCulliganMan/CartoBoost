@@ -43,7 +43,6 @@ EXTERNAL_INSTALL_METADATA_BASELINES = {
 
 REQUIRED_CI_COMMANDS = {
     "cargo test --workspace",
-    'toolchain: ["1.85.0", "stable"]',
     "npm run typecheck",
     "npm run test:ui",
     "cargo check --manifest-path fuzz/Cargo.toml --all-targets",
@@ -175,9 +174,28 @@ def check_docs_version_manifest() -> dict[str, Any]:
 def check_ci_release_gates() -> dict[str, Any]:
     text = CI_WORKFLOW.read_text(encoding="utf-8")
     missing = sorted(command for command in REQUIRED_CI_COMMANDS if command not in text)
+    compatibility = re.search(r"(?ms)^  rust-compatibility:\n(.*?)(?=^  \S|\Z)", text)
+    rust_job = compatibility.group(1) if compatibility else ""
+    required_rust_patterns = {
+        "Rust 1.85 CPU compatibility matrix": (
+            r'toolchain: "1\.85\.0"\s+ cargo-args: "--no-default-features"'
+        ),
+        "stable Rust default-feature compatibility matrix": (
+            r'toolchain: "stable"\s+ cargo-args: ""'
+        ),
+        "matrix toolchain installation": r"toolchain: \$\{\{ matrix\.toolchain \}\}",
+        "matrix feature selection in workspace tests": (
+            r"cargo test --workspace --locked \$\{\{ matrix\.cargo-args \}\}"
+        ),
+    }
+    missing.extend(
+        label
+        for label, pattern in required_rust_patterns.items()
+        if re.search(pattern, rust_job) is None
+    )
     return {
         "passed": not missing,
-        "missing": missing,
+        "missing": sorted(missing),
     }
 
 

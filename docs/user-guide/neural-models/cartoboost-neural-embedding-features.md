@@ -1,10 +1,15 @@
+---
+sidebar_label: Embedding features
+---
+
 import {NeuralModelExample} from '@site/src/components/ModelingLabClient';
 
 # CartoBoost NeuralEmbeddingFeatures
 
-Use `NeuralEmbeddingFeatures` when learned ID vectors should become columns for
-another estimator. This page is for feature generation and ablation studies,
-not for serving a neural model directly.
+Turn repeated pickup-zone or route IDs into learned feature columns with
+`NeuralEmbeddingFeatures`. Fit the representation on training rows, then reuse
+its vectors in CartoBoost, LightGBM, XGBoost, or another estimator. This is the
+entry point for comparing measured features with and without ID embeddings.
 
 ## When To Use
 
@@ -30,6 +35,9 @@ Append the generated columns to the dense features used by
 embedding table only on training rows when evaluating a holdout.
 
 ## Interactive Example
+
+Run the small example to inspect inputs and model behavior. It is a browser
+demonstration, not a benchmark on held-out taxi trips.
 
 <NeuralModelExample title="Neural embedding feature browser model" pipeline="embedding" />
 

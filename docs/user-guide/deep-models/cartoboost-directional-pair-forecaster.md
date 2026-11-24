@@ -1,11 +1,15 @@
+---
+sidebar_label: Directional pair forecaster
+---
+
 import {DeepModelWasmExample} from '@site/src/components/ModelingLabClient';
 
-# CartoBoost DirectionalPairForecaster
+# Directional Pair Forecaster
 
-Use `DirectionalPairForecaster` when each row is an ordered source-target pair
-and reversing the pair changes the meaning. Good examples include origin-to-
-destination flows, sender-to-receiver activity, upstream-to-downstream sensors,
-or account-to-account interactions.
+Model pickup-to-dropoff relationships without losing direction.
+`DirectionalPairForecaster` treats a trip from `PULocationID` to `DOLocationID`
+as a different ordered pair from the return trip, while learning from repeated
+origins, destinations, and pair-level measurements.
 
 ## Python Example
 
@@ -15,10 +19,10 @@ from cartoboost.deep import DirectionalPairForecaster, DirectionalPairFrame
 frame = DirectionalPairFrame.from_pandas(
     pair_history,
     timestamp_col="timestamp",
-    source_col="source_id",
-    target_col="target_id",
-    target_value_col="observed_value",
-    numeric_covariates=["distance", "baseline_estimate", "hour"],
+    source_col="PULocationID",
+    target_col="DOLocationID",
+    target_value_col="trip_duration",
+    numeric_covariates=["trip_distance", "baseline_estimate", "hour"],
 )
 
 model = DirectionalPairForecaster(
@@ -40,7 +44,10 @@ and a residual MLP head. Predictions for an unseen ordered pair use the learned
 source and target embeddings with a global pair bucket; unseen source or target
 ids use the learned unknown embedding row.
 
-## Browser WASM Example
+## Interactive Example
+
+Run the small example to inspect inputs and model behavior. It is a browser
+demonstration, not a benchmark on held-out taxi trips.
 
 <DeepModelWasmExample model="DirectionalPairForecaster" />
 

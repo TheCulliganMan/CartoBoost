@@ -2,9 +2,10 @@ import {ForecastModelExample} from '@site/src/components/ModelingLabClient';
 
 # TSB Forecasting
 
-`TsbForecaster` implements the Teunter-Syntetos-Babai intermittent-demand
-method. It smooths demand size and demand occurrence probability separately,
-which makes it useful when the chance of a non-zero event changes over time.
+Track changing demand occurrence with `TsbForecaster`. The
+Teunter-Syntetos-Babai method smooths non-zero demand size and the probability
+of a demand event separately. It is useful for quiet taxi zones where the
+chance of a pickup changes even when the size of each non-zero count does not.
 
 ## Interactive Example
 

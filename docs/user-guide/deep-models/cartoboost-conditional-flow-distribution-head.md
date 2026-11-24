@@ -1,10 +1,19 @@
+---
+sidebar_label: Conditional residual distribution
+---
+
 import {DeepModelWasmExample} from '@site/src/components/ModelingLabClient';
 
-# CartoBoost ConditionalFlowDistributionHead
+# Conditional Residual Distribution
 
-Use `ConditionalFlowDistributionHead` when a deep model needs joint residual
-uncertainty rather than independent quantile bands. Fit it on hidden-state
-features and residuals from the upstream model.
+Generate residual scenarios conditioned on an upstream model's hidden state
+with `ConditionalFlowDistributionHead`. This is useful when uncertainty across
+forecast horizons matters to a decision, such as planning taxi supply across
+the next several hours.
+
+Fit the head on representative residuals and context. The implementation is a
+conditional residual sampler, so evaluate its joint scenarios and tail behavior
+separately from the point forecast.
 
 ## Python Example
 
@@ -29,11 +38,16 @@ prediction = head.predict(model_hidden_state=hidden_holdout, actual=residuals_ho
 
 ## Use When
 
-Use this head when an upstream model exposes hidden-state context and the
-decision needs joint residual scenarios or tail summaries. Prefer conformal
-intervals when distribution-free marginal coverage is the main requirement.
+| Your task | Start with |
+| --- | --- |
+| Joint residual scenarios conditioned on model context. | `ConditionalFlowDistributionHead` |
+| Marginal intervals from a separate calibration set. | [Probabilistic and conformal models](../forecasting-models/probabilistic-conformal.md) |
+| Graph-wide stress scenarios around a point forecast. | [GeoTemporalDiffusionScenarioModel](cartoboost-geotemporal-diffusion-scenario-model.md) |
 
-## Browser WASM Example
+## Interactive Example
+
+Run the small example to inspect inputs and model behavior. It is a browser
+demonstration, not a benchmark on held-out taxi trips.
 
 <DeepModelWasmExample model="ConditionalFlowDistributionHead" />
 

@@ -1,47 +1,36 @@
 # Forecasting
 
-Forecasting documentation is split into two practical paths:
+CartoBoost's forecasting workflow starts with an explicit series and cadence,
+fits a model using past observations, and checks the next horizon on rolling origins.
 
-- this page, for preparing time-series data, backtesting, metrics, saving
-  results, and command-line workflows;
-- the [forecasting model guides](user-guide/forecasting-models/index.md), for
-  choosing an individual model type such as naive, theta, ETS, ARIMA, Kalman,
-  piecewise linear seasonal, kriging, spatial piecewise kriging, CartoBoost
-  lag, NeuralPanel, AutoForecaster, or fixed weighted ensembles.
-
-The Python forecasting package provides dataframe inputs, explicit
-configuration, source-checkout script entry points, and artifact handling.
-Model behavior is shared across Python, source-checkout scripts, and interactive examples: fitting, prediction,
-backtesting, metric evaluation, leakage checks, feature generation, intervals,
-reconciliation, and serialization contracts follow the same rules. Python does
-not provide fallback forecasting algorithms.
+| Your next step | Read |
+| --- | --- |
+| Prepare hourly pickup counts or route aggregates | [ForecastFrame](#forecastframe) |
+| Choose a forecasting model | [Model guide](user-guide/forecasting-models/index.md) |
+| Measure performance at realistic forecast cutoffs | [Backtesting](#backtesting) |
+| Save forecast rows and their settings | [Artifacts and CLI](#artifacts-and-cli) |
+| Compare recorded results | [Forecasting benchmarks](benchmarks/forecasting.md) |
 
 ## Workflow
 
-Start by making the scientific unit of analysis explicit. For panel forecasting,
-this is usually one time series per entity, location, route, or product. The
-timestamp might be an hour, day, or week field, the target might be counts,
-revenue, duration, or demand, and known-future covariates should be limited to
-values that are genuinely known at forecast creation time, such as hour or
-day-of-week.
+Define the prediction before fitting. An hourly pickup-demand panel has one
+series per `PULocationID`; a route panel can use an ordered pickup/dropoff pair.
+Choose a target such as trip count, average fare, or average duration and a
+horizon that matches the decision you need to make.
 
-Then choose the validation protocol before choosing a winner. Forecasting
-validation should answer, "At this origin timestamp, using only information
-available up to the origin, how well did the model predict the next horizon?"
-CartoBoost uses rolling-origin splitters for that reason. Random
-cross-validation is not a forecasting protocol.
+Declare only genuinely available values as known-future covariates. Hour and
+day of week are known at forecast creation; tomorrow's observed trip count is
+not. History-derived features must stop at the forecast cutoff.
 
-Finally, save the evidence. A forecast table without its panel contract,
-features, bounds, and backtest settings is hard to audit. CartoBoost artifacts
-store forecast rows beside a manifest so the result can be compared or reviewed
-without hidden Python process state.
+Start with seasonal naive and compare models on the same origins and horizon.
+Save the forecast rows, settings, and evaluation alongside each other so the
+result remains understandable after the fitting session ends.
 
 ## ForecastFrame
 
-`ForecastFrame` is the production input contract. It records the timestamp
-column, target column, optional series id, frequency, static covariates,
-known-future covariates, and historical-only covariates before a model sees the
-data.
+`ForecastFrame` declares what each row means: its timestamp, target, series ID,
+frequency, and covariate roles. For hourly taxi demand, one row is one pickup
+zone at one hour.
 
 ```python
 from cartoboost.forecasting import ForecastFrame
@@ -49,11 +38,11 @@ from cartoboost.forecasting import ForecastFrame
 frame = ForecastFrame.from_pandas(
     hourly_zone_demand,
     timestamp_col="timestamp",
-    target_col="demand",
-    series_id_col="entity_id",
+    target_col="pickup_demand",
+    series_id_col="PULocationID",
     freq="h",
     known_future_covariates=["hour", "day_of_week"],
-    static_covariates=["group_id"],
+    static_covariates=["borough_id"],
 )
 ```
 
@@ -101,15 +90,15 @@ frame = ForecastFrame.from_pandas(
     trip_observations,
     timestamp_col="timestamp",
     target_col="fare",
-    series_id_col="entity_id",
+    series_id_col="PULocationID",
     freq="h",
     historical_covariates=["trip_distance"],
     sample_weight_col="trip_count",
 )
 ```
 
-If five events share the same entity and timestamp, the forecasting model sees
-one row. With `trip_count` as the weight, the hourly target is the weighted
+If five trip aggregates share the same pickup zone and timestamp, the
+forecasting model sees one row. With `trip_count` as the weight, the hourly target is the weighted
 mean and the weight column is the sum of the five weights. Without
 `sample_weight_col`, those five rows still fail as duplicate timestamps because
 forecasting requires one target per series/timestamp.
@@ -174,7 +163,7 @@ settings, frame contract, metrics, interval metadata, and optional config. Use
 CSV for portable tables and Parquet only when the optional dependency is
 installed intentionally.
 
-The forecasting command scaffold is exposed through `scripts/forecast.py`:
+From a source checkout, use `scripts/forecast.py` to fit, predict, or backtest:
 
 ```sh
 python scripts/forecast.py fit \
@@ -201,110 +190,54 @@ Invalid configs, missing columns, unknown model names, unavailable optional
 bindings, and missing artifacts should fail clearly instead of silently changing
 the algorithm.
 
-## Native Model Surface
+## Choose A Model
 
-Use the model guides for modeling decisions:
+Use the [forecasting model guide](user-guide/forecasting-models/index.md) to
+compare assumptions, inputs, and outputs. A practical progression is:
 
-| Modeling type | Guide |
+| Pattern | Start with |
 | --- | --- |
-| Last-value and last-season baselines | [Naive And Seasonal Naive](user-guide/forecasting-models/naive-seasonal.md) |
-| Lightweight trend extrapolation | [Theta](user-guide/forecasting-models/theta.md) |
-| Additive level, trend, and seasonality | [ETS](user-guide/forecasting-models/ets.md) |
-| Autocorrelation and differencing | [ARIMA And AutoARIMA](user-guide/forecasting-models/arima.md) |
-| Noisy latent level and trend | [Kalman](user-guide/forecasting-models/kalman.md) |
-| Interpretable trend, changepoints, seasonalities, events, and regressors | [Piecewise Linear Seasonal](user-guide/forecasting-models/piecewise-linear-seasonal) |
-| Coordinate-aware panel borrowing | [Kriging](user-guide/forecasting-models/kriging.md) |
-| Temporal components plus spatial residual or regressor kriging | [Spatial Piecewise Kriging](user-guide/forecasting-models/spatial-piecewise-kriging.md) |
-| Shared supervised lag features across many panels | [CartoBoost Lag](user-guide/forecasting-models/cartoboost-lag.md) |
-| Directed graph sequence forecasting for roads, lanes, sensors, and zone flows | [Graph Spatiotemporal Forecasting](user-guide/forecasting-models/graph-spatiotemporal.md) |
-| Heterogeneous, high-order, long-short, gated, or spatial-shift graph Transformer forecasting | [Paper Graph Transformers](user-guide/forecasting-models/graph-spatiotemporal.md#paper-graph-transformer-profiles) |
-| Learned sparse relationships, hierarchy-aware smoothing, and analyst-visible kernels for directional markets | [Market Structure Forecasting](user-guide/forecasting-models/graph-spatiotemporal.md) |
-| Compact neural window experts | [N-BEATS And N-HiTS](user-guide/forecasting-models/beats-hits.md) |
-| Neural panel forecasting with directional ids | [Neural Panel](user-guide/forecasting-models/neural-panel.md) |
-| Guarded default selector over reusable candidates | [AutoForecaster](user-guide/forecasting-models/auto-forecaster.md) |
-| Fixed combinations of fitted models | [Weighted Ensembles](user-guide/forecasting-models/ensembles.md) |
+| The last hour or last daily cycle is informative | [Naive and Seasonal Naive](user-guide/forecasting-models/naive-seasonal.md) |
+| Level, trend, or a recurring additive cycle dominates | [Theta](user-guide/forecasting-models/theta.md), [ETS](user-guide/forecasting-models/ets.md), or [Kalman](user-guide/forecasting-models/kalman.md) |
+| Recent values and errors explain local dependence | [ARIMA](user-guide/forecasting-models/arima.md) |
+| Trend, events, and regressors need separate explanations | [Piecewise Linear Seasonal](user-guide/forecasting-models/piecewise-linear-seasonal.md) |
+| Related zones share lag and calendar patterns | [CartoBoost Lag](user-guide/forecasting-models/cartoboost-lag.md) |
+| Nearby locations share residual signal | [Kriging](user-guide/forecasting-models/kriging.md) or [Spatial Piecewise Kriging](user-guide/forecasting-models/spatial-piecewise-kriging.md) |
+| A directed network explains movement between zones | [Graph and Market Structure Forecasting](user-guide/forecasting-models/graph-spatiotemporal.md) |
+| Regular windows support a neural comparison | [N-BEATS and N-HiTS](user-guide/forecasting-models/beats-hits.md) or [Neural Panel](user-guide/forecasting-models/neural-panel.md) |
+| Validation should select the strategy | [AutoForecaster](user-guide/forecasting-models/auto-forecaster.md) |
+| A decision needs calibrated bounds | [Probabilistic and Conformal](user-guide/forecasting-models/probabilistic-conformal.md) |
 
-Benchmark scripts expose stable aliases such as `cartoboost_lag` and
-`cartoboost_auto_forecast` for reproducible evidence tables. Keep benchmark-
-specific aliases in benchmark orchestration, not in generic model names.
-
-ETS is additive-only in this version. AutoARIMA searches bounded ARIMA(p,d,q)
-candidates with residual-lag moving-average terms; seasonal AutoARIMA is
-rejected explicitly. Weighted ensembles require explicit component models.
-`NeuralPanelForecaster` accepts `ForecastFrame` panel rows. It builds train-only normalized direct windows, stores quantiles with median
-output first internally, learns residual offsets for non-median quantiles,
-applies fitted target-tail AR state from `n_lags`, repairs non-crossing
-quantiles on prediction, and records normalization, component parameters,
-series ids, feature schema, lag config, seed, and train cutoff in metadata.
-Fourier seasonality, event offsets, and future regressors each have
-independent global/local/glocal parameter-sharing modes. Missing dynamic
-known-future regressors fail at prediction time; values proven constant within
-each fitted series are stored as static future covariates. Do not use it for
-quality claims without a real rolling-origin benchmark against seasonal naive
-and `CartoBoostLagForecaster`.
-The lane wrapper injects generated origin/destination/lane embedding
-covariates and directional graph summary covariates into the inner neural
-panel, so lane identity participates in the fitted feature weights rather than
-living only in metadata.
-The maintained benchmark entry point can emit a NeuralPanel split artifact:
-
-```sh
-uv run --group dev python scripts/forecasting_library_benchmark.py \
-  --source polars \
-  --model-roster neural-panel \
-  --neural-panel-splits \
-  --output target/neural_panel_split_suite.json
-```
-
-That artifact records rolling-origin, cold-lane, cold-origin, and sparse-tail
-splits with metrics, timing, command metadata, and artifact paths.
+Model limitations are specific. ETS uses additive components; AutoARIMA searches
+non-seasonal orders; weighted ensembles require explicit members and weights.
+Neural panel models require dynamic known-future regressors at prediction time
+unless those regressors were constant within each fitted series.
 
 ## Advanced Behavior
 
-Several advanced behaviors are reusable utilities rather than separate public
-docs pages:
-
-| Behavior | Where it belongs |
+| Need | Available behavior |
 | --- | --- |
-| Direct and rectified-recursive supervised strategies | Internal candidates for [AutoForecaster](user-guide/forecasting-models/auto-forecaster.md) and shared lag forecasting. |
-| STL/MSTL decomposition hybrids | `stl_cartoboost` uses cycle-subseries LOESS, STL low-pass filtering, and a model of the seasonally adjusted target; `mstl_cartoboost` iteratively re-estimates each configured seasonal component before fitting the adjusted-target model. Both require at least two complete cycles of every configured period and repeat the final fitted seasonal cycle when reseasoning forecasts. Benchmark claims stay in [Forecasting Benchmarks](benchmarks/forecasting.md). |
-| Hierarchical reconciliation | Forecast artifact metadata and benchmark orchestration when pickup, dropoff, lane, or total demand must be coherent. |
-| Quantiles and conformal intervals | `QuantileLoss`, `HuberQuantileLoss`, `CompositeQuantileLoss`, `QuantileRegressorSet`, non-crossing repair, interval coverage, interval width, crossing-rate diagnostics, and serializable conformal calibration. |
-| Temporal residual correction | `KalmanResidualCorrector`, `StateFilter`, and `StateCorrectedBooster` apply predict-before-update residual states by origin, destination, corridor, segment, entity family, target family, or time bucket. |
-| Regime-aware uncertainty | `CUSUM`, `PageHinkley`, EWMA volatility, rolling median residuals, rolling MAD residuals, and `RegimeIntervalPolicy` can widen intervals, raise process variance, or lower confidence during detected shifts. |
-| Calibrated forecast events | Probability calibration helpers turn threshold, horizon, failure-risk, or escalation-risk events into bounded probability forecasts with Brier score, log loss, ECE, calibration buckets, and reliability-curve data. |
-| Rank probability score helpers | Metrics and interval evaluation; competition-specific scoring stays in benchmark adapters. |
-| NeuralPanel forecasting | Panel neural forecaster with directional ids, generated embedding/graph covariates, direct horizons, separate global/local/glocal seasonality/event/regressor modes, known-future regressors, lagged regressors, median-first internal quantile residuals, and serializable metadata. |
+| Predict horizons directly or correct recursive error | Direct and rectified-recursive strategies in [AutoForecaster](user-guide/forecasting-models/auto-forecaster.md) and supervised lag forecasting |
+| Separate one or more repeating cycles | `stl_cartoboost` and `mstl_cartoboost` decompose seasonality, model the adjusted target, and add the fitted seasonal cycle back |
+| Keep pickup, dropoff, route, and total forecasts coherent | Hierarchical reconciliation with settings recorded in forecast metadata |
+| Model uncertainty | Quantile losses, non-crossing repair, conformal calibration, coverage, width, and crossing diagnostics |
+| Update a residual state over time | `KalmanResidualCorrector`, `StateFilter`, and `StateCorrectedBooster` use predict-before-update residual states |
+| Detect changing conditions | CUSUM, Page-Hinkley, volatility, and robust residual summaries with `RegimeIntervalPolicy` |
+| Calibrate a threshold event | Bounded probability outputs with Brier score, log loss, ECE, and reliability data |
 
-These primitives are generic. A panel forecast may call the state dimensions
-origin, destination, corridor, segment, entity family, target family, and time
-bucket. Benchmark-specific labels and competition scoring stay in benchmark
-orchestration.
+Decomposition needs enough history: STL requires two complete cycles of its
+configured period, and MSTL requires two complete cycles of every period.
+Interval widening and residual correction should be evaluated on future
+origins just like the point forecaster.
 
-The interactive examples use the same primitive families through
-`runGeotemporalDiagnostics(request)`. The request can include any combination of
-`quantiles`, `residualCorrection`, `regime`, and `calibration` sections. The
-response is JSON-compatible and returns repaired quantiles, pinball loss,
-interval diagnostics, Kalman residual-state corrections, CUSUM/Page-Hinkley/EWMA
-regime signals, regime-adjusted intervals, calibration metrics, calibrated
-probabilities, and probability event labels.
+## Reading The Evidence
 
-## Evidence Standard
+A useful comparison identifies its data, series definition, cadence, horizon,
+cutoffs, covariates, and model settings. Read point metrics alongside bias and
+per-horizon errors; for interval models, also read coverage, width, and pinball
+loss. Fit and prediction times describe the cost of the chosen model.
 
-When reporting a forecasting result, record:
-
-- data source and filtering rules;
-- panel definition, timestamp column, target column, frequency, and horizon;
-- train/validation split boundaries or rolling-origin splitter settings;
-- model name and relevant parameters;
-- feature configuration and covariate roles;
-- RMSE, MAE, R2 when applicable, bias, WAPE or MAPE family metrics, and any
-  interval coverage or pinball-loss metrics;
-- for M5/M6-style benchmark claims, the `official_metrics` artifact section:
-  level-aware WRMSSE for M5 and rank-probability score plus decision rows for
-  M6;
-- training time and prediction time when comparing models.
-
-For benchmark comparisons, keep the train/test split, task names, model list,
-metrics, and success criteria stable across reruns. Compare against serious baselines
-with the same split and comparable estimator settings.
+The [forecasting benchmark reports](benchmarks/forecasting.md) include exact
+commands, artifact paths, model identifiers, metrics, and limitations. Browser
+examples use small demonstration inputs and should be read as behavior checks,
+not as evidence of better forecast accuracy.

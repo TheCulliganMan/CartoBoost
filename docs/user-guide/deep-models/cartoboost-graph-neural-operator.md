@@ -1,11 +1,19 @@
+---
+sidebar_label: Graph neural operator
+---
+
 import {DeepModelWasmExample} from '@site/src/components/ModelingLabClient';
 
-# CartoBoost GraphNeuralOperator
+# Graph Neural Operator
 
-Use `GraphNeuralOperator` for advanced experimental field-to-field mapping on
-regional or gridded panels. It consumes field values, coordinates, graph edges,
-and optional exogenous fields, then returns future, residual, and uncertainty
-fields.
+Map a spatial field to forecast, residual, and uncertainty fields with
+`GraphNeuralOperator`. Inputs combine values across locations, coordinates,
+weighted edges, and optional external fields—for example, pickup demand across
+a connected set of taxi zones.
+
+This is an experimental model. Use the examples to understand its input and
+output shapes, and compare against pointwise and spatial baselines before
+interpreting field-transfer performance.
 
 ## Python Example
 
@@ -26,11 +34,16 @@ benchmark = GraphNeuralOperator.synthetic_benchmark()
 
 ## Use When
 
-Use this experimental operator for field-to-field prediction when coordinates
-and graph structure define the output domain. Start with kriging or a pointwise
-model for ordinary interpolation tasks.
+| Your task | Start with |
+| --- | --- |
+| Experimental mapping of one spatial field to another. | `GraphNeuralOperator` |
+| Coordinate-based interpolation with uncertainty. | [Gaussian-process geostatistics](../geostatistics-models.md) |
+| A time forecast with explicit adjacency. | [SpatioTemporalGraphForecaster](cartoboost-spatiotemporal-graph-forecaster.md) |
 
-## Browser WASM Example
+## Interactive Example
+
+Run the small example to inspect inputs and model behavior. It is a browser
+demonstration, not a benchmark on held-out taxi trips.
 
 <DeepModelWasmExample model="GraphNeuralOperator" />
 

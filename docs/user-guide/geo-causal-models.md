@@ -1,9 +1,9 @@
 # Geo-Causal Experiment Models
 
-CartoBoost geo-causal tools estimate intervention effects on geographic panels.
-They are for questions such as marketing lift, policy rollout impact, store
-openings, and network changes. They do not forecast future demand and should not
-be reported as forecast accuracy evidence.
+Estimate the effect of a geographic intervention on taxi trips, fare revenue,
+or pickup demand. Geo-causal tools compare treated areas with controls and
+expose balance, placebo, and spillover diagnostics. Use them for intervention
+questions; forecast error alone cannot establish an intervention's effect.
 
 ## Models
 
@@ -15,9 +15,8 @@ be reported as forecast accuracy evidence.
 | `SpatialPlaceboTester` | Run deterministic placebo assignments and spillover diagnostics. |
 | `InvariantRiskEncoder` | Representation supplement for held-out-region diagnostics; not a causal estimator. |
 
-All fitting and causal scoring behavior is implemented in Rust under
-`crates/cartoboost-geo-causal`. Python wraps the native routines and only adds
-data coercion, `.plot()`, and ergonomics.
+Import these tools from `cartoboost.geo_causal`. The Python estimators accept
+panel inputs and expose summaries and plotting helpers.
 
 Representation supplements such as `InvariantRiskEncoder`,
 `DomainAdversarialGeoEncoder`, `CounterfactualRepresentationNet`, and
@@ -33,9 +32,9 @@ assumptions, placebo checks, and spillover diagnostics in the causal report.
 
 | Field | Meaning |
 | --- | --- |
-| `unit_id` | Stable geographic unit such as pickup zone, store catchment, district, or network node. |
+| `unit_id` | Stable geographic unit such as a pickup zone or corridor. |
 | `time` | Comparable ordered timestamp label. ISO strings sort correctly and are recommended. |
-| `outcome` | Numeric outcome such as trips, revenue, visits, policy incidents, or throughput. |
+| `outcome` | Numeric outcome such as taxi trips, fare revenue, or pickup demand. |
 | `treatment` | Boolean flag for treated unit-period rows. |
 | `covariates` | Optional numeric controls retained in the panel contract. |
 | `latitude`, `longitude` | Optional coordinates for distance diagnostics. |
@@ -45,7 +44,7 @@ assumptions, placebo checks, and spillover diagnostics in the causal report.
 Missing required inputs fail clearly. CartoBoost does not synthesize controls,
 drop invalid geos, or replace failed experiment designs with weaker defaults.
 
-## Synthetic DID
+## Python Example {#synthetic-did}
 
 `SyntheticDIDEstimator` splits rows into pre and post periods using
 `intervention_time`, partitions units into treated and controls, builds control
@@ -98,12 +97,10 @@ design = (
 )
 ```
 
-Use this for marketing lift when selecting treated media markets or taxi pickup
-zones, policy rollout when choosing districts, store openings when choosing
-candidate catchments, and network changes when selecting treated corridors or
-nodes. The design helper is not proof that the intervention will work; it only
-checks whether the historical panel can support a measurable experiment under
-the stated assumptions.
+Use the designer to choose taxi pickup zones for a service or pricing
+experiment, or corridors for a network change. Historical balance and placebo
+dispersion help assess whether the experiment can detect an effect. They do not
+predict whether the intervention itself will succeed.
 
 ## Spillover Diagnostics
 
@@ -149,3 +146,19 @@ Reports should include the exact intervention time, treated geos, control
 weights, placebo distribution, spillover warnings, and assumptions. Do not
 combine causal estimates with forecast benchmark tables unless the table clearly
 separates intervention effects from prediction metrics.
+
+## Use When
+
+| Your question | Start with |
+| --- | --- |
+| How did an intervention change outcomes in treated zones? | `SyntheticDIDEstimator` |
+| Which zones could support a measurable experiment? | `GeoExperimentDesigner` or `GeoLiftEstimator` |
+| Are treated and control areas exposed to each other? | `SpatialPlaceboTester` |
+| What will future demand be? | [Forecasting](../forecasting.md) |
+
+## Limitations
+
+- Unmeasured shocks that affect treated and control zones differently can bias effects.
+- Spillover can make a control zone partly treated.
+- Good pre-period balance does not prove the counterfactual remains valid afterward.
+- Representation models alone do not identify an intervention effect.

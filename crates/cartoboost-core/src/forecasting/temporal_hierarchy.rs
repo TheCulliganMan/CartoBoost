@@ -151,7 +151,7 @@ pub fn aggregate_non_overlapping(values: &[f64], factor: usize) -> Result<Vec<f6
             "temporal aggregation factor must be positive".to_string(),
         ));
     }
-    if !values.len().is_multiple_of(factor) {
+    if values.len() % factor != 0 {
         return Err(CartoBoostError::InvalidInput(format!(
             "series length {} is not divisible by temporal aggregation factor {}",
             values.len(),

@@ -151,7 +151,7 @@ impl CsrAdjacency {
         data: Vec<f64>,
         node_count: usize,
     ) -> Result<Self> {
-        if indptr.len() != node_count + 1 {
+        if node_count.checked_add(1) != Some(indptr.len()) {
             return Err(GeoStError::InvalidFrame(
                 "CSR indptr length must equal node_count + 1".to_string(),
             ));
@@ -746,21 +746,47 @@ impl DcrnnForecaster {
         frame: &GraphTemporalFrame,
         train_size: usize,
     ) -> Result<GraphForecastMetrics> {
-        if train_size == 0 || train_size + frame.horizon > frame.target.len() {
-            return Err(GeoStError::InvalidFrame(
-                "train_size must leave a full forecast horizon".to_string(),
-            ));
-        }
-        let mut train = frame.clone();
-        train.timestamps.truncate(train_size);
-        train.target.truncate(train_size);
+        frame.validate()?;
+        let test_end = train_size
+            .checked_add(frame.horizon)
+            .filter(|end| train_size > 0 && *end <= frame.target.len())
+            .ok_or_else(|| {
+                GeoStError::InvalidFrame(
+                    "train_size must leave a full forecast horizon".to_string(),
+                )
+            })?;
+        let train = GraphTemporalFrame {
+            node_ids: frame.node_ids.clone(),
+            timestamps: frame.timestamps[..train_size].to_vec(),
+            target: frame.target[..train_size].to_vec(),
+            covariates: frame
+                .covariates
+                .as_ref()
+                .map(|rows| rows[..train_size].to_vec()),
+            adjacency: frame.adjacency.clone(),
+            horizon: frame.horizon,
+            frequency: frame.frequency.clone(),
+            owner_mask: frame.owner_mask.clone(),
+            target_mask: frame
+                .target_mask
+                .as_ref()
+                .map(|rows| rows[..train_size].to_vec()),
+            imputed_mask: frame
+                .imputed_mask
+                .as_ref()
+                .map(|rows| rows[..train_size].to_vec()),
+            target_weights: frame
+                .target_weights
+                .as_ref()
+                .map(|rows| rows[..train_size].to_vec()),
+            covariate_roles: frame.covariate_roles.clone(),
+        };
         let mut model = Self::new(self.config.clone())?;
         model.fit(&train)?;
         let predictions = model.predict(frame.horizon)?;
-        let actual = frame.target[train_size..train_size + frame.horizon].to_vec();
         Ok(graph_metrics(
             &predictions,
-            &actual,
+            &frame.target[train_size..test_end],
             &frame.node_ids,
             &frame.adjacency,
         ))
@@ -4821,7 +4847,7 @@ impl CudaLsttnTensorExecutor {
         weight_decay: f64,
     ) -> Result<f64> {
         let patch_width = (state.periodicity / 24).max(1);
-        if !window.len().is_multiple_of(patch_width) {
+        if window.len() % patch_width != 0 {
             return Err(GeoStError::InvalidFrame(format!(
                 "LSTTN long-history window length {} must be divisible by patch width {}",
                 window.len(),
@@ -6010,7 +6036,7 @@ impl TrainableGraphTransformerState {
         backend: Option<&BackendSelection>,
     ) -> Result<f64> {
         let patch_width = (self.periodicity / 24).max(1);
-        if !window.len().is_multiple_of(patch_width) {
+        if window.len() % patch_width != 0 {
             return Err(GeoStError::InvalidFrame(format!(
                 "LSTTN long-history window length {} must be divisible by patch width {}",
                 window.len(),
@@ -9907,7 +9933,7 @@ impl PaperGraphTransformerForecaster {
             || config.hidden_size == 0
             || config.attention_heads == 0
             || config.attention_heads > config.hidden_size
-            || !config.hidden_size.is_multiple_of(config.attention_heads)
+            || config.hidden_size % config.attention_heads != 0
             || config.graph_order == 0
             || config.experts == 0
             || config.periodicity == 0
@@ -10168,7 +10194,7 @@ impl PaperGraphTransformerForecaster {
             } else {
                 (self.config.periodicity / patch_width).max(1) * 7
             };
-            if !self.config.lookback.is_multiple_of(patch_width) || patch_count <= seasonal_lag {
+            if self.config.lookback % patch_width != 0 || patch_count <= seasonal_lag {
                 return Err(GeoStError::InvalidFrame(format!(
                     "LSTTN lookback must contain complete patches and exceed its seasonal lag: lookback={}, patch_width={}, seasonal_lag_patches={seasonal_lag}",
                     self.config.lookback, patch_width
@@ -12067,10 +12093,14 @@ fn distance_residuals(
     adjacency: &CsrAdjacency,
     nodes: usize,
 ) -> Vec<GraphDistanceResidual> {
-    let distances = graph_distances(adjacency, nodes);
     let mut sums = vec![0.0; nodes];
     let mut counts = vec![0usize; nodes];
-    for distance_row in distances.iter().take(nodes) {
+    // Aggregate one source at a time: metrics need distance buckets, not an
+    // O(nodes^2) matrix retained for the lifetime of the calculation.
+    let mut distance_row = vec![usize::MAX / 4; nodes];
+    let mut queue = VecDeque::new();
+    for source in 0..nodes {
+        graph_distances_from(adjacency, source, &mut distance_row, &mut queue);
         for (target, distance) in distance_row.iter().enumerate().take(nodes) {
             let distance = *distance;
             if distance < nodes {
@@ -12096,28 +12126,66 @@ fn distance_residuals(
 
 fn graph_distances(adjacency: &CsrAdjacency, nodes: usize) -> Vec<Vec<usize>> {
     let mut all = vec![vec![usize::MAX / 4; nodes]; nodes];
+    let mut queue = VecDeque::new();
     for (source, distances) in all.iter_mut().enumerate().take(nodes) {
-        let mut queue = VecDeque::new();
-        distances[source] = 0;
-        queue.push_back(source);
-        while let Some(node) = queue.pop_front() {
-            let next_distance = distances[node] + 1;
-            let start = adjacency.indptr[node];
-            let end = adjacency.indptr[node + 1];
-            for &next in &adjacency.indices[start..end] {
-                if distances[next] > next_distance {
-                    distances[next] = next_distance;
-                    queue.push_back(next);
-                }
+        graph_distances_from(adjacency, source, distances, &mut queue);
+    }
+    all
+}
+
+fn graph_distances_from(
+    adjacency: &CsrAdjacency,
+    source: usize,
+    distances: &mut [usize],
+    queue: &mut VecDeque<usize>,
+) {
+    distances.fill(usize::MAX / 4);
+    queue.clear();
+    distances[source] = 0;
+    queue.push_back(source);
+    while let Some(node) = queue.pop_front() {
+        let next_distance = distances[node] + 1;
+        let start = adjacency.indptr[node];
+        let end = adjacency.indptr[node + 1];
+        for &next in &adjacency.indices[start..end] {
+            if distances[next] > next_distance {
+                distances[next] = next_distance;
+                queue.push_back(next);
             }
         }
     }
-    all
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn distance_residuals_preserve_directed_disconnected_buckets() {
+        // 0 -> 1 -> 2, plus isolated node 3. Residuals are 1,2,3,4
+        // on the first horizon and twice those values on the second.
+        let adjacency =
+            CsrAdjacency::new(vec![0, 1, 2, 2, 2], vec![1, 2], vec![1.0, 1.0], 4).unwrap();
+        let predictions = vec![vec![1.0, 2.0, 3.0, 4.0], vec![2.0, 4.0, 6.0, 8.0]];
+        let actual = vec![vec![0.0; 4]; 2];
+        let buckets = distance_residuals(&predictions, &actual, &adjacency, 4);
+        assert_eq!(buckets.len(), 3);
+        assert_eq!(buckets[0].distance, 0);
+        assert_eq!(buckets[0].count, 8);
+        assert_eq!(buckets[0].mean_abs_residual, 3.75);
+        assert_eq!(buckets[1].distance, 1);
+        assert_eq!(buckets[1].count, 4);
+        assert_eq!(buckets[1].mean_abs_residual, 3.75);
+        assert_eq!(buckets[2].distance, 2);
+        assert_eq!(buckets[2].count, 2);
+        assert_eq!(buckets[2].mean_abs_residual, 4.5);
+        assert!(distance_residuals(&[], &[], &adjacency, 4).is_empty());
+    }
+
+    #[test]
+    fn csr_adjacency_rejects_overflowing_node_count() {
+        assert!(CsrAdjacency::new(vec![0], vec![], vec![], usize::MAX).is_err());
+    }
 
     #[test]
     fn auto_compute_backend_selects_an_available_backend() {
@@ -12152,6 +12220,73 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[test]
+    fn dcrnn_backtest_slices_all_temporal_metadata() {
+        let adjacency = CsrAdjacency::new(vec![0, 1, 2], vec![1, 0], vec![1.0, 1.0], 2).unwrap();
+        let frame = GraphTemporalFrame::new_with_training_metadata(
+            vec!["pickup".to_string(), "dropoff".to_string()],
+            (0..10).collect(),
+            (0..10)
+                .map(|time| vec![time as f64 + 1.0, time as f64 * 2.0 + 3.0])
+                .collect(),
+            Some(
+                (0..10)
+                    .map(|time| vec![vec![time as f64], vec![time as f64]])
+                    .collect(),
+            ),
+            adjacency,
+            2,
+            "hourly".to_string(),
+            Some(vec![true, true]),
+            Some(vec![vec![true, true]; 10]),
+            Some(vec![vec![false, false]; 10]),
+            Some(vec![vec![0.5, 1.0]; 10]),
+            Some(vec!["time_of_day".to_string()]),
+        )
+        .unwrap();
+        let config = DcrnnConfig {
+            hidden_size: 2,
+            epochs: 1,
+            backend: select_compute_backend(Some("cpu")).unwrap(),
+            ..DcrnnConfig::default()
+        };
+        let model = DcrnnForecaster::new(config.clone()).unwrap();
+        let before = serde_json::to_value(&frame).unwrap();
+        let actual = model.backtest(&frame, 7).unwrap();
+        assert_eq!(serde_json::to_value(&frame).unwrap(), before);
+
+        let train = GraphTemporalFrame::new_with_training_metadata(
+            frame.node_ids.clone(),
+            frame.timestamps[..7].to_vec(),
+            frame.target[..7].to_vec(),
+            Some(frame.covariates.as_ref().unwrap()[..7].to_vec()),
+            frame.adjacency.clone(),
+            frame.horizon,
+            frame.frequency.clone(),
+            frame.owner_mask.clone(),
+            Some(frame.target_mask.as_ref().unwrap()[..7].to_vec()),
+            Some(frame.imputed_mask.as_ref().unwrap()[..7].to_vec()),
+            Some(frame.target_weights.as_ref().unwrap()[..7].to_vec()),
+            frame.covariate_roles.clone(),
+        )
+        .unwrap();
+        let mut reference = DcrnnForecaster::new(config).unwrap();
+        reference.fit(&train).unwrap();
+        let expected = graph_metrics(
+            &reference.predict(2).unwrap(),
+            &frame.target[7..9],
+            &frame.node_ids,
+            &frame.adjacency,
+        );
+        assert_eq!(
+            serde_json::to_value(actual).unwrap(),
+            serde_json::to_value(expected).unwrap()
+        );
+        assert!(model.backtest(&frame, usize::MAX).is_err());
+        assert!(model.backtest(&frame, 0).is_err());
+        assert!(model.backtest(&frame, 9).is_err());
     }
 
     #[test]

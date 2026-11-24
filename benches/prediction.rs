@@ -1,4 +1,7 @@
-use cartoboost_core::tree::{Node, PredictionTransform, Split, Tree, MODEL_ARTIFACT_VERSION};
+use cartoboost_core::predictors::LinearLeafModel;
+use cartoboost_core::tree::{
+    FuzzyKernel, Node, PredictionTransform, Split, Tree, MODEL_ARTIFACT_VERSION,
+};
 use cartoboost_core::{Dataset, Model};
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 
@@ -109,6 +112,49 @@ fn bench_prediction(c: &mut Criterion) {
             },
         );
     }
+    // Include the checked Dataset path used by Rust callers, plus predictors
+    // that need access to complete dense rows during tree traversal.
+    for kind in ["axis_checked", "fuzzy_dataset", "linear_dataset"] {
+        let (rows, cols, trees) = (1_024, 8, 100);
+        let dataset = synthetic_dataset(rows, cols);
+        let mut model = synthetic_axis_model(trees, cols);
+        for tree in &mut model.trees {
+            match kind {
+                "fuzzy_dataset" => {
+                    if let Node::Branch { split, .. } = &mut tree.root {
+                        *split = Split::Fuzzy {
+                            base: Box::new(split.clone()),
+                            bandwidth: 0.5,
+                            kernel: FuzzyKernel::Linear,
+                        };
+                    }
+                }
+                "linear_dataset" => {
+                    tree.root = Node::LinearLeaf {
+                        model: LinearLeafModel {
+                            intercept: 0.01,
+                            coefficients: vec![0.02; cols],
+                            features: (0..cols).collect(),
+                        },
+                        sample_weight_sum: 1.0,
+                        training_loss: 0.0,
+                    };
+                }
+                _ => {}
+            }
+        }
+        group.bench_with_input(
+            BenchmarkId::new(kind, format!("{rows}x{cols}_{trees}trees")),
+            &(model, dataset),
+            |bench, (model, dataset)| {
+                bench.iter(|| {
+                    black_box(model)
+                        .try_predict(black_box(dataset))
+                        .expect("benchmark fixture predicts")
+                });
+            },
+        );
+    }
     for &(rows, cols, trees) in &[(25_000, 8, 100), (25_000, 3, 100)] {
         let (dataset, values) = synthetic_dataset_with_values(rows, cols);
         let model = synthetic_axis_model(trees, cols);
@@ -184,6 +230,22 @@ fn bench_prediction(c: &mut Criterion) {
                 });
             },
         );
+    }
+    // Match interactive, minibatch, and large-table API workloads. The model
+    // and inputs stay outside the timed closure; include validation as callers do.
+    for rows in [1, 32, 1_024, 100_000] {
+        let cols = 8;
+        let model = synthetic_axis_model(128, cols);
+        let predictor = model.flat_axis_predictor().expect("axis fixture");
+        let values = synthetic_values(rows, cols);
+        group.bench_function(BenchmarkId::new("batch_axis_128_trees", rows), |bench| {
+            bench.iter(|| {
+                model
+                    .validate_dense_flat_prediction_inputs(rows, cols, black_box(&values))
+                    .unwrap();
+                black_box(predictor.predict_flat(rows, cols, black_box(&values)))
+            });
+        });
     }
     group.finish();
 }

@@ -221,13 +221,26 @@ def materialize_source_target_pair_nodes(
 ) -> SourceTargetPairNodes:
     """Create explicit source-target pair nodes for directed OD-style facts."""
     endpoint_lookup: dict[str, Any] = {}
+    pair_node_lookup: dict[str, tuple[str, str, str]] = {}
     native_input_edges = []
     for source, target, relation in edges:
         source_key = str(source)
         target_key = str(target)
-        endpoint_lookup.setdefault(source_key, source)
-        endpoint_lookup.setdefault(target_key, target)
+        for key, node in ((source_key, source), (target_key, target)):
+            if key in endpoint_lookup and (
+                type(endpoint_lookup[key]) is not type(node) or endpoint_lookup[key] != node
+            ):
+                raise ValueError("distinct graph node IDs have colliding string representations")
+            endpoint_lookup[key] = node
+        pair_id = f"{pair_node_prefix}:{source_key}:{target_key}"
+        logical_pair = (pair_node_prefix, source_key, target_key)
+        if pair_id in pair_node_lookup and pair_node_lookup[pair_id] != logical_pair:
+            raise ValueError("distinct source-target pairs render the same pair node ID")
+        pair_node_lookup[pair_id] = logical_pair
         native_input_edges.append((source_key, target_key, str(relation)))
+
+    if pair_node_lookup.keys() & endpoint_lookup.keys():
+        raise ValueError("generated pair node ID collides with an original node ID")
 
     native_edges, native_pair_ids = _native_materialize_source_target_pair_nodes(
         native_input_edges,
@@ -236,9 +249,6 @@ def materialize_source_target_pair_nodes(
         str(pair_node_prefix),
         bool(include_original_edges),
     )
-    pair_node_lookup = {
-        pair_id: _parse_pair_node_id(pair_id, pair_node_prefix) for pair_id in native_pair_ids
-    }
     augmented: list[tuple[Any, Any, Any]] = []
     for source, target, relation in native_edges:
         augmented.append(
@@ -252,14 +262,6 @@ def materialize_source_target_pair_nodes(
         edges=augmented,
         pair_node_ids=[pair_node_lookup[pair_id] for pair_id in native_pair_ids],
     )
-
-
-def _parse_pair_node_id(value: str, pair_node_prefix: str) -> tuple[str, str, str]:
-    prefix = f"{pair_node_prefix}:"
-    if not value.startswith(prefix):
-        raise ValueError(f"unexpected native pair node id {value!r}")
-    source, target = value[len(prefix) :].split(":", maxsplit=1)
-    return (pair_node_prefix, source, target)
 
 
 def ensure_node_features_shape(

@@ -73,12 +73,15 @@ class RollingOriginSplitter:
         if unique_times.size <= self.horizon:
             return
 
-        candidates: list[tuple[np.ndarray, np.ndarray, dict[str, Any]]] = []
-        for cutoff_pos in range(
+        cutoffs = range(
             self.min_train_size - 1,
             unique_times.size - self.horizon,
             self.step,
-        ):
+        )
+        if self.n_splits is not None:
+            cutoffs = cutoffs[-self.n_splits :]
+        candidates: list[tuple[np.ndarray, np.ndarray, dict[str, Any]]] = []
+        for cutoff_pos in cutoffs:
             train_times = unique_times[: cutoff_pos + 1]
             if self.max_train_size is not None:
                 train_times = train_times[-self.max_train_size :]
@@ -114,9 +117,6 @@ class RollingOriginSplitter:
                     },
                 )
             )
-
-        if self.n_splits is not None:
-            candidates = candidates[-self.n_splits :]
 
         for i, (train_indices, validation_indices, metadata) in enumerate(candidates):
             yield ForecastFold(

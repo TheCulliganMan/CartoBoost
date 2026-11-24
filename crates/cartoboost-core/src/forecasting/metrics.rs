@@ -32,6 +32,132 @@ pub struct ForecastActual {
     pub actual: f64,
 }
 
+#[derive(Default)]
+struct PointMetricSums {
+    abs_sum: f64,
+    squared_sum: f64,
+    actual_abs_sum: f64,
+    smape_sum: f64,
+    smape_count: usize,
+    error_sum: f64,
+    count: usize,
+}
+
+impl PointMetricSums {
+    fn observe(&mut self, actual: f64, predicted: f64) {
+        let error = predicted - actual;
+        let abs_error = error.abs();
+        self.abs_sum += abs_error;
+        self.squared_sum += error * error;
+        self.actual_abs_sum += actual.abs();
+        self.error_sum += error;
+        let denominator = predicted.abs() + actual.abs();
+        if denominator > 0.0 {
+            self.smape_sum += 2.0 * abs_error / denominator;
+            self.smape_count += 1;
+        }
+        self.count += 1;
+    }
+
+    fn mae(&self) -> f64 {
+        self.abs_sum / self.count as f64
+    }
+
+    fn finish(self, mase: Option<f64>) -> ForecastMetricSet {
+        let n = self.count as f64;
+        let mean_abs_actual = self.actual_abs_sum / n;
+        ForecastMetricSet {
+            mae: self.mae(),
+            rmse: (self.squared_sum / n).sqrt(),
+            normalized_rmse: if mean_abs_actual > 0.0 {
+                (self.squared_sum / n).sqrt() / mean_abs_actual
+            } else if self.squared_sum == 0.0 {
+                0.0
+            } else {
+                (self.squared_sum / n).sqrt() / 1e-12
+            },
+            wape: if self.actual_abs_sum > 0.0 {
+                self.abs_sum / self.actual_abs_sum
+            } else {
+                0.0
+            },
+            smape: if self.smape_count == 0 {
+                0.0
+            } else {
+                self.smape_sum / self.smape_count as f64
+            },
+            bias: self.error_sum / n,
+            mase,
+        }
+    }
+}
+
+/// Evaluate already aligned forecast arrays, without constructing keyed rows.
+/// Training values, when MASE is requested, represent one chronological series.
+pub fn evaluate_forecast_arrays(
+    actuals: &[f64],
+    predictions: &[f64],
+    training_actuals: &[f64],
+    mase_seasonality: Option<usize>,
+) -> Result<ForecastMetricSet> {
+    if actuals.is_empty() {
+        return Err(CartoBoostError::InvalidInput(
+            "forecast metrics require at least one actual value".to_string(),
+        ));
+    }
+    if actuals.len() != predictions.len() {
+        return Err(CartoBoostError::InvalidInput(
+            "forecast actual and prediction lengths must match".to_string(),
+        ));
+    }
+    let mut sums = PointMetricSums::default();
+    for (&actual, &predicted) in actuals.iter().zip(predictions) {
+        if !actual.is_finite() || !predicted.is_finite() {
+            return Err(CartoBoostError::InvalidInput(
+                "actual and predicted forecast values must be finite".to_string(),
+            ));
+        }
+        sums.observe(actual, predicted);
+    }
+    let mase = if let Some(seasonality) = mase_seasonality {
+        if seasonality == 0 {
+            return Err(CartoBoostError::InvalidInput(
+                "MASE seasonality must be positive".to_string(),
+            ));
+        }
+        if training_actuals.is_empty() {
+            return Err(CartoBoostError::InvalidInput(
+                "MASE requires training actuals".to_string(),
+            ));
+        }
+        if training_actuals.iter().any(|value| !value.is_finite()) {
+            return Err(CartoBoostError::InvalidInput(
+                "training actual values must be finite".to_string(),
+            ));
+        }
+        if training_actuals.len() <= seasonality {
+            return Err(CartoBoostError::InvalidInput(
+                "MASE requires more training rows than the seasonality".to_string(),
+            ));
+        }
+        let mut abs_naive_sum = 0.0;
+        for index in seasonality..training_actuals.len() {
+            abs_naive_sum +=
+                (training_actuals[index] - training_actuals[index - seasonality]).abs();
+        }
+        let scale = abs_naive_sum / (training_actuals.len() - seasonality) as f64;
+        if scale == 0.0 {
+            return Err(CartoBoostError::InvalidInput(
+                "MASE scale must be non-zero".to_string(),
+            ));
+        }
+        Some(sums.mae() / scale)
+    } else {
+        None
+    };
+    Ok(sums.finish(mase))
+}
+
 pub fn evaluate_forecast(
     forecast: &ForecastResult,
     actuals: &[ForecastActual],
@@ -54,7 +180,7 @@ pub fn evaluate_forecast_with_training(
     for prediction in forecast.predictions() {
         let previous = predictions.insert(
             (
-                prediction.series_id.clone(),
+                prediction.series_id.as_str(),
                 prediction.timestamp,
                 prediction.horizon,
             ),
@@ -68,12 +194,7 @@ pub fn evaluate_forecast_with_training(
         }
     }
 
-    let mut abs_sum = 0.0;
-    let mut squared_sum = 0.0;
-    let mut actual_abs_sum = 0.0;
-    let mut smape_sum = 0.0;
-    let mut smape_count = 0usize;
-    let mut error_sum = 0.0;
+    let mut sums = PointMetricSums::default();
     let mut actual_keys = HashSet::with_capacity(actuals.len());
 
     for actual in actuals {
@@ -82,8 +203,8 @@ pub fn evaluate_forecast_with_training(
                 "actual forecast values must be finite".to_string(),
             ));
         }
-        let key = (actual.series_id.clone(), actual.timestamp, actual.horizon);
-        if !actual_keys.insert(key.clone()) {
+        let key = (actual.series_id.as_str(), actual.timestamp, actual.horizon);
+        if !actual_keys.insert(key) {
             return Err(CartoBoostError::InvalidInput(format!(
                 "duplicate actual for series {}, timestamp {}, horizon {}",
                 actual.series_id, actual.timestamp, actual.horizon
@@ -95,17 +216,7 @@ pub fn evaluate_forecast_with_training(
                 actual.series_id, actual.timestamp, actual.horizon
             )));
         };
-        let error = predicted - actual.actual;
-        let abs_error = error.abs();
-        abs_sum += abs_error;
-        squared_sum += error * error;
-        actual_abs_sum += actual.actual.abs();
-        error_sum += error;
-        let denominator = predicted.abs() + actual.actual.abs();
-        if denominator > 0.0 {
-            smape_sum += 2.0 * abs_error / denominator;
-            smape_count += 1;
-        }
+        sums.observe(actual.actual, *predicted);
     }
     for key in predictions.keys() {
         if !actual_keys.contains(key) {
@@ -116,37 +227,12 @@ pub fn evaluate_forecast_with_training(
         }
     }
 
-    let n = actuals.len() as f64;
-    let smape = if smape_count == 0 {
-        0.0
-    } else {
-        smape_sum / smape_count as f64
-    };
     let mase = if let Some(seasonality) = mase_seasonality {
-        Some(evaluate_mase(abs_sum / n, training_actuals, seasonality)?)
+        Some(evaluate_mase(sums.mae(), training_actuals, seasonality)?)
     } else {
         None
     };
-    let mean_abs_actual = actual_abs_sum / n;
-    Ok(ForecastMetricSet {
-        mae: abs_sum / n,
-        rmse: (squared_sum / n).sqrt(),
-        normalized_rmse: if mean_abs_actual > 0.0 {
-            (squared_sum / n).sqrt() / mean_abs_actual
-        } else if squared_sum == 0.0 {
-            0.0
-        } else {
-            (squared_sum / n).sqrt() / 1e-12
-        },
-        wape: if actual_abs_sum > 0.0 {
-            abs_sum / actual_abs_sum
-        } else {
-            0.0
-        },
-        smape,
-        bias: error_sum / n,
-        mase,
-    })
+    Ok(sums.finish(mase))
 }
 
 pub fn evaluate_competition_metrics(

@@ -5,6 +5,36 @@ use cartoboost_neural::{
 use tempfile::tempdir;
 
 #[test]
+fn embedding_checksum_and_predictions_do_not_depend_on_artifact_row_order() {
+    let rows = vec![
+        EmbeddingRow {
+            id: 7,
+            values: vec![0.25, -0.75],
+        },
+        EmbeddingRow {
+            id: 3,
+            values: vec![-0.5, 0.0],
+        },
+    ];
+    let artifact =
+        build_embedding_table_artifact(2, rows.clone(), ArtifactFallbackKind::GlobalMeanVector)
+            .unwrap();
+    let sorted = build_embedding_table_artifact(
+        2,
+        rows.into_iter().rev().collect(),
+        ArtifactFallbackKind::GlobalMeanVector,
+    )
+    .unwrap();
+    assert_eq!(artifact.metadata.checksum, sorted.metadata.checksum);
+    let original = EmbeddingTable::from_artifact(artifact).unwrap();
+    let restored = EmbeddingTable::from_artifact(sorted).unwrap();
+    assert_eq!(
+        original.encode_ids(&[7, 3, 999], "ids").unwrap().values,
+        restored.encode_ids(&[7, 3, 999], "ids").unwrap().values,
+    );
+}
+
+#[test]
 fn loads_embedding_table() {
     let rows = vec![
         EmbeddingRow {

@@ -1,6 +1,6 @@
+use crate::tree::map_prediction_rows;
 use crate::tree::{Model, Node, PredictionTransform, Split, Tree};
 use crate::{CartoBoostError, Result};
-use rayon::prelude::*;
 
 #[derive(Clone, Copy, Debug, Default)]
 struct PathElement {
@@ -47,33 +47,33 @@ impl Model {
         self.validate_dense_flat_prediction_inputs(rows, cols, values)?;
         let expected_prediction = self.feature_contribution_base_value()?;
 
-        (0..rows)
-            .into_par_iter()
-            .map(|row| {
-                let row_values = &values[row * cols..(row + 1) * cols];
-                let mut output = vec![0.0; self.feature_count + 1];
-                for tree in &self.trees {
-                    let mut tree_values = vec![0.0; self.feature_count];
-                    tree_shap_recursive(
-                        &tree.root,
-                        row_values,
-                        0,
-                        &[PathElement::default()],
-                        1.0,
-                        1.0,
-                        -1,
-                        &mut tree_values,
-                    )?;
-                    for (output_value, tree_value) in
-                        output[..self.feature_count].iter_mut().zip(tree_values)
-                    {
-                        *output_value += self.learning_rate * tree_value;
-                    }
+        map_prediction_rows(rows, self.trees.len().saturating_mul(64), |row| {
+            let row_values = &values[row * cols..(row + 1) * cols];
+            let mut output = vec![0.0; self.feature_count + 1];
+            let mut tree_values = vec![0.0; self.feature_count];
+            for tree in &self.trees {
+                tree_values.fill(0.0);
+                tree_shap_recursive(
+                    &tree.root,
+                    row_values,
+                    0,
+                    &[PathElement::default()],
+                    1.0,
+                    1.0,
+                    -1,
+                    &mut tree_values,
+                )?;
+                for (output_value, tree_value) in
+                    output[..self.feature_count].iter_mut().zip(&tree_values)
+                {
+                    *output_value += self.learning_rate * tree_value;
                 }
-                output[self.feature_count] = expected_prediction;
-                Ok(output)
-            })
-            .collect()
+            }
+            output[self.feature_count] = expected_prediction;
+            Ok(output)
+        })
+        .into_iter()
+        .collect()
     }
 }
 

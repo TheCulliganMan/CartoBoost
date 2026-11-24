@@ -1,5 +1,6 @@
 use cartoboost_core::forecasting::{
-    ArimaForecaster, AutoARIMAForecaster, ForecastFrame, ForecastFrequency, ForecastRow, Forecaster,
+    ArimaForecaster, AutoARIMAForecaster, ForecastFrame, ForecastFrequency, ForecastRow,
+    ForecastWindow, Forecaster, RollingOriginSplitter,
 };
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 
@@ -79,6 +80,13 @@ fn bench_forecasting(c: &mut Criterion) {
             },
         );
     }
+
+    let frame = taxi_lane_frame(8, 2400);
+    let splitter = RollingOriginSplitter::new(24, 1, 168, None, Some(3), ForecastWindow::Expanding)
+        .expect("valid rolling-origin splitter");
+    group.bench_function("rolling_origin_last_3_8lanes_2400hours", |bench| {
+        bench.iter(|| black_box(splitter.split(black_box(&frame)).expect("benchmark folds")));
+    });
 
     group.finish();
 }

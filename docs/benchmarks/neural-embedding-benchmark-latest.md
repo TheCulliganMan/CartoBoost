@@ -1,11 +1,13 @@
 # Neural Embedding Benchmark
 
-## Bottom Line
+Repeated identifiers help the hybrid embedding model on this synthetic fixture;
+held-out origin IDs can hurt it. Random, tail, and temporal splits show larger
+MAE gains than the geographic split, so the validation design changes the
+interpretation.
 
-The neural embedding benchmark is a synthetic repeated-ID diagnostic. It shows
-the intended pattern: residual embeddings help strongly when IDs recur, help
-modestly on some geographic/tail splits, and can hurt when the tested origin
-IDs are cold.
+The run uses 2,000 generated rows and 128 ID cells. It is a diagnostic for ID
+reuse and cold-start behavior, not a real NYC taxi quality comparison. See the
+[neural model guides](../user-guide/neural-models/index.md) to choose a workflow.
 
 ## Reproduce
 

@@ -66,6 +66,49 @@ def test_forecast_frame_rejects_duplicate_timestamps_within_single_series():
         ForecastFrame.from_pandas(raw, timestamp_col="pickup_hour", target_col="fare", freq="D")
 
 
+@pytest.mark.parametrize("panel", [False, True])
+@pytest.mark.parametrize("with_covariates", [False, True])
+def test_forecast_frame_builds_native_payload_without_materializing_full_records(
+    monkeypatch, panel, with_covariates
+):
+    raw = pd.DataFrame(
+        {
+            "timestamp": pd.date_range("2025-01-01", periods=8, freq="h"),
+            "fare": np.arange(8, dtype=np.float32),
+            "pickup_zone": ["pickup-a"] * 4 + ["pickup-b"] * 4,
+            "hour": np.arange(8, dtype=np.int64),
+            "trip_distance": np.arange(8, dtype=float) + 0.5,
+            "unused_payload": [[object()] for _ in range(8)],
+        }
+    ).iloc[::-1]
+
+    def reject_records(*args, **kwargs):
+        raise AssertionError("native frame construction must not materialize full-table records")
+
+    monkeypatch.setattr(pd.DataFrame, "to_dict", reject_records)
+    frame = ForecastFrame.from_pandas(
+        raw,
+        timestamp_col="timestamp",
+        target_col="fare",
+        series_id_col="pickup_zone" if panel else None,
+        freq="h",
+        known_future_covariates=["hour"] if with_covariates else None,
+        historical_covariates=["trip_distance"] if with_covariates else None,
+    )
+
+    rows = frame._native_frame.rows()
+    assert [row[2] for row in rows] == list(range(8))
+    assert [row[0] for row in rows] == (
+        ["pickup-a"] * 4 + ["pickup-b"] * 4 if panel else ["__single__"] * 8
+    )
+    assert frame._native_frame.row_covariates() == (
+        [{"hour": float(index), "trip_distance": index + 0.5} for index in range(8)]
+        if with_covariates
+        else [{} for _ in range(8)]
+    )
+    assert "unused_payload" in frame.to_pandas().columns
+
+
 def test_forecast_frame_aggregates_duplicate_timestamps_with_sample_weights():
     raw = pd.DataFrame(
         {

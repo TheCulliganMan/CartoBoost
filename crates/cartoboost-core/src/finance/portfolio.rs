@@ -53,12 +53,20 @@ impl Portfolio {
                 "at least one long or short position is required".to_string(),
             ));
         }
-        if long_count + short_count > signals.len() {
+        if long_count > signals.len() || short_count > signals.len() - long_count {
             return Err(CartoBoostError::InvalidInput(
                 "long_count plus short_count must not exceed asset count".to_string(),
             ));
         }
-        let mut ranked = signals.to_vec();
+        if signals
+            .iter()
+            .any(|signal| signal.asset_id.trim().is_empty() || !signal.expected_return.is_finite())
+        {
+            return Err(CartoBoostError::InvalidInput(
+                "signals must have non-empty asset ids and finite expected returns".to_string(),
+            ));
+        }
+        let mut ranked = signals.iter().collect::<Vec<_>>();
         ranked.sort_by(|left, right| {
             right
                 .expected_return
@@ -98,5 +106,47 @@ impl Portfolio {
         );
         positions.sort_by(|left, right| left.asset_id.cmp(&right.asset_id));
         Ok(Self { positions })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn portfolio_rejects_overflowing_counts_and_invalid_public_signals() {
+        let signal = PortfolioSignal::new("PU100", 1.0).expect("signal");
+        assert!(Portfolio::deterministic_long_short(&[signal], usize::MAX, 1).is_err());
+        assert!(Portfolio::deterministic_long_short(
+            &[PortfolioSignal {
+                asset_id: "PU100".into(),
+                expected_return: f64::NAN
+            }],
+            1,
+            0,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn portfolio_ranking_keeps_deterministic_ties_and_weights() {
+        let signals = [("PU102", 3.0), ("PU100", 3.0), ("PU101", 1.0)]
+            .into_iter()
+            .map(|(id, value)| PortfolioSignal::new(id, value).expect("signal"))
+            .collect::<Vec<_>>();
+        let portfolio = Portfolio::deterministic_long_short(&signals, 1, 1).expect("portfolio");
+        assert_eq!(
+            portfolio.positions,
+            vec![
+                PortfolioPosition {
+                    asset_id: "PU100".into(),
+                    weight: 1.0
+                },
+                PortfolioPosition {
+                    asset_id: "PU101".into(),
+                    weight: -1.0
+                },
+            ]
+        );
     }
 }

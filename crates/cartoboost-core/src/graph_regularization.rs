@@ -139,12 +139,28 @@ impl CsrGraph {
         indices: Vec<usize>,
         weights: Vec<f64>,
     ) -> Result<Self> {
+        let graph = Self {
+            node_count,
+            indptr,
+            indices,
+            weights,
+        };
+        graph.validate()?;
+        Ok(graph)
+    }
+
+    /// Validate the CSR layout, including graphs assembled through public fields.
+    pub fn validate(&self) -> Result<()> {
+        let node_count = self.node_count;
+        let indptr = &self.indptr;
+        let indices = &self.indices;
+        let weights = &self.weights;
         if node_count == 0 {
             return Err(CartoBoostError::InvalidInput(
                 "graph must contain at least one node".to_string(),
             ));
         }
-        if indptr.len() != node_count + 1 {
+        if node_count.checked_add(1) != Some(indptr.len()) {
             return Err(CartoBoostError::InvalidInput(
                 "CSR indptr length must equal node_count + 1".to_string(),
             ));
@@ -177,15 +193,18 @@ impl CsrGraph {
                 "CSR weights must be finite and non-negative".to_string(),
             ));
         }
-        Ok(Self {
-            node_count,
-            indptr,
-            indices,
-            weights,
-        })
+        Ok(())
     }
 
     pub fn from_edges(node_count: usize, edges: &[(usize, usize, f64)]) -> Result<Self> {
+        let indptr_len = node_count.checked_add(1).ok_or_else(|| {
+            CartoBoostError::InvalidInput("graph node_count is too large".to_string())
+        })?;
+        if node_count == 0 {
+            return Err(CartoBoostError::InvalidInput(
+                "graph must contain at least one node".to_string(),
+            ));
+        }
         if edges.iter().any(|&(left, right, weight)| {
             left >= node_count || right >= node_count || !weight.is_finite() || weight < 0.0
         }) {
@@ -203,7 +222,7 @@ impl CsrGraph {
         for row in &mut rows {
             row.sort_by_key(|left| left.0);
         }
-        let mut indptr = Vec::with_capacity(node_count + 1);
+        let mut indptr = Vec::with_capacity(indptr_len);
         let mut indices = Vec::new();
         let mut weights = Vec::new();
         indptr.push(0);
@@ -223,12 +242,12 @@ impl CsrGraph {
                 "node index out of graph range".to_string(),
             ));
         }
-        let start = self.indptr[node];
-        let end = self.indptr[node + 1];
-        Ok(self.indices[start..end]
-            .iter()
-            .copied()
-            .zip(self.weights[start..end].iter().copied()))
+        let invalid = || CartoBoostError::InvalidInput("invalid CSR row offsets".to_string());
+        let start = *self.indptr.get(node).ok_or_else(invalid)?;
+        let end = *self.indptr.get(node + 1).ok_or_else(invalid)?;
+        let indices = self.indices.get(start..end).ok_or_else(invalid)?;
+        let weights = self.weights.get(start..end).ok_or_else(invalid)?;
+        Ok(indices.iter().copied().zip(weights.iter().copied()))
     }
 
     pub fn edge_count(&self) -> usize {
@@ -250,13 +269,7 @@ impl GraphLaplacian {
 
     pub fn penalty(&self, values: &[f64]) -> Result<f64> {
         self.validate_values(values)?;
-        let mut total = 0.0;
-        for left in 0..self.graph.node_count {
-            for (right, weight) in self.graph.neighbors(left)? {
-                total += weight * (values[left] - values[right]).powi(2);
-            }
-        }
-        Ok(0.5 * total)
+        graph_penalty(&self.graph, values)
     }
 
     pub fn gradient(&self, values: &[f64]) -> Result<Vec<f64>> {
@@ -273,6 +286,18 @@ impl GraphLaplacian {
     }
 
     fn validate_values(&self, values: &[f64]) -> Result<()> {
+        self.graph.validate()?;
+        if self.degree.len() != self.graph.node_count
+            || self
+                .degree
+                .iter()
+                .any(|value| !value.is_finite() || *value < 0.0)
+        {
+            return Err(CartoBoostError::InvalidInput(
+                "graph degree vector must match node_count and be finite and non-negative"
+                    .to_string(),
+            ));
+        }
         if values.len() != self.graph.node_count {
             return Err(CartoBoostError::InvalidInput(
                 "graph value count must match node_count".to_string(),
@@ -285,6 +310,19 @@ impl GraphLaplacian {
         }
         Ok(())
     }
+}
+
+fn graph_penalty(graph: &CsrGraph, values: &[f64]) -> Result<f64> {
+    let mut total = 0.0;
+    for left in 0..graph.node_count {
+        for (right, weight) in graph.neighbors(left)? {
+            let right_value = values.get(right).ok_or_else(|| {
+                CartoBoostError::InvalidInput("CSR edge index out of node range".to_string())
+            })?;
+            total += weight * (values[left] - right_value).powi(2);
+        }
+    }
+    Ok(0.5 * total)
 }
 
 impl GraphSmoother {
@@ -425,6 +463,7 @@ impl GraphRegularizedBooster {
         lambda: f64,
         iterations: usize,
     ) -> Result<Self> {
+        graph.validate()?;
         let laplacian = GraphLaplacian::new(graph);
         laplacian.validate_values(&baseline_predictions)?;
         if !lambda.is_finite() || lambda < 0.0 {
@@ -479,6 +518,7 @@ impl GraphRegularizedBooster {
 
 impl GraphSplitRegularization {
     pub fn new(graph: CsrGraph, lambda: f64) -> Result<Self> {
+        graph.validate()?;
         if !lambda.is_finite() || lambda < 0.0 {
             return Err(CartoBoostError::InvalidInput(
                 "graph split regularization lambda must be finite and non-negative".to_string(),
@@ -488,6 +528,7 @@ impl GraphSplitRegularization {
     }
 
     pub fn validate_row_count(&self, row_count: usize) -> Result<()> {
+        self.graph.validate()?;
         if self.graph.node_count != row_count {
             return Err(CartoBoostError::InvalidInput(format!(
                 "graph split regularization node_count {} must match training row count {row_count}",
@@ -507,7 +548,12 @@ impl GraphSplitRegularization {
         if self.lambda == 0.0 {
             return Ok(0.0);
         }
-        Ok(self.lambda * GraphLaplacian::new(self.graph.clone()).penalty(updates)?)
+        if updates.iter().any(|value| !value.is_finite()) {
+            return Err(CartoBoostError::InvalidInput(
+                "graph values must be finite".to_string(),
+            ));
+        }
+        Ok(self.lambda * graph_penalty(&self.graph, updates)?)
     }
 
     pub fn adjusted_gain(&self, ordinary_gain: f64, updates: &[f64]) -> Result<f64> {
@@ -522,6 +568,7 @@ impl GraphSplitRegularization {
 
 impl GraphLeafSmoothing {
     pub fn new(graph: CsrGraph, lambda: f64, iterations: usize) -> Result<Self> {
+        graph.validate()?;
         if !lambda.is_finite() || lambda < 0.0 {
             return Err(CartoBoostError::InvalidInput(
                 "graph leaf smoothing lambda must be finite and non-negative".to_string(),
@@ -535,6 +582,7 @@ impl GraphLeafSmoothing {
     }
 
     pub fn validate_row_count(&self, row_count: usize) -> Result<()> {
+        self.graph.validate()?;
         if self.graph.node_count != row_count {
             return Err(CartoBoostError::InvalidInput(format!(
                 "graph leaf smoothing node_count {} must match training row count {row_count}",
@@ -577,6 +625,7 @@ impl SymbolicRelationSet {
         let included = included.iter().copied().collect::<BTreeSet<_>>();
         let mut weights = BTreeMap::<(usize, usize), f64>::new();
         for relation in &self.relations {
+            relation.validate(self.node_count)?;
             if relation.kind == SymbolicRelationKind::NoSmoothGroup
                 || (!included.is_empty() && !included.contains(&relation.kind))
             {
@@ -606,6 +655,7 @@ impl SymbolicRelationSet {
         }
         let mut penalties = BTreeMap::<SymbolicRelationKind, f64>::new();
         for relation in &self.relations {
+            relation.validate(self.node_count)?;
             if relation.kind == SymbolicRelationKind::NoSmoothGroup {
                 continue;
             }
@@ -852,6 +902,7 @@ impl RuleCompiler {
         let mut reverse_edge = vec![0.0; self.relation_set.node_count];
         let mut hierarchy = vec![0.0; self.relation_set.node_count];
         for relation in &self.relation_set.relations {
+            relation.validate(self.relation_set.node_count)?;
             if relation.kind == SymbolicRelationKind::NoSmoothGroup {
                 continue;
             }
@@ -932,6 +983,61 @@ mod tests {
 
     fn chain_graph() -> CsrGraph {
         CsrGraph::from_edges(3, &[(0, 1, 1.0), (1, 0, 1.0), (1, 2, 1.0), (2, 1, 1.0)]).unwrap()
+    }
+
+    #[test]
+    fn checked_graph_operations_reject_publicly_assembled_invalid_graphs() {
+        let invalid = CsrGraph {
+            node_count: 1,
+            indptr: vec![0, 1],
+            indices: vec![3],
+            weights: vec![1.0],
+        };
+        assert!(GraphRegularizedBooster::new(vec![0.0], invalid.clone(), 1.0, 1).is_err());
+        assert!(GraphSplitRegularization::new(invalid.clone(), 1.0).is_err());
+        assert!(GraphLeafSmoothing::new(invalid, 1.0, 1).is_err());
+        let mut laplacian = GraphLaplacian::new(chain_graph());
+        laplacian.degree.clear();
+        assert!(GraphSmoother {
+            lambda: 1.0,
+            iterations: 1
+        }
+        .smooth(&[1.0, 2.0, 3.0], &laplacian)
+        .is_err());
+        let relations = SymbolicRelationSet {
+            node_count: 1,
+            relations: vec![SymbolicRelation::new(
+                SymbolicRelationKind::OriginAdjacency,
+                0,
+                2,
+                1.0,
+            )],
+        };
+        assert!(relations.relation_penalties(&[1.0]).is_err());
+    }
+
+    #[test]
+    fn graph_construction_rejects_shape_overflow_and_neighbors_reject_bad_offsets() {
+        assert!(CsrGraph::new(usize::MAX, vec![], vec![], vec![]).is_err());
+        assert!(CsrGraph::from_edges(usize::MAX, &[]).is_err());
+        let malformed = CsrGraph {
+            node_count: 1,
+            indptr: vec![0, 2],
+            indices: vec![],
+            weights: vec![],
+        };
+        assert!(malformed.neighbors(0).is_err());
+    }
+
+    #[test]
+    fn borrowed_split_penalty_matches_laplacian_for_directed_and_duplicate_edges() {
+        let graph = CsrGraph::from_edges(3, &[(0, 1, 0.5), (0, 1, 2.0), (1, 0, 3.0), (2, 1, 0.25)])
+            .unwrap();
+        let values = [1.0, -2.0, 4.0];
+        let expected = 0.75 * GraphLaplacian::new(graph.clone()).penalty(&values).unwrap();
+        let regularizer = GraphSplitRegularization::new(graph, 0.75).unwrap();
+        assert_eq!(regularizer.split_penalty(&values).unwrap(), expected);
+        assert!(regularizer.split_penalty(&[f64::NAN, 0.0, 0.0]).is_err());
     }
 
     #[test]

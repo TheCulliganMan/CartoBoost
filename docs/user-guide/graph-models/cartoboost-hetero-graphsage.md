@@ -1,19 +1,27 @@
+---
+sidebar_label: HeteroGraphSAGE
+---
+
 import {NeuralModelExample} from '@site/src/components/ModelingLabClient';
 
 # CartoBoost HeteroGraphSAGE Models
 
-Use HeteroGraphSAGE when edge relation IDs matter but the graph can still be
-represented with one node-feature matrix. It is the middle ground between
-homogeneous GraphSAGE and schema-heavy HinSAGE.
+Keep different relationships distinct with HeteroGraphSAGE. A taxi-zone graph
+may contain both trip-flow edges and geographic adjacency; relation-aware
+aggregation lets them carry different meanings while sharing one numeric
+node-feature matrix.
 
 ## When To Use
 
-- Relations such as `view`, `purchase`, `transfer`, or `belongs_to` should not
+- Relations such as `trip_flow`, `adjacent_to`, or `serves_airport` should not
   be collapsed into one edge type.
 - Node attributes still live in one numeric feature table.
 - The model needs relation-aware aggregation without a strict node-type schema.
 
 ## Interactive Example
+
+Run the small example to inspect inputs and model behavior. It is a browser
+demonstration, not a benchmark on held-out taxi trips.
 
 <NeuralModelExample title="HeteroGraphSAGE browser model" pipeline="hetero_graphsage" />
 

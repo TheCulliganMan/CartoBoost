@@ -1,20 +1,21 @@
 # CartoBoost
 
-CartoBoost is a Python toolkit for structured regression, classification,
-ranking, and forecasting. The human documentation is organized for developers
-and data scientists around installation, model selection, validation,
-reproducible artifacts, and benchmark evidence. This file is a machine-readable
-index of those maintained guides.
+CartoBoost models structure in time, place, and relationships. Its Python API
+covers regression, classification, ranking, forecasting, graph and neural
+modeling, spatial estimation, and geographic experiments. This index links to
+maintained guides; individual guides define inputs, limitations, and examples.
 
 ## Primary Docs
 
-- README: ./README.md
+- Documentation home: ./docs/index.md
+- Installation and optional integrations: ./docs/installation.md
+- Your first model, temporal holdout, and artifact round-trip: ./docs/getting-started.md
+- Choose a model by prediction task: ./docs/user-guide/model-types.md
+- Interactive Modeling Lab: ./src/pages/modeling-lab.tsx
 - CartoBoost 0.3 migration: ./docs/migration-v0.3.md
-- Docs home: ./docs/index.md
+- README: ./README.md
 - Versioned docs manifest: ./docs-versions.json
-- Getting started: ./docs/getting-started.md
 - Python estimator numeric input and missing-value contract: ./docs/user-guide/python-estimator.md
-- Choose a model: ./docs/user-guide/model-types.md
 - Unified model registry and model selection guidance: ./docs/user-guide/model-types.md
 - Geo-causal experiment models: ./docs/user-guide/geo-causal-models.md
 - Spatial econometrics models: ./docs/user-guide/spatial-econometrics.md
@@ -23,7 +24,7 @@ index of those maintained guides.
 - Forecasting model guides: ./docs/user-guide/forecasting-models/index.md
 - ForecastFrame validation, missing-target, and missing-covariate behavior: ./docs/forecasting.md
 - Piecewise linear seasonal missing-target example: ./docs/user-guide/forecasting-models/piecewise-linear-seasonal.md
-- Naive and seasonal naive missing-target support: ./docs/user-guide/forecasting-models/naive-seasonal.md
+- Naive and seasonal naive point forecasts, missing-target support, and Gaussian residual intervals: ./docs/user-guide/forecasting-models/naive-seasonal.md
 - Intermittent demand forecasting: ./docs/user-guide/forecasting-models/intermittent-demand.md
 - Croston forecasting: ./docs/user-guide/forecasting-models/croston.md
 - SBA forecasting: ./docs/user-guide/forecasting-models/sba.md
@@ -117,7 +118,7 @@ index of those maintained guides.
 
 ## Model Lists
 
-Supported `cartoboost.models.ModelRegistry.defaults()` models:
+Selected entries from `cartoboost.models.ModelRegistry.defaults()`:
 
 - `models.cartoboost_regressor` / `cartoboost.CartoBoostRegressor`
 - `models.cartoboost_classifier` / `cartoboost.CartoBoostClassifier`
@@ -238,13 +239,15 @@ Representation, foundation, geo, causal, and probabilistic model surfaces:
 - `InvariantRiskEncoder`, `DomainAdversarialGeoEncoder`, `CounterfactualRepresentationNet`, `TreatmentEffectRepresentationHead`
 - `ConformalIntervalRegressor`, `SpatialConformalRegressor`, `ConformalCalibrator`, `ForecastConformalCalibrator`, `QuantileCartoBoostRegressor`
 
-## Usage Notes
+## Reading the contracts
 
-- Keep public docs focused on what each model family is good for, not on
-  implementation details.
-- Use taxi examples only as one domain example among others such as mobility,
-  routing, logistics, and demand forecasting.
-- Keep benchmark claims tied to maintained artifacts, exact commands, and
-  comparable baselines.
-- TensorBoard scalar logging is optional on the boosting estimators via
+- The first-model guide uses generated taxi-shaped data to demonstrate fitting;
+  it does not establish real-data benchmark performance.
+- Benchmark guides identify the data, split, model settings, metrics, timing,
+  and limits of each reported comparison.
+- Model APIs are available through their named modules, with lazy top-level
+  exports. The model registry provides discovery metadata.
+- The base Python install requires only NumPy. Dataframe, plotting, geospatial,
+  and foundation-model integrations are optional.
+- TensorBoard scalar logging is optional on boosting estimators via
   `tensorboard_log_dir`; install `tensorboardX` for event writing.

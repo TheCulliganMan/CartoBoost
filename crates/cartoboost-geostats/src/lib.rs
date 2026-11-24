@@ -383,11 +383,7 @@ impl NearestNeighborGPRegressor {
                 .zip(distances.into_par_iter())
                 .map(|(coord, row)| {
                     let mut ranked = row.into_iter().enumerate().collect::<Vec<_>>();
-                    ranked.sort_by(|left, right| {
-                        left.1
-                            .total_cmp(&right.1)
-                            .then_with(|| left.0.cmp(&right.0))
-                    });
+                    sort_nearest(&mut ranked, self.config.n_neighbors, f32::total_cmp);
                     let neighbors = ranked
                         .into_iter()
                         .take(self.config.n_neighbors.min(self.coords.len()))
@@ -428,11 +424,7 @@ impl NearestNeighborGPRegressor {
             .zip(distances.par_iter())
             .map(|(coord, row)| {
                 let mut ranked = row.iter().copied().enumerate().collect::<Vec<_>>();
-                ranked.sort_by(|left, right| {
-                    left.1
-                        .total_cmp(&right.1)
-                        .then_with(|| left.0.cmp(&right.0))
-                });
+                sort_nearest(&mut ranked, self.config.n_neighbors, f32::total_cmp);
                 let neighbors = ranked
                     .into_iter()
                     .take(self.config.n_neighbors.min(self.coords.len()))
@@ -468,11 +460,7 @@ impl NearestNeighborGPRegressor {
             .par_iter()
             .map(|row| {
                 let mut ranked = row.iter().copied().enumerate().collect::<Vec<_>>();
-                ranked.sort_by(|left, right| {
-                    left.1
-                        .total_cmp(&right.1)
-                        .then_with(|| left.0.cmp(&right.0))
-                });
+                sort_nearest(&mut ranked, self.config.n_neighbors, f64::total_cmp);
                 let neighbors = ranked
                     .into_iter()
                     .take(self.config.n_neighbors.min(self.values.len()))
@@ -554,7 +542,8 @@ impl NearestNeighborGPRegressor {
         for (row_pos, &row_idx) in neighbors.iter().enumerate() {
             centered[row_pos] = self.values[row_idx] - self.mean;
             k_star[row_pos] = covariance(coord, self.coords[row_idx], self.config);
-            for (col_pos, &col_idx) in neighbors.iter().enumerate() {
+            // Cholesky consumes only this triangle; preserve its evaluation order.
+            for (col_pos, &col_idx) in neighbors.iter().take(row_pos + 1).enumerate() {
                 let mut value = covariance(self.coords[row_idx], self.coords[col_idx], self.config);
                 if row_pos == col_pos {
                     value += self.config.nugget;
@@ -600,7 +589,7 @@ impl NearestNeighborGPRegressor {
         for (row_pos, &row_idx) in neighbors.iter().enumerate() {
             centered[row_pos] = self.values[row_idx] - self.mean;
             k_star[row_pos] = covariance_from_distance(query_distances[row_idx], self.config);
-            for (col_pos, &col_idx) in neighbors.iter().enumerate() {
+            for (col_pos, &col_idx) in neighbors.iter().take(row_pos + 1).enumerate() {
                 let mut value =
                     covariance_from_distance(training_distances[row_idx][col_idx], self.config);
                 if row_pos == col_pos {
@@ -1236,6 +1225,9 @@ fn validate_nonnegative_candidates(values: &[f64], name: &str) -> Result<()> {
 }
 
 pub fn deterministic_neighbors(coords: &[[f64; 2]], target: [f64; 2], k: usize) -> Vec<usize> {
+    if k == 0 {
+        return Vec::new();
+    }
     let mut distances = coords
         .iter()
         .enumerate()
@@ -1245,11 +1237,7 @@ pub fn deterministic_neighbors(coords: &[[f64; 2]], target: [f64; 2], k: usize) 
             (idx, dx * dx + dy * dy)
         })
         .collect::<Vec<_>>();
-    distances.sort_by(|left, right| {
-        left.1
-            .total_cmp(&right.1)
-            .then_with(|| left.0.cmp(&right.0))
-    });
+    sort_nearest(&mut distances, k, f64::total_cmp);
     distances.into_iter().take(k).map(|(idx, _)| idx).collect()
 }
 
@@ -1299,11 +1287,7 @@ pub fn deterministic_neighbors_many_with_backend(
             rows.into_par_iter()
                 .map(|row| {
                     let mut ranked = row.into_iter().enumerate().collect::<Vec<_>>();
-                    ranked.sort_by(|left, right| {
-                        left.1
-                            .total_cmp(&right.1)
-                            .then_with(|| left.0.cmp(&right.0))
-                    });
+                    sort_nearest(&mut ranked, k, f32::total_cmp);
                     ranked
                         .into_iter()
                         .take(k.min(coords.len()))
@@ -1312,6 +1296,24 @@ pub fn deterministic_neighbors_many_with_backend(
                 })
                 .collect()
         })
+}
+
+// Partial selection preserves the full distance/index ordering while sorting
+// only the requested neighbors. This is shared by CPU and device distance rows.
+fn sort_nearest<T>(
+    distances: &mut Vec<(usize, T)>,
+    k: usize,
+    compare_distance: impl Fn(&T, &T) -> std::cmp::Ordering,
+) {
+    let count = k.min(distances.len());
+    let compare = |left: &(usize, T), right: &(usize, T)| {
+        compare_distance(&left.1, &right.1).then_with(|| left.0.cmp(&right.0))
+    };
+    if count < distances.len() {
+        distances.select_nth_unstable_by(count, &compare);
+        distances.truncate(count);
+    }
+    distances.sort_unstable_by(compare);
 }
 
 #[derive(Clone, Debug)]
@@ -1367,12 +1369,12 @@ impl KdNode {
             return None;
         }
         let axis = depth % 2;
-        indices.sort_by(|left, right| {
+        let median = indices.len() / 2;
+        indices.select_nth_unstable_by(median, |left, right| {
             coords[*left][axis]
                 .total_cmp(&coords[*right][axis])
                 .then_with(|| left.cmp(right))
         });
-        let median = indices.len() / 2;
         let (left_indices, rest) = indices.split_at_mut(median);
         let (median_indices, right_indices) = rest.split_at_mut(1);
         Some(Box::new(Self {
@@ -1628,6 +1630,89 @@ fn checked_nonnegative(value: f64, scale: f64, label: &str) -> Result<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn triangular_query_covariance_matches_full_matrix_reference() {
+        let coords = [[0.0, 0.0], [0.0, 1.0], [1.0, 0.0], [1.0, 1.0], [0.5, 0.25]];
+        let values = [11.0, 13.0, 9.0, 14.0, 10.5];
+        let query = [0.25, 0.5];
+        for kernel in [
+            CovarianceKernel::Exponential,
+            CovarianceKernel::SquaredExponential,
+            CovarianceKernel::Matern32,
+            CovarianceKernel::Matern52,
+        ] {
+            let config = NngpConfig {
+                kernel,
+                n_neighbors: 4,
+                anisotropy: Anisotropy {
+                    angle_degrees: 37.0,
+                    scaling: 0.4,
+                },
+                ..NngpConfig::default()
+            };
+            let mut model = NearestNeighborGPRegressor::new(config).unwrap();
+            model.fit(&coords, &values).unwrap();
+            let prediction = model.predict(&[query]).unwrap().remove(0);
+            let neighbors = &prediction.neighbor_indices;
+            let full = neighbors
+                .iter()
+                .enumerate()
+                .map(|(i, &left)| {
+                    neighbors
+                        .iter()
+                        .enumerate()
+                        .map(|(j, &right)| {
+                            covariance(coords[left], coords[right], config)
+                                + if i == j { config.nugget } else { 0.0 }
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            let cross = neighbors
+                .iter()
+                .map(|&index| covariance(query, coords[index], config))
+                .collect::<Vec<_>>();
+            let weights = solve_spd(full, cross.clone()).unwrap();
+            let centered = neighbors
+                .iter()
+                .map(|&index| values[index] - model.mean)
+                .collect::<Vec<_>>();
+            assert_eq!(prediction.mean, model.mean + dot(&weights, &centered));
+            assert_eq!(
+                prediction.variance,
+                config.sill + config.nugget - dot(&cross, &weights)
+            );
+
+            let distances = coords
+                .iter()
+                .map(|&left| {
+                    coords
+                        .iter()
+                        .map(|&right| transformed_distance(left, right, config))
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            let query_distances = coords
+                .iter()
+                .map(|&coord| transformed_distance(query, coord, config))
+                .collect::<Vec<_>>();
+            let mut metric = NearestNeighborGPRegressor::new(config).unwrap();
+            metric
+                .fit_from_distance_matrix(&distances, &values)
+                .unwrap();
+            let metric_prediction = metric
+                .predict_from_distance_matrix(&[query_distances])
+                .unwrap()
+                .remove(0);
+            assert_eq!(metric_prediction.mean, prediction.mean);
+            assert_eq!(metric_prediction.variance, prediction.variance);
+            assert_eq!(
+                metric_prediction.neighbor_indices,
+                prediction.neighbor_indices
+            );
+        }
+    }
 
     #[test]
     fn kernels_have_unit_sill_at_zero_distance() {
@@ -2161,5 +2246,48 @@ mod tests {
         );
         assert!(checked_nonnegative(-1.0e-4, 1.0, "variance").is_err());
         assert!(checked_nonnegative(f64::NAN, 1.0, "variance").is_err());
+    }
+
+    #[test]
+    fn partial_neighbor_selection_matches_full_sort_with_ties() {
+        let coords = (0..257)
+            .map(|index| [((index * 17) % 23) as f64, ((index * 7) % 13) as f64])
+            .collect::<Vec<_>>();
+        for target in [[0.0, 0.0], [5.0, 7.0], [10.5, 6.5]] {
+            let mut reference = coords
+                .iter()
+                .enumerate()
+                .map(|(index, coord)| (index, squared_distance(*coord, target)))
+                .collect::<Vec<_>>();
+            reference.sort_by(|left, right| {
+                left.1
+                    .total_cmp(&right.1)
+                    .then_with(|| left.0.cmp(&right.0))
+            });
+            let index = NeighborIndex::fit(&coords, 0);
+            for k in [0, 1, 8, 16, 256, 257, 300] {
+                let expected = reference
+                    .iter()
+                    .take(k)
+                    .map(|(index, _)| *index)
+                    .collect::<Vec<_>>();
+                assert_eq!(deterministic_neighbors(&coords, target, k), expected);
+                assert_eq!(index.neighbors(&coords, target, k), expected);
+                let mut device_distances = reference
+                    .iter()
+                    .rev()
+                    .map(|(index, distance)| (*index, *distance as f32))
+                    .collect::<Vec<_>>();
+                sort_nearest(&mut device_distances, k, f32::total_cmp);
+                assert_eq!(
+                    device_distances
+                        .into_iter()
+                        .map(|(index, _)| index)
+                        .collect::<Vec<_>>(),
+                    expected
+                );
+            }
+        }
+        assert!(deterministic_neighbors(&[], [0.0, 0.0], 1).is_empty());
     }
 }

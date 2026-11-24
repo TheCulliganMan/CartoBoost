@@ -666,6 +666,90 @@ fn metrics_reject_unmatched_forecast_rows() {
 }
 
 #[test]
+fn aligned_metric_arrays_match_keyed_metrics_exactly() {
+    use cartoboost_core::forecasting::{
+        evaluate_forecast_arrays, evaluate_forecast_with_training, ForecastPrediction,
+    };
+    let training = [2.0, 4.0, 3.0, 9.0];
+    let training_rows = training
+        .iter()
+        .enumerate()
+        .map(|(index, &actual)| ForecastActual {
+            series_id: "pickup-a".to_string(),
+            timestamp: ts(index as u32 + 1),
+            horizon: index + 1,
+            actual,
+        })
+        .rev()
+        .collect::<Vec<_>>();
+    for (actuals, predictions) in [
+        (vec![0.0, 0.0, 0.0], vec![0.0, 0.0, 0.0]),
+        (vec![0.0, 0.0, 0.0], vec![1.0, -1.0, 2.0]),
+        (vec![10.0, -3.0, 0.0, 1.0e100], vec![9.0, 2.0, 0.0, 2.0e100]),
+    ] {
+        let actual_rows = actuals
+            .iter()
+            .enumerate()
+            .map(|(index, &actual)| ForecastActual {
+                series_id: format!("pickup-{}", index % 2),
+                timestamp: ts(index as u32 + 1),
+                horizon: index + 1,
+                actual,
+            })
+            .collect::<Vec<_>>();
+        let forecast = ForecastResult::new(
+            actual_rows
+                .iter()
+                .zip(&predictions)
+                .map(|(row, &mean)| ForecastPrediction {
+                    series_id: row.series_id.clone(),
+                    timestamp: row.timestamp,
+                    horizon: row.horizon,
+                    model: "metric_set".to_string(),
+                    mean,
+                })
+                .collect(),
+        )
+        .unwrap();
+        for seasonality in [None, Some(1), Some(2)] {
+            let expected = evaluate_forecast_with_training(
+                &forecast,
+                &actual_rows,
+                &training_rows,
+                seasonality,
+            )
+            .unwrap();
+            assert_eq!(
+                evaluate_forecast_arrays(&actuals, &predictions, &training, seasonality).unwrap(),
+                expected
+            );
+        }
+    }
+}
+
+#[test]
+fn aligned_metric_arrays_validate_shapes_and_training_scale() {
+    use cartoboost_core::forecasting::evaluate_forecast_arrays;
+    for (actuals, predictions) in [
+        (vec![], vec![]),
+        (vec![1.0], vec![1.0, 2.0]),
+        (vec![f64::NAN], vec![1.0]),
+        (vec![1.0], vec![f64::INFINITY]),
+    ] {
+        assert!(evaluate_forecast_arrays(&actuals, &predictions, &[], None).is_err());
+    }
+    for (training, period) in [
+        (vec![], 1),
+        (vec![1.0, 2.0], 0),
+        (vec![1.0, 2.0], 2),
+        (vec![1.0, 1.0], 1),
+        (vec![1.0, f64::NAN], 1),
+    ] {
+        assert!(evaluate_forecast_arrays(&[1.0], &[2.0], &training, Some(period)).is_err());
+    }
+}
+
+#[test]
 fn competition_metrics_compute_smape_mase_and_owa_ratios() {
     let training_series = vec![vec![10.0, 12.0, 14.0], vec![20.0, 23.0, 26.0]];
     let actuals = vec![16.0, 29.0];

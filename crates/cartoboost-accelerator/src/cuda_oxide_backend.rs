@@ -5227,7 +5227,7 @@ impl CudaTensorArena {
             || masked == 0
             || patch_width == 0
             || hidden == 0
-            || !times.is_multiple_of(patch_width)
+            || times % patch_width != 0
             || decoder_bias_offset < decoder_offset + patch_width * hidden
             || !masked_zero.is_finite()
             || !target_scale.is_finite()
@@ -5601,7 +5601,7 @@ impl CudaTensorArena {
             || channels == 0
             || patch_width == 0
             || hidden == 0
-            || !times.is_multiple_of(patch_width)
+            || times % patch_width != 0
         {
             return Err(AcceleratorError::InvalidArgument(
                 "invalid CUDA patch-embedding backward dimensions".to_string(),
@@ -7750,7 +7750,7 @@ impl CudaTensorArena {
             || channels == 0
             || patch_width == 0
             || hidden == 0
-            || !times.is_multiple_of(patch_width)
+            || times % patch_width != 0
             || input == parameters
             || input == output
             || parameters == output

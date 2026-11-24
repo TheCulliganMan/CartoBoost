@@ -2,14 +2,13 @@ import {ForecastModelExample} from '@site/src/components/ModelingLabClient';
 
 # Probabilistic And Conformal Models
 
-Use probabilistic and conformal APIs when point forecasts are not enough. These
-surfaces add quantiles, calibrated intervals, interval width, and coverage
-checks around CartoBoost regressors, spatial models, residual hybrids, and
-forecasting workflows.
+Quantile and conformal APIs add
+intervals and coverage diagnostics to regression, spatial, residual, and
+forecasting models. For taxi demand or duration, use them when decisions depend
+on a high-demand tail or a service threshold as well as an average outcome.
 
-Use them when the question is about risk, service levels, uncertainty, or
-decision thresholds. Keep point metrics visible, but do not treat RMSE alone as
-the quality claim for an interval model.
+Evaluate coverage and interval width together with point error. A narrow band
+is useful only if it covers the outcomes it claims to cover.
 
 ## Interactive Example
 
@@ -94,7 +93,7 @@ interval = model.predict_interval(
 )
 ```
 
-Groups can be regions, cells, routes, stores, sensors, or other calibration
+Groups can be pickup zones, dropoff zones, cells, routes, or other calibration
 blocks. Unseen holdout groups use the global split-conformal width and record
 the method in metadata.
 
@@ -121,7 +120,7 @@ the prediction cutoff.
 ## When To Use
 
 - You need calibrated lower and upper bounds, not only a point prediction.
-- Errors vary by horizon, location, route, customer, sensor, or product group.
+- Errors vary by horizon, pickup zone, dropoff zone, or route group.
 - A decision depends on upper-tail or lower-tail risk.
 - You can preserve a clean train, calibration, and holdout split.
 
@@ -186,5 +185,4 @@ overstating the requested coverage.
 - Report both coverage and width; wide intervals can cover well while being
   operationally useless.
 
-The executable contract for the conformal examples and interval metrics is
-checked by `scripts/check_docs_examples.py` in CI.
+{/* Executable example coverage: scripts/check_docs_examples.py */}

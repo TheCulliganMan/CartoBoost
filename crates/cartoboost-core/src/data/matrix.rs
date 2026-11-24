@@ -2,7 +2,7 @@ use super::{FeatureKind, FeatureSchema, SparseSetColumn};
 use crate::{CartoBoostError, Result};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Dataset {
     rows: usize,
     cols: usize,
@@ -11,6 +11,34 @@ pub struct Dataset {
     sparse_sets: Vec<SparseSetColumn>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     schema: Option<FeatureSchema>,
+}
+
+// Deserialization must establish the same invariants as the constructors.
+// Otherwise malformed dimensions or duplicate sparse IDs can reach unchecked
+// training indices and invalidate histogram counts.
+impl<'de> Deserialize<'de> for Dataset {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct DatasetFields {
+            rows: usize,
+            cols: usize,
+            values: Vec<f64>,
+            #[serde(default)]
+            sparse_sets: Vec<SparseSetColumn>,
+            #[serde(default)]
+            schema: Option<FeatureSchema>,
+        }
+        let fields = DatasetFields::deserialize(deserializer)?;
+        let dataset = Self::from_flat(fields.rows, fields.cols, fields.values)
+            .and_then(|dataset| dataset.with_sparse_sets(fields.sparse_sets))
+            .and_then(|dataset| match fields.schema {
+                Some(schema) => dataset.with_schema(schema),
+                None => Ok(dataset),
+            });
+        dataset.map_err(serde::de::Error::custom)
+    }
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -149,6 +177,11 @@ impl Dataset {
         self.values[row * self.cols + col]
     }
 
+    pub(crate) fn dense_row(&self, row: usize) -> &[f64] {
+        let start = row * self.cols;
+        &self.values[start..start + self.cols]
+    }
+
     pub fn sparse_set_row(&self, row: usize, sparse_col: usize) -> Option<&[u64]> {
         self.sparse_sets
             .get(sparse_col)
@@ -156,9 +189,10 @@ impl Dataset {
     }
 
     pub fn sparse_set_contains_any(&self, row: usize, sparse_col: usize, ids: &[u64]) -> bool {
-        self.sparse_sets
-            .get(sparse_col)
-            .is_some_and(|column| column.contains_any(row, ids.iter().copied()))
+        // Dataset construction and deserialization normalize these private
+        // columns once; membership need not rescan the row for sortedness.
+        self.sparse_set_row(row, sparse_col)
+            .is_some_and(|values| ids.iter().any(|id| values.binary_search(id).is_ok()))
     }
 
     pub fn row(&self, row: usize) -> SampleRef<'_> {
@@ -318,5 +352,30 @@ mod tests {
             .unwrap_err();
 
         assert!(err.to_string().contains("dataset feature count 2"));
+    }
+    #[test]
+    fn deserialization_revalidates_dimensions_sparse_rows_and_schema() {
+        for payload in [
+            r#"{"rows":2,"cols":1,"values":[1.0]}"#,
+            r#"{"rows":1,"cols":0,"values":[]}"#,
+            r#"{"rows":1,"cols":1,"values":[1.0],"sparse_sets":[{"values":[]}]}"#,
+            r#"{"rows":1,"cols":1,"values":[1.0],"schema":{"names":["x"],"kinds":[]}}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<Dataset>(payload).is_err(),
+                "{payload}"
+            );
+        }
+    }
+
+    #[test]
+    fn deserialization_normalizes_sparse_sets_and_preserves_valid_artifacts() {
+        let payload =
+            r#"{"rows":1,"cols":1,"values":[1.0],"sparse_sets":[{"values":[[9,3,9,1]]}]}"#;
+        let dataset: Dataset = serde_json::from_str(payload).unwrap();
+        assert_eq!(dataset.sparse_set_row(0, 0), Some(&[1, 3, 9][..]));
+        let serialized = serde_json::to_string(&dataset).unwrap();
+        let restored: Dataset = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(serde_json::to_string(&restored).unwrap(), serialized);
     }
 }

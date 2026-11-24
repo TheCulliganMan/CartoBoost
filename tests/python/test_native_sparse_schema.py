@@ -25,10 +25,19 @@ def test_python_native_sparse_list_route_cells_train_predict():
         max_depth=1,
         min_samples_leaf=1,
         min_gain=0.0,
-        splitters=["sparse_set"],
+        split_policy="structured",
     )
 
-    _fit_or_skip(model, x, y, sparse_sets=sparse_sets)
+    _fit_or_skip(
+        model,
+        x,
+        y,
+        sparse_sets=sparse_sets,
+        feature_schema={
+            "dense": [("feature_0", "numeric")],
+            "sparse_sets": [("route_cells", "sparse_set")],
+        },
+    )
 
     assert model.predict(x, sparse_sets=sparse_sets) == pytest.approx(y)
     with pytest.raises(ValueError, match="sparse_sets"):
@@ -45,10 +54,19 @@ def test_python_native_sparse_list_two_tree_boosting():
         max_depth=1,
         min_samples_leaf=1,
         min_gain=0.0,
-        splitters=["sparse_set"],
+        split_policy="structured",
     )
 
-    _fit_or_skip(model, x, y, sparse_sets=sparse_sets)
+    _fit_or_skip(
+        model,
+        x,
+        y,
+        sparse_sets=sparse_sets,
+        feature_schema={
+            "dense": [("feature_0", "numeric")],
+            "sparse_sets": [("route_cells", "sparse_set")],
+        },
+    )
 
     assert model.predict(x, sparse_sets=sparse_sets) == pytest.approx([8.75, 8.75, 1.25, 1.25])
 
@@ -63,9 +81,18 @@ def test_python_native_sparse_list_save_load_identity(tmp_path: Path):
         max_depth=1,
         min_samples_leaf=1,
         min_gain=0.0,
-        splitters=["sparse_set"],
+        split_policy="structured",
     )
-    _fit_or_skip(model, x, y, sparse_sets=sparse_sets)
+    _fit_or_skip(
+        model,
+        x,
+        y,
+        sparse_sets=sparse_sets,
+        feature_schema={
+            "dense": [("feature_0", "numeric")],
+            "sparse_sets": [("route_cells", "sparse_set")],
+        },
+    )
     path = tmp_path / "sparse-list.json"
     before = model.predict(x, sparse_sets=sparse_sets)
 
@@ -86,7 +113,7 @@ def test_python_schema_periodic_feature_used_without_full_period_coverage():
         max_depth=1,
         min_samples_leaf=1,
         min_gain=0.0,
-        splitters=["periodic:24"],
+        split_policy="structured",
     )
 
     _fit_or_skip(model, x, y, feature_schema=schema)
@@ -105,7 +132,7 @@ def test_python_schema_categorical_feature_roundtrip(tmp_path: Path):
         max_depth=1,
         min_samples_leaf=1,
         min_gain=0.0,
-        splitters=["axis"],
+        split_policy="axis_only",
     )
     _fit_or_skip(model, x, y, feature_schema=schema)
     path = tmp_path / "categorical-regressor.json"
@@ -136,14 +163,19 @@ def test_python_schema_pandas_categorical_missing_values_roundtrip():
         }
     )
     y = [12.0, 12.0, 5.0, 3.0, 5.0]
-    schema = {"dense": [{"name": "pickup_zone", "kind": FeatureKind.CATEGORICAL}]}
+    schema = {
+        "dense": [
+            {"name": "pickup_zone", "kind": FeatureKind.CATEGORICAL},
+            {"name": "trip_distance", "kind": FeatureKind.NUMERIC},
+        ]
+    }
     model = CartoBoostRegressor(
         n_estimators=1,
         learning_rate=1.0,
         max_depth=1,
         min_samples_leaf=1,
         min_gain=0.0,
-        splitters=["axis"],
+        split_policy="axis_only",
     )
 
     _fit_or_skip(model, x, y, feature_schema=schema)
@@ -173,7 +205,7 @@ def test_python_schema_preserves_periodic_role_after_categorical_encoding():
         max_depth=1,
         min_samples_leaf=1,
         min_gain=0.0,
-        splitters=["axis"],
+        split_policy="axis_only",
     )
 
     _fit_or_skip(model, x, y, feature_schema=schema)
@@ -200,7 +232,7 @@ def test_python_schema_low_cardinality_categorical_uses_partition_artifact():
         max_depth=1,
         min_samples_leaf=1,
         min_gain=0.0,
-        splitters=["axis"],
+        split_policy="axis_only",
     )
 
     _fit_or_skip(model, x, y, feature_schema=schema)
@@ -250,19 +282,22 @@ def test_real_native_save_load_restores_public_params(tmp_path: Path):
         max_depth=1,
         min_samples_leaf=1,
         min_gain=0.0,
-        splitters=["gaussian_2d"],
+        split_policy="structured",
         fuzzy=True,
         fuzzy_bandwidth=0.5,
         fuzzy_kernel="tricube",
         leaf_predictor="constant",
     )
-    _fit_or_skip(model, x, y)
+    _fit_or_skip(
+        model, x, y, feature_schema={"dense": [("pickup_x", "spatial"), ("pickup_y", "spatial")]}
+    )
     path = tmp_path / "native.json"
 
     model.save(path)
     loaded = CartoBoostRegressor.load(path)
 
-    assert loaded.splitters == ["gaussian_2d"]
+    assert loaded.split_policy == "structured"
+    assert "Gaussian2D" in loaded.training_config_["splitters"]
     assert loaded.fuzzy is True
     assert loaded.fuzzy_bandwidth == 0.5
     assert loaded.fuzzy_kernel == "tricube"

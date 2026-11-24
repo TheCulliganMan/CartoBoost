@@ -4,14 +4,15 @@ import type { Config, Plugin } from '@docusaurus/types';
 import type { Options as ClassicOptions } from '@docusaurus/preset-classic';
 import { themes as prismThemes } from 'prism-react-renderer';
 
-function llmsTxtDocsPlugin(): Plugin {
+function mapLibreSsrPlugin(): Plugin {
   return {
-    name: 'llms-txt-docs',
-    postBuild({ outDir }) {
-      const source = path.join(process.cwd(), 'docs', 'llms.txt');
-      const target = path.join(outDir, 'docs', 'llms.txt');
-      fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.copyFileSync(source, target);
+    name: 'maplibre-ssr-module-resolution',
+    configureWebpack(_config, isServer) {
+      // Docusaurus rewrites server-side dynamic imports to CommonJS. MapLibre
+      // exports its root only for ESM imports, so resolve its exported ESM file.
+      return isServer
+        ? {resolve: {alias: {'maplibre-gl$': require.resolve('maplibre-gl/dist/maplibre-gl.mjs')}}}
+        : {};
     },
   };
 }
@@ -35,7 +36,7 @@ const docsVersionItems = [
 
 const config: Config = {
   title: 'CartoBoost',
-  tagline: 'Temporal, spatial, geotemporal, and graph-aware regression',
+  tagline: 'Structured modeling in Python and Rust',
   favicon: 'img/cartoboost-route-splitter-logo.svg',
 
   url: 'https://theculliganman.github.io',
@@ -103,7 +104,7 @@ const config: Config = {
   ],
 
   plugins: [
-    llmsTxtDocsPlugin,
+    mapLibreSsrPlugin,
     [
       '@docusaurus/plugin-client-redirects',
       {
@@ -144,9 +145,9 @@ const config: Config = {
   themeConfig: {
     image: 'img/social-card.svg',
     colorMode: {
-      defaultMode: 'dark',
+      defaultMode: 'light',
       disableSwitch: false,
-      respectPrefersColorScheme: true,
+      respectPrefersColorScheme: false,
     },
     navbar: {
       title: 'CartoBoost',
@@ -155,13 +156,13 @@ const config: Config = {
         src: 'img/cartoboost-route-splitter-logo.svg',
       },
       items: [
-        { to: '/docs/installation', label: 'Get Started', position: 'left' },
+        { to: '/docs', label: 'Docs', position: 'left' },
         { to: '/modeling-lab', label: 'Modeling Lab', position: 'left' },
         { to: '/docs/reference/python-api', label: 'Reference', position: 'left' },
         { to: '/docs/benchmarks', label: 'Benchmarks', position: 'left' },
         {
           type: 'dropdown',
-          label: 'Docs',
+          label: 'Version',
           position: 'right',
           items: docsVersionItems,
         },
@@ -185,7 +186,7 @@ const config: Config = {
           ],
         },
         {
-          title: 'Deep Dives',
+          title: 'Models',
           items: [
             { label: 'Forecasting', to: '/docs/forecasting' },
             { label: 'Boosting Models', to: '/docs/user-guide/boosting-models' },

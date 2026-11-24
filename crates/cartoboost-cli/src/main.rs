@@ -69,10 +69,12 @@ fn parse_options(raw: Vec<String>) -> CliResult<BTreeMap<String, String>> {
             i += 1;
             continue;
         }
-        let Some(value) = raw.get(i + 1) else {
+        let Some(value) = raw.get(i + 1).filter(|value| !value.starts_with("--")) else {
             return Err(format!("missing value for '{key}'").into());
         };
-        opts.insert(name, value.clone());
+        if opts.insert(name.clone(), value.clone()).is_some() {
+            return Err(format!("duplicate option '--{name}'").into());
+        }
         i += 2;
     }
     Ok(opts)
@@ -768,12 +770,11 @@ fn read_csv(path: &str) -> CliResult<CsvData> {
     let headers = lines
         .next()
         .map(parse_csv_line)
-        .ok_or_else(|| format!("CSV file '{}' is empty", Path::new(path).display()))?;
-    let records = lines.map(parse_csv_line).collect::<Vec<_>>();
-    let records = records
-        .into_iter()
+        .ok_or_else(|| format!("CSV file '{}' is empty", Path::new(path).display()))??;
+    let records = lines
         .enumerate()
-        .map(|(idx, record)| {
+        .map(|(idx, line)| {
+            let record = parse_csv_line(line)?;
             if record.len() != headers.len() {
                 Err(format!(
                     "CSV row {} has {} columns but header has {}",
@@ -855,7 +856,7 @@ fn parse_numeric_cell(record: &[String], idx: usize) -> CliResult<f64> {
         })
 }
 
-fn parse_csv_line(line: &str) -> Vec<String> {
+fn parse_csv_line(line: &str) -> CliResult<Vec<String>> {
     let mut values = Vec::new();
     let mut cell = String::new();
     let mut quoted = false;
@@ -874,8 +875,11 @@ fn parse_csv_line(line: &str) -> Vec<String> {
             _ => cell.push(ch),
         }
     }
+    if quoted {
+        return Err("unterminated quoted CSV field".into());
+    }
     values.push(cell.trim().to_string());
-    values
+    Ok(values)
 }
 
 #[derive(Clone)]
@@ -1003,11 +1007,23 @@ fn json_number_token<'a>(text: &'a str, field: &str) -> Option<&'a str> {
 }
 
 fn json_escape(value: &str) -> String {
-    value
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
-        .replace('\r', "\\r")
+    use std::fmt::Write;
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            ch if ch <= '\u{1f}' => {
+                // Writing to a String cannot fail.
+                let _ = write!(escaped, "\\u{:04x}", ch as u32);
+            }
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
 }
 
 fn optional_json_string(value: Option<&String>) -> String {
@@ -1017,7 +1033,7 @@ fn optional_json_string(value: Option<&String>) -> String {
 }
 
 fn csv_cell(value: &str) -> String {
-    if value.contains(',') || value.contains('"') || value.contains('\n') {
+    if value.contains(',') || value.contains('"') || value.contains('\n') || value.contains('\r') {
         format!("\"{}\"", value.replace('"', "\"\""))
     } else {
         value.to_string()

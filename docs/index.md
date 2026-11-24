@@ -1,70 +1,85 @@
-# CartoBoost Documentation
+---
+title: Documentation
+sidebar_label: Documentation
+hide_title: true
+description: CartoBoost Python documentation, model guides, examples, API reference, and benchmarks.
+---
 
-[![PyPI](https://img.shields.io/pypi/v/cartoboost.svg)](https://pypi.org/project/cartoboost/)
-[![Python](https://img.shields.io/pypi/pyversions/cartoboost.svg)](https://pypi.org/project/cartoboost/)
-[![CI](https://github.com/TheCulliganMan/CartoBoost/actions/workflows/ci.yml/badge.svg)](https://github.com/TheCulliganMan/CartoBoost/actions/workflows/ci.yml)
-[![Docs](https://github.com/TheCulliganMan/CartoBoost/actions/workflows/pages.yml/badge.svg)](https://github.com/TheCulliganMan/CartoBoost/actions/workflows/pages.yml)
-[![Release](https://github.com/TheCulliganMan/CartoBoost/actions/workflows/publish-pypi.yml/badge.svg)](https://github.com/TheCulliganMan/CartoBoost/actions/workflows/publish-pypi.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/TheCulliganMan/CartoBoost/blob/main/LICENSE)
+import Link from '@docusaurus/Link';
+import useBaseUrl from '@docusaurus/useBaseUrl';
 
-CartoBoost is a Python toolkit for structured regression, classification,
-ranking, and forecasting when time, location, route structure, or repeated IDs
-are part of the signal. These docs are organized around practical modeling
-workflows: preparing data, choosing an estimator, validating it without
-leakage, interpreting results, and deploying reproducible artifacts.
+<span className="docs-kicker">Documentation</span>
 
-## What It Is Good For
+# CartoBoost
 
-- Row-level tabular modeling for fare, duration, risk, or demand targets.
-- Forecasting demand and count series with rolling-origin validation.
-- Graph modeling when direction or relationship structure matters.
-- Learned ID embeddings when stable identifiers carry repeated residual signal.
-- Leakage-aware evaluation against strong baselines on the same split.
+<p className="docs-lead">Python APIs for structured boosting, forecasting, graph models, and spatial analysis.</p>
 
-## Choose Your Path
+Use these guides to prepare inputs, fit a model, choose a validation split, and
+inspect predictions. Examples use NYC taxi fares, trip durations, and pickup demand.
 
-- **First model:** [Getting Started](getting-started.md) covers installation,
-  fitting, validation, baseline comparison, and persistence.
-- **Model selection:** [Choose A Model](user-guide/model-types.md) maps data and
-  prediction tasks to the appropriate estimator family.
-- **Tabular and spatial ML:** [Boosting Model Guides](user-guide/boosting-models/index.md)
-  cover regression, classification, ranking, categorical data, and structured splits.
-- **Time series:** [Forecasting](forecasting.md) covers validated frames,
-  rolling-origin backtesting, metrics, artifacts, and CLI workflows.
-- **Production integration:** [Python API](reference/python-api.md),
-  [CLI Reference](reference/cli.md), and [Model Artifacts](model_artifact.md).
-- **Evidence:** [Benchmarks](benchmarks/index.md) reports commands, datasets,
-  splits, metrics, and limitations.
+<div className="docs-route-grid">
+  <Link className="docs-route-card" to="/docs/getting-started">
+    <span className="docs-route-label">Tutorial</span>
+    <h2>Quickstart</h2>
+    <p>Go from NumPy arrays to a fitted regressor, a temporal holdout, and a saved artifact.</p>
+  </Link>
+  <Link className="docs-route-card" to="/docs/user-guide/model-types">
+    <span className="docs-route-label">Models</span>
+    <h2>Model selection</h2>
+    <p>Match trip-level predictions, demand series, and connected zones to a model.</p>
+  </Link>
+  <Link className="docs-route-card" to="/modeling-lab">
+    <span className="docs-route-label">Interactive</span>
+    <h2>Browser examples</h2>
+    <p>Fit a sample and inspect predictions in the Modeling Lab. No Python setup required.</p>
+  </Link>
+  <Link className="docs-route-card" to="/docs/benchmarks">
+    <span className="docs-route-label">Evaluation</span>
+    <h2>Benchmarks</h2>
+    <p>See the datasets, splits, baselines, timings, and limits behind each result.</p>
+  </Link>
+</div>
 
-## Model Families
-
-- [CartoBoost Boosting Model Guides](user-guide/boosting-models/index.md): row-level tree models.
-- [CartoBoost Forecasting Model Guides](user-guide/forecasting-models/index.md): one guide per forecast family.
-- [Geo-Causal Experiment Models](user-guide/geo-causal-models.md): synthetic DID, GeoLift-style design, and spillover diagnostics.
-- [CartoBoost Graph Model Guides](user-guide/graph-models/index.md): directed movement, link prediction, and graph features.
-- [CartoBoost Neural Model Guides](user-guide/neural-models/index.md): standalone ID embeddings and embedding features.
-- [Benchmark Overview](benchmarks/index.md): current benchmark evidence and limits.
-
-Stable estimators are available from the package root. The
-`cartoboost.models` registry provides machine-readable metadata for tools that
-need to enumerate supported model surfaces.
-
-## Reference
-
-- [Forecasting](forecasting.md): frame contracts, backtesting, artifacts, and shared forecast rules.
-- [Feature Catalog](feature_catalog.md): full capability map.
-- [Sparse Features](sparse_features.md): sparse sets, H3/S2 point cells, and decoded route-cell encoders.
-- [Python API](reference/python-api.md): public classes and methods.
-- [CLI Reference](reference/cli.md): command behavior.
-
-## Install
+## Install CartoBoost
 
 ```sh
 uv add cartoboost
 ```
 
-Optional dependencies are installed directly:
+The base package requires NumPy. Install dataframe, plotting, or geospatial
+integrations only when you need them. [Check installation details](installation.md),
+then follow the [complete first-fit example](getting-started.md).
 
-```sh
-uv add shap optuna polars onnx
-```
+## Model families
+
+| You want to predict… | Start with… | What the guide helps you decide |
+| --- | --- | --- |
+| A trip's duration or fare | [Boosting models](user-guide/boosting-models/index.md) | Which numeric, periodic, spatial, or sparse features belong in the model. |
+| Future pickup demand | [Forecasting](forecasting.md) | How to construct series, choose a horizon, and backtest at realistic cutoffs. |
+| Outcomes across connected zones | [Graph models](user-guide/graph-models/index.md) | Whether observed relationships add signal beyond a tabular baseline. |
+| Effects associated with repeated IDs | [Neural embeddings](user-guide/neural-models/index.md) | How learned pickup or dropoff representations behave on held-out IDs. |
+| Pair, sequence, or distribution outcomes | [Deep models](user-guide/deep-models.md) | Which input contract fits the task and what the browser examples demonstrate. |
+| Values between observed locations | [Geostatistics](user-guide/geostatistics-models.md) | How spatial covariance and uncertainty enter interpolation. |
+| Effects of a geographic intervention | [Geo-causal models](user-guide/geo-causal-models.md) | How to define the comparison and assess spillover. |
+
+## Validation
+
+Predicting tomorrow's trips and predicting trips in an unseen zone are different
+tasks. A random split does not answer both. Choose a temporal, spatial, or grouped
+holdout before comparing models, and fit transformations on training data only.
+
+[Spatial validation](user-guide/spatial-cv-best-practices.md) explains blocked and
+buffered splits. [Geo evaluation](user-guide/geo-evaluation-standard.md) covers
+reproducible split manifests. The [benchmark reports](benchmarks/index.md) show
+how specific models performed under stated conditions.
+
+## API and integration reference
+
+Use the [Python API](reference/python-api.md) for public methods, the
+[feature schema](feature_schema.md) for typed inputs, and
+[model artifacts](model_artifact.md) for persistence. The
+[CLI reference](reference/cli.md) covers command-line workflows.
+
+Returning from an older version? Read the [0.3 migration guide](migration-v0.3.md).
+For tools and coding assistants, <a href={useBaseUrl('/docs/llms.txt')}>llms.txt</a> indexes the
+maintained documentation.

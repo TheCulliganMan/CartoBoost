@@ -1,21 +1,20 @@
 # Feature Schema
 
-Feature schemas tell CartoBoost what each input column means. The same numeric
-array can contain scalar variables, cyclic time, and list-valued geographic or
-membership features. Without a schema, the model can still fit, but saved
-artifacts and future prediction calls have less evidence about which feature
-semantics were intended.
+Declare the role of each feature, then carry that meaning into the saved
+model. A schema distinguishes trip distance from a zone identifier, marks hour
+as periodic, and names the sparse memberships required at prediction time.
 
-Use a schema when:
+Use a schema whenever input semantics affect the fit:
 
-- hour, weekday, or season should wrap around rather than behave like a line;
-- pickup/dropoff zone IDs, vendor codes, service tiers, or other dense labels
-  should be treated as categorical or ordinal values;
-- pickup/dropoff zones, H3 cells, S2 cells, ZIPs, or route memberships are
-  supplied as sparse lists;
-- you need saved artifacts to validate feature roles at prediction time;
-- you are comparing models and need the feature-generation contract to stay
-  fixed across runs.
+- **Periodic:** hour, weekday, or seasonal phase wraps around.
+- **Categorical or ordinal:** pickup/dropoff zones, vendor codes, or ordered
+  service tiers are labels rather than continuous measurements.
+- **Sparse:** a trip belongs to several zones, route cells, or geographic parents.
+- **Reusable:** a saved model needs the same feature roles on later data.
+
+Dense models can fit without a schema. An explicit schema makes the input
+contract inspectable and keeps feature definitions consistent across comparisons.
+See [Sparse features](sparse_features.md) for list-valued inputs.
 
 ## Compact Python Format
 
@@ -126,6 +125,6 @@ When a schema is present:
 - numeric dense columns remain eligible for numeric and spatial split
   candidates.
 
-Keep schema changes out of benchmark reruns unless the feature contract itself
-is the tested change. A changed schema can change the scientific comparison even
-when the raw matrix values are unchanged.
+A schema changes how the model interprets the matrix, even when the raw values
+stay the same. Save it with the model and use the same definitions when
+comparing feature choices or scoring later trips.

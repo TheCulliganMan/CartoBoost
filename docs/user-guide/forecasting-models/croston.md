@@ -2,10 +2,10 @@ import {ForecastModelExample} from '@site/src/components/ModelingLabClient';
 
 # Croston Forecasting
 
-`CrostonForecaster` is a fixed intermittent-demand method for sparse,
-non-negative series where zero periods are true no-demand observations. It
-separately smooths non-zero demand size and the interval between non-zero
-events, then returns a flat forecast for the requested horizon.
+Forecast sparse pickup demand by separating event size from event spacing.
+`CrostonForecaster` smooths non-zero counts and the gaps between them, then
+returns a constant expected demand across the requested horizon. Use it only
+when zeros are real no-demand periods on a regular time grid.
 
 ## Interactive Example
 
@@ -53,4 +53,4 @@ calendar cycle is plausible.
 
 - Forecasts are flat across the requested horizon.
 - The method does not model calendar seasonality, covariates, or cross-series effects.
-- Long runs of zeros caused by stockouts or missing collection violate the demand interpretation.
+- Long runs of zeros caused by unavailable taxi service or missing collection violate the demand interpretation.

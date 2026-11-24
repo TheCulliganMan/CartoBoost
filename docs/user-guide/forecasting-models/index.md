@@ -2,88 +2,67 @@ import {ForecastModelRosterExample} from '@site/src/components/ModelingLabClient
 
 # Forecasting Models
 
-These guides explain the forecasting model classes. Use this section when you
-need to pick, configure, or compare a model. Use
-[Forecasting](../../forecasting.md) when you need `ForecastFrame`,
-rolling-origin backtesting, artifacts, CLI workflows, or shared evidence rules.
+Yesterday's hourly pickup cycle, a
+changing airport-demand trend, and spillover between taxi zones call for
+different models. Start with seasonal naive, then add the simplest model that
+captures what the baseline misses.
 
-Start with seasonal naive. Add the simplest model that represents a pattern you
-actually see—trend, autocorrelation, intermittent demand, shared panel lags,
-spatial proximity, or graph flow—and compare it on the same rolling origins.
+For data preparation, rolling-origin backtesting, output columns, and saved
+results, use the [forecasting workflow](../../forecasting.md).
 
-## Try Models In The Browser
+## Interactive Example
+
+Compare model behavior on a small browser sample. These runs help you inspect
+forecast shapes and configuration; use held-out real data to measure quality.
 
 <ForecastModelRosterExample />
 
 ## Choose A Model
 
-| Model guide | Best first use | Notes |
+| Pattern or task | Model guide | What to inspect |
 | --- | --- | --- |
-| [Naive And Seasonal Naive](naive-seasonal.md) | Establish transparent last-value and last-season baselines. | Start here for every forecast comparison. |
-| [Theta](theta.md) | Extrapolate level and trend with a lightweight deterministic model. | Includes manual and optimized theta examples. |
-| [ETS](ets.md) | Model additive level, trend, and seasonality. | Useful when the series has smooth components and repeatable seasonal structure. |
-| [ARIMA And AutoARIMA](arima.md) | Use differencing and autocorrelation in a bounded search. | Covers fixed-order ARIMA, AutoARIMA candidate selection, visual smoke checks, and benchmark notes. |
-| [Kalman](kalman.md) | Track noisy local level and local trend over time. | Includes state diagnostics and visualization examples. |
-| [Piecewise Linear Seasonal](/docs/user-guide/forecasting-models/piecewise-linear-seasonal) | Fit interpretable trend, changepoint, seasonality, event, and regressor components. | Includes an interactive example for `piecewise_linear_seasonal`. |
-| [Kriging](kriging.md) | Borrow signal across nearby coordinates. | Useful for coordinate-aware panel forecasting. |
-| [Spatial Piecewise Kriging](spatial-piecewise-kriging.md) | Combine interpretable temporal components with spatial borrowing. | Includes an interactive coordinate-panel example for `spatial_piecewise_kriging`. |
-| [CartoBoost Lag](cartoboost-lag.md) | Learn one supervised lag model across many related series. | Use when many aligned panels should share lag structure. |
-| [Graph Spatiotemporal Forecasting](graph-spatiotemporal.md) | Forecast sensor, route, road, or zone-flow panels on a directed graph. | Use when upstream/downstream graph structure should improve forecasts beyond panel-only baselines. |
-| [Market Structure Forecasting](graph-spatiotemporal.md) | Learn sparse directional relationships with hierarchy-aware smoothing and analyst-visible kernels. | Use when distance alone misses connected market structure and reviewers need shift explanations. |
-| [Probabilistic And Conformal](probabilistic-conformal.md) | Add calibrated uncertainty to regressors, spatial models, residual hybrids, and forecasts. | Use when interval coverage and width matter alongside point accuracy. |
-| [N-BEATS And N-HiTS](beats-hits.md) | Fit deterministic neural window experts for regular forecast windows. | Use as neural baselines against seasonal naive, local statistical models, and `CartoBoostLagForecaster`. |
-| [Neural Panel](neural-panel.md) | Fit a neural panel forecaster with direct multi-horizon output for related series. | Includes an interactive example for `neural_panel`. |
-| [AutoStatsBank](auto-stats-bank.md) | Validate a deterministic statistical expert bank. | Useful when a local statistical selector is the model being tested. |
-| [Intermittent Demand](intermittent-demand.md) | Forecast sparse non-negative demand with fixed Croston, SBA, or TSB methods. | Use when zeros are meaningful demand periods rather than missing rows. |
-| [Croston](croston.md) | Fit the basic Croston decomposition for sparse non-negative demand. | Includes an interactive example for `croston`. |
-| [SBA](sba.md) | Fit the Syntetos-Boylan bias-adjusted Croston method. | Includes an interactive example for `sba`. |
-| [TSB](tsb.md) | Smooth demand size and occurrence probability separately. | Includes an interactive example for `tsb`. |
-| [AutoForecaster](auto-forecaster.md) | Use the guarded default selector over lag, direct, residual-corrected, intermittent, and classical candidates. | Includes diagrams for validation, gating, prediction, and metadata inspection. |
-| [Weighted Ensembles](ensembles.md) | Combine fitted forecasters with explicit weights. | Components and weights must be named explicitly. |
+| The latest value or previous cycle is a useful forecast | [Naive and Seasonal Naive](naive-seasonal.md) | Persistence versus recurrence |
+| A short history has a clear level and trend | [Theta](theta.md) | Trend extrapolation and selected smoothing |
+| Level, trend, and an additive cycle evolve gradually | [ETS](ets.md) | Fitted components and residual seasonality |
+| Recent values and forecast errors carry signal | [ARIMA and AutoARIMA](arima.md) | Differencing, selected order, and residuals |
+| Observations are noisy but the underlying state changes smoothly | [Kalman](kalman.md) | State movement, innovations, and variance settings |
+| Trend changes, seasonalities, events, and regressors need separate explanations | [Piecewise Linear Seasonal](piecewise-linear-seasonal.md) | Named component contributions |
+| Nearby coordinates share signal | [Kriging](kriging.md) | Variogram, neighbors, and spatial holdout error |
+| Temporal components leave spatially related residuals | [Spatial Piecewise Kriging](spatial-piecewise-kriging.md) | Base forecast versus spatial correction |
+| Many related series share lag and calendar behavior | [CartoBoost Lag](cartoboost-lag.md) | Per-series and per-horizon errors |
+| Directed edges connect the forecast series | [Graph Spatiotemporal Forecasting](graph-spatiotemporal.md) | Graph contribution versus graph-free baselines |
+| Directional pickup/dropoff markets have sparse learned relationships | [Market Structure Forecasting](graph-spatiotemporal.md#learned-market-structure) | Retained relationships and forecast components |
+| A decision depends on tails or coverage | [Probabilistic and Conformal](probabilistic-conformal.md) | Coverage and width alongside point error |
+| Regular history windows support a neural comparison | [N-BEATS and N-HiTS](beats-hits.md) | Error versus local and lag baselines |
+| Related series need direct multi-horizon neural forecasts | [Neural Panel](neural-panel.md) | Components, quantiles, and cold-lane behavior |
+| Validation should choose a local statistical expert | [AutoStatsBank](auto-stats-bank.md) | Selected expert and internal holdout score |
+| Pickup counts contain many true zeros | [Intermittent Demand](intermittent-demand.md) | Zero fraction and demand-event count |
+| Sparse demand needs separate size and spacing estimates | [Croston](croston.md) | The constant expected demand level |
+| Croston smoothing needs its standard bias adjustment | [SBA](sba.md) | Bias and error relative to Croston |
+| The chance of a demand event changes over time | [TSB](tsb.md) | Occurrence and size smoothing |
+| Validation should choose among lag, direct, and statistical strategies | [AutoForecaster](auto-forecaster.md) | Selected members, safeguards, and weights |
+| Validated members make complementary errors | [Weighted Ensembles](ensembles.md) | Each member's contribution and the best single model |
 
-## Match The Model To The Pattern
-
-Choose the model whose assumptions match the signal you can defend:
-
-| Signal in the series | First model to try | Why |
-| --- | --- | --- |
-| The latest observed level is the best short-horizon summary. | Naive | Tests whether any model adds information beyond persistence. |
-| The same hour yesterday or same weekday last week dominates. | Seasonal naive | Tests repeatable seasonality without estimated parameters. |
-| Level and trend are smooth, with optional simple seasonality. | Theta or ETS | Estimates a low-dimensional local structure that is easy to inspect. |
-| Recent autocorrelation and differencing explain the series. | ARIMA or AutoARIMA | Models local serial dependence after bounded non-seasonal differencing. |
-| The measured series is noisy and the latent level/trend should update gradually. | Kalman | Separates observation noise from latent state movement. |
-| You need interpretable changepoints, Fourier seasonalities, event windows, known future regressors, quantiles, and component decomposition in one local model. | [Piecewise linear seasonal](/docs/user-guide/forecasting-models/piecewise-linear-seasonal) | Estimates additive or multiplicative component paths and keeps the result inspectable. |
-| You need a forecast figure that matches Prophet's plotting surface for a Prophet-shaped result. | [Plotting](../../plotting.md) | Uses the same observed-point, forecast-line, capacity, floor, interval, axis, and legend behavior as `prophet.plot.plot`. |
-| Nearby zones, route midpoints, or residual surfaces should be spatially related. | Kriging | Uses coordinate distance and a variogram to borrow cross-series signal. |
-| Panels have both temporal changepoints and spatial residual structure. | [Spatial Piecewise Kriging](spatial-piecewise-kriging.md) | Separates the temporal forecast, spatial correction, kriging variance, neighbors, metadata, and components so the spatial claim can be checked. |
-| Many related series share lag, rolling, calendar, or trend structure. | CartoBoost lag | Learns one supervised model from many aligned panel examples. |
-| Roads, lanes, sensors, or zone flows diffuse over a directed graph. | [Graph spatiotemporal forecasting](graph-spatiotemporal.md) | Applies diffusion convolution over directed CSR adjacency and reports horizon, node, and graph-distance errors. |
-| Geo model quality must include calibrated uncertainty. | [Probabilistic and conformal models](probabilistic-conformal.md) | Separates base fitting from calibration and reports coverage, width, PIT bins, horizon/block coverage, and residual Moran's I. |
-| Fixed regular windows should be tested with a compact neural expert. | [N-BEATS or N-HiTS](beats-hits.md) | Provides deterministic neural baselines for direct window learning before moving to richer panel or graph models. |
-| Directional series need direct multi-horizon neural forecasts with id direction preserved. | [Neural Panel](neural-panel.md) | Builds leak-free lag windows from `ForecastFrame`, keeps directional ids distinct, injects generated lane embedding/graph covariates, and stores component, normalization, quantile, series-id, and train-cutoff metadata. |
-| Pickup demand is sparse with many true zero periods. | [Croston](croston.md), [SBA](sba.md), or [TSB](tsb.md) | Uses intermittent-demand smoothing instead of generic trend extrapolation. |
-| A local statistical bank should choose among reusable non-benchmark candidates. | AutoStatsBank | Runs validation over a deterministic statistical expert bank. |
-| A production panel needs a deterministic guarded default with auditable candidate weights. | AutoForecaster | Validates a fixed roster, protects the lag baseline, and stores global, horizon, and series weights. |
-| Validated models capture complementary errors. | Weighted ensemble | Averages explicit components after each member proves useful. |
-
-Do not choose a richer model only because it is available. Be explicit about
-the pattern it is meant to capture, what it ignores, and whether it improves a
-time-ordered holdout enough to justify extra complexity.
+A richer model earns its place through a better time-ordered holdout or a
+necessary output, such as calibrated intervals. Complexity alone is not a
+reason to switch.
 
 ## Shared Input Patterns
 
-For quick checks, local forecasters can fit a plain numeric sequence:
+Local forecasters accept a numeric sequence for a small check:
 
 ```python
 from cartoboost.forecasting import SeasonalNaiveForecaster
 
+# Two illustrative days of hourly pickup counts.
+zone_hourly_counts = [12, 9, 7, 6, 8, 15, 28, 41, 38, 31, 29, 33,
+                      36, 39, 42, 47, 59, 64, 52, 40, 32, 26, 21, 16] * 2
 model = SeasonalNaiveForecaster(season_length=24)
 model.fit(zone_hourly_counts)
 forecast = model.predict(12)
 ```
 
-For production demand or time-series workflows, prefer a validated
-`ForecastFrame`:
+For timestamped taxi panels, declare the series and cadence with `ForecastFrame`:
 
 ```python
 from cartoboost.forecasting import ForecastFrame
@@ -91,76 +70,49 @@ from cartoboost.forecasting import ForecastFrame
 frame = ForecastFrame.from_pandas(
     hourly_zone_demand,
     timestamp_col="timestamp",
-    target_col="demand",
-    series_id_col="zone_id",
+    target_col="pickup_demand",
+    series_id_col="PULocationID",
     freq="h",
 )
 ```
 
-`ForecastFrame` validates timestamps, duplicate rows within each series, finite
-targets by default, regular frequency, panel ids, and covariate role metadata.
-Use `allow_missing_targets=True` only when missing target rows represent known
-calendar slots that should be skipped during fitting while still anchoring the
-future schedule after the latest input timestamp. This Prophet-style behavior
-is supported by `PiecewiseLinearSeasonalForecaster`, `NaiveForecaster`, and
-non-seasonal window averages; models that require dense regular targets reject
-missing targets with a clear error.
+The frame checks timestamps, duplicate series/time rows, finite targets,
+frequency, and covariate roles. Missing targets, missing covariates, and
+irregular observations require explicit opt-ins and a model that supports the
+chosen policy. See the [frame contract](../../forecasting.md#forecastframe)
+before changing these defaults.
 
-Use `allow_missing_covariates=True` when declared covariate columns contain
-`NaN` values and you want each model to validate only the covariates it actually
-uses. Infinite covariates are always rejected. Models that consume a missing
-covariate still fail clearly at fit or predict time.
+## Decomposition And Automatic Candidates
 
-## Additional Models
+The browser roster includes `stl_cartoboost` and `mstl_cartoboost`. They use
+LOESS-based decomposition, fit the downstream model to the seasonally adjusted
+target, and repeat the final fitted cycle when adding seasonality back. STL
+requires two complete cycles of its period; MSTL requires two complete cycles
+of every configured period.
 
-`AutoStatsBank` is a public wrapper for the reusable statistical expert bank.
-`AutoForecaster` also considers direct, rectified-recursive, intermittent,
-classical, and decomposition-style candidates. Use the dedicated guide pages
-for the model-specific use cases:
-
-- [Piecewise Linear Seasonal](piecewise-linear-seasonal.md)
-- [N-BEATS And N-HiTS](beats-hits.md)
-- [Neural Panel](neural-panel.md)
-- [Graph Spatiotemporal Forecasting](graph-spatiotemporal.md)
-- [Spatial Piecewise Kriging](spatial-piecewise-kriging.md)
-
-The browser roster also exposes `stl_cartoboost` and `mstl_cartoboost`. These
-models use LOESS-based STL decomposition, fit their downstream model to the
-seasonally adjusted target, and repeat the final fitted seasonal cycle when
-reseasoning. STL needs two complete cycles of its configured period; MSTL needs
-two complete cycles of every configured period.
-
-Keep benchmark-specific candidate names and scoring labels in benchmark
-harnesses and reports.
+[AutoForecaster](auto-forecaster.md) includes direct, rectified-recursive,
+intermittent, classical, and decomposition-style candidates. Its guide explains
+eligibility, validation, and how to inspect the chosen forecast.
 
 ## Shared Result Shape
 
-Forecasting models return a `ForecastResult` object. Use
-`predictions()` for row tuples:
+A forecast is a `ForecastResult`. Read row tuples with `predictions()`:
 
 ```python
 forecast = model.predict(3)
-rows = forecast.predictions()
-
-for series_id, timestamp, horizon, model_name, mean in rows:
+for series_id, timestamp, horizon, model_name, mean in forecast.predictions():
     print(series_id, timestamp, horizon, model_name, mean)
 ```
 
-The tuple columns are also available from `forecast.columns()`. Use
-`forecast.to_json()` for portable artifact roundtrips and downstream reporting.
+Use `columns()` for column names and `to_json()` for a portable representation.
+[Plotting](../../plotting.md) covers forecast and component figures.
 
-## Validation Order
+## Validate The Next Decision
 
-For forecast claims, compare models under the same rolling-origin split:
+Evaluate every candidate on the same series, forecast origins, and horizons.
+Keep seasonal naive in the comparison. Report errors by horizon and zone so a
+busy airport does not hide poor performance elsewhere.
 
-1. Start with naive and seasonal naive baselines.
-2. Add a local model that matches the series structure, such as theta, ETS,
-   ARIMA, or Kalman.
-3. Use `CartoBoostLagForecaster` when many related series should share lag,
-   rolling, calendar, or trend features.
-4. Use kriging when stable coordinates are part of the forecast signal.
-5. Use weighted ensembles only after component models have been validated.
-
-Report RMSE, MAE, horizon, split dates, training time, prediction time, model
-settings, sample size, and whether the input data is real, generated acceptance
-data, or synthetic.
+The [forecasting workflow](../../forecasting.md#backtesting) shows rolling-origin
+backtesting. The [benchmark reports](../../benchmarks/forecasting.md) give the
+recorded data, model settings, metrics, timings, and limits of maintained runs.

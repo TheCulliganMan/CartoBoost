@@ -2,10 +2,19 @@ import {GeoFeatureExample} from '@site/src/components/ModelingLabClient';
 
 # Temporal-Spatial Modeling
 
-CartoBoost is built for regression problems where time, place, membership, or
-local neighborhoods drive the target. Examples include demand by hour and zone,
-adjustments by location, and operational metrics grouped by source/target
-pairs.
+Model the spatial and temporal features of a taxi trip: where it starts, where it ends,
+which direction it travels, and when it happens. CartoBoost combines spatial
+boundaries, cyclic time, route geometry, and list-valued memberships in a
+regression workflow.
+
+Start with the pattern you want to express. Use periodic splits for hour-of-day,
+spatial splits for corridors or hotspots, and sparse sets for routes that cross
+several cells. Then compare the result with axis-only CartoBoost, LightGBM, or
+XGBoost on the same holdout.
+
+This guide connects [feature schemas](feature_schema.md),
+[sparse inputs](sparse_features.md), and [validation](user-guide/spatial-cv-best-practices.md)
+to one fitted model.
 
 ## When To Use Structured Spatial Features
 

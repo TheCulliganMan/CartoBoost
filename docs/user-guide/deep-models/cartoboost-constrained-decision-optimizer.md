@@ -1,10 +1,16 @@
+---
+sidebar_label: Constrained decision optimizer
+---
+
 import {DeepModelWasmExample} from '@site/src/components/ModelingLabClient';
 
-# CartoBoost ConstrainedDecisionOptimizer
+# Constrained Decision Optimizer
 
-Use `ConstrainedDecisionOptimizer` when each decision group has several scored
-candidates and the output must select one feasible candidate per group. It is
-for decision selection after prediction, not for fitting the predictor itself.
+Turn scored candidates into one feasible choice per decision with
+`ConstrainedDecisionOptimizer`. For a taxi dispatch decision, a candidate might
+have expected utility, an acceptance probability, and a risk score. The
+optimizer applies your constraints and selects from those scored alternatives;
+the prediction model remains a separate step.
 
 ## Python Example
 
@@ -13,14 +19,14 @@ from cartoboost.deep import ConstrainedDecisionOptimizer
 
 candidate_rows = [
     {
-        "decision_id": "order-1",
+        "decision_id": "dispatch-1",
         "candidate_id": "candidate-a",
         "expected_utility": 0.82,
         "response_probability": 0.76,
         "risk_score": 0.08,
     },
     {
-        "decision_id": "order-1",
+        "decision_id": "dispatch-1",
         "candidate_id": "candidate-b",
         "expected_utility": 0.91,
         "response_probability": 0.63,
@@ -39,7 +45,10 @@ optimizer = ConstrainedDecisionOptimizer(
 choice = optimizer.select(candidate_rows)
 ```
 
-## Browser WASM Example
+## Interactive Example
+
+Run the small example to inspect inputs and model behavior. It is a browser
+demonstration, not a benchmark on held-out taxi trips.
 
 <DeepModelWasmExample model="ConstrainedDecisionOptimizer" />
 

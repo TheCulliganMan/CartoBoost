@@ -4,7 +4,7 @@ const sidebars: SidebarsConfig = {
   docs: [
     {
       type: 'category',
-      label: 'Start Here',
+      label: 'Getting started',
       collapsed: false,
       items: [
         'index',
@@ -16,7 +16,7 @@ const sidebars: SidebarsConfig = {
     },
     {
       type: 'category',
-      label: 'Modeling Guides',
+      label: 'Model guides',
       collapsed: false,
       items: [
         {
@@ -35,7 +35,7 @@ const sidebars: SidebarsConfig = {
         {
           type: 'category',
           label: 'Forecasting',
-          collapsed: false,
+          collapsed: true,
           items: [
             'forecasting',
             'user-guide/forecasting-models/index',
@@ -52,7 +52,7 @@ const sidebars: SidebarsConfig = {
             {
               type: 'doc',
               id: 'user-guide/forecasting-models/graph-spatiotemporal',
-              label: 'Graph and Market Structure Forecasting',
+              label: 'Graph & market forecasting',
             },
             'user-guide/forecasting-models/probabilistic-conformal',
             'user-guide/forecasting-models/beats-hits',
@@ -110,7 +110,7 @@ const sidebars: SidebarsConfig = {
     },
     {
       type: 'category',
-      label: 'Data & Features',
+      label: 'Data & features',
       items: [
         'user-guide/python-estimator',
         'feature_schema',
@@ -123,7 +123,7 @@ const sidebars: SidebarsConfig = {
     },
     {
       type: 'category',
-      label: 'Evaluation & Interpretation',
+      label: 'Evaluate & explain',
       items: [
         'user-guide/spatial-cv-best-practices',
         'user-guide/geo-evaluation-standard',
@@ -152,8 +152,8 @@ const sidebars: SidebarsConfig = {
     },
     {
       type: 'category',
-      label: 'API & Reference',
-      collapsed: false,
+      label: 'API & reference',
+      collapsed: true,
       items: [
         'reference/python-api',
         'reference/cli',
@@ -166,7 +166,7 @@ const sidebars: SidebarsConfig = {
     {
       type: 'category',
       label: 'Benchmarks',
-      collapsed: false,
+      collapsed: true,
       items: [
         'benchmarks/index',
         'benchmarks/model-suite',

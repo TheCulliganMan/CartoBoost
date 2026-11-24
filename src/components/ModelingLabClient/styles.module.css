@@ -19,7 +19,7 @@
     var(--lab-bg);
   color: var(--lab-text);
   min-height: calc(100vh - var(--ifm-navbar-height, 3.75rem));
-  padding: calc(var(--ifm-navbar-height, 3.75rem) + 0.85rem) clamp(1rem, 2.4vw, 2rem) 5.25rem;
+  padding: 1.5rem clamp(1rem, 2.4vw, 2rem) 5.25rem;
 }
 
 .shell :global(*) {
@@ -34,7 +34,7 @@ body:has(.shell) :global(.footer) {
   align-items: center;
   background: var(--lab-panel-elevated);
   border: 1px solid var(--lab-border);
-  border-radius: 8px;
+  border-radius: 0;
   box-shadow: 0 16px 42px rgba(11, 18, 32, 0.07);
   display: flex;
   gap: 1rem;
@@ -72,7 +72,7 @@ body:has(.shell) :global(.footer) {
 .eyebrow {
   color: #168f86;
   display: block;
-  font-size: 0.7rem;
+  font-size: 0.825rem;
   font-weight: 800;
   letter-spacing: 0.08em;
   margin-bottom: 0.25rem;
@@ -91,7 +91,7 @@ body:has(.shell) :global(.footer) {
 .controlPanel {
   background: var(--lab-panel-elevated);
   border: 1px solid var(--lab-border);
-  border-radius: 8px;
+  border-radius: 0;
   align-self: start;
   box-shadow: 0 18px 48px rgba(11, 18, 32, 0.08);
   padding: 0.7rem;
@@ -101,7 +101,7 @@ body:has(.shell) :global(.footer) {
   align-items: center;
   background: #f5fbfb;
   border: 1px solid #c2ece8;
-  border-radius: 8px;
+  border-radius: 0;
   cursor: pointer;
   display: grid;
   gap: 0.35rem;
@@ -125,7 +125,7 @@ body:has(.shell) :global(.footer) {
 .dropZone span,
 .status {
   color: var(--lab-muted);
-  font-size: 0.82rem;
+  font-size: 0.825rem;
 }
 
 .controlStack {
@@ -137,7 +137,7 @@ body:has(.shell) :global(.footer) {
 .controlSection {
   background: var(--lab-panel);
   border: 1px solid var(--lab-border);
-  border-radius: 8px;
+  border-radius: 0;
   padding: 0.6rem;
 }
 
@@ -153,11 +153,11 @@ body:has(.shell) :global(.footer) {
   align-items: center;
   background: #e0f5f3;
   border: 1px solid #168f86;
-  border-radius: 999px;
+  border-radius: 0;
   color: #0b6f68;
   display: inline-flex;
   flex: 0 0 auto;
-  font-size: 0.68rem;
+  font-size: 0.825rem;
   font-weight: 900;
   height: 1.35rem;
   justify-content: center;
@@ -169,7 +169,7 @@ body:has(.shell) :global(.footer) {
 .stepHeader strong,
 .actionHeader strong {
   color: var(--lab-heading);
-  font-size: 0.78rem;
+  font-size: 0.825rem;
   letter-spacing: 0;
   margin: 0;
 }
@@ -201,14 +201,14 @@ body:has(.shell) :global(.footer) {
 .surfaceBlock {
   background: var(--lab-panel);
   border: 1px solid var(--lab-border);
-  border-radius: 8px;
+  border-radius: 0;
   padding: 0.55rem;
 }
 
 .surfaceTabs {
   background: var(--lab-tabs);
   border: 1px solid var(--lab-control-border);
-  border-radius: 8px;
+  border-radius: 0;
   display: grid;
   gap: 0.25rem;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -221,11 +221,11 @@ body:has(.shell) :global(.footer) {
 .surfaceTabs button {
   background: transparent;
   border: 0;
-  border-radius: 6px;
+  border-radius: 0;
   color: var(--lab-muted);
   cursor: pointer;
   font: inherit;
-  font-size: 0.8rem;
+  font-size: 0.825rem;
   font-weight: 800;
   min-height: 2.1rem;
   padding: 0.35rem 0.45rem;
@@ -241,7 +241,7 @@ body:has(.shell) :global(.footer) {
   align-items: start;
   background: var(--lab-panel-soft);
   border: 1px solid var(--lab-border-strong);
-  border-radius: 8px;
+  border-radius: 0;
   display: flex;
   gap: 0.6rem;
   justify-content: space-between;
@@ -252,7 +252,7 @@ body:has(.shell) :global(.footer) {
 
 .neuralSummary strong {
   color: var(--lab-text);
-  font-size: 0.8rem;
+  font-size: 0.825rem;
   line-height: 1.25;
   min-width: 0;
   overflow-wrap: anywhere;
@@ -261,7 +261,7 @@ body:has(.shell) :global(.footer) {
 
 .neuralSummary span {
   color: var(--lab-muted);
-  font-size: 0.66rem;
+  font-size: 0.825rem;
   font-weight: 800;
   line-height: 1.25;
   text-transform: uppercase;
@@ -279,7 +279,7 @@ body:has(.shell) :global(.footer) {
 
 .deepCatalogGroup h3 {
   color: var(--lab-muted);
-  font-size: 0.68rem;
+  font-size: 0.825rem;
   font-weight: 900;
   letter-spacing: 0.07em;
   margin: 0;
@@ -294,7 +294,7 @@ body:has(.shell) :global(.footer) {
 .deepModelCard {
   background: var(--lab-panel-tint);
   border: 1px solid var(--lab-border-strong);
-  border-radius: 8px;
+  border-radius: 0;
   color: var(--lab-text);
   cursor: pointer;
   display: grid;
@@ -304,19 +304,19 @@ body:has(.shell) :global(.footer) {
 }
 
 .deepModelCard strong {
-  font-size: 0.78rem;
+  font-size: 0.825rem;
   line-height: 1.2;
 }
 
 .deepModelCard span {
   color: var(--lab-muted);
-  font-size: 0.72rem;
+  font-size: 0.825rem;
   line-height: 1.3;
 }
 
 .deepModelCard small {
   color: #0b6f68;
-  font-size: 0.65rem;
+  font-size: 0.825rem;
   font-weight: 800;
 }
 
@@ -332,7 +332,7 @@ body:has(.shell) :global(.footer) {
 .deepResultPanel {
   background: var(--lab-panel-elevated);
   border: 1px solid var(--lab-border);
-  border-radius: 8px;
+  border-radius: 0;
   display: flex;
   gap: 1rem;
   justify-content: space-between;
@@ -398,19 +398,19 @@ body:has(.shell) :global(.footer) {
 .lsttnTracePanel dl div {
   background: var(--lab-panel-soft);
   border: 1px solid var(--lab-border);
-  border-radius: 7px;
+  border-radius: 0;
   padding: 0.42rem 0.5rem;
 }
 
 .lsttnDebuggerHeader dt,
-.lsttnTracePanel dt { color: var(--lab-muted); font-size: 0.62rem; font-weight: 800; text-transform: uppercase; }
+.lsttnTracePanel dt { color: var(--lab-muted); font-size: 0.825rem; font-weight: 800; text-transform: uppercase; }
 .lsttnDebuggerHeader dd,
-.lsttnTracePanel dd { color: var(--lab-heading); font-size: 0.82rem; font-weight: 850; margin: 0.08rem 0 0; }
+.lsttnTracePanel dd { color: var(--lab-heading); font-size: 0.825rem; font-weight: 850; margin: 0.08rem 0 0; }
 
 .lsttnModeBar {
   background: var(--lab-panel-soft);
   border: 1px solid var(--lab-border);
-  border-radius: 8px;
+  border-radius: 0;
   display: grid;
   gap: 0.28rem;
   grid-template-columns: repeat(7, minmax(0, 1fr));
@@ -421,11 +421,11 @@ body:has(.shell) :global(.footer) {
 .lsttnMapControls button {
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: 0;
   color: var(--lab-muted);
   cursor: pointer;
   font: inherit;
-  font-size: 0.72rem;
+  font-size: 0.825rem;
   font-weight: 850;
   padding: 0.4rem 0.46rem;
 }
@@ -447,7 +447,7 @@ body:has(.shell) :global(.footer) {
   justify-content: space-between;
 }
 
-.lsttnMapControls label { color: var(--lab-muted); display: grid; font-size: 0.72rem; gap: 0.2rem; min-width: min(26rem, 54%); }
+.lsttnMapControls label { color: var(--lab-muted); display: grid; font-size: 0.825rem; gap: 0.2rem; min-width: min(26rem, 54%); }
 .lsttnMapControls label strong { color: var(--lab-heading); font-size: 0.84rem; }
 .lsttnMapControls input { accent-color: #168f86; width: 100%; }
 .lsttnMapControls > div { display: flex; gap: 0.3rem; }
@@ -456,7 +456,7 @@ body:has(.shell) :global(.footer) {
 .lsttnMapShell {
   background: #0a1728;
   border: 1px solid rgba(107, 197, 214, 0.32);
-  border-radius: 12px;
+  border-radius: 0;
   box-shadow: 0 18px 42px rgba(7, 17, 31, 0.2);
   height: 560px;
   overflow: hidden;
@@ -498,14 +498,14 @@ body:has(.shell) :global(.footer) {
 .lsttnMetricGrid > div {
   background: var(--lab-panel-soft);
   border: 1px solid var(--lab-border);
-  border-radius: 8px;
+  border-radius: 0;
   display: grid;
   gap: 0.08rem;
   padding: 0.62rem;
 }
 
 .lsttnMetricGrid span,
-.lsttnMetricGrid small { color: var(--lab-muted); font-size: 0.65rem; }
+.lsttnMetricGrid small { color: var(--lab-muted); font-size: 0.825rem; }
 .lsttnMetricGrid span { font-weight: 850; text-transform: uppercase; }
 .lsttnMetricGrid strong { color: var(--lab-heading); font-size: 1.12rem; }
 
@@ -521,7 +521,7 @@ body:has(.shell) :global(.footer) {
 .lsttnRankTable {
   background: var(--lab-panel-soft);
   border: 1px solid var(--lab-border);
-  border-radius: 9px;
+  border-radius: 0;
   min-width: 0;
   padding: 0.75rem;
 }
@@ -530,16 +530,16 @@ body:has(.shell) :global(.footer) {
 .lsttnDriverList { display: grid; gap: 0.48rem; }
 .lsttnDriverList > div { align-items: center; display: grid; gap: 0.42rem; grid-template-columns: minmax(9rem, 1.3fr) minmax(5rem, 0.8fr) 3.6rem; }
 .lsttnDriverList span { display: grid; gap: 0.04rem; }
-.lsttnDriverList strong { color: var(--lab-heading); font-size: 0.76rem; }
-.lsttnDriverList small { color: var(--lab-muted); font-size: 0.62rem; line-height: 1.25; }
-.lsttnDriverList i { border-radius: 999px; display: block; height: 0.5rem; min-width: 4%; }
-.lsttnDriverList b { color: var(--lab-heading); font-size: 0.76rem; text-align: right; }
+.lsttnDriverList strong { color: var(--lab-heading); font-size: 0.825rem; }
+.lsttnDriverList small { color: var(--lab-muted); font-size: 0.825rem; line-height: 1.25; }
+.lsttnDriverList i { border-radius: 0; display: block; height: 0.5rem; min-width: 4%; }
+.lsttnDriverList b { color: var(--lab-heading); font-size: 0.825rem; text-align: right; }
 .lsttnPositive { background: #22a984; }
 .lsttnNegative { background: #4d82da; }
 .lsttnMethodNote,
-.lsttnFixtureNote { color: var(--lab-muted); font-size: 0.67rem; line-height: 1.4; margin: 0.65rem 0 0; }
+.lsttnFixtureNote { color: var(--lab-muted); font-size: 0.825rem; line-height: 1.4; margin: 0.65rem 0 0; }
 
-.lsttnTrace { background: #0c2233; border-radius: 7px; display: block; height: 174px; margin: 0.45rem 0 0.55rem; overflow: visible; padding: 0.35rem; width: 100%; }
+.lsttnTrace { background: #0c2233; border-radius: 0; display: block; height: 174px; margin: 0.45rem 0 0.55rem; overflow: visible; padding: 0.35rem; width: 100%; }
 .lsttnTrace line { stroke: rgba(224, 240, 245, 0.3); stroke-dasharray: 2 2; stroke-width: 0.7; }
 .lsttnTrace polyline { fill: none; vector-effect: non-scaling-stroke; }
 .lsttnHistoryLine { stroke: #8da7b4; stroke-width: 1.2; }
@@ -549,26 +549,26 @@ body:has(.shell) :global(.footer) {
 
 .lsttnArchitecture { align-items: start; display: grid; gap: 0.8rem; grid-template-columns: minmax(13rem, 0.68fr) minmax(0, 1.32fr); }
 .lsttnArchitecture ul { display: grid; gap: 0.34rem; grid-template-columns: repeat(2, minmax(0, 1fr)); list-style: none; margin: 0; padding: 0; }
-.lsttnArchitecture li { background: var(--lab-panel-elevated); border-left: 3px solid #27b7a9; border-radius: 5px; color: var(--lab-text); font-size: 0.7rem; line-height: 1.35; padding: 0.42rem 0.5rem; }
+.lsttnArchitecture li { background: var(--lab-panel-elevated); border-left: 3px solid #27b7a9; border-radius: 0; color: var(--lab-text); font-size: 0.825rem; line-height: 1.35; padding: 0.42rem 0.5rem; }
 
 .lsttnRankTable > div { align-items: center; display: flex; justify-content: space-between; }
-.lsttnRankTable > div strong { color: var(--lab-heading); font-size: 0.76rem; }
+.lsttnRankTable > div strong { color: var(--lab-heading); font-size: 0.825rem; }
 .lsttnRankTable ol { display: grid; gap: 0.32rem; grid-template-columns: repeat(5, minmax(0, 1fr)); list-style: none; margin: 0.55rem 0 0; padding: 0; }
-.lsttnRankTable button { background: var(--lab-panel-elevated); border: 1px solid var(--lab-border); border-radius: 6px; color: var(--lab-text); cursor: pointer; display: grid; font: inherit; gap: 0.08rem; padding: 0.48rem; text-align: left; width: 100%; }
+.lsttnRankTable button { background: var(--lab-panel-elevated); border: 1px solid var(--lab-border); border-radius: 0; color: var(--lab-text); cursor: pointer; display: grid; font: inherit; gap: 0.08rem; padding: 0.48rem; text-align: left; width: 100%; }
 .lsttnRankTable button:hover,
 .lsttnRankTable button:focus-visible { border-color: #27b7a9; outline: 2px solid rgba(39, 183, 169, 0.18); }
 .lsttnRankTable span,
-.lsttnRankTable small { color: var(--lab-muted); font-size: 0.62rem; }
+.lsttnRankTable small { color: var(--lab-muted); font-size: 0.825rem; }
 .lsttnRankTable strong { color: var(--lab-heading); font-size: 0.86rem; }
 .lsttnFixtureNote { margin: -0.2rem 0 0; }
 
 .deepDocsLink {
   align-self: start;
   border: 1px solid var(--lab-control-border);
-  border-radius: 7px;
+  border-radius: 0;
   color: #0b6f68;
   flex: 0 0 auto;
-  font-size: 0.8rem;
+  font-size: 0.825rem;
   font-weight: 800;
   padding: 0.42rem 0.55rem;
 }
@@ -583,13 +583,13 @@ body:has(.shell) :global(.footer) {
 .deepResultGrid div {
   background: var(--lab-panel-soft);
   border: 1px solid var(--lab-border);
-  border-radius: 7px;
+  border-radius: 0;
   padding: 0.55rem;
 }
 
 .deepResultGrid dt {
   color: var(--lab-muted);
-  font-size: 0.68rem;
+  font-size: 0.825rem;
   font-weight: 800;
   text-transform: uppercase;
 }
@@ -613,7 +613,7 @@ body:has(.shell) :global(.footer) {
 
 .field span {
   color: var(--lab-muted);
-  font-size: 0.68rem;
+  font-size: 0.825rem;
   font-weight: 800;
   text-transform: uppercase;
 }
@@ -622,7 +622,7 @@ body:has(.shell) :global(.footer) {
 .field input {
   background: var(--lab-control);
   border: 1px solid var(--lab-control-border);
-  border-radius: 8px;
+  border-radius: 0;
   color: var(--lab-text);
   font: inherit;
   min-height: 2.1rem;
@@ -632,7 +632,7 @@ body:has(.shell) :global(.footer) {
 
 .seasonalityControl {
   border: 1px solid var(--lab-border);
-  border-radius: 8px;
+  border-radius: 0;
   grid-column: 1 / -1;
   padding: 0.45rem;
 }
@@ -647,14 +647,14 @@ body:has(.shell) :global(.footer) {
 
 .seasonalityHeader span {
   color: var(--lab-muted);
-  font-size: 0.78rem;
+  font-size: 0.825rem;
   font-weight: 800;
   text-transform: uppercase;
 }
 
 .seasonalityHeader strong {
   color: #168f86;
-  font-size: 0.82rem;
+  font-size: 0.825rem;
 }
 
 .seasonalityButtons {
@@ -667,7 +667,7 @@ body:has(.shell) :global(.footer) {
 .seasonalityButtons button {
   background: var(--lab-panel-tint);
   border: 1px solid var(--lab-border-strong);
-  border-radius: 8px;
+  border-radius: 0;
   color: var(--lab-text);
   cursor: pointer;
   font: inherit;
@@ -682,12 +682,12 @@ body:has(.shell) :global(.footer) {
 }
 
 .seasonalityButtons strong {
-  font-size: 0.78rem;
+  font-size: 0.825rem;
 }
 
 .seasonalityButtons span {
   color: var(--lab-muted);
-  font-size: 0.72rem;
+  font-size: 0.825rem;
 }
 
 .seasonalityButtons .seasonalityButtonActive {
@@ -698,9 +698,9 @@ body:has(.shell) :global(.footer) {
 .settingHint {
   background: var(--lab-panel-soft);
   border: 1px solid var(--lab-border);
-  border-radius: 8px;
+  border-radius: 0;
   color: var(--lab-muted);
-  font-size: 0.78rem;
+  font-size: 0.825rem;
   line-height: 1.35;
   margin: 0.5rem 0 0;
   padding: 0.5rem 0.6rem;
@@ -708,7 +708,7 @@ body:has(.shell) :global(.footer) {
 
 .primaryButton,
 .secondaryButton {
-  border-radius: 8px;
+  border-radius: 0;
   cursor: pointer;
   font: inherit;
   font-weight: 800;
@@ -759,7 +759,7 @@ body:has(.shell) :global(.footer) {
 .secondaryActionButton {
   background: var(--lab-control);
   border: 1px solid var(--lab-control-border);
-  border-radius: 8px;
+  border-radius: 0;
   color: var(--lab-text);
   cursor: pointer;
   font: inherit;
@@ -783,7 +783,7 @@ body:has(.shell) :global(.footer) {
 .loadingBar,
 .progressBar {
   background: #d8e0ea;
-  border-radius: 999px;
+  border-radius: 0;
   height: 0.46rem;
   overflow: hidden;
   position: relative;
@@ -808,7 +808,7 @@ body:has(.shell) :global(.footer) {
 .progressWrap {
   background: var(--lab-panel-soft);
   border: 1px solid var(--lab-border-strong);
-  border-radius: 8px;
+  border-radius: 0;
   display: grid;
   gap: 0.45rem;
   margin-top: 0.6rem;
@@ -825,7 +825,7 @@ body:has(.shell) :global(.footer) {
 .progressMeta span,
 .progressMeta strong {
   color: var(--lab-text);
-  font-size: 0.76rem;
+  font-size: 0.825rem;
   font-weight: 800;
   min-width: 0;
   overflow-wrap: anywhere;
@@ -839,7 +839,7 @@ body:has(.shell) :global(.footer) {
 .runLog {
   background: var(--lab-panel-soft);
   border: 1px solid var(--lab-border-strong);
-  border-radius: 8px;
+  border-radius: 0;
   display: grid;
   gap: 0.35rem;
   margin-top: 0.55rem;
@@ -850,7 +850,7 @@ body:has(.shell) :global(.footer) {
 
 .runLog strong {
   color: var(--lab-heading);
-  font-size: 0.7rem;
+  font-size: 0.825rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
@@ -865,7 +865,7 @@ body:has(.shell) :global(.footer) {
 
 .runLog li {
   color: var(--lab-muted);
-  font-size: 0.74rem;
+  font-size: 0.825rem;
   line-height: 1.3;
   overflow-wrap: anywhere;
 }
@@ -895,7 +895,7 @@ body:has(.shell) :global(.footer) {
 .resultHeader {
   background: var(--lab-panel-elevated);
   border: 1px solid var(--lab-border);
-  border-radius: 8px;
+  border-radius: 0;
   align-items: start;
   display: flex;
   gap: 1rem;
@@ -910,7 +910,7 @@ body:has(.shell) :global(.footer) {
   align-content: start;
   background: var(--lab-panel-elevated);
   border: 1px solid var(--lab-border);
-  border-radius: 8px;
+  border-radius: 0;
   display: grid;
   margin-bottom: 0;
   min-height: 8.5rem;
@@ -937,7 +937,7 @@ body:has(.shell) :global(.footer) {
 
 .resultHeader dt {
   color: var(--lab-muted);
-  font-size: 0.75rem;
+  font-size: 0.825rem;
   font-weight: 800;
   text-transform: uppercase;
 }
@@ -952,7 +952,7 @@ body:has(.shell) :global(.footer) {
 .chart {
   background: var(--lab-panel);
   border: 1px solid var(--lab-border);
-  border-radius: 8px;
+  border-radius: 0;
   box-shadow: 0 14px 34px rgba(11, 18, 32, 0.06);
   margin: 0;
   max-width: 100%;
@@ -983,7 +983,7 @@ body:has(.shell) :global(.footer) {
 
 .chartToolbar span {
   color: var(--lab-muted);
-  font-size: 0.74rem;
+  font-size: 0.825rem;
   font-weight: 800;
   text-transform: uppercase;
 }
@@ -991,7 +991,7 @@ body:has(.shell) :global(.footer) {
 .chartZoomControls {
   background: var(--lab-panel-tint);
   border: 1px solid var(--lab-border-strong);
-  border-radius: 8px;
+  border-radius: 0;
   display: inline-grid;
   flex: 0 0 auto;
   gap: 0.2rem;
@@ -1002,11 +1002,11 @@ body:has(.shell) :global(.footer) {
 .chartZoomControls button {
   background: transparent;
   border: 0;
-  border-radius: 6px;
+  border-radius: 0;
   color: var(--lab-muted);
   cursor: pointer;
   font: inherit;
-  font-size: 0.76rem;
+  font-size: 0.825rem;
   font-weight: 900;
   min-height: 1.75rem;
   padding: 0.22rem 0.42rem;
@@ -1021,7 +1021,7 @@ body:has(.shell) :global(.footer) {
 .benchmarkToggles {
   background: var(--lab-panel);
   border: 1px solid var(--lab-border);
-  border-radius: 8px;
+  border-radius: 0;
   display: flex;
   flex-wrap: wrap;
   gap: 0.4rem;
@@ -1032,11 +1032,11 @@ body:has(.shell) :global(.footer) {
   align-items: center;
   background: var(--lab-panel-soft);
   border: 1px solid var(--lab-border-strong);
-  border-radius: 8px;
+  border-radius: 0;
   color: var(--lab-text);
   cursor: pointer;
   display: inline-flex;
-  font-size: 0.78rem;
+  font-size: 0.825rem;
   font-weight: 800;
   gap: 0.35rem;
   max-width: 100%;
@@ -1243,7 +1243,7 @@ body:has(.shell) :global(.footer) {
 .componentPanel {
   background: var(--lab-panel);
   border: 1px solid var(--lab-border);
-  border-radius: 8px;
+  border-radius: 0;
   margin: 0;
   max-width: 100%;
   min-width: 0;
@@ -1254,7 +1254,7 @@ body:has(.shell) :global(.footer) {
 .debuggerPanel {
   background: var(--lab-panel);
   border: 1px solid var(--lab-border);
-  border-radius: 8px;
+  border-radius: 0;
   display: grid;
   gap: 0.65rem;
   margin: 0;
@@ -1273,7 +1273,7 @@ body:has(.shell) :global(.footer) {
 .debuggerMetrics p {
   background: var(--lab-panel-tint);
   border: 1px solid var(--lab-border-strong);
-  border-radius: 8px;
+  border-radius: 0;
   color: var(--lab-text);
   font-size: 1rem;
   font-weight: 850;
@@ -1286,7 +1286,7 @@ body:has(.shell) :global(.footer) {
 .debuggerMetrics span {
   color: var(--lab-muted);
   display: block;
-  font-size: 0.7rem;
+  font-size: 0.825rem;
   font-weight: 850;
   margin-bottom: 0.18rem;
   text-transform: uppercase;
@@ -1309,7 +1309,7 @@ body:has(.shell) :global(.footer) {
 
 .componentHeader p {
   color: var(--lab-muted);
-  font-size: 0.82rem;
+  font-size: 0.825rem;
   margin: 0;
   text-align: right;
 }
@@ -1323,7 +1323,7 @@ body:has(.shell) :global(.footer) {
 
 .componentGrid p {
   background: var(--lab-panel-tint);
-  border-radius: 8px;
+  border-radius: 0;
   color: var(--lab-text);
   font-size: 1.05rem;
   font-weight: 800;
@@ -1336,14 +1336,14 @@ body:has(.shell) :global(.footer) {
 .componentGrid span {
   color: var(--lab-muted);
   display: block;
-  font-size: 0.72rem;
+  font-size: 0.825rem;
   margin-bottom: 0.2rem;
   text-transform: uppercase;
 }
 
 .chart figcaption {
   color: var(--lab-muted);
-  font-size: 0.8rem;
+  font-size: 0.825rem;
   margin-top: 0.3rem;
 }
 
@@ -1358,12 +1358,12 @@ body:has(.shell) :global(.footer) {
   align-items: center;
   color: var(--lab-muted);
   display: inline-flex;
-  font-size: 0.82rem;
+  font-size: 0.825rem;
   gap: 0.35rem;
 }
 
 .legend i {
-  border-radius: 999px;
+  border-radius: 0;
   display: inline-block;
   height: 0.65rem;
   width: 0.65rem;
@@ -1380,7 +1380,7 @@ body:has(.shell) :global(.footer) {
   align-items: center;
   background: var(--lab-panel-soft);
   border: 1px solid var(--lab-border-strong);
-  border-radius: 8px;
+  border-radius: 0;
   display: grid;
   gap: 0.1rem 0.42rem;
   grid-template-columns: auto minmax(0, 1fr) auto;
@@ -1390,7 +1390,7 @@ body:has(.shell) :global(.footer) {
 }
 
 .outcomeStrip i {
-  border-radius: 999px;
+  border-radius: 0;
   display: block;
   grid-row: 1 / span 2;
   height: 0.62rem;
@@ -1405,7 +1405,7 @@ body:has(.shell) :global(.footer) {
 
 .outcomeStrip span {
   color: var(--lab-text);
-  font-size: 0.76rem;
+  font-size: 0.825rem;
   font-weight: 800;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1414,13 +1414,13 @@ body:has(.shell) :global(.footer) {
 
 .outcomeStrip strong {
   color: var(--lab-heading);
-  font-size: 0.8rem;
+  font-size: 0.825rem;
   text-align: right;
 }
 
 .outcomeStrip em {
   color: var(--lab-muted);
-  font-size: 0.68rem;
+  font-size: 0.825rem;
   font-style: normal;
   font-weight: 800;
   grid-column: 2 / -1;
@@ -1439,7 +1439,7 @@ body:has(.shell) :global(.footer) {
 .signalCards p {
   background: var(--lab-panel);
   border: 1px solid var(--lab-border);
-  border-radius: 8px;
+  border-radius: 0;
   box-shadow: 0 10px 28px rgba(11, 18, 32, 0.04);
   color: var(--lab-text);
   font-size: 1rem;
@@ -1453,7 +1453,7 @@ body:has(.shell) :global(.footer) {
 .signalCards span,
 .signalCards em {
   display: block;
-  font-size: 0.72rem;
+  font-size: 0.825rem;
   font-style: normal;
   font-weight: 800;
 }
@@ -1472,7 +1472,7 @@ body:has(.shell) :global(.footer) {
 .metricChart {
   background: var(--lab-panel);
   border: 1px solid var(--lab-border);
-  border-radius: 8px;
+  border-radius: 0;
   margin: 0;
   padding: 0.65rem;
 }
@@ -1492,7 +1492,7 @@ body:has(.shell) :global(.footer) {
 
 .metricCards p {
   background: var(--lab-panel-soft);
-  border-radius: 8px;
+  border-radius: 0;
   color: var(--lab-text);
   font-size: 1.1rem;
   font-weight: 800;
@@ -1503,7 +1503,7 @@ body:has(.shell) :global(.footer) {
 .metricCards span {
   color: var(--lab-muted);
   display: block;
-  font-size: 0.72rem;
+  font-size: 0.825rem;
   margin-bottom: 0.25rem;
   text-transform: uppercase;
 }
@@ -1511,7 +1511,7 @@ body:has(.shell) :global(.footer) {
 .modelVisualizer {
   background: var(--lab-panel);
   border: 1px solid var(--lab-border);
-  border-radius: 8px;
+  border-radius: 0;
   box-shadow: 0 12px 30px rgba(11, 18, 32, 0.05);
   display: grid;
   gap: 0.75rem;
@@ -1542,7 +1542,7 @@ body:has(.shell) :global(.footer) {
 
 .modelVisualizerHeader dt {
   color: var(--lab-muted);
-  font-size: 0.7rem;
+  font-size: 0.825rem;
   font-weight: 800;
   text-transform: uppercase;
 }
@@ -1570,7 +1570,7 @@ body:has(.shell) :global(.footer) {
 .splitterCard {
   background: var(--lab-panel-soft);
   border: 1px solid var(--lab-border-strong);
-  border-radius: 8px;
+  border-radius: 0;
   display: grid;
   gap: 0.45rem;
   grid-template-columns: 64px minmax(0, 1fr);
@@ -1588,19 +1588,19 @@ body:has(.shell) :global(.footer) {
 
 .splitterCard strong {
   color: var(--lab-heading);
-  font-size: 0.82rem;
+  font-size: 0.825rem;
   overflow-wrap: anywhere;
 }
 
 .splitterCard span {
   color: var(--lab-muted);
-  font-size: 0.74rem;
+  font-size: 0.825rem;
   font-weight: 800;
 }
 
 .splitterCard p {
   color: var(--lab-text);
-  font-size: 0.74rem;
+  font-size: 0.825rem;
   grid-column: 1 / -1;
   line-height: 1.25;
   margin: 0;
@@ -1647,7 +1647,7 @@ body:has(.shell) :global(.footer) {
 .treeForest {
   background: var(--lab-panel-soft);
   border: 1px solid var(--lab-border-strong);
-  border-radius: 8px;
+  border-radius: 0;
   margin: 0;
   min-width: 0;
   overflow: hidden;
@@ -1677,7 +1677,7 @@ body:has(.shell) :global(.footer) {
 
 .treeForest figcaption {
   color: var(--lab-muted);
-  font-size: 0.78rem;
+  font-size: 0.825rem;
   margin-top: 0.35rem;
 }
 
@@ -1734,7 +1734,7 @@ body:has(.shell) :global(.footer) {
 .treeRoster {
   background: var(--lab-panel-soft);
   border: 1px solid var(--lab-border-strong);
-  border-radius: 8px;
+  border-radius: 0;
   display: grid;
   gap: 0.42rem;
   min-width: 0;
@@ -1743,7 +1743,7 @@ body:has(.shell) :global(.footer) {
 
 .treeRoster > strong {
   color: var(--lab-heading);
-  font-size: 0.82rem;
+  font-size: 0.825rem;
 }
 
 .treeRosterRow {
@@ -1758,7 +1758,7 @@ body:has(.shell) :global(.footer) {
 .treeRosterRow b,
 .treeRosterRow small {
   color: var(--lab-text);
-  font-size: 0.74rem;
+  font-size: 0.825rem;
   min-width: 0;
   overflow-wrap: anywhere;
 }
@@ -1775,7 +1775,7 @@ body:has(.shell) :global(.footer) {
 
 .treeRosterRow i {
   background: #d8e0ea;
-  border-radius: 999px;
+  border-radius: 0;
   display: block;
   height: 0.55rem;
   overflow: hidden;
@@ -1791,7 +1791,7 @@ body:has(.shell) :global(.footer) {
 .featureSplitterMatrix {
   background: var(--lab-panel-soft);
   border: 1px solid var(--lab-border-strong);
-  border-radius: 8px;
+  border-radius: 0;
   display: grid;
   gap: 0.38rem;
   min-width: 0;
@@ -1800,7 +1800,7 @@ body:has(.shell) :global(.footer) {
 
 .featureSplitterMatrix > strong {
   color: var(--lab-heading);
-  font-size: 0.82rem;
+  font-size: 0.825rem;
 }
 
 .featureSplitterHeader,
@@ -1824,7 +1824,7 @@ body:has(.shell) :global(.footer) {
 
 .featureSplitterRow span {
   color: var(--lab-text);
-  font-size: 0.72rem;
+  font-size: 0.825rem;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1833,7 +1833,7 @@ body:has(.shell) :global(.footer) {
 
 .featureSplitterRow i {
   background: #d8e0ea;
-  border-radius: 5px;
+  border-radius: 0;
   display: block;
   height: 1.05rem;
   overflow: hidden;
@@ -1849,7 +1849,7 @@ body:has(.shell) :global(.footer) {
 .structurePanel {
   background: var(--lab-panel-soft);
   border: 1px solid var(--lab-border-strong);
-  border-radius: 8px;
+  border-radius: 0;
   display: grid;
   gap: 0.42rem;
   min-width: 0;
@@ -1858,7 +1858,7 @@ body:has(.shell) :global(.footer) {
 
 .structurePanel > strong {
   color: var(--lab-heading);
-  font-size: 0.82rem;
+  font-size: 0.825rem;
 }
 
 .structureRow,
@@ -1877,7 +1877,7 @@ body:has(.shell) :global(.footer) {
 .splitterRuleRow span,
 .splitterRuleRow strong {
   color: var(--lab-text);
-  font-size: 0.76rem;
+  font-size: 0.825rem;
   min-width: 0;
   overflow-wrap: anywhere;
 }
@@ -1893,7 +1893,7 @@ body:has(.shell) :global(.footer) {
 .residualRow i,
 .splitterRuleRow i {
   background: #d8e0ea;
-  border-radius: 999px;
+  border-radius: 0;
   display: block;
   height: 0.55rem;
   overflow: hidden;
@@ -1911,7 +1911,7 @@ body:has(.shell) :global(.footer) {
 .splitterRuleRow span b {
   color: var(--lab-muted);
   display: block;
-  font-size: 0.68rem;
+  font-size: 0.825rem;
   text-transform: uppercase;
 }
 
@@ -1935,7 +1935,7 @@ body:has(.shell) :global(.footer) {
 .depthProfile i {
   align-self: end;
   background: #168f86;
-  border-radius: 5px 5px 0 0;
+  border-radius: 0;
   display: block;
   min-height: 5px;
   width: 100%;
@@ -1943,7 +1943,7 @@ body:has(.shell) :global(.footer) {
 
 .depthProfile em {
   color: var(--lab-muted);
-  font-size: 0.7rem;
+  font-size: 0.825rem;
   font-style: normal;
   font-weight: 800;
 }
@@ -1972,7 +1972,7 @@ body:has(.shell) :global(.footer) {
 
 .metricRow div {
   background: var(--lab-panel-tint);
-  border-radius: 999px;
+  border-radius: 0;
   height: 0.7rem;
   overflow: hidden;
 }
@@ -1987,7 +1987,7 @@ body:has(.shell) :global(.footer) {
 .tableScroller {
   background: var(--lab-panel);
   border: 1px solid var(--lab-border);
-  border-radius: 8px;
+  border-radius: 0;
   max-height: min(44vh, 34rem);
   max-width: 100%;
   overflow: auto;
@@ -1996,7 +1996,7 @@ body:has(.shell) :global(.footer) {
 .tableScroller table {
   border-collapse: collapse;
   display: table;
-  font-size: 0.82rem;
+  font-size: 0.825rem;
   min-width: 680px;
   width: 100%;
 }
@@ -2012,7 +2012,7 @@ body:has(.shell) :global(.footer) {
 .tableScroller th {
   background: #f8fafc;
   color: #526274;
-  font-size: 0.74rem;
+  font-size: 0.825rem;
   position: sticky;
   top: 0;
   z-index: 1;
@@ -2029,7 +2029,7 @@ body:has(.shell) :global(.footer) {
 .datasetProfile {
   background: #ffffff;
   border: 1px solid #d8e0ea;
-  border-radius: 8px;
+  border-radius: 0;
   padding: 0.85rem;
 }
 
@@ -2040,7 +2040,7 @@ body:has(.shell) :global(.footer) {
 .geoPanel {
   background: #ffffff;
   border: 1px solid #d8e0ea;
-  border-radius: 8px;
+  border-radius: 0;
   max-width: 100%;
   min-width: 0;
   overflow: hidden;
@@ -2074,7 +2074,7 @@ body:has(.shell) :global(.footer) {
 .diagnosticsHeader > span,
 .geoHeader > span {
   color: #526274;
-  font-size: 0.82rem;
+  font-size: 0.825rem;
   font-weight: 800;
 }
 
@@ -2099,7 +2099,7 @@ body:has(.shell) :global(.footer) {
 .planGrid p,
 .geoStats p {
   background: #f4f7fb;
-  border-radius: 8px;
+  border-radius: 0;
   color: #122033;
   font-size: 0.9rem;
   margin: 0;
@@ -2113,7 +2113,7 @@ body:has(.shell) :global(.footer) {
 .geoStats span {
   color: #526274;
   display: block;
-  font-size: 0.72rem;
+  font-size: 0.825rem;
   font-weight: 800;
   margin-bottom: 0.2rem;
   text-transform: uppercase;
@@ -2133,9 +2133,9 @@ body:has(.shell) :global(.footer) {
 .planReasons span {
   background: #eef2f7;
   border: 1px solid #d8e0ea;
-  border-radius: 999px;
+  border-radius: 0;
   color: #526274;
-  font-size: 0.78rem;
+  font-size: 0.825rem;
   padding: 0.3rem 0.55rem;
 }
 
@@ -2148,9 +2148,9 @@ body:has(.shell) :global(.footer) {
 
 .readinessList span {
   border: 1px solid #d8e0ea;
-  border-radius: 8px;
+  border-radius: 0;
   color: #526274;
-  font-size: 0.76rem;
+  font-size: 0.825rem;
   min-width: 0;
   overflow-wrap: anywhere;
   padding: 0.5rem;
@@ -2159,7 +2159,7 @@ body:has(.shell) :global(.footer) {
 .readinessList strong {
   color: #122033;
   display: block;
-  font-size: 0.72rem;
+  font-size: 0.825rem;
   margin-bottom: 0.2rem;
   text-transform: uppercase;
 }
@@ -2175,7 +2175,7 @@ body:has(.shell) :global(.footer) {
 .inlineActionButton {
   background: #122033;
   border: 1px solid #122033;
-  border-radius: 8px;
+  border-radius: 0;
   color: #ffffff;
   cursor: pointer;
   font: inherit;
@@ -2197,7 +2197,7 @@ body:has(.shell) :global(.footer) {
 .featureRoleRow strong,
 .featureRoleRow em {
   color: #122033;
-  font-size: 0.82rem;
+  font-size: 0.825rem;
   min-width: 0;
   overflow-wrap: anywhere;
 }
@@ -2215,7 +2215,7 @@ body:has(.shell) :global(.footer) {
 
 .featureRoleRow div {
   background: #eef2f7;
-  border-radius: 999px;
+  border-radius: 0;
   height: 0.65rem;
   overflow: hidden;
 }
@@ -2230,7 +2230,7 @@ body:has(.shell) :global(.footer) {
 .histogram {
   align-items: end;
   background: #f4f7fb;
-  border-radius: 8px;
+  border-radius: 0;
   display: grid;
   gap: 0.25rem;
   grid-template-columns: repeat(12, minmax(0, 1fr));
@@ -2247,7 +2247,7 @@ body:has(.shell) :global(.footer) {
 
 .histogram i {
   background: #168f86;
-  border-radius: 4px 4px 0 0;
+  border-radius: 0;
   display: block;
   min-height: 4px;
   width: 100%;
@@ -2261,9 +2261,9 @@ body:has(.shell) :global(.footer) {
 }
 
 .timeBuckets span {
-  border-radius: 6px;
+  border-radius: 0;
   color: #ffffff;
-  font-size: 0.72rem;
+  font-size: 0.825rem;
   font-weight: 800;
   min-height: 1.9rem;
   padding: 0.45rem 0.35rem;
@@ -2286,7 +2286,7 @@ body:has(.shell) :global(.footer) {
 
 .opportunityHeader {
   color: #526274;
-  font-size: 0.72rem;
+  font-size: 0.825rem;
   font-weight: 800;
   padding: 0 0.45rem;
   text-transform: uppercase;
@@ -2294,9 +2294,9 @@ body:has(.shell) :global(.footer) {
 
 .opportunityRow {
   background: #f4f7fb;
-  border-radius: 8px;
+  border-radius: 0;
   color: #122033;
-  font-size: 0.82rem;
+  font-size: 0.825rem;
   padding: 0.55rem;
 }
 
@@ -2310,7 +2310,7 @@ body:has(.shell) :global(.footer) {
 .opportunityRow strong span {
   color: #526274;
   display: block;
-  font-size: 0.72rem;
+  font-size: 0.825rem;
   margin-bottom: 0.12rem;
   text-transform: uppercase;
 }
@@ -2324,7 +2324,7 @@ body:has(.shell) :global(.footer) {
 
 .opportunityScoreBar {
   background: #d8e0ea;
-  border-radius: 999px;
+  border-radius: 0;
   display: block;
   height: 0.42rem;
   margin-top: 0.3rem;
@@ -2341,7 +2341,7 @@ body:has(.shell) :global(.footer) {
 .webglMapShell {
   background: #101b2c;
   border: 1px solid rgba(111, 181, 205, 0.28);
-  border-radius: 10px;
+  border-radius: 0;
   box-shadow: 0 16px 34px rgba(11, 18, 32, 0.12);
   height: 420px;
   margin-bottom: 0.75rem;
@@ -2359,7 +2359,7 @@ body:has(.shell) :global(.footer) {
   backdrop-filter: blur(10px);
   background: rgba(10, 24, 42, 0.82);
   border: 1px solid rgba(204, 234, 240, 0.2);
-  border-radius: 7px;
+  border-radius: 0;
   color: #eaf5f7;
   display: flex;
   gap: 0.75rem;
@@ -2374,20 +2374,20 @@ body:has(.shell) :global(.footer) {
 }
 
 .geoMapToolbar > div:first-child { display: grid; gap: 0.08rem; }
-.geoMapToolbar span { color: #9ebbc6; font-size: 0.65rem; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; }
-.geoMapToolbar strong { font-size: 0.78rem; }
-.geoMapToolbar > div:last-child { background: rgba(255, 255, 255, 0.1); border-radius: 6px; display: flex; gap: 0.18rem; padding: 0.18rem; }
-.geoMapToolbar button { background: transparent; border: 0; border-radius: 4px; color: #c8dce3; cursor: pointer; font: inherit; font-size: 0.72rem; font-weight: 800; padding: 0.3rem 0.42rem; }
+.geoMapToolbar span { color: #9ebbc6; font-size: 0.825rem; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; }
+.geoMapToolbar strong { font-size: 0.825rem; }
+.geoMapToolbar > div:last-child { background: rgba(255, 255, 255, 0.1); border-radius: 0; display: flex; gap: 0.18rem; padding: 0.18rem; }
+.geoMapToolbar button { background: transparent; border: 0; border-radius: 0; color: #c8dce3; cursor: pointer; font: inherit; font-size: 0.825rem; font-weight: 800; padding: 0.3rem 0.42rem; }
 .geoMapToolbar button:hover, .geoMapToolbar button:focus-visible, .geoMapToolbar .geoMapModeActive { background: #dff6f0; color: #075e5b; outline: 0; }
 
-.geoMapLegend { align-items: center; backdrop-filter: blur(8px); background: rgba(10, 24, 42, 0.8); border: 1px solid rgba(204, 234, 240, 0.2); border-radius: 5px; bottom: 0.65rem; color: #eaf5f7; display: flex; font-size: 0.65rem; gap: 0.35rem; padding: 0.38rem 0.45rem; pointer-events: none; position: absolute; right: 0.65rem; z-index: 2; }
+.geoMapLegend { align-items: center; backdrop-filter: blur(8px); background: rgba(10, 24, 42, 0.8); border: 1px solid rgba(204, 234, 240, 0.2); border-radius: 0; bottom: 0.65rem; color: #eaf5f7; display: flex; font-size: 0.825rem; gap: 0.35rem; padding: 0.38rem 0.45rem; pointer-events: none; position: absolute; right: 0.65rem; z-index: 2; }
 .geoMapLegend i { background: linear-gradient(90deg, #18608b, #1aa4b1, #6cdab2, #fad55e, #f4773f); height: 0.42rem; width: 4rem; }
 
 .webglMapOverlay {
   backdrop-filter: blur(8px);
   background: rgba(10, 24, 42, 0.8);
   border: 1px solid rgba(204, 234, 240, 0.2);
-  border-radius: 6px;
+  border-radius: 0;
   bottom: 0.65rem;
   color: #eaf5f7;
   left: 0.65rem;
@@ -2399,7 +2399,7 @@ body:has(.shell) :global(.footer) {
 .webglMapOverlay span {
   color: #9ebbc6;
   display: block;
-  font-size: 0.72rem;
+  font-size: 0.825rem;
   font-weight: 800;
   margin-bottom: 0.15rem;
   text-transform: uppercase;
@@ -2407,16 +2407,16 @@ body:has(.shell) :global(.footer) {
 
 .webglMapOverlay strong {
   display: block;
-  font-size: 0.82rem;
+  font-size: 0.825rem;
   overflow-wrap: anywhere;
 }
 
 .geoRegionError {
   background: #fff3ed;
   border: 1px solid #f2c4ae;
-  border-radius: 8px;
+  border-radius: 0;
   color: #8b3218;
-  font-size: 0.8rem;
+  font-size: 0.825rem;
   font-weight: 700;
   margin: 0 0 0.75rem;
   padding: 0.55rem 0.65rem;
@@ -2424,7 +2424,7 @@ body:has(.shell) :global(.footer) {
 
 .geoSvg {
   background: #f4f7fb;
-  border-radius: 8px;
+  border-radius: 0;
   display: block;
   height: auto;
   width: 100%;
@@ -2518,13 +2518,13 @@ body:has(.shell) :global(.footer) {
 
 .geoListHeader strong {
   color: #122033;
-  font-size: 0.78rem;
+  font-size: 0.825rem;
   text-transform: uppercase;
 }
 
 .geoListHeader span {
   color: #526274;
-  font-size: 0.76rem;
+  font-size: 0.825rem;
   font-weight: 800;
 }
 
@@ -2544,11 +2544,11 @@ body:has(.shell) :global(.footer) {
   align-items: center;
   background: #eef2f7;
   border: 1px solid #d8e0ea;
-  border-radius: 8px;
+  border-radius: 0;
   color: #526274;
   display: inline-flex;
   font: inherit;
-  font-size: 0.78rem;
+  font-size: 0.825rem;
   gap: 0.4rem;
   min-width: 0;
   overflow-wrap: anywhere;
@@ -2596,7 +2596,7 @@ body:has(.shell) :global(.footer) {
 
 .datasetProfile dt {
   color: #526274;
-  font-size: 0.74rem;
+  font-size: 0.825rem;
   font-weight: 800;
   text-transform: uppercase;
 }
@@ -2616,7 +2616,7 @@ body:has(.shell) :global(.footer) {
 
 .profileGrid p {
   background: #f4f7fb;
-  border-radius: 8px;
+  border-radius: 0;
   color: #122033;
   font-size: 0.9rem;
   margin: 0;
@@ -2626,7 +2626,7 @@ body:has(.shell) :global(.footer) {
 .profileGrid span {
   color: #526274;
   display: block;
-  font-size: 0.72rem;
+  font-size: 0.825rem;
   font-weight: 800;
   margin-bottom: 0.2rem;
   text-transform: uppercase;
@@ -2642,9 +2642,9 @@ body:has(.shell) :global(.footer) {
 .columnChips span {
   background: #eef2f7;
   border: 1px solid #d8e0ea;
-  border-radius: 999px;
+  border-radius: 0;
   color: #526274;
-  font-size: 0.78rem;
+  font-size: 0.825rem;
   padding: 0.25rem 0.55rem;
 }
 
@@ -2658,7 +2658,7 @@ body:has(.shell) :global(.footer) {
 .featureSelector {
   background: #ffffff;
   border: 1px solid var(--lab-border);
-  border-radius: 8px;
+  border-radius: 0;
   margin: 0.55rem 0 0;
   padding: 0.65rem;
 }
@@ -2666,7 +2666,7 @@ body:has(.shell) :global(.footer) {
 .featureSelector > span {
   color: #526274;
   display: block;
-  font-size: 0.78rem;
+  font-size: 0.825rem;
   font-weight: 800;
   margin-bottom: 0.55rem;
   text-transform: uppercase;
@@ -2682,10 +2682,10 @@ body:has(.shell) :global(.footer) {
   align-items: center;
   background: #eef2f7;
   border: 1px solid #d8e0ea;
-  border-radius: 999px;
+  border-radius: 0;
   color: #526274;
   display: inline-flex;
-  font-size: 0.8rem;
+  font-size: 0.825rem;
   gap: 0.35rem;
   padding: 0.25rem 0.55rem;
 }
@@ -3246,7 +3246,7 @@ body:has(.shell) :global(.footer) {
   }
 
   .surfaceTabs button {
-    font-size: 0.7rem;
+    font-size: 0.825rem;
     padding-inline: 0.2rem;
   }
 
@@ -3260,4 +3260,283 @@ body:has(.shell) :global(.footer) {
   .lsttnDriverList i { grid-column: 1 / -1; }
   .lsttnMapSelection { max-width: calc(100% - 1.5rem); }
   .lsttnLegend { bottom: auto; top: 0.75rem; }
+}
+
+/* Shared documentation palette; chart and map scales retain their own colors. */
+.shell,
+:global([data-theme='dark']) .shell,
+:global(html:not([data-theme='light'])) .shell {
+  --lab-accent: var(--cb-accent);
+  --lab-bg: var(--cb-bg);
+  --lab-border: var(--cb-border);
+  --lab-border-strong: var(--cb-border);
+  --lab-control: var(--cb-surface);
+  --lab-control-border: var(--cb-border);
+  --lab-heading: var(--cb-text);
+  --lab-muted: var(--cb-muted);
+  --lab-panel: var(--cb-surface);
+  --lab-panel-elevated: var(--cb-surface);
+  --lab-panel-soft: var(--cb-bg);
+  --lab-panel-tint: var(--ifm-code-background);
+  --lab-tabs: var(--cb-bg);
+  --lab-text: var(--cb-text);
+  background: var(--lab-bg);
+  color: var(--lab-text);
+}
+
+.shell .header,
+.shell .controlPanel,
+.shell .emptyState,
+.shell .resultHeader,
+.shell .datasetProfile,
+.shell .diagnosticsPanel,
+.shell .featureRolePanel,
+.shell .opportunityPanel,
+.shell .runPlanPanel,
+.shell .geoPanel,
+.shell .componentPanel,
+.shell .deepResultPanel,
+.shell .chart,
+.shell .metricChart,
+.shell .tableScroller {
+  background: var(--lab-panel);
+  border: 2px solid var(--lab-border);
+  box-shadow: 4px 4px 0 #171817;
+}
+
+.shell .controlSection,
+.shell .surfaceBlock,
+.shell .surfaceTabs,
+.shell .settingHint,
+.shell .progressWrap,
+.shell .runLog,
+.shell .seasonalityControl,
+.shell .featureSelector,
+.shell .neuralSummary,
+.shell .deepResultGrid div,
+.shell .profileGrid p,
+.shell .diagnosticGrid p,
+.shell .planGrid p,
+.shell .geoStats p,
+.shell .metricCards p,
+.shell .signalCards p,
+.shell .componentGrid p,
+.shell .metricRow div,
+.shell .featureRoleRow div,
+.shell .outcomeStrip p {
+  background: var(--lab-panel-soft);
+  border-color: var(--lab-border);
+  box-shadow: none;
+}
+
+.shell .eyebrow,
+.shell .deepDocsLink,
+.shell .seasonalityHeader strong,
+.shell .featureRoleRow em,
+.shell .routeList i,
+.shell .targetList i,
+.shell .h3List i,
+.shell .opportunityRow em,
+.shell .opportunityRow i,
+.shell .signalCards em {
+  color: var(--lab-accent);
+}
+
+.shell .header h1,
+.shell .emptyState h2,
+.shell .resultHeader h2,
+.shell .componentHeader h3,
+.shell .controlSection h2,
+.shell .diagnosticsHeader h3,
+.shell .geoHeader h3,
+.shell .dropZone strong,
+.shell .datasetProfile dd,
+.shell .stepHeader h2,
+.shell .stepHeader strong,
+.shell .actionHeader strong,
+.shell .neuralSummary strong,
+.shell .deepResultPanel h3,
+.shell .deepResultGrid dd,
+.shell .runLog strong,
+.shell .resultHeader dd,
+.shell .chartToolbar strong,
+.shell .outcomeStrip strong,
+.shell .outcomeStrip span {
+  color: var(--lab-heading);
+}
+
+.shell .header p,
+.shell .dropZone span,
+.shell .status,
+.shell .resultHeader dt,
+.shell .componentHeader p,
+.shell .datasetProfile dt,
+.shell .diagnosticsHeader > span,
+.shell .geoHeader > span,
+.shell .profileGrid span,
+.shell .diagnosticGrid span,
+.shell .planGrid span,
+.shell .featureRoleRow strong,
+.shell .geoStats span,
+.shell .opportunityHeader,
+.shell .metricCards span,
+.shell .signalCards span,
+.shell .componentGrid span,
+.shell .featureSelector > span,
+.shell .neuralSummary span,
+.shell .deepResultPanel p,
+.shell .deepResultGrid dt,
+.shell .settingHint,
+.shell .progressMeta strong,
+.shell .runLog li,
+.shell .chartToolbar span,
+.shell .outcomeStrip em {
+  color: var(--lab-muted);
+}
+
+.shell .field select,
+.shell .field input,
+.shell .secondaryButton,
+.shell .secondaryActionButton,
+.shell .deepDocsLink,
+.shell .seasonalityButtons button,
+.shell .featureSelector label,
+.shell .deepModelCard,
+.shell .chartZoomControls,
+.shell .routeList button,
+.shell .columnChips span {
+  background: var(--lab-control);
+  border: 2px solid var(--lab-control-border);
+  color: var(--lab-text);
+  box-shadow: none;
+}
+
+.shell .field select,
+.shell .field input {
+  font-size: 0.9rem;
+  min-height: 2.5rem;
+}
+
+.shell .field option,
+.shell .field optgroup {
+  background: var(--lab-control);
+  color: var(--lab-text);
+}
+
+.shell .primaryButton,
+.shell .inlineActionButton {
+  background: #e5f66a;
+  border: 2px solid #171817;
+  color: #171817;
+  box-shadow: 3px 3px 0 #171817;
+}
+
+.shell .primaryButton:not(:disabled):hover,
+.shell .secondaryButton:not(:disabled):hover,
+.shell .secondaryActionButton:not(:disabled):hover,
+.shell .inlineActionButton:not(:disabled):hover {
+  box-shadow: 4px 4px 0 #171817;
+  filter: brightness(0.97);
+}
+
+.shell button:focus-visible,
+.shell input:focus-visible,
+.shell select:focus-visible,
+.shell a:focus-visible {
+  outline: 3px solid var(--lab-accent);
+  outline-offset: 3px;
+}
+
+.shell .dropZone {
+  background: var(--lab-panel-tint);
+  border: 2px dashed var(--lab-border);
+}
+
+.shell .dropZone:focus-within {
+  outline: 3px solid var(--lab-accent);
+  outline-offset: 3px;
+}
+
+.shell .actionBlock { border-top-color: var(--lab-border); }
+.shell .surfaceTabs button { color: var(--lab-text); }
+.shell .surfaceTabs .surfaceTabActive,
+.shell .seasonalityButtons .seasonalityButtonActive,
+.shell .chartZoomControls .chartZoomActive,
+.shell .columnChips .columnChipSelected,
+.shell .routeList .routeButtonActive,
+.shell .deepModelCardActive,
+.shell .deepModelCard:hover,
+.shell .deepModelCard:focus-visible {
+  background: #e5f66a;
+  border-color: #171817;
+  color: #171817;
+  box-shadow: 2px 2px 0 #171817;
+}
+
+.shell .deepModelCard span { color: var(--lab-muted); }
+.shell .deepModelCard small { color: var(--lab-accent); }
+.shell .deepModelCardActive span,
+.shell .deepModelCardActive small,
+.shell .deepModelCard:hover span,
+.shell .deepModelCard:hover small,
+.shell .deepModelCard:focus-visible span,
+.shell .deepModelCard:focus-visible small,
+.shell .seasonalityButtonActive span { color: #3d4530; }
+
+.shell .stepHeader span,
+.shell .actionHeader span {
+  background: #a6b5ff;
+  border: 1px solid #171817;
+  color: #171817;
+}
+
+.shell .loadingBar,
+.shell .progressBar { background: var(--cb-line); }
+.shell .loadingBar span,
+.shell .progressBar span { background: var(--lab-accent); }
+.shell .tableScroller th,
+.shell .tableScroller td { border-bottom-color: var(--cb-line); }
+.shell .tableScroller th { background: var(--lab-panel-tint); color: var(--lab-heading); }
+.shell .tableScroller td { color: var(--lab-text); }
+.shell .header h1 { letter-spacing: -0.045em; }
+.shell .eyebrow { font-family: var(--ifm-font-family-monospace); }
+
+@media (prefers-reduced-motion: reduce) {
+  .loadingBar span,
+  .progressBarIndeterminate span { animation: none; }
+}
+
+.shell .lsttnMapShell,
+.shell .webglMapShell {
+  border: 2px solid var(--lab-border);
+  border-radius: 0;
+  box-shadow: 4px 4px 0 #171817;
+}
+
+.shell .lsttnMapTitle,
+.shell .lsttnMapSelection,
+.shell .lsttnLegend,
+.shell .webglMapOverlay {
+  background: #171817;
+  backdrop-filter: none;
+  border: 1px solid #f8f9f4;
+  border-radius: 0;
+  color: #f8f9f4;
+}
+
+.shell .lsttnMapTitle span,
+.shell .lsttnMapSelection span,
+.shell .lsttnMapSelection code,
+.shell .webglMapOverlay span {
+  color: #c9cec1;
+  font-size: 0.75rem;
+}
+
+.shell .lsttnLegend { font-size: 0.75rem; }
+
+/* Embedded model workspaces use their own heading rhythm. */
+.shell h2,
+:global(.theme-doc-markdown) .shell h2 {
+  border-top: 0;
+  padding-top: 0;
 }

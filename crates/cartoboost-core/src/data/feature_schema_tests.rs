@@ -70,3 +70,16 @@ fn schema_validation_accepts_categorical_and_ordinal_features() {
 
     assert!(schema.validate().is_ok());
 }
+
+#[test]
+fn wide_schema_reports_first_duplicate_in_input_order() {
+    let mut schema = FeatureSchema::unnamed_numeric(4_096);
+    assert!(schema.validate().is_ok());
+    schema.names[2_048] = schema.names[17].clone();
+    schema.names[2_049] = schema.names[3].clone();
+    assert!(schema
+        .validate()
+        .unwrap_err()
+        .to_string()
+        .contains("'feature_17'"));
+}

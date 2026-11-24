@@ -1,9 +1,16 @@
-# Forecasting Benchmark
+# Forecasting Benchmark Results
 
-This page summarizes the maintained forecasting benchmark artifacts. Lower is
-better for RMSE, MAE, WAPE, WRMSSE, RPS, and mean RMSE ratio. A mean RMSE ratio
-of `1.000000` means the model tied the best RMSE observed on that artifact and
-split.
+The winning model depends on the task and metric. On the real NYC taxi panel,
+seasonal naive has the lowest RMSE; `cartoboost_auto_forecast` is the strongest
+reported learned model. M5 and M6 rankings change when the score changes from
+RMSE to WRMSSE or rank probability score.
+
+Each section identifies the dataset, model roster, split, command, and artifact.
+Synthetic checks are labeled separately from real observations.
+
+**Reading the tables:** lower is better for RMSE, MAE, WAPE, WRMSSE, RPS, and
+mean RMSE ratio. A ratio of `1.000000` ties the best RMSE in the corresponding
+artifact and split. See the [limits](#limits) before comparing across runs.
 
 ## NYC Taxi Demand
 
@@ -24,9 +31,9 @@ functime and external lag-tree baselines under the same protocol.
 
 Read: `cartoboost_auto_forecast` is 4.18% lower RMSE than the strongest completed
 external learned baseline (`lightgbm_lag`) across the three rolling origins. It
-does not beat the seasonal-naive library baseline, so the artifact does not
-claim a win against every forecasting library. The external-baseline gate is
-recorded directly in the JSON artifact and passes the v0.3 within-5% RMSE rule.
+does not beat the seasonal-naive library baseline. That distinction matters
+when choosing a model: learned structure adds complexity, and a simple seasonal
+forecast remains a strong comparator on this panel.
 The current run loaded and aggregated 13,069,067 source rows in 2.050 seconds
 and completed in 22.379 seconds. It recorded 71.205 CPU-seconds and a 925 MiB
 peak resident set; per-fold fit and prediction timings remain in the JSON
@@ -49,9 +56,8 @@ Comparability audit for `forecasting_library_benchmark_real.json`: every
 requested model completed on the same three rolling-origin folds and 7-day
 horizon, uses the same metric set, and records candidate selection without
 outer test-label selection. The strongest completed external learned baseline
-is `lightgbm_lag`; CartoBoost's 0.958234 RMSE ratio versus that baseline is
-inside the five-percent acceptance gate. The seasonal-naive result remains
-reported as a separate, stronger forecasting-library reference.
+is `lightgbm_lag`; CartoBoost's RMSE ratio versus that baseline is 0.958234.
+The seasonal-naive result remains a separate, stronger forecasting reference.
 
 ## Synthetic Demand Checks
 
@@ -90,12 +96,10 @@ and converts Polars to pandas, while CartoBoost fits the Polars frame directly.
 | 100,000 | `prophet.Prophet` | Polars → pandas | 1.8920 | 0.0040 | 1.8960 | 30 |
 
 CartoBoost is 2.6× faster on the 500-row run and 7.7× faster on the
-100,000-row run under this single-series protocol. The optimized path avoids
-serializing historical component rows when the requested forecast is
-future-only; the native Rust forecast and component calls remain sub-10 ms on
-the 100,000-row case. These are synthetic
-performance results, not a quality claim; the functionality claim is covered
-by the pandas/Polars compatibility test and Prophet-shaped output contract.
+100,000-row run under this single-series protocol. Forecast and component
+calls take less than 10 ms in the 100,000-row case. These synthetic timings
+describe runtime with uncertainty sampling disabled; they do not compare
+forecast accuracy.
 
 Reproduce the rows independently in the two environments:
 
@@ -184,9 +188,9 @@ uv run --group dev python scripts/forecasting_library_benchmark.py \
 The JSON artifact records the exact command, split definitions, RMSE/MAE/WAPE
 metrics, timing, model settings, resource usage, and artifact path. Cold
 identity splits expand missing-lane forecasts by exact lane when available,
-then origin, destination, and global horizon means. Treat the suite as
-implementation evidence until a maintained artifact is committed and summarized
-with its actual metric table.
+then origin, destination, and global horizon means. This section documents
+the runnable diagnostic; it contains no numerical model ranking. The identity
+aggregation policy is part of this benchmark and affects cold-start interpretation.
 
 ## CartoBoost Piecewise Local Diagnostics
 
@@ -457,10 +461,10 @@ uv run --group dev --group bench python scripts/forecasting_library_benchmark.py
   rolling-origin folds.
 - Synthetic demand checks are diagnostics.
 - The CartoBoost piecewise local diagnostics are synthetic and should be read as
-  wiring and behavior evidence for Prophet-shaped tasks, not broad real-data
+  controlled behavior checks for Prophet-shaped tasks, not broad real-data
   evidence.
 - M4 is a 96-series-per-group sample.
 - M5 full-roster evidence is a 100-series sample; the full-corpus artifact is a
   lag-only coverage run.
 - M6 is a daily-return proxy, not an official leaderboard submission.
-- Optional external baselines require their benchmark extras.
+- External baselines require the dependencies in the benchmark environment.

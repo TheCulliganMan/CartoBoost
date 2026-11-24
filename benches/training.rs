@@ -102,6 +102,52 @@ fn mixed_booster_config(n_estimators: usize, max_depth: usize) -> BoosterConfig 
 }
 
 fn bench_training(c: &mut Criterion) {
+    let mut metrics = c.benchmark_group("binary_metric_scaling");
+    metrics.sample_size(10);
+    for rows in [1_024, 8_192, 32_768] {
+        let labels = (0..rows).map(|row| (row % 2) as f64).collect::<Vec<_>>();
+        let scores = (0..rows)
+            .map(|row| ((row * 7) % 37) as f64)
+            .collect::<Vec<_>>();
+        let weights = (0..rows).map(|row| (row % 11) as f64).collect::<Vec<_>>();
+        let query_ids = (0..rows).map(|row| row % 63).collect::<Vec<_>>();
+        metrics.bench_with_input(BenchmarkId::new("weighted_auc", rows), &rows, |bench, _| {
+            bench.iter(|| {
+                cartoboost_core::metrics::binary_roc_auc(
+                    black_box(&labels),
+                    black_box(&scores),
+                    Some(black_box(&weights)),
+                )
+                .unwrap()
+            });
+        });
+        metrics.bench_with_input(BenchmarkId::new("graph_mrr", rows), &rows, |bench, _| {
+            bench.iter(|| {
+                cartoboost_core::metrics::graph_mean_reciprocal_rank(
+                    black_box(&labels),
+                    black_box(&scores),
+                    black_box(&query_ids),
+                )
+                .unwrap()
+            });
+        });
+    }
+    metrics.finish();
+    let relevance = (0..4_096).map(|row| (row % 5) as f64).collect::<Vec<_>>();
+    let scores = (0..4_096)
+        .map(|row| (row as f64 * 0.37).sin())
+        .collect::<Vec<_>>();
+    let groups = vec![64; 64];
+    c.bench_function("ranking_metrics/4096rows_64groups", |bench| {
+        bench.iter(|| {
+            cartoboost_core::booster::ranking_metrics(
+                black_box(&relevance),
+                black_box(&scores),
+                black_box(&groups),
+            )
+            .expect("ranking benchmark fixture is valid")
+        });
+    });
     let mut group = c.benchmark_group("training");
     group.sample_size(10);
     for &(rows, cols, estimators, depth) in &[(32, 3, 1, 1), (96, 4, 3, 2)] {

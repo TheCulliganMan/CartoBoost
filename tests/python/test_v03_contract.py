@@ -105,7 +105,10 @@ def test_structured_policy_bounds_large_row_candidate_search() -> None:
         "periodic_time",
         "sparse_set",
     ]
-    assert _resolve_splitters(SplitPolicy.STRUCTURED, schema, n_rows=100_000) == ["axis_histogram"]
+    assert _resolve_splitters(SplitPolicy.STRUCTURED, schema, n_rows=100_000) == [
+        "axis_histogram",
+        "sparse_set",
+    ]
 
 
 def test_structured_policy_only_enables_spatial_candidates_for_declared_pairs() -> None:
@@ -142,3 +145,33 @@ def test_v2_artifact_envelope_roundtrip() -> None:
         import os
 
         os.unlink(path)
+
+
+def test_stable_artifact_rejects_mismatched_schema_hash(tmp_path):
+    import pytest
+
+    model = cartoboost.CartoBoostRegressor(n_estimators=2, min_samples_leaf=1).fit(
+        [[1.0], [2.0], [3.0]], [2.0, 4.0, 6.0]
+    )
+    path = tmp_path / "taxi-model.json"
+    model.save(path)
+    payload = json.loads(path.read_text())
+    payload["schema_hash"] = "0" * 64
+    path.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="schema_hash"):
+        cartoboost.CartoBoostRegressor.load(path)
+
+
+def test_root_ranking_metric_keeps_graph_query_id_call_form():
+    from cartoboost.graph.eval import mean_reciprocal_rank as graph_mrr
+    from cartoboost.metrics import mean_reciprocal_rank as tabular_mrr
+
+    labels = [1, 0, 0, 1, 0, 0]
+    scores = [0.9, 0.5, 0.1, 0.8, 0.7, 0.6]
+    query_ids = ["a", "a", "b", "b", "c", "c"]
+    assert cartoboost.mean_reciprocal_rank(labels, scores, query_ids) == graph_mrr(
+        labels, scores, query_ids
+    )
+    assert cartoboost.mean_reciprocal_rank(labels, scores, groups=[2, 2, 2]) == tabular_mrr(
+        labels, scores, groups=[2, 2, 2]
+    )

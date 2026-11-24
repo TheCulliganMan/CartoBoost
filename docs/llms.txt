@@ -1,19 +1,21 @@
-# CartoBoost Docs
+# CartoBoost documentation
 
-This is a machine-readable index of the user-facing documentation. Developers
-and data scientists should begin with the docs home and getting-started guide;
-the website navigation remains the canonical human reading order.
+A discovery index for tools and coding assistants. Start with the documentation
+home, first-model walkthrough, and model chooser. The family guides describe
+inputs, fitting, validation, and limits; the references define API contracts.
 
 ## Main Entry Points
 
-- [Docs home](./index.md)
+- [Documentation home](./index.md)
+- [Installation and optional integrations](./installation.md)
+- [Your first model: fit, compare, and save](./getting-started.md)
+- [Choose a model by prediction task](./user-guide/model-types.md)
+- [Modeling Lab browser entry](../src/pages/modeling-lab.tsx)
 - Versioned docs are built from `../docs-versions.json`; `latest` maps to the
   current docs, and retained release docs are added only for real tagged
   versions listed in that manifest.
-- [Getting started](./getting-started.md)
 - [Python estimator numeric input and missing-value contract](./user-guide/python-estimator.md)
-- [Choose a model](./user-guide/model-types.md)
-- [Stable estimators and supported model registry](./user-guide/model-types.md)
+- [Model registry and discovery](./user-guide/model-types.md)
 - [Spatial econometrics models](./user-guide/spatial-econometrics.md)
 - [Scalable GP geostatistics models](./user-guide/geostatistics-models.md)
 - [CartoBoost Boosting Model Guides](./user-guide/boosting-models/index.md)
@@ -70,7 +72,7 @@ the website navigation remains the canonical human reading order.
 - Docs example audit: `../scripts/check_docs_examples.py`
 - Official geo evidence audit: `../scripts/check_official_geo_evidence.py`
 - Performance threshold audit: `../scripts/check_performance_thresholds.py`
-- AutoGeo is supported-only and excluded from the stable release gate.
+- Automatic geo model selection is not shipped; select an estimator explicitly.
 - NYC TLC quality benchmark harness: `../scripts/run_nyc_taxi_quality_benchmarks.py`
 - NYC TLC Path C claim harness: `../scripts/run_nyc_taxi_path_c_claims.py`
 - NYC TLC Path C gate audit: `../scripts/check_nyc_taxi_path_c_gates.py`
@@ -81,7 +83,7 @@ the website navigation remains the canonical human reading order.
 
 ## Model Lists
 
-Supported `cartoboost.models.ModelRegistry.defaults()` models:
+Selected entries from `cartoboost.models.ModelRegistry.defaults()`:
 
 - `models.cartoboost_regressor` / `cartoboost.CartoBoostRegressor`
 - `models.cartoboost_classifier` / `cartoboost.CartoBoostClassifier`
@@ -102,10 +104,9 @@ Supported `cartoboost.models.ModelRegistry.defaults()` models:
 
 Forecasting model ids and classes:
 
-Only `NaiveForecaster`, `SeasonalNaiveForecaster`, `CartoBoostLagForecaster`,
-`AutoForecaster`, and the typed forecast result/config surfaces are stable in
-the v0.3 Python API. Other forecasting classes below are supported/demo entries
-and must be imported from `cartoboost.supported` when available.
+Forecasting models and typed frame, result, and configuration objects are
+available from `cartoboost.forecasting`. Browser model identifiers are listed
+separately where they describe a concrete browser configuration.
 
 - `naive` / `NaiveForecaster`
 - `seasonal_naive` / `SeasonalNaiveForecaster`
@@ -204,10 +205,11 @@ Representation, foundation, geo, causal, and probabilistic model surfaces:
 - `InvariantRiskEncoder`, `DomainAdversarialGeoEncoder`, `CounterfactualRepresentationNet`, `TreatmentEffectRepresentationHead`
 - `ConformalIntervalRegressor`, `SpatialConformalRegressor`, `ConformalCalibrator`, `ForecastConformalCalibrator`, `QuantileCartoBoostRegressor`
 
-## What To Emphasize
+## Reading the contracts
 
-- Lead with the model family, the use case, and the baseline comparison.
-- Keep implementation details out of the main guides unless they affect how the
-  model is used.
-- Use taxi examples only when they clarify a structured modeling idea.
+- Generated examples illustrate behavior; real-data benchmark claims belong
+  to the corresponding dataset report and its recorded comparison.
+- A temporal, spatial, or grouped split should match the deployment question.
+- Browser examples show model behavior and input shape, not benchmark evidence.
+- Model guides link to adjacent models and explain their concrete limitations.
 - [Migrating to CartoBoost 0.3](./migration-v0.3.md)

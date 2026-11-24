@@ -2,7 +2,7 @@ use crate::error::{NeuralError, Result};
 use crate::{backend_csr_diffusion_f32, select_backend_for, BackendOperation, BackendSelection};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 const MIN_ACCELERATED_DIRECTIONAL_AGGREGATION_VALUES: usize = 16_384;
 
@@ -32,7 +32,7 @@ pub fn validate_directed_metapath(
             "directed metapath must contain node, relation, node".to_string(),
         ));
     }
-    if steps.len().is_multiple_of(2) {
+    if steps.len() % 2 == 0 {
         return Err(NeuralError::InvalidArgument(
             "directed metapath must alternate node/relation/node".to_string(),
         ));
@@ -88,12 +88,29 @@ pub fn materialize_source_target_pair_nodes(
     } else {
         Vec::new()
     };
-    let mut seen_pairs = HashSet::new();
+    let original_nodes = edges
+        .iter()
+        .flat_map(|(source, target, _)| [source.as_str(), target.as_str()])
+        .collect::<HashSet<_>>();
+    let mut seen_pairs = HashMap::new();
     let mut pair_node_ids = Vec::new();
 
     for (source, target, _relation) in edges {
         let pair_node = format!("{pair_node_prefix}:{source}:{target}");
-        if seen_pairs.insert(pair_node.clone()) {
+        let logical_pair = (source.as_str(), target.as_str());
+        if original_nodes.contains(pair_node.as_str()) {
+            return Err(NeuralError::InvalidArgument(
+                "generated pair node ID collides with an original node ID".to_string(),
+            ));
+        }
+        if let Some(previous) = seen_pairs.get(&pair_node) {
+            if *previous != logical_pair {
+                return Err(NeuralError::InvalidArgument(
+                    "distinct source-target pairs render the same pair node ID".to_string(),
+                ));
+            }
+        } else {
+            seen_pairs.insert(pair_node.clone(), logical_pair);
             pair_node_ids.push(pair_node.clone());
         }
         expanded.push((
@@ -585,5 +602,22 @@ mod tests {
         assert!(expansion
             .pair_node_ids
             .contains(&"od_pair:Dallas:Chicago".to_string()));
+    }
+
+    #[test]
+    fn pair_nodes_reject_rendering_collisions() {
+        for edges in [
+            vec![("a:b", "c"), ("a", "b:c")],
+            vec![("a", "b"), ("od_pair:a:b", "c")],
+        ] {
+            let edges = edges
+                .into_iter()
+                .map(|(a, b)| (a.to_string(), b.to_string(), "r".to_string()))
+                .collect::<Vec<_>>();
+            assert!(
+                materialize_source_target_pair_nodes(&edges, "from", "to", "od_pair", true)
+                    .is_err()
+            );
+        }
     }
 }

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from cartoboost import CartoBoostClassifier
+from cartoboost import CartoBoostClassifier, CartoBoostRanker, CartoBoostRegressor
 from cartoboost.schema import FeatureKind
 
 
@@ -17,7 +17,7 @@ def test_binary_classifier_fit_predict_proba_and_roundtrip(tmp_path: Path):
         max_depth=1,
         min_samples_leaf=1,
         min_gain=0.0,
-        splitters=["axis"],
+        split_policy="axis_only",
     ).fit(X, y)
 
     predictions = classifier.predict(X)
@@ -58,7 +58,7 @@ def test_multiclass_classifier_learns_ordered_regions():
         min_samples_leaf=1,
         min_gain=0.0,
         objective="multiclass_logloss",
-        splitters=["axis"],
+        split_policy="axis_only",
     ).fit(X, y)
 
     probabilities = classifier.predict_proba(X)
@@ -78,7 +78,7 @@ def test_classifier_preserves_first_seen_mixed_label_order():
         max_depth=1,
         min_samples_leaf=1,
         min_gain=0.0,
-        splitters=["axis"],
+        split_policy="axis_only",
     ).fit(X, y)
 
     assert classifier.classes_.tolist() == ["airport", 1]
@@ -94,7 +94,7 @@ def test_classifier_roundtrip_preserves_tuple_labels(tmp_path: Path):
         max_depth=1,
         min_samples_leaf=1,
         min_gain=0.0,
-        splitters=["axis"],
+        split_policy="axis_only",
     ).fit(X, y)
     model_path = tmp_path / "tuple-label-classifier.json"
 
@@ -115,7 +115,7 @@ def test_classifier_accepts_native_categorical_features(tmp_path: Path):
         max_depth=1,
         min_samples_leaf=1,
         min_gain=0.0,
-        splitters=["axis"],
+        split_policy="axis_only",
     ).fit(X, y, feature_schema=schema)
     probabilities = classifier.predict_proba(X)
     model_path = tmp_path / "categorical-classifier.json"
@@ -148,7 +148,7 @@ def test_classifier_accepts_pandas_categorical_and_string_features():
         max_depth=1,
         min_samples_leaf=1,
         min_gain=0.0,
-        splitters=["axis"],
+        split_policy="axis_only",
     ).fit(X, y)
 
     assert classifier.feature_names_in_.tolist() == ["pickup_zone", "daypart"]
@@ -270,3 +270,112 @@ def test_classifier_graph_smoothing_roundtrip(tmp_path: Path):
     assert classifier.selected_backend_ == "cpu"
     assert loaded.selected_backend_ == "cpu"
     assert loaded.predict_proba([[0.0], [3.0]]) == pytest.approx(expected)
+
+
+def test_classifier_loads_legacy_native_numeric_labels(tmp_path: Path):
+    X = [[0.0], [1.0], [2.0], [3.0]]
+    model = CartoBoostClassifier(n_estimators=2, min_samples_leaf=1).fit(X, [0, 0, 1, 1])
+    path = tmp_path / "native-classifier.json"
+    model._model.save(path)
+    original = path.read_bytes()
+
+    restored = CartoBoostClassifier.load(path)
+
+    assert restored.classes_.tolist() == model.classes_.tolist()
+    np.testing.assert_array_equal(restored.predict(X), model.predict(X))
+    np.testing.assert_array_equal(restored.predict_proba(X), model.predict_proba(X))
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("classes", [None, ["only-one"]])
+def test_classifier_rejects_incomplete_label_envelope(tmp_path: Path, classes):
+    model = CartoBoostClassifier(n_estimators=1).fit([[0.0], [1.0]], [0, 1])
+    path = tmp_path / "classifier.json"
+    model.save(path)
+    payload = json.loads(path.read_text())
+    if classes is None:
+        del payload["payload"]["classes"]
+    else:
+        payload["payload"]["classes"] = classes
+    path.write_text(json.dumps(payload))
+
+    with pytest.raises(ValueError, match="classes"):
+        CartoBoostClassifier.load(path)
+
+
+@pytest.mark.parametrize("classes", [2, 3])
+@pytest.mark.parametrize("use_sparse", [False, True])
+def test_classifier_array_margins_match_native_list_path(classes, use_sparse):
+    X = np.arange(12, dtype=float).reshape(6, 2)[:, ::-1]
+    y = [row % classes for row in range(6)]
+    sparse = {"zones": [[value] for value in y]} if use_sparse else None
+    schema = {"dense": ["a", "b"], "sparse_sets": ["zones"]} if use_sparse else None
+    model = CartoBoostClassifier(
+        n_estimators=2,
+        min_samples_leaf=1,
+        split_policy="structured" if use_sparse else "axis_only",
+    ).fit(X, y, sparse_sets=sparse, feature_schema=schema)
+    native_sparse = [sparse["zones"]] if use_sparse else None
+    expected = np.asarray(model._model.decision_function(X.tolist(), native_sparse))
+    if classes == 2:
+        expected = expected[:, 0]
+    np.testing.assert_array_equal(model.decision_function(X, sparse_sets=sparse), expected)
+
+
+@pytest.mark.parametrize(
+    "model_type", [CartoBoostClassifier, CartoBoostRanker, CartoBoostRegressor]
+)
+@pytest.mark.parametrize("explicit_schema", [False, True])
+def test_estimators_combine_categorical_and_sparse_features(tmp_path, model_type, explicit_schema):
+    X = [["a"], ["b"], ["a"], ["b"]]
+    sparse = {"zones": [[10], [20], [10], [20]]}
+    schema = (
+        {"dense": [{"name": "label", "kind": "Categorical"}], "sparse_sets": ["zones"]}
+        if explicit_schema
+        else None
+    )
+    kwargs = {"groups": [2, 2]} if model_type is CartoBoostRanker else {}
+    model = model_type(n_estimators=2, min_samples_leaf=1, split_policy="structured").fit(
+        X, [0, 1, 0, 1], feature_schema=schema, sparse_sets=sparse, **kwargs
+    )
+    assert model.feature_schema_["names"][-1] == "zones"
+    assert model.feature_schema_["kinds"][-1] == "SparseSet"
+    expected = model.predict(X, sparse_sets=sparse)
+    path = tmp_path / "combined.json"
+    model.save(path)
+    np.testing.assert_array_equal(model_type.load(path).predict(X, sparse_sets=sparse), expected)
+
+
+@pytest.mark.parametrize("classes", [2, 3])
+@pytest.mark.parametrize("layout", ["fortran", "reversed", "strided"])
+def test_classifier_wrapper_layout_and_row_batch_parity(classes, layout):
+    X = np.arange(48, dtype=float).reshape(12, 4)
+    if layout == "fortran":
+        X = np.asfortranarray(X)
+    elif layout == "reversed":
+        X = X[::-1, ::-1]
+    else:
+        X = X[::2, ::2]
+    labels = [index % classes for index in range(len(X))]
+    model = CartoBoostClassifier(n_estimators=2, min_samples_leaf=1).fit(X, labels)
+    for method in (model.predict, model.predict_proba, model.decision_function):
+        expected = method(np.ascontiguousarray(X))
+        np.testing.assert_array_equal(method(X), expected)
+        np.testing.assert_array_equal(
+            np.concatenate([method(X[index : index + 1]) for index in range(len(X))]), expected
+        )
+        with pytest.raises(ValueError, match="empty"):
+            method(X[:0])
+
+
+def test_classifier_scores_tuple_labels_and_nullable_integer_labels():
+    pd = pytest.importorskip("pandas")
+    X = [[0.0], [1.0], [2.0], [3.0]]
+    tuples = [("low", 0), ("low", 0), ("high", 1), ("high", 1)]
+    config = dict(n_estimators=3, min_samples_leaf=1, learning_rate=1.0)
+    model = CartoBoostClassifier(**config).fit(X, tuples)
+    assert model.score(X, tuples) == 1.0
+    labels = pd.Series([0, 0, 1, 1], dtype="Int64")
+    model = CartoBoostClassifier(**config).fit(X, labels)
+    assert all(type(label) is int for label in model.classes_)
+    assert model.score(X, labels.to_frame()) == 1.0

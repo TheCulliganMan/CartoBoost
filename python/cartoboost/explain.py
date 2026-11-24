@@ -6,7 +6,7 @@ from typing import Any
 import numpy as np
 
 from .config import ExplanationAlgorithm, ExplanationDecomposition
-from .regressor import _tabular_column_mapping
+from .regressor import _tabular_column_mapping, _to_numpy
 
 
 def make_shap_explainer(
@@ -396,18 +396,14 @@ class _SparseSetShapAdapter:
 
 
 def _as_2d_array(values: Any) -> np.ndarray:
-    if hasattr(values, "to_numpy"):
-        values = values.to_numpy()
-    rows = np.asarray(values, dtype=float)
+    rows = np.asarray(_to_numpy(values), dtype=float)
     if rows.ndim != 2:
         raise ValueError("SHAP inputs must be 2D")
     return rows
 
 
 def _as_explanation_data(values: Any) -> np.ndarray:
-    if hasattr(values, "to_numpy"):
-        values = values.to_numpy()
-    rows = np.asarray(values)
+    rows = np.asarray(_to_numpy(values))
     if rows.ndim != 2:
         raise ValueError("SHAP inputs must be 2D")
     return rows

@@ -2,12 +2,12 @@ import {RegressionModelExample} from '@site/src/components/ModelingLabClient';
 
 # CartoBoost Ranker
 
-Use `CartoBoostRanker` when rows are only comparable within a query group.
-Typical uses are candidate ordering, route ranking, or planning contexts where
-only within-group comparisons matter.
+Order candidates within a decision using `CartoBoostRanker`. For example, rank
+candidate pickup zones for the same taxi dispatch query. Scores are comparable
+within that query; they do not represent an absolute fare or probability.
 
-The CartoBoost ranker uses pairwise logistic or LambdaRank objectives and
-reports grouped metrics from predictions.
+Choose pairwise logistic or LambdaRank objectives, keep query groups together,
+and evaluate the ordering with grouped ranking metrics.
 
 ## Python Example
 
@@ -26,14 +26,13 @@ scores = ranker.predict(X_test)
 metrics = ranker.score_groups(X_test, relevance_test, groups=query_sizes_test)
 ```
 
-## Browser WASM Example
+## Interactive Example
 
-The browser bundle currently exposes the shared boosted-tree runner through
-`runRegressionModel`. Use this example to inspect WASM split behavior and model
-visualization; use the Python ranker API above when query groups and ranking
-metrics are required.
+Explore shared tree-splitting behavior on a numeric target below. This browser
+example runs regression; use the Python ranker above for query groups and
+ranking metrics.
 
-<RegressionModelExample title="Boosted tree browser ranking analog" mode="axis" loss="l2" />
+<RegressionModelExample title="Explore axis-aligned tree splits" mode="axis" loss="l2" />
 
 Rows for each query must be contiguous. Pass `groups` as group sizes or
 contiguous query ids, or set `group_col` when the query id is a column in `X`.

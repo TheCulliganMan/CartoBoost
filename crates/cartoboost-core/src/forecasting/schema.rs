@@ -152,12 +152,11 @@ impl ForecastFrame {
                 .then_with(|| a.timestamp.cmp(&b.timestamp))
         });
 
-        let mut seen = HashSet::with_capacity(rows.len());
-        for row in &rows {
-            if !seen.insert((row.series_id.clone(), row.timestamp)) {
+        for pair in rows.windows(2) {
+            if pair[0].series_id == pair[1].series_id && pair[0].timestamp == pair[1].timestamp {
                 return Err(CartoBoostError::InvalidInput(format!(
                     "duplicate forecast timestamp {} for series {}",
-                    row.timestamp, row.series_id
+                    pair[1].timestamp, pair[1].series_id
                 )));
             }
         }
@@ -352,9 +351,9 @@ impl ForecastFrame {
     }
 
     pub fn is_panel(&self) -> bool {
-        self.series_ids()
+        self.rows
             .iter()
-            .any(|series_id| series_id != SINGLE_SERIES_ID)
+            .any(|row| row.series_id != SINGLE_SERIES_ID)
     }
 }
 

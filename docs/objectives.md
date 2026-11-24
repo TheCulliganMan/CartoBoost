@@ -1,12 +1,18 @@
 # Objectives
 
-CartoBoost supports regression objectives for continuous temporal-spatial targets
-such as demand, duration, fare, cost, or residual error.
+Choose what a prediction should estimate before choosing how to score it.
+For taxi trips, expected duration and a high-delay threshold are different
+targets even when they use the same input features.
 
-Choose the objective by the scientific estimand. If the study asks for the
-expected fare or duration, use an L2 point model and report RMSE/MAE/R2. If the
-study asks for a service threshold, risk bound, or conservative planning value,
-use quantile regression and report pinball loss plus interval diagnostics.
+| Prediction you need | Starting objective | Evaluation |
+| --- | --- | --- |
+| Expected fare, duration, or demand | `loss="l2"` | RMSE, MAE, and R2. |
+| A conditional percentile, such as 90th-percentile duration | `loss="quantile", quantile_alpha=0.9` | Pinball loss and interval diagnostics. |
+| Robust point prediction for heavy-tailed trips | L1, Huber, or log-L2 | Metrics aligned with the chosen target scale. |
+
+See the [feature catalog](feature_catalog.md#cartoboost-regressor) for the full
+regression loss roster and [Parameters](user-guide/parameters.md) for controls.
+The sections below cover L2, quantiles, count helpers, and probability calibration.
 
 ## L2 Regression
 
@@ -85,9 +91,8 @@ finite clipping.
 
 The helpers validate finite non-negative targets and finite raw scores. Tweedie
 power must be in `(1, 2)`, and negative-binomial dispersion must be positive.
-They do not create benchmark claims by themselves; any public quality claim
-still needs a real run with fixed data, settings, baselines, and recorded
-metrics.
+These helpers expose objective calculations; they are not complete estimators
+or evidence of predictive accuracy on a particular dataset.
 
 ## Probability Calibration
 
@@ -118,4 +123,4 @@ probabilities in `[0, 1]`.
 - Report the holdout type: random, temporal, spatial, grouped, or route-based.
 - Compare objectives on the same split and feature set.
 - For temporal-spatial work, include residual summaries by time bucket, zone, or
-  taxi zone; aggregate metrics can hide localized failure modes.
+  route; aggregate metrics can hide localized failure modes.

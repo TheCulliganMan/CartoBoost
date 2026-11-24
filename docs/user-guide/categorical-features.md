@@ -1,9 +1,9 @@
 # Categorical Features
 
-CartoBoost accepts categorical columns in the CartoBoost regressor,
-classifier, and ranker Python wrappers. The fitted artifact records the
-mapping used during training so prediction and save/load use the same
-encoding.
+CartoBoost's regressor, classifier, and ranker accept
+categorical columns without asking you to invent a numeric distance between
+pickup zones or route categories. The fitted model saves its training-time
+mapping, so prediction and save/load use the same encoding.
 
 ## Supported Inputs
 

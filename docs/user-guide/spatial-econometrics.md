@@ -1,15 +1,12 @@
 # Spatial Econometrics
 
-Import these models from `cartoboost.spatial_econometrics`.
+Explain spatial dependence with an explicit neighbor matrix. The models in
+`cartoboost.spatial_econometrics` test whether neighboring taxi zones share
+response levels, residual errors, or covariate effects.
 
-Classical spatial econometrics models are interpretable baselines for areal
-units, store trade areas, service zones, and route cells. Use them when the
-question is whether a sparse neighbor graph explains the target through a
-lagged response, lagged errors, or lagged covariates.
-
-Use these models as interpretable comparisons for `CartoBoostRegressor`. Fit
-them on the same training rows, with the same measured covariates and the same
-spatial weights, then compare residual diagnostics and holdout metrics.
+Use them as interpretable comparisons for boosted trees and spatial residual
+models. Keep the training rows, measured features, and spatial weights aligned
+so differences in holdout error and residual structure are meaningful.
 
 ## Models
 
@@ -20,9 +17,8 @@ spatial weights, then compare residual diagnostics and holdout metrics.
 | Spatial Durbin ML | `SpatialDurbinRegressor` | `y = rho W y + X beta + W X theta + e` | likelihood criteria and direct, indirect, and total effects |
 | Two-stage spatial lag | `SpatialTwoStageLeastSquares` | `W X` instruments the endogenous `W y` term | `rho` and residual Moran's I |
 
-All four models fit through Rust native code and use the shared geo-core sparse
-`SpatialWeights` representation internally. Python only adapts arrays and
-exposes the sklearn-style estimator surface.
+All four estimators accept sparse `SpatialWeights` and provide `fit`,
+`predict`, `score`, and `summary` methods.
 
 The lag, error, and Durbin estimators use concentrated Gaussian maximum
 likelihood. Their objective includes the spatial Jacobian
@@ -73,7 +69,7 @@ assert taxi_zone_weights.isolated_rows_ == []
 For neighbor dictionaries, use `from_neighbors`:
 
 ```python
-trade_area_weights = SpatialWeights.from_neighbors(
+zone_neighbor_weights = SpatialWeights.from_neighbors(
     {
         0: [1],
         1: [0, 2],
@@ -89,7 +85,7 @@ must be finite. Spatial-dependence parameters are restricted to a stability
 interval derived from the weight scale. A spatial model also requires a
 full-rank design and more observations than fitted mean parameters.
 
-## Areal Units Example
+## Python Example {#areal-units-example}
 
 This example fits a spatial lag model for taxi-zone fare residuals after dense
 trip features have been assembled.
@@ -114,26 +110,24 @@ print(summary["diagnostics"]["rho"])
 print(summary["diagnostics"]["residual_morans_i"])
 ```
 
-Use this when the target for a pickup zone, dropoff zone, census area, or
-territory may move with neighboring areas.
+Use this when the target for a pickup zone, dropoff zone, or corridor may move with neighboring areas.
 
-## Store Trade Areas
+## Pickup-Zone Residuals {#store-trade-areas}
 
-For store trade areas, build `W` from shared boundaries, drive-time overlap, or
-nearest-neighbor catchments. Keep the covariates as measured store attributes:
-local demand, inventory capacity, service hours, and distance to the nearest
-hub.
+Build `W` from shared zone boundaries, travel-time overlap, or nearest
+neighbors. Use measured covariates such as pickup counts, average trip distance,
+hourly trip shares, and distance to an airport.
 
 ```python
 from cartoboost.spatial_econometrics import SpatialErrorRegressor
 
-store_error = SpatialErrorRegressor().fit(
-    store_features_train,
-    store_sales_residual_train,
-    spatial_weights=store_trade_area_weights,
+zone_error = SpatialErrorRegressor().fit(
+    zone_features_train,
+    zone_fare_residual_train,
+    spatial_weights=pickup_zone_weights,
 )
 
-diagnostics = store_error.summary()["diagnostics"]
+diagnostics = zone_error.summary()["diagnostics"]
 ```
 
 Choose the error model when the covariates explain the mean but residuals still
@@ -200,9 +194,8 @@ pysal_w.transform = "r"
 pysal_lag = spreg.ML_Lag(y_train.reshape(-1, 1), X_train_dense, w=pysal_w)
 ```
 
-CartoBoost's spatial econometrics surface is intentionally sparse and
-Rust-native; PySAL remains an optional comparison dependency rather than a core
-runtime dependency.
+PySAL is optional. Install `libpysal` and `spreg` separately when you need this
+comparison; CartoBoost does not require them to fit its spatial estimators.
 
 ## Model Lab And WASM Payload Shape
 
@@ -228,8 +221,8 @@ materializing dense `W` matrices. A complete request can be represented as:
 }
 ```
 
-The corresponding response should expose the fitted coefficients and
-diagnostics:
+A response includes coefficients and diagnostics with this structure. The
+values below illustrate the fields rather than a measured result:
 
 ```json
 {
@@ -264,3 +257,23 @@ Predictions are stable after reload when the same `X` and compatible spatial
 weights are supplied. Artifacts are model-specific: loading a Durbin artifact
 through `SpatialLagRegressor.load`, or any other class mismatch, fails instead
 of changing the requested estimator implicitly.
+
+## Use When
+
+| Pattern | Model |
+| --- | --- |
+| Neighboring response levels move together | `SpatialLagRegressor` |
+| Measured covariates explain the mean but residuals remain spatially related | `SpatialErrorRegressor` |
+| Both neighboring responses and neighboring covariates matter | `SpatialDurbinRegressor` |
+| Spatial lag estimation needs the two-stage instrumental-variable form | `SpatialTwoStageLeastSquares` |
+
+## Validation And Limitations
+
+Compare held-out errors and residual Moran's I using the same feature set and
+spatial weights. Choose the weight matrix from information available at
+prediction time; changing that matrix changes the model's assumptions.
+
+A fitted spatial coefficient is not automatically causal. Singular systems,
+rank-deficient designs, and non-finite inputs fail explicitly. Dense nonlinear
+trip effects may be better represented by a boosted tree, while a point-level
+residual surface may call for [geostatistics](geostatistics-models.md).

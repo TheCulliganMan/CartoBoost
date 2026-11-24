@@ -1,3 +1,17 @@
+fn serialize_piecewise_fitted<S: serde::Serializer>(
+    fitted: &Option<Arc<FittedPiecewiseLinearSeasonalState>>,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error> {
+    fitted.as_deref().serialize(serializer)
+}
+
+fn deserialize_piecewise_fitted<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<Arc<FittedPiecewiseLinearSeasonalState>>, D::Error> {
+    Option::<FittedPiecewiseLinearSeasonalState>::deserialize(deserializer)
+        .map(|fitted| fitted.map(Arc::new))
+}
+
 impl PiecewiseEventTerm {
     fn label(&self) -> String {
         format!("{}[{:+}]", self.name, self.offset)
@@ -151,13 +165,90 @@ impl NaiveForecaster {
     }
 }
 
+macro_rules! residual_interval_configuration {
+    ($($model:ty),+ $(,)?) => {$(
+        impl $model {
+            /// Configure residual-Gaussian intervals before fitting.
+            pub fn with_prediction_interval_levels(mut self, levels: Vec<f64>) -> Result<Self> {
+                if self.fitted.is_some() {
+                    return Err(CartoBoostError::InvalidInput(
+                        "configure prediction intervals before fitting".into(),
+                    ));
+                }
+                self.intervals = ResidualForecastIntervals::configured(levels)?;
+                Ok(self)
+            }
+        }
+    )+};
+}
+residual_interval_configuration!(
+    NaiveForecaster,
+    SeasonalNaiveForecaster,
+    ThetaForecaster,
+    OptimizedThetaForecaster
+);
+
 impl PiecewiseLinearSeasonalForecaster {
     pub fn new(config: PiecewiseLinearSeasonalConfig) -> Result<Self> {
         validate_piecewise_linear_seasonal_config(&config)?;
         Ok(Self {
             config,
             fitted: None,
+            regressor_standardization_by_name: BTreeMap::new(),
         })
+    }
+
+    pub fn set_regressor_standardization_by_name(
+        &mut self,
+        overrides: BTreeMap<String, String>,
+    ) -> Result<()> {
+        if self.fitted.is_some() {
+            return Err(CartoBoostError::InvalidInput(
+                "regressor standardization must be set before fitting".into(),
+            ));
+        }
+        let overrides = overrides
+            .into_iter()
+            .map(|(name, mode)| {
+                let mode = match mode.as_str() {
+                    "none" => PiecewiseRegressorStandardizationOverride::None,
+                    "auto" => PiecewiseRegressorStandardizationOverride::Auto,
+                    "standardize" => PiecewiseRegressorStandardizationOverride::Standardize,
+                    _ => {
+                        return Err(CartoBoostError::InvalidInput(format!(
+                            "unknown standardization mode {mode:?} for regressor {name:?}"
+                        )))
+                    }
+                };
+                Ok((name, mode))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        validate_piecewise_standardization_overrides(&self.config, &overrides)?;
+        self.regressor_standardization_by_name = overrides;
+        Ok(())
+    }
+
+    pub fn regressor_standardization_by_name(&self) -> BTreeMap<String, String> {
+        self.regressor_standardization_by_name
+            .iter()
+            .map(|(name, mode)| {
+                (
+                    name.clone(),
+                    match mode {
+                        PiecewiseRegressorStandardizationOverride::None => "none",
+                        PiecewiseRegressorStandardizationOverride::Auto => "auto",
+                        PiecewiseRegressorStandardizationOverride::Standardize => "standardize",
+                    }
+                    .to_string(),
+                )
+            })
+            .collect()
+    }
+
+    pub fn unfitted_clone(&self) -> Self {
+        let mut model = self.clone();
+        model.fitted = None;
+        model
     }
 
     pub fn config(&self) -> &PiecewiseLinearSeasonalConfig {
@@ -171,6 +262,10 @@ impl PiecewiseLinearSeasonalForecaster {
         let mut config = self.config.clone();
         update(&mut config);
         validate_piecewise_linear_seasonal_config(&config)?;
+        validate_piecewise_standardization_overrides(
+            &config,
+            &self.regressor_standardization_by_name,
+        )?;
         self.config = config;
         Ok(())
     }
@@ -208,6 +303,10 @@ impl PiecewiseLinearSeasonalForecaster {
             )));
         }
         validate_piecewise_linear_seasonal_config(&artifact.model.config)?;
+        validate_piecewise_standardization_overrides(
+            &artifact.model.config,
+            &artifact.model.regressor_standardization_by_name,
+        )?;
         Ok(artifact.model)
     }
 
@@ -217,28 +316,67 @@ impl PiecewiseLinearSeasonalForecaster {
     }
 
     pub fn predict_components_json_value(&self, horizon: usize) -> Result<Value> {
-        validate_horizon(horizon)?;
         let fitted = self.fitted.as_ref().ok_or_else(not_fitted)?;
+        let schedule = self.horizon_schedule(fitted, horizon)?;
+        self.components_with_schedule(fitted, &schedule)
+    }
+
+    pub fn predict_components_at_timestamps_json_value(
+        &self,
+        timestamps_by_series: BTreeMap<String, Vec<chrono::NaiveDateTime>>,
+    ) -> Result<Value> {
+        let fitted = self.fitted.as_ref().ok_or_else(not_fitted)?;
+        let schedule = self.validate_prediction_schedule(timestamps_by_series)?;
+        self.components_with_schedule(fitted, &schedule)
+    }
+
+    fn components_with_schedule(
+        &self,
+        fitted: &FittedPiecewiseLinearSeasonalState,
+        schedule: &BTreeMap<String, Vec<chrono::NaiveDateTime>>,
+    ) -> Result<Value> {
+        let plan = PiecewiseFeaturePlan::new(&self.config);
         let records = fitted
             .series
             .iter()
             .collect::<Vec<_>>()
             .into_par_iter()
             .map(|(series_id, series)| {
-                let anchor_timestamp = fitted
-                    .anchor_timestamp_by_series
-                    .get(series_id)
-                    .copied()
-                    .unwrap_or(series.last_timestamp);
-                (1..=horizon)
-                    .map(|step| {
-                        let timestamp = fitted.frame.frequency().advance(anchor_timestamp, step)?;
+                let mut features = vec![0.0; series.feature_count];
+                schedule[series_id]
+                    .iter()
+                    .enumerate()
+                    .map(|(index, &timestamp)| {
+                        let step = index + 1;
                         let elapsed = elapsed_days(series.start_timestamp, timestamp);
-                        series.predict_component_record(
+                        let bounds =
+                            piecewise_bounds(Some(series_id), None, Some(step), &self.config)?;
+                        fill_piecewise_linear_seasonal_features(
+                            &mut features,
+                            elapsed,
+                            &PiecewiseLinearFeatureContext {
+                                series_id: Some(series_id),
+                                timestamp,
+                                covariates: None,
+                                horizon_step: Some(step),
+                                component_multiplier: series.component_multiplier(
+                                    elapsed,
+                                    bounds,
+                                    &self.config,
+                                ),
+                                changepoints: &series.changepoints,
+                                config: &self.config,
+                                regressor_stats: Some(&series.regressor_stats),
+                                feature_plan: Some(&plan),
+                            },
+                        )?;
+                        series.component_record_from_features(
                             series_id,
                             elapsed,
                             timestamp,
                             step,
+                            bounds,
+                            &features,
                             &self.config,
                         )
                     })
@@ -248,23 +386,32 @@ impl PiecewiseLinearSeasonalForecaster {
             .into_iter()
             .flatten()
             .collect::<Vec<_>>();
-        Ok(json!({
-            "model": self.model_name(),
-            "columns": [
-                "series_id",
-                "timestamp",
-                "horizon",
-                "prediction",
-                "trend",
-                "adjusted_trend",
-                "trend_adjustment_multiplier",
-                "trend_adjustment",
-                "residual_shock",
-                "linear_predictor",
-                "components",
-            ],
-            "records": records,
-        }))
+        Ok(piecewise_components_payload(self.model_name(), records))
+    }
+
+    pub fn predict_with_components(&self, horizon: usize) -> Result<(ForecastResult, Value)> {
+        let fitted = self.fitted.as_ref().ok_or_else(not_fitted)?;
+        let schedule = self.horizon_schedule(fitted, horizon)?;
+        let (forecast, records) =
+            self.predict_with_schedule_and_components(fitted, &schedule, true)?;
+        Ok((
+            forecast,
+            piecewise_components_payload(self.model_name(), records),
+        ))
+    }
+
+    pub fn predict_with_components_at_timestamps(
+        &self,
+        timestamps_by_series: BTreeMap<String, Vec<chrono::NaiveDateTime>>,
+    ) -> Result<(ForecastResult, Value)> {
+        let fitted = self.fitted.as_ref().ok_or_else(not_fitted)?;
+        let schedule = self.validate_prediction_schedule(timestamps_by_series)?;
+        let (forecast, records) =
+            self.predict_with_schedule_and_components(fitted, &schedule, true)?;
+        Ok((
+            forecast,
+            piecewise_components_payload(self.model_name(), records),
+        ))
     }
 
     pub fn history_components_json_value(&self) -> Result<Value> {
@@ -334,6 +481,47 @@ impl PiecewiseLinearSeasonalForecaster {
     pub fn predict_samples_json_value(&self, horizon: usize) -> Result<Value> {
         validate_horizon(horizon)?;
         let fitted = self.fitted.as_ref().ok_or_else(not_fitted)?;
+        let schedule = self.sample_horizon_schedule(fitted, horizon)?;
+        self.samples_with_schedule(fitted, &schedule)
+    }
+
+    pub fn predict_samples_at_timestamps_json_value(
+        &self,
+        timestamps_by_series: BTreeMap<String, Vec<chrono::NaiveDateTime>>,
+    ) -> Result<Value> {
+        let fitted = self.fitted.as_ref().ok_or_else(not_fitted)?;
+        let schedule = self.validate_prediction_schedule(timestamps_by_series)?;
+        self.samples_with_schedule(fitted, &schedule)
+    }
+
+    fn sample_horizon_schedule(
+        &self,
+        fitted: &FittedPiecewiseLinearSeasonalState,
+        horizon: usize,
+    ) -> Result<BTreeMap<String, Vec<chrono::NaiveDateTime>>> {
+        validate_horizon(horizon)?;
+        fitted
+            .series
+            .iter()
+            .map(|(id, series)| {
+                let timestamps = (1..=horizon)
+                    .map(|step| {
+                        fitted
+                            .frame
+                            .frequency()
+                            .advance(series.last_timestamp, step)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok((id.clone(), timestamps))
+            })
+            .collect()
+    }
+
+    fn samples_with_schedule(
+        &self,
+        fitted: &FittedPiecewiseLinearSeasonalState,
+        schedule: &BTreeMap<String, Vec<chrono::NaiveDateTime>>,
+    ) -> Result<Value> {
         let sample_count = self.config.uncertainty_samples;
         let records = if sample_count == 0 {
             Vec::new()
@@ -345,12 +533,11 @@ impl PiecewiseLinearSeasonalForecaster {
                 .into_par_iter()
                 .map(|(series_id, series)| {
                     let residual_scale = series.residual_scale();
-                    (1..=horizon)
-                        .map(|step| {
-                            let timestamp = fitted
-                                .frame
-                                .frequency()
-                                .advance(series.last_timestamp, step)?;
+                    schedule[series_id]
+                        .iter()
+                        .enumerate()
+                        .map(|(index, &timestamp)| {
+                            let step = index + 1;
                             let elapsed = elapsed_days(series.start_timestamp, timestamp);
                             let bounds =
                                 piecewise_bounds(Some(series_id), None, Some(step), &self.config)?;
@@ -419,6 +606,125 @@ impl PiecewiseLinearSeasonalForecaster {
             ],
             "records": records,
         }))
+    }
+
+    #[allow(clippy::type_complexity)]
+    pub fn predict_samples_array(
+        &self,
+        horizon: usize,
+    ) -> Result<(Vec<String>, Vec<chrono::NaiveDateTime>, Vec<Vec<f64>>)> {
+        let fitted = self.fitted.as_ref().ok_or_else(not_fitted)?;
+        let schedule = self.sample_horizon_schedule(fitted, horizon)?;
+        self.samples_array_with_schedule(fitted, &schedule)
+    }
+
+    #[allow(clippy::type_complexity)]
+    pub fn predict_samples_array_at_timestamps(
+        &self,
+        timestamps_by_series: BTreeMap<String, Vec<chrono::NaiveDateTime>>,
+    ) -> Result<(Vec<String>, Vec<chrono::NaiveDateTime>, Vec<Vec<f64>>)> {
+        let fitted = self.fitted.as_ref().ok_or_else(not_fitted)?;
+        let schedule = self.validate_prediction_schedule(timestamps_by_series)?;
+        self.samples_array_with_schedule(fitted, &schedule)
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn samples_array_with_schedule(
+        &self,
+        fitted: &FittedPiecewiseLinearSeasonalState,
+        schedule: &BTreeMap<String, Vec<chrono::NaiveDateTime>>,
+    ) -> Result<(Vec<String>, Vec<chrono::NaiveDateTime>, Vec<Vec<f64>>)> {
+        let sample_count = self.config.uncertainty_samples;
+        let plan = PiecewiseFeaturePlan::new(&self.config);
+        let rows = fitted
+            .series
+            .iter()
+            .collect::<Vec<_>>()
+            .into_par_iter()
+            .map(|(series_id, series)| {
+                let residual_scale = series.residual_scale();
+                let mut features = vec![0.0; series.feature_count];
+                schedule[series_id]
+                    .iter()
+                    .enumerate()
+                    .map(|(index, &timestamp)| {
+                        if sample_count == 0 {
+                            return Ok((series_id.clone(), timestamp, Vec::new()));
+                        }
+                        let step = index + 1;
+                        let elapsed = elapsed_days(series.start_timestamp, timestamp);
+                        let bounds =
+                            piecewise_bounds(Some(series_id), None, Some(step), &self.config)?;
+                        let terms = series.prediction_terms_with_features_at(
+                            series_id,
+                            elapsed,
+                            timestamp,
+                            step,
+                            bounds,
+                            &self.config,
+                            &mut features,
+                            &plan,
+                        )?;
+                        let trend_offsets = if self.config.growth == PiecewiseLinearGrowth::Logistic
+                        {
+                            Vec::new()
+                        } else {
+                            series.trend_uncertainty_offsets(
+                                series_id,
+                                elapsed,
+                                timestamp,
+                                step,
+                                &self.config,
+                            )?
+                        };
+                        let linear_offsets =
+                            if self.config.growth == PiecewiseLinearGrowth::Logistic {
+                                series.trend_uncertainty_linear_offsets(
+                                    series_id,
+                                    elapsed,
+                                    step,
+                                    &self.config,
+                                )
+                            } else {
+                                Vec::new()
+                            };
+                        let values = (0..sample_count)
+                            .map(|sample| {
+                                series
+                                    .predictive_sample_values(
+                                        series_id,
+                                        step,
+                                        sample,
+                                        terms.mean,
+                                        terms.linear_predictor,
+                                        bounds,
+                                        residual_scale,
+                                        terms.coefficient_scale,
+                                        terms.linear_coefficient_scale,
+                                        trend_offsets.get(sample).copied().unwrap_or(0.0),
+                                        linear_offsets.get(sample).copied().unwrap_or(0.0),
+                                        &self.config,
+                                    )
+                                    .0
+                            })
+                            .collect::<Vec<_>>();
+                        Ok((series_id.clone(), timestamp, values))
+                    })
+                    .collect::<Result<Vec<_>>>()
+            })
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        let mut ids = Vec::with_capacity(rows.len());
+        let mut timestamps = Vec::with_capacity(rows.len());
+        let mut values = Vec::with_capacity(rows.len());
+        for (id, timestamp, row) in rows {
+            ids.push(id);
+            timestamps.push(timestamp);
+            values.push(row);
+        }
+        Ok((ids, timestamps, values))
     }
 
     pub fn predict_samples_json_string(&self, horizon: usize) -> Result<String> {
@@ -508,12 +814,24 @@ impl PiecewiseLinearSeasonalForecaster {
         fitted: &FittedPiecewiseLinearSeasonalState,
         schedule: &BTreeMap<String, Vec<chrono::NaiveDateTime>>,
     ) -> Result<ForecastResult> {
+        self.predict_with_schedule_and_components(fitted, schedule, false)
+            .map(|(forecast, _)| forecast)
+    }
+
+    fn predict_with_schedule_and_components(
+        &self,
+        fitted: &FittedPiecewiseLinearSeasonalState,
+        schedule: &BTreeMap<String, Vec<chrono::NaiveDateTime>>,
+        include_components: bool,
+    ) -> Result<(ForecastResult, Vec<Value>)> {
+        let feature_plan = PiecewiseFeaturePlan::new(&self.config);
         let per_series = fitted
             .series
             .iter()
             .collect::<Vec<_>>()
             .into_par_iter()
             .map(|(series_id, series)| {
+                let mut features = vec![0.0; series.feature_count];
                 let emit_intervals = !self.config.interval_levels.is_empty();
                 let residual_scale = if emit_intervals {
                     series.residual_scale()
@@ -533,13 +851,15 @@ impl PiecewiseLinearSeasonalForecaster {
                         let elapsed = elapsed_days(series.start_timestamp, timestamp);
                         let bounds =
                             piecewise_bounds(Some(series_id), None, Some(step), &self.config)?;
-                        let terms = series.prediction_terms_at(
+                        let terms = series.prediction_terms_with_features_at(
                             series_id,
                             elapsed,
                             timestamp,
                             step,
                             bounds,
                             &self.config,
+                            &mut features,
+                            &feature_plan,
                         )?;
                         let prediction = ForecastPrediction {
                             series_id: series_id.clone(),
@@ -560,19 +880,27 @@ impl PiecewiseLinearSeasonalForecaster {
                                 },
                                 terms.linear_predictor,
                                 terms.linear_coefficient_scale,
-                                series.trend_uncertainty_offsets(
-                                    series_id,
-                                    elapsed,
-                                    timestamp,
-                                    step,
-                                    &self.config,
-                                )?,
-                                series.trend_uncertainty_linear_offsets(
-                                    series_id,
-                                    elapsed,
-                                    step,
-                                    &self.config,
-                                ),
+                                if self.config.growth == PiecewiseLinearGrowth::Logistic {
+                                    Vec::new()
+                                } else {
+                                    series.trend_uncertainty_offsets(
+                                        series_id,
+                                        elapsed,
+                                        timestamp,
+                                        step,
+                                        &self.config,
+                                    )?
+                                },
+                                if self.config.growth == PiecewiseLinearGrowth::Logistic {
+                                    series.trend_uncertainty_linear_offsets(
+                                        series_id,
+                                        elapsed,
+                                        step,
+                                        &self.config,
+                                    )
+                                } else {
+                                    Vec::new()
+                                },
                                 &self.config.interval_levels,
                                 bounds,
                                 &self.config,
@@ -580,7 +908,20 @@ impl PiecewiseLinearSeasonalForecaster {
                         } else {
                             Vec::new()
                         };
-                        Ok((prediction, intervals))
+                        let component = if include_components {
+                            Some(series.component_record_from_features(
+                                series_id,
+                                elapsed,
+                                timestamp,
+                                step,
+                                bounds,
+                                &features,
+                                &self.config,
+                            )?)
+                        } else {
+                            None
+                        };
+                        Ok((prediction, intervals, component))
                     })
                     .collect::<Result<Vec<_>>>()
             })
@@ -590,11 +931,22 @@ impl PiecewiseLinearSeasonalForecaster {
             .collect::<Vec<_>>();
         let mut predictions = Vec::with_capacity(per_series.len());
         let mut intervals = Vec::new();
-        for (prediction, prediction_intervals) in per_series {
+        let mut components = if include_components {
+            Vec::with_capacity(per_series.len())
+        } else {
+            Vec::new()
+        };
+        for (prediction, prediction_intervals, component) in per_series {
             predictions.push(prediction);
             intervals.extend(prediction_intervals);
+            if let Some(component) = component {
+                components.push(component);
+            }
         }
-        ForecastResult::new_with_intervals(predictions, intervals)
+        Ok((
+            ForecastResult::new_with_intervals(predictions, intervals)?,
+            components,
+        ))
     }
 
     pub fn predict_quantiles_json_value(
@@ -801,6 +1153,7 @@ impl SeasonalNaiveForecaster {
         Ok(Self {
             season_length,
             fitted: None,
+            intervals: None,
         })
     }
 }
@@ -884,6 +1237,7 @@ impl ThetaForecaster {
             alpha,
             seasonality,
             fitted: None,
+            intervals: None,
         })
     }
 
@@ -937,6 +1291,7 @@ impl OptimizedThetaForecaster {
             validation_window: None,
             validation_scores: Vec::new(),
             fitted: None,
+            intervals: None,
         })
     }
 
@@ -1391,3 +1746,25 @@ impl SpatialPiecewiseKrigingForecaster {
     }
 }
 
+fn piecewise_components_payload(model: &str, records: Vec<Value>) -> Value {
+    json!({
+        "model": model,
+        "columns": ["series_id", "timestamp", "horizon", "prediction", "trend", "adjusted_trend",
+            "trend_adjustment_multiplier", "trend_adjustment", "residual_shock", "linear_predictor", "components"],
+        "records": records,
+    })
+}
+
+fn validate_piecewise_standardization_overrides(
+    config: &PiecewiseLinearSeasonalConfig,
+    overrides: &BTreeMap<String, PiecewiseRegressorStandardizationOverride>,
+) -> Result<()> {
+    for name in overrides.keys() {
+        if !config.extra_regressors.contains(name) {
+            return Err(CartoBoostError::InvalidInput(format!(
+                "standardization override names unknown regressor {name:?}"
+            )));
+        }
+    }
+    Ok(())
+}

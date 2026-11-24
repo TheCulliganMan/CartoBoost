@@ -702,13 +702,15 @@ def test_native_fuzzy_gaussian_serialization_preserves_predictions(tmp_path):
         max_depth=1,
         min_samples_leaf=4,
         min_gain=0.0,
-        splitters=["gaussian_2d"],
+        split_policy="structured",
         fuzzy=True,
         fuzzy_bandwidth=0.5,
     )
 
     try:
-        model.fit(x, y)
+        model.fit(
+            x, y, feature_schema={"dense": [("pickup_x", "spatial"), ("pickup_y", "spatial")]}
+        )
     except ImportError as exc:
         pytest.skip(str(exc))
 
@@ -739,14 +741,16 @@ def test_real_native_save_load_restores_public_params_and_metadata(tmp_path):
         max_depth=1,
         min_samples_leaf=1,
         min_gain=0.0,
-        splitters=["gaussian_2d"],
+        split_policy="structured",
         fuzzy=True,
         fuzzy_bandwidth=0.5,
         leaf_predictor="constant",
     )
 
     try:
-        model.fit(x, y)
+        model.fit(
+            x, y, feature_schema={"dense": [("pickup_x", "spatial"), ("pickup_y", "spatial")]}
+        )
     except ImportError as exc:
         pytest.skip(str(exc))
 
@@ -756,34 +760,10 @@ def test_real_native_save_load_restores_public_params_and_metadata(tmp_path):
 
     restored = CartoBoostRegressor.load(path)
 
-    assert restored.get_params() == {
-        "n_estimators": 2,
-        "learning_rate": 0.25,
-        "max_depth": 1,
-        "min_samples_leaf": 1,
-        "min_gain": 0.0,
-        "loss": "l2",
-        "quantile_alpha": 0.5,
-        "huber_delta": 1.0,
-        "log_offset": 1.0,
-        "loss_params": None,
-        "splitters": ["gaussian_2d"],
-        "split_policy": "auto",
-        "leaf_predictor": "constant",
-        "linear_leaf_features": [],
-        "fuzzy": True,
-        "fuzzy_bandwidth": 0.5,
-        "fuzzy_kernel": "linear",
-        "l2_regularization": 1.0,
-        "constant_l2_regularization": 0.0,
-        "random_state": None,
-        "n_threads": None,
-        "monotonic_constraints": None,
-        "tensorboard_log_dir": None,
-        "tensorboard_run_name": None,
-    }
+    assert restored.get_params() == {**model.get_params(), "linear_leaf_features": []}
     assert restored.metadata_["library_name"] == "cartoboost-core"
-    assert restored.training_config_["splitters"] == ["Gaussian2D"]
+    assert restored.training_config_["splitters"] == model.training_config_["splitters"]
+    assert "Gaussian2D" in restored.training_config_["splitters"]
     assert restored.requires_sparse_sets_ is False
     assert restored.predict(x) == pytest.approx(before)
 
@@ -813,7 +793,7 @@ def test_real_native_save_weights_load_weights_restores_predictions(tmp_path):
 
     assert payload["artifact_type"] == "cartoboost.weights"
     assert payload["weights_artifact_version"] == 1
-    assert payload["backend"] == "rust"
+    assert payload["backend"] == "cpu"
     assert restored.predict(x) == pytest.approx(before)
 
 
@@ -827,11 +807,19 @@ def test_native_sparse_list_prediction_requires_sparse_sets_after_load(tmp_path)
         max_depth=1,
         min_samples_leaf=1,
         min_gain=0.0,
-        splitters=["sparse_set"],
+        split_policy="structured",
     )
 
     try:
-        model.fit(x, y, sparse_sets=sparse_sets)
+        model.fit(
+            x,
+            y,
+            sparse_sets=sparse_sets,
+            feature_schema={
+                "dense": [("feature_0", "numeric")],
+                "sparse_sets": [("route_cells", "sparse_set")],
+            },
+        )
     except ImportError as exc:
         pytest.skip(str(exc))
 
@@ -920,3 +908,637 @@ def test_feature_contributions_do_not_import_optional_shap(monkeypatch):
 
     assert values.shape == (2, 2)
     assert values.sum(axis=1) == pytest.approx(model.predict([[0.0], [3.0]]))
+
+
+@pytest.mark.parametrize("explicit_dates", [False, True])
+@pytest.mark.parametrize("sample_count", [0, 13])
+@pytest.mark.parametrize("panel", [False, True])
+def test_native_piecewise_combined_outputs_and_sample_arrays_preserve_legacy_results(
+    explicit_dates, sample_count, panel
+):
+    pd = pytest.importorskip("pandas")
+    zones = ["pickup_zone_1", "pickup_zone_2"] if panel else ["pickup_zone_1"]
+    records = [
+        {
+            "zone": zone,
+            "ds": timestamp,
+            "fare": 20.0 + 0.3 * day + np.sin(day * 0.7) + zone_index,
+            "airport_queue": float(day % 3),
+        }
+        for zone_index, zone in enumerate(zones)
+        for day, timestamp in enumerate(pd.date_range("2026-01-01", periods=32, freq="D"))
+    ]
+    frame = ForecastFrame.from_pandas(
+        pd.DataFrame(records),
+        timestamp_col="ds",
+        target_col="fare",
+        series_id_col="zone",
+        freq="D",
+        known_future_covariates=["airport_queue"],
+    )
+    model = PiecewiseLinearSeasonalForecaster(
+        changepoints=3,
+        weekly_fourier_order=2,
+        extra_regressors=["airport_queue"],
+        future_regressors={"airport_queue": [0.0, 1.0, 2.0]},
+        prediction_interval_levels=[0.8],
+        uncertainty_samples=sample_count,
+        uncertainty_seed=17,
+    ).fit(frame)
+    native = model._native_model
+    artifact_before = native.to_json()
+    options = {}
+    if explicit_dates:
+        options["future_timestamps"] = [
+            "2026-02-04T00:00:00",
+            "2026-02-07T00:00:00",
+            "2026-02-12T00:00:00",
+        ]
+    expected_result = native.predict(3, **options)
+    expected_components = json.loads(native.components_json(3, **options))
+    result, components_json = native.predict_with_components(3, **options)
+    assert result.records() == json.loads(expected_result.to_json())["records"]
+    assert result.records() == expected_result.records()
+    assert json.loads(components_json) == expected_components
+    series_ids, timestamps, values = native.samples_arrays(3, **options)
+    samples = json.loads(native.samples_json(3, **options))
+    assert isinstance(values, np.ndarray)
+    assert values.dtype == np.float64 and values.flags.c_contiguous
+    assert values.shape == (len(zones) * 3, sample_count)
+    assert len(series_ids) == len(timestamps) == len(values)
+    if sample_count:
+        row_indices = {
+            (series, timestamp): index
+            for index, (series, timestamp) in enumerate(zip(series_ids, timestamps, strict=True))
+        }
+        expected = np.empty_like(values)
+        for record in samples["records"]:
+            index = row_indices[(record["series_id"], record["timestamp"])]
+            expected[index, record["sample"]] = record["prediction"]
+        np.testing.assert_array_equal(values, expected)
+    else:
+        assert samples["records"] == []
+    # Prediction overrides operate on a view/clone and cannot change persisted fitted state.
+    native.predict_with_components(
+        3,
+        future_regressors={"airport_queue": [2.0, 0.0, 1.0]},
+        prediction_interval_levels=[0.9],
+        uncertainty_samples=7,
+        **options,
+    )
+    native.samples_arrays(3, uncertainty_samples=5, **options)
+    assert native.to_json() == artifact_before
+    assert native.predict(3, **options).records() == expected_result.records()
+    restored = type(native).from_json(artifact_before)
+    assert restored.predict(3, **options).records() == expected_result.records()
+
+
+def test_native_piecewise_new_outputs_keep_strict_schedule_validation():
+    pd = pytest.importorskip("pandas")
+    frame = ForecastFrame.from_pandas(
+        pd.DataFrame(
+            {
+                "ds": pd.date_range("2026-01-01", periods=16, freq="D"),
+                "fare": np.arange(16, dtype=float),
+            }
+        ),
+        timestamp_col="ds",
+        target_col="fare",
+        freq="D",
+    )
+    native = (
+        PiecewiseLinearSeasonalForecaster(
+            changepoints=0, weekly_fourier_order=0, uncertainty_samples=3
+        )
+        .fit(frame)
+        ._native_model
+    )
+    for method in [
+        native.predict_with_components,
+        native.samples_arrays,
+        native.components_json,
+        native.samples_json,
+    ]:
+        with pytest.raises(ValueError):
+            method(0)
+        with pytest.raises(ValueError, match="length must match horizon"):
+            method(2, future_timestamps=["2026-01-17"])
+        with pytest.raises(ValueError, match="not both"):
+            method(
+                1,
+                future_timestamps=["2026-01-17"],
+                future_timestamps_by_series={"zone": ["2026-01-17"]},
+            )
+        with pytest.raises(ValueError, match="strictly after"):
+            method(1, future_timestamps=["2026-01-01"])
+
+
+class _ProphetFacadeResult:
+    def __init__(self, records):
+        self._records = records
+
+    def records(self):
+        return self._records
+
+    def to_json(self):
+        raise AssertionError("forecast records should not roundtrip through JSON")
+
+
+class _ProphetFacadeNative:
+    def __init__(self, dates, shift=0.0):
+        self._native_model = object()
+        self.dates = dates
+        self.shift = shift
+        self.calls = {"history": 0, "forecast": 0, "components": 0, "samples": 0}
+        self.schedule = []
+
+    def _records(self, dates):
+        return [
+            {
+                "timestamp": value.isoformat(),
+                "prediction": float(value.day) + self.shift,
+                "prediction_lower_p80": float(value.day) - 1.0 + self.shift,
+                "prediction_upper_p80": float(value.day) + 1.0 + self.shift,
+                "components": {"trend_linear": float(value.day), "non_trend_total": self.shift},
+            }
+            for value in dates
+        ]
+
+    def history_components(self):
+        self.calls["history"] += 1
+        return {"records": self._records(self.dates)}
+
+    def predict_with_components(self, horizon, **kwargs):
+        self.calls["forecast"] += 1
+        self.schedule = kwargs["future_timestamps"]
+        records = self._records(self.schedule)
+        return _ProphetFacadeResult(records), {"records": records}
+
+    def components(self, horizon, **kwargs):
+        self.calls["components"] += 1
+        self.schedule = kwargs["future_timestamps"]
+        return {"records": self._records(self.schedule)}
+
+    def samples_arrays(self, horizon, **kwargs):
+        self.calls["samples"] += 1
+        dates = kwargs["future_timestamps"]
+        count = kwargs["uncertainty_samples"]
+        values = np.array([value.day for value in dates], dtype=float)[:, None]
+        return (
+            ["series"] * horizon,
+            [value.isoformat() for value in dates],
+            values + np.arange(count),
+        )
+
+
+def _prophet_facade_fixture():
+    pd = pytest.importorskip("pandas")
+    dates = pd.date_range("2026-01-01", periods=5, freq="D")
+    model = Prophet(uncertainty_samples=4)
+    model.history = pd.DataFrame({"ds": dates, "y": np.arange(5, dtype=float)})
+    model._model = _ProphetFacadeNative(dates)
+    return model
+
+
+def test_prophet_history_cache_is_reused_and_invalidated_by_model_replacement():
+    model = _prophet_facade_fixture()
+    frame = model.history.iloc[[3, 0, 3]]
+    expected = model.predict(frame)
+    actual = model.predict(frame)
+    assert model._model.calls["history"] == 1
+    np.testing.assert_array_equal(actual["yhat"], expected["yhat"])
+    model._model = _ProphetFacadeNative(model.history["ds"], shift=10.0)
+    changed = model.predict(frame)
+    np.testing.assert_array_equal(changed["yhat"], expected["yhat"] + 10.0)
+    assert model._model.calls["history"] == 1
+
+
+def test_prophet_future_schedule_preserves_reordered_duplicate_rows_and_arbitrary_index():
+    pd = pytest.importorskip("pandas")
+    model = _prophet_facade_fixture()
+    frame = pd.DataFrame(
+        {"ds": pd.to_datetime(["2026-01-09", "2026-01-02", "2026-01-07", "2026-01-09"])},
+        index=[90, 2, 2, -5],
+    )
+    forecast = model.predict(frame)
+    assert forecast["ds"].tolist() == frame["ds"].tolist()
+    np.testing.assert_array_equal(forecast["yhat"], [9.0, 2.0, 7.0, 9.0])
+    assert model._model.schedule == pd.to_datetime(["2026-01-07", "2026-01-09"]).tolist()
+    assert model._model.calls["forecast"] == 1
+    assert model._model.calls["components"] == 0
+    assert list(frame.index) == [90, 2, 2, -5]
+
+
+def test_prophet_samples_scatter_by_position_without_repredicting_uncertainty():
+    pd = pytest.importorskip("pandas")
+    model = _prophet_facade_fixture()
+    frame = pd.DataFrame(
+        {"ds": pd.to_datetime(["2026-01-09", "2026-01-02", "2026-01-07", "2026-01-09"])},
+        index=[90, 2, 2, -5],
+    )
+    samples = model.predictive_samples(frame)
+    np.testing.assert_array_equal(
+        samples["yhat"], [[9, 10, 11, 12], [2, 2, 2, 2], [7, 8, 9, 10], [9, 10, 11, 12]]
+    )
+    np.testing.assert_array_equal(samples["trend"], [[9] * 4, [2] * 4, [7] * 4, [9] * 4])
+    assert model._model.calls == {"history": 1, "forecast": 0, "components": 1, "samples": 1}
+    model.predict_trend(frame)
+    model.predict_seasonal_components(frame)
+    assert model._model.calls["forecast"] == 0
+    assert model._model.calls["samples"] == 1
+
+
+def test_prophet_duplicate_future_dates_reject_conflicting_regressors():
+    pd = pytest.importorskip("pandas")
+    model = _prophet_facade_fixture()
+    model.extra_regressors = {"promo": {}}
+    frame = pd.DataFrame({"ds": pd.to_datetime(["2026-01-07"] * 2), "promo": [0.0, 1.0]})
+    with pytest.raises(ValueError, match="identical regressor values"):
+        model.predict(frame)
+
+
+def test_prophet_column_assembly_preserves_component_order_and_missing_values():
+    pd = pytest.importorskip("pandas")
+    from cartoboost.prophet import _prophet_result_frame
+
+    frame = pd.DataFrame({"ds": pd.date_range("2026-01-01", periods=3)})
+    result = [
+        {"prediction": value, "prediction_lower_p80": value - 1.0} for value in [1.0, 2.0, 3.0]
+    ]
+    components = [
+        {"components": {"trend_linear": 1.0, "regressors": {"promo": 2.0}}},
+        {
+            "components": {
+                "trend_linear": 2.0,
+                "non_trend_total": 1.0,
+                "regressors": {"holiday": 3.0},
+            }
+        },
+        {"components": {"trend_linear": 3.0, "regressors": {"promo": 4.0, "trend": 5.0}}},
+    ]
+    actual = _prophet_result_frame(frame, result, components, 0.8)
+    assert list(actual.columns) == [
+        "ds",
+        "yhat",
+        "yhat_lower",
+        "yhat_upper",
+        "trend",
+        "additive_terms",
+        "promo",
+        "holiday",
+    ]
+    np.testing.assert_array_equal(actual["trend"], [1.0, 2.0, 5.0])
+    np.testing.assert_array_equal(actual["additive_terms"], [0.0, 1.0, 0.0])
+    np.testing.assert_array_equal(actual["promo"], [2.0, np.nan, 4.0])
+    np.testing.assert_array_equal(actual["holiday"], [np.nan, 3.0, np.nan])
+
+
+def test_prophet_holiday_features_match_calendar_days_and_repeated_occurrences():
+    pd = pytest.importorskip("pandas")
+    dates = pd.to_datetime(
+        ["2026-01-01", "2026-01-02 06:00", "2026-01-02 18:00", "2026-01-03", "2027-01-02"],
+        format="mixed",
+    )
+    holidays = pd.DataFrame(
+        {
+            "holiday": ["launch", "launch"],
+            "ds": pd.to_datetime(["2026-01-02", "2027-01-02"]),
+            "lower_window": [-1, -1],
+            "upper_window": [1, 1],
+        }
+    )
+    features, _, names = Prophet().make_holiday_features(dates, holidays)
+    np.testing.assert_array_equal(features["launch_delim_+0"], [0, 1, 1, 0, 1])
+    np.testing.assert_array_equal(features["launch_delim_-1"], [1, 0, 0, 0, 0])
+    np.testing.assert_array_equal(features["launch_delim_+1"], [0, 0, 0, 1, 0])
+    assert names == ["launch"]
+
+
+def test_prophet_zero_period_future_frame_is_independent_and_keeps_datetime_dtype():
+    pd = pytest.importorskip("pandas")
+    model = _prophet_facade_fixture()
+    empty = model.make_future_dataframe(0, include_history=False)
+    assert empty.shape == (0, 1)
+    assert empty["ds"].dtype == model.history["ds"].dtype
+    copied = model.make_future_dataframe(0)
+    original = model.history["ds"].copy()
+    copied.loc[0, "ds"] = pd.Timestamp("2030-01-01")
+    pd.testing.assert_series_equal(model.history["ds"], original)
+
+
+def test_prophet_native_irregular_forecast_and_samples_keep_requested_row_order():
+    pd = pytest.importorskip("pandas")
+    dates = pd.date_range("2026-01-01 00:00:00.125", periods=32, freq="D")
+    model = Prophet(n_changepoints=2, uncertainty_samples=8, yearly_seasonality=False).fit(
+        pd.DataFrame({"ds": dates, "y": np.arange(32, dtype=float) + np.sin(np.arange(32))})
+    )
+    future_dates = [dates[-1] + pd.Timedelta(days=2), dates[-1] + pd.Timedelta(days=5)]
+    request = pd.DataFrame(
+        {"ds": [future_dates[1], dates[3], future_dates[0], future_dates[1]]}, index=[40, -2, 40, 7]
+    )
+    forecast = model.predict(request)
+    reference = model._model.predict(2, future_timestamps=future_dates).records()
+    np.testing.assert_array_equal(
+        forecast["yhat"].iloc[[0, 2, 3]],
+        [reference[1]["prediction"], reference[0]["prediction"], reference[1]["prediction"]],
+    )
+    assert forecast["ds"].tolist() == request["ds"].tolist()
+    samples = model.predictive_samples(request)
+    _, _, expected = model._model.samples_arrays(2, future_timestamps=future_dates)
+    np.testing.assert_array_equal(samples["yhat"][[0, 2, 3]], np.asarray(expected)[[1, 0, 1]])
+    np.testing.assert_array_equal(samples["yhat"][1], forecast["yhat"].iloc[1])
+    cached = model.predict(model.history.iloc[[0]])["yhat"].to_numpy()
+    model.history.loc[:, "y"] = 999.0
+    np.testing.assert_array_equal(model.predict(model.history.iloc[[0]])["yhat"], cached)
+
+
+def test_prophet_future_only_samples_reuse_native_matrix(monkeypatch):
+    pd = pytest.importorskip("pandas")
+    model = _prophet_facade_fixture()
+    original = model._model.samples_arrays
+    captured = {}
+
+    def capture(*args, **kwargs):
+        result = original(*args, **kwargs)
+        captured["values"] = result[2]
+        return result
+
+    monkeypatch.setattr(model._model, "samples_arrays", capture)
+    request = pd.DataFrame({"ds": pd.to_datetime(["2026-01-07", "2026-01-09"])})
+    result = model.predictive_samples(request)
+    assert np.shares_memory(result["yhat"], captured["values"])
+    np.testing.assert_array_equal(result["yhat"], [[7, 8, 9, 10], [9, 10, 11, 12]])
+
+
+def _prophet_direct_reference(frame, *, growth="linear", covariates=(), **kwargs):
+    forecast_frame = ForecastFrame.from_pandas(
+        frame,
+        timestamp_col="ds",
+        target_col="y",
+        freq="D",
+        known_future_covariates=list(covariates),
+        allow_irregular=True,
+        allow_missing_targets=True,
+    )
+    return PiecewiseLinearSeasonalForecaster(
+        growth=growth,
+        changepoints=0,
+        changepoint_range=0.8,
+        yearly_fourier_order=0,
+        weekly_fourier_order=0,
+        daily_fourier_order=0,
+        auto_yearly_seasonality=False,
+        auto_weekly_seasonality=False,
+        auto_daily_seasonality=False,
+        changepoint_prior_scale=0.05,
+        seasonality_prior_scale=10.0,
+        holidays_mode="additive",
+        prediction_interval_levels=[0.8],
+        uncertainty_samples=0,
+        **kwargs,
+    ).fit(forecast_frame)
+
+
+def _small_prophet(**kwargs):
+    return Prophet(
+        n_changepoints=0,
+        yearly_seasonality=False,
+        weekly_seasonality=False,
+        daily_seasonality=False,
+        uncertainty_samples=0,
+        **kwargs,
+    )
+
+
+@pytest.mark.parametrize("use_floor", [False, True])
+def test_prophet_logistic_bounds_match_direct_piecewise_configuration(use_floor):
+    pd = pytest.importorskip("pandas")
+    t = np.arange(24, dtype=float)
+    cap = 80.0 + t
+    floor = 5.0 + 0.1 * t if use_floor else np.zeros(len(t))
+    frame = pd.DataFrame(
+        {
+            "ds": pd.date_range("2026-01-01", periods=len(t)),
+            "cap": cap,
+            "y": floor + (cap - floor) / (1.0 + np.exp(-0.2 * (t - 12.0))),
+        }
+    )
+    covariates = ["cap"]
+    if use_floor:
+        frame["floor"] = floor
+        covariates.append("floor")
+    model = _small_prophet(growth="logistic").fit(frame)
+    direct = _prophet_direct_reference(
+        frame,
+        growth="logistic",
+        covariates=covariates,
+        cap_regressor="cap",
+        floor_regressor="floor" if use_floor else None,
+    )
+    future = model.make_future_dataframe(3, include_history=False)
+    future["cap"] = [104.0, 105.0, 106.0]
+    if use_floor:
+        future["floor"] = [7.4, 7.5, 7.6]
+    forecast = model.predict(future)
+    prediction = forecast["yhat"].to_numpy()
+    np.testing.assert_array_equal(forecast["cap"], future["cap"])
+    if use_floor:
+        np.testing.assert_array_equal(forecast["floor"], future["floor"])
+    expected = direct.predict(
+        3, future_regressors={name: future[name].tolist() for name in covariates}
+    ).records()
+    np.testing.assert_allclose(
+        prediction, [row["prediction"] for row in expected], rtol=0.0, atol=1e-12
+    )
+    expected_trend = np.asarray(
+        [
+            row["trend"]
+            for row in direct.components(
+                3, future_regressors={name: future[name].tolist() for name in covariates}
+            )["records"]
+        ]
+    )
+    np.testing.assert_array_equal(forecast["trend"], expected_trend)
+    np.testing.assert_array_equal(model.predict_trend(future), expected_trend)
+    np.testing.assert_array_equal(
+        model.predictive_samples(future)["trend"], expected_trend[:, None]
+    )
+    assert np.all(prediction < future["cap"].to_numpy())
+    assert np.all(prediction > (future["floor"].to_numpy() if use_floor else 0.0))
+    assert model.logistic_floor == use_floor
+    np.testing.assert_array_equal(model.history["floor"], floor)
+    prepared = model.setup_dataframe(future)
+    np.testing.assert_array_equal(prepared["floor"], future["floor"] if use_floor else np.zeros(3))
+    with pytest.raises(ValueError, match="cap"):
+        model.predict(future.drop(columns="cap"))
+
+
+def test_prophet_logistic_forecast_plot_preserves_capacity_and_floor_traces():
+    pd = pytest.importorskip("pandas")
+    pyplot = pytest.importorskip("matplotlib.pyplot")
+    t = np.arange(16, dtype=float)
+    frame = pd.DataFrame(
+        {
+            "ds": pd.date_range("2026-01-01", periods=len(t)),
+            "cap": 80.0 + t,
+            "floor": 5.0 + 0.1 * t,
+            "y": 5.0 + 0.1 * t + (75.0 + 0.9 * t) / (1.0 + np.exp(-0.2 * (t - 8.0))),
+        }
+    )
+    model = _small_prophet(growth="logistic").fit(frame)
+    future = pd.DataFrame(
+        {
+            "ds": pd.to_datetime(["2026-01-19", "2026-01-17"]),
+            "cap": [98.0, 96.0],
+            "floor": [6.8, 6.6],
+        },
+        index=[4, -2],
+    )
+    forecast = model.predict(future)
+    figure = model.plot(forecast, uncertainty=False)
+    try:
+        traces = {line.get_label(): line for line in figure.axes[0].lines}
+        for name, label in (("cap", "Maximum capacity"), ("floor", "Minimum capacity")):
+            np.testing.assert_array_equal(forecast[name], future[name])
+            np.testing.assert_array_equal(traces[label].get_ydata(), future[name])
+            np.testing.assert_array_equal(traces[label].get_xdata(), future["ds"].to_numpy())
+    finally:
+        pyplot.close(figure)
+
+
+def test_prophet_regressor_prior_scales_match_direct_native_penalties():
+    pd = pytest.importorskip("pandas")
+    rng = np.random.default_rng(734)
+    x = rng.uniform(0.0, 100.0, 32)
+    binary = np.arange(32) % 2
+    frame = pd.DataFrame(
+        {
+            "ds": pd.date_range("2026-01-01", periods=32),
+            "y": 4.0 + 0.3 * x + binary,
+            "x": x,
+            "binary": binary,
+        }
+    )
+    model = (
+        _small_prophet()
+        .add_regressor("x", prior_scale=2.0)
+        .add_regressor("binary", prior_scale=5.0)
+        .fit(frame)
+    )
+    direct = _prophet_direct_reference(
+        frame,
+        covariates=["x", "binary"],
+        extra_regressors=["x", "binary"],
+        regressor_l2_regularization_by_name={"x": 0.25, "binary": 0.04},
+    )
+    future = model.make_future_dataframe(3, include_history=False)
+    future["x"], future["binary"] = [10.0, 40.0, 90.0], [0.0, 1.0, 0.0]
+    expected = direct.predict(
+        3, future_regressors={name: future[name].tolist() for name in ["x", "binary"]}
+    ).records()
+    np.testing.assert_allclose(
+        model.predict(future)["yhat"], [row["prediction"] for row in expected], rtol=0.0, atol=1e-12
+    )
+
+
+@pytest.mark.parametrize("prior_scale", [0.0, -1.0, np.nan, np.inf, 1e-300])
+def test_prophet_rejects_invalid_regressor_prior_scales(prior_scale):
+    pd = pytest.importorskip("pandas")
+    frame = pd.DataFrame(
+        {
+            "ds": pd.date_range("2026-01-01", periods=4),
+            "y": [1.0, 2.0, 3.0, 4.0],
+            "x": [0.0, 1.0, 0.0, 1.0],
+        }
+    )
+    with pytest.raises(ValueError, match="prior_scale"):
+        _small_prophet().add_regressor("x", prior_scale=prior_scale).fit(frame)
+
+
+def test_prophet_mixed_regressor_standardization_matches_native_overrides():
+    pd = pytest.importorskip("pandas")
+    rng = np.random.default_rng(1734)
+    count = 24
+    raw, scaled = rng.uniform(0.0, 100.0, count), rng.uniform(1.0, 5.0, count)
+    binary_auto, binary_forced = np.arange(count) % 2, (np.arange(count) // 2) % 2
+    frame = pd.DataFrame(
+        {
+            "ds": pd.date_range("2026-01-01", periods=count),
+            "y": 5.0 + 0.1 * raw + scaled + 2.0 * binary_auto + 4.0 * binary_forced,
+            "raw": raw,
+            "scaled": scaled,
+            "binary_auto": binary_auto,
+            "binary_forced": binary_forced,
+        }
+    )
+    names = ["raw", "scaled", "binary_auto", "binary_forced"]
+    model = (
+        _small_prophet()
+        .add_regressor("raw", standardize=False)
+        .add_regressor("scaled", standardize=True)
+        .add_regressor("binary_auto", standardize="auto")
+        .add_regressor("binary_forced", standardize=True)
+        .fit(frame)
+    )
+    overrides = {"raw": "none", "scaled": "standardize", "binary_forced": "standardize"}
+    direct = _prophet_direct_reference(
+        frame,
+        covariates=names,
+        extra_regressors=names,
+        regressor_standardization_by_name=overrides,
+        regressor_l2_regularization_by_name={name: 0.01 for name in names},
+    )
+    native_payload = json.loads(model._model.to_json())["model"]
+    assert native_payload["regressor_standardization_by_name"] == overrides
+    stats = next(iter(native_payload["fitted"]["series"].values()))["regressor_stats"]
+    assert not stats["raw"]["standardized"]
+    assert not stats["binary_auto"]["standardized"]
+    assert stats["scaled"]["standardized"]
+    assert stats["binary_forced"]["standardized"]
+    future = model.make_future_dataframe(2, include_history=False)
+    future["raw"], future["scaled"] = [10.0, 90.0], [2.0, 4.0]
+    future["binary_auto"], future["binary_forced"] = [0.0, 1.0], [1.0, 0.0]
+    values = {name: future[name].tolist() for name in names}
+    expected = direct.predict(2, future_regressors=values).records()
+    np.testing.assert_allclose(
+        model.predict(future)["yhat"], [row["prediction"] for row in expected], rtol=0.0, atol=1e-12
+    )
+
+
+def test_native_forecast_timestamp_accessors_keep_nanosecond_precision():
+    from cartoboost import _native
+
+    timestamps = ["2026-01-01T00:00:00.123456789", "2026-01-02T00:00:00.123456789"]
+    rows = [("pickup_zone_132", stamp, 12.0 + index) for index, stamp in enumerate(timestamps)]
+    frame = _native.ForecastFrame(rows, "D")
+    assert frame.rows() == rows
+    predictions = [
+        (zone, timestamp, index + 1, "taxi_fare", value)
+        for index, (zone, timestamp, value) in enumerate(rows)
+    ]
+    result = _native.ForecastResult(predictions)
+    assert result.predictions() == predictions
+    assert [row["timestamp"] for row in result.records()] == timestamps
+    restored = _native.ForecastResult.from_json(result.to_json())
+    assert restored.predictions() == predictions
+    assert restored.records() == result.records()
+
+
+def test_native_piecewise_per_regressor_standardization_bindings_roundtrip():
+    from cartoboost import _native
+
+    options = {"airport_queue": "none", "pickup_indicator": "standardize"}
+    model = _native.PiecewiseLinearSeasonalForecaster(
+        extra_regressors=list(options), regressor_standardization_by_name=options
+    )
+    assert model.regressor_standardization_by_name() == options
+    restored = _native.PiecewiseLinearSeasonalForecaster.from_json(model.to_json())
+    assert restored.regressor_standardization_by_name() == options
+    clone = restored.unfitted_clone()
+    assert clone.regressor_standardization_by_name() == options
+    clone.set_regressor_standardization_by_name({"airport_queue": "auto"})
+    assert clone.regressor_standardization_by_name() == {"airport_queue": "auto"}
+    assert restored.regressor_standardization_by_name() == options
+    with pytest.raises(ValueError, match="standardization"):
+        clone.set_regressor_standardization_by_name({"airport_queue": "invalid"})
+    assert clone.regressor_standardization_by_name() == {"airport_queue": "auto"}

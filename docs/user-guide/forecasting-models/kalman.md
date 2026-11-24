@@ -2,12 +2,11 @@ import {ForecastModelExample} from '@site/src/components/ModelingLabClient';
 
 # Kalman
 
-CartoBoost exposes Kalman forecasters for both level-only and local-linear-trend
-state-space models. Use `LocalLevelKalmanForecaster` when the series has a
-noisy stable level, `KalmanForecaster` when the latent level also has a slowly
-changing trend, and the `Auto*` variants when you want a deterministic
-variance-grid search based on held-out predictive likelihood before refitting
-on all training rows.
+Separate a noisy observation from a changing underlying demand state with a
+Kalman forecaster. Use `LocalLevelKalmanForecaster` for a moving level and
+`KalmanForecaster` when that level also has a gradual trend. The `Auto*` models
+select process and observation variances by held-out predictive likelihood,
+then refit on the training history.
 
 ## Interactive Example
 
@@ -20,17 +19,16 @@ observations should update the level and trend without requiring a fixed
 seasonal cycle. It is often a good baseline for short horizons and noisy
 single-zone series.
 
-## Scientific Role
+## What The Model Learns {#scientific-role}
 
-Kalman forecasting is a state-space choice. It represents observed counts
-as noisy measurements of an unobserved level and trend. The model is useful
-when the research question is: "What latent demand state best explains these
-noisy observations, and how should that state move into the next few horizons?"
+A Kalman model treats each observation as a noisy measurement of an underlying
+state. The local-level model tracks one level; the local-linear model also
+tracks a slope.
 
-Choose Kalman when measurement noise and gradual state movement are central to
-the problem. It is more scientifically appropriate than naive when the last
-point may be noisy, and more direct than ARIMA when you want explicit latent
-level and trend diagnostics.
+The process variance controls how freely that state can move. Observation
+variance controls how much weight to give a noisy count. These explicit states
+make Kalman useful when one unusual pickup count should not set the entire
+forecast.
 
 ## Assumptions And Failure Modes
 
@@ -73,7 +71,7 @@ full panel.
 
 | Example | Use | Why |
 | --- | --- | --- |
-| A single location sensor is noisy but the true demand level is stable. | `LocalLevelKalmanForecaster` or `cartoboost.local_level_kalman_filter` | One latent level is enough; there is no explicit slope. |
+| A zone's observed pickup count is noisy but its demand level is stable. | `LocalLevelKalmanForecaster` or `cartoboost.local_level_kalman_filter` | One latent level is enough; there is no explicit slope. |
 | Airport pickup demand is drifting upward through the evening rush. | `KalmanForecaster` or `cartoboost.utilities.kalman_filter` | The local-linear model estimates both a level and a trend. |
 | You want the model to choose variance settings from a small grid. | `AutoLocalLevelKalmanForecaster` or `AutoKalmanForecaster` | Candidate settings are scored by predictive negative log likelihood on a time-ordered tail window and the winner is refit. |
 | You need a normal forecast band for a dashboard. | `forecast_distribution` from either utility | It returns mean, variance, lower, and upper for each horizon. |
@@ -352,6 +350,14 @@ print(min(scores, key=lambda item: (item[0], item[1])))
 
 Use the diagnostic plots after picking the best validation candidate; do not
 choose variance settings by making the in-sample line look smooth.
+
+## Use When
+
+| Your task | Start with |
+| --- | --- |
+| A noisy level should update gradually | `LocalLevelKalmanForecaster` |
+| The underlying state also has a slope | `KalmanForecaster` |
+| A strong additive seasonal cycle dominates | [ETS](ets.md) |
 
 ## Limitations
 

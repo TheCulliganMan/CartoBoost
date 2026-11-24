@@ -36,13 +36,20 @@ class EntityPanelFrame:
         static_covariates: list[str] | None = None,
     ) -> EntityPanelFrame:
         rows = _records_from_pandas(df)
+        if not rows:
+            raise ValueError("entity panel must contain at least one row")
         timestamps = sorted({row[timestamp_col] for row in rows})
         entities = sorted({str(row[entity_col]) for row in rows})
         t_pos = {value: idx for idx, value in enumerate(timestamps)}
         e_pos = {value: idx for idx, value in enumerate(entities)}
         y = np.full((len(timestamps), len(entities)), np.nan, dtype=float)
+        seen = set()
         for row in rows:
-            y[t_pos[row[timestamp_col]], e_pos[str(row[entity_col])]] = float(row[target_col])
+            position = (t_pos[row[timestamp_col]], e_pos[str(row[entity_col])])
+            if position in seen:
+                raise ValueError("entity panel contains duplicate timestamp/entity cells")
+            seen.add(position)
+            y[position] = float(row[target_col])
         if np.isnan(y).any():
             raise ValueError("entity panel contains missing timestamp/entity target cells")
         if not np.isfinite(y).all():
@@ -56,11 +63,16 @@ class EntityPanelFrame:
         static = None
         if static_covariates:
             static = np.zeros((len(entities), len(static_covariates)), dtype=float)
-            first = {str(row[entity_col]): row for row in rows}
-            for entity, idx in e_pos.items():
-                static[idx] = [float(first[entity][col]) for col in static_covariates]
-            if not np.isfinite(static).all():
-                raise ValueError("static_covariates must contain only finite values")
+            static_by_entity = {}
+            for row in rows:
+                entity = str(row[entity_col])
+                values = [float(row[col]) for col in static_covariates]
+                if not np.isfinite(values).all():
+                    raise ValueError("static_covariates must contain only finite values")
+                if entity in static_by_entity and static_by_entity[entity] != values:
+                    raise ValueError("static_covariates must be constant within each entity")
+                static_by_entity[entity] = values
+                static[e_pos[entity]] = values
         return cls(y, timestamps, entities, hist, future, static, freq)
 
 

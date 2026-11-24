@@ -105,7 +105,8 @@ pub use local::{
 };
 pub use metrics::{
     competition_mase_scale, evaluate_competition_metrics, evaluate_forecast,
-    evaluate_forecast_with_training, CompetitionMetricSet, ForecastActual, ForecastMetricSet,
+    evaluate_forecast_arrays, evaluate_forecast_with_training, CompetitionMetricSet,
+    ForecastActual, ForecastMetricSet,
 };
 pub use mstl::MSTLDecomposition;
 pub use objective::ForecastObjective;

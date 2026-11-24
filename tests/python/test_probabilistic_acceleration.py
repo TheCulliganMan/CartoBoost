@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
+from cartoboost import _native
 from cartoboost.accelerators import available_backends
 from cartoboost.forecasting.probabilistic import QuantileCartoBoostRegressor
 
@@ -63,3 +65,20 @@ def test_quantile_booster_reports_every_selected_backend() -> None:
         assert model.selected_backend_ == backend
         assert set(model.metadata_["backend"]["selected"].values()) == {backend}
         assert model.predict_quantiles(x).shape == (8, 2)
+
+
+def test_quantile_booster_propagates_native_training_error(monkeypatch) -> None:
+    class FailingNativeQuantileSet:
+        def __init__(self, **kwargs):
+            pass
+
+        def fit(self, x, y):
+            raise ValueError("native training failed")
+
+    monkeypatch.setattr(_native, "QuantileRegressorSet", FailingNativeQuantileSet)
+    model = QuantileCartoBoostRegressor(quantiles=(0.25, 0.75), n_estimators=1)
+
+    with pytest.raises(ValueError, match="native training failed"):
+        model.fit([[0.0], [1.0]], [0.0, 1.0])
+    assert model.models_ == {}
+    assert model._native_model is None

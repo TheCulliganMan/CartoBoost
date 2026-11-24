@@ -54,6 +54,46 @@ pub struct CategoricalEncoder {
     pub columns: Vec<CategoricalColumnEncoder>,
 }
 
+/// Borrowed categorical tokens or already parsed numeric column values.
+/// Numeric columns preserve their f64 values without a text round trip.
+#[derive(Clone, Copy, Debug)]
+pub enum CategoricalInputColumn<'a> {
+    Numeric(&'a [f64]),
+    Tokens(&'a [String]),
+}
+
+impl<'a> CategoricalInputColumn<'a> {
+    fn len(&self) -> usize {
+        match self {
+            Self::Numeric(values) => values.len(),
+            Self::Tokens(values) => values.len(),
+        }
+    }
+
+    fn tokens(&self, name: &str) -> Result<&'a [String]> {
+        match self {
+            Self::Tokens(values) => Ok(values),
+            Self::Numeric(_) => Err(CartoBoostError::InvalidInput(format!(
+                "categorical feature '{name}' requires category tokens"
+            ))),
+        }
+    }
+
+    fn numeric_values(&self, name: &str) -> Result<Vec<f64>> {
+        match self {
+            Self::Tokens(values) => parse_numeric_column(values, name),
+            Self::Numeric(values) => {
+                if values.iter().any(|value| !value.is_finite()) {
+                    return Err(CartoBoostError::InvalidInput(format!(
+                        "feature '{name}' must contain finite numeric values"
+                    )));
+                }
+                Ok(values.to_vec())
+            }
+        }
+    }
+}
+
 impl CategoricalEncoder {
     pub fn fit_transform_rows(
         rows: &[Vec<String>],
@@ -68,6 +108,20 @@ impl CategoricalEncoder {
 
     pub fn fit_transform_columns(
         columns: &[Vec<String>],
+        targets: &[f64],
+        schema: Option<&FeatureSchema>,
+        sample_weight: Option<&[f64]>,
+        config: CategoricalEncodingConfig,
+    ) -> Result<(Dataset, Self)> {
+        let columns = columns
+            .iter()
+            .map(|column| CategoricalInputColumn::Tokens(column))
+            .collect::<Vec<_>>();
+        Self::fit_transform_typed_columns(&columns, targets, schema, sample_weight, config)
+    }
+
+    pub fn fit_transform_typed_columns(
+        columns: &[CategoricalInputColumn<'_>],
         targets: &[f64],
         schema: Option<&FeatureSchema>,
         sample_weight: Option<&[f64]>,
@@ -97,6 +151,7 @@ impl CategoricalEncoder {
             let name = schema.names[idx].clone();
             match &schema.kinds[idx] {
                 FeatureKind::Categorical => {
+                    let column = column.tokens(&name)?;
                     let categories = sorted_categories(column);
                     if should_use_partition_encoding(
                         categories.len(),
@@ -164,6 +219,7 @@ impl CategoricalEncoder {
                     }
                 }
                 FeatureKind::Ordinal => {
+                    let column = column.tokens(&name)?;
                     let categories = sorted_categories(column);
                     let mapping = categories
                         .iter()
@@ -197,7 +253,7 @@ impl CategoricalEncoder {
                 }
                 _ => {
                     encoded_names.push(name.clone());
-                    encoded_columns.push(parse_numeric_column(column, &name)?);
+                    encoded_columns.push(column.numeric_values(&name)?);
                 }
             }
         }
@@ -209,9 +265,9 @@ impl CategoricalEncoder {
             encoded_feature_names: encoded_names,
             columns: encoders,
         };
-        let dataset = Dataset::from_rows(columns_to_rows(&encoded_columns)?)?.with_schema(
-            FeatureSchema::numeric(encoder.encoded_feature_names.clone()),
-        )?;
+        let dataset = columns_to_dataset(&encoded_columns)?.with_schema(FeatureSchema::numeric(
+            encoder.encoded_feature_names.clone(),
+        ))?;
         Ok((dataset, encoder))
     }
 
@@ -221,6 +277,17 @@ impl CategoricalEncoder {
     }
 
     pub fn transform_columns(&self, columns: &[Vec<String>]) -> Result<Dataset> {
+        let columns = columns
+            .iter()
+            .map(|column| CategoricalInputColumn::Tokens(column))
+            .collect::<Vec<_>>();
+        self.transform_typed_columns(&columns)
+    }
+
+    pub fn transform_typed_columns(
+        &self,
+        columns: &[CategoricalInputColumn<'_>],
+    ) -> Result<Dataset> {
         let row_count = validate_columns(columns)?;
         if columns.len() != self.original_feature_count {
             return Err(CartoBoostError::InvalidInput(format!(
@@ -244,10 +311,11 @@ impl CategoricalEncoder {
                     .get(encoded_columns.len())
                     .cloned()
                     .unwrap_or_else(|| format!("feature_{idx}"));
-                encoded_columns.push(parse_numeric_column(column, &name)?);
+                encoded_columns.push(column.numeric_values(&name)?);
                 continue;
             };
 
+            let column = column.tokens(&encoder.name)?;
             match encoder.strategy {
                 CategoricalEncodingStrategy::OneHot => {
                     for category in &encoder.categories {
@@ -287,7 +355,7 @@ impl CategoricalEncoder {
         debug_assert!(encoded_columns
             .iter()
             .all(|column| column.len() == row_count));
-        Dataset::from_rows(columns_to_rows(&encoded_columns)?)?
+        columns_to_dataset(&encoded_columns)?
             .with_schema(FeatureSchema::numeric(self.encoded_feature_names.clone()))
     }
 }
@@ -352,13 +420,13 @@ fn rows_to_columns(rows: &[Vec<String>]) -> Result<Vec<Vec<String>>> {
     Ok(columns)
 }
 
-fn validate_columns(columns: &[Vec<String>]) -> Result<usize> {
+fn validate_columns(columns: &[CategoricalInputColumn<'_>]) -> Result<usize> {
     if columns.is_empty() {
         return Err(CartoBoostError::InvalidInput(
             "categorical columns must not be empty".to_string(),
         ));
     }
-    let rows = columns.first().map_or(0, Vec::len);
+    let rows = columns.first().map_or(0, CategoricalInputColumn::len);
     if rows == 0 {
         return Err(CartoBoostError::InvalidInput(
             "categorical columns must contain at least one row".to_string(),
@@ -372,25 +440,26 @@ fn validate_columns(columns: &[Vec<String>]) -> Result<usize> {
     Ok(rows)
 }
 
-fn columns_to_rows(columns: &[Vec<f64>]) -> Result<Vec<Vec<f64>>> {
+fn columns_to_dataset(columns: &[Vec<f64>]) -> Result<Dataset> {
     if columns.is_empty() {
         return Err(CartoBoostError::InvalidInput(
             "encoded categorical matrix must contain at least one column".to_string(),
         ));
     }
-    let rows = columns.first().map_or(0, Vec::len);
+    let rows = columns[0].len();
     if columns.iter().any(|column| column.len() != rows) {
         return Err(CartoBoostError::InvalidInput(
             "encoded categorical columns must be rectangular".to_string(),
         ));
     }
-    let mut output = vec![Vec::with_capacity(columns.len()); rows];
-    for column in columns {
-        for (row_idx, value) in column.iter().copied().enumerate() {
-            output[row_idx].push(value);
-        }
+    let count = rows.checked_mul(columns.len()).ok_or_else(|| {
+        CartoBoostError::InvalidInput("encoded categorical matrix dimensions overflow".to_string())
+    })?;
+    let mut output = Vec::with_capacity(count);
+    for row in 0..rows {
+        output.extend(columns.iter().map(|column| column[row]));
     }
-    Ok(output)
+    Dataset::from_flat(rows, columns.len(), output)
 }
 
 fn sorted_categories(column: &[String]) -> Vec<String> {
@@ -415,10 +484,7 @@ fn category_partitions(categories: &[String]) -> Vec<Vec<String>> {
         if selected_count > category_count / 2 {
             continue;
         }
-        if category_count.is_multiple_of(2)
-            && selected_count == category_count / 2
-            && (mask & 1) == 0
-        {
+        if category_count % 2 == 0 && selected_count == category_count / 2 && (mask & 1) == 0 {
             continue;
         }
         partitions.push(
@@ -729,5 +795,126 @@ mod tests {
             CategoricalEncodingStrategy::Ordinal
         );
         assert_eq!(transformed.get(0, 0), -1.0);
+    }
+    #[test]
+    fn typed_columns_preserve_encoder_artifacts_and_all_encoding_strategies() {
+        let numeric = [0.125, 1.5, -2.25, 3.75, 4.0, 8.5];
+        let numeric_tokens = numeric.iter().map(f64::to_string).collect::<Vec<_>>();
+        let targets = [0.2, -0.1, 1.5, 0.0, 2.0, 7.25];
+        let weights = [1.0, 0.5, 2.0, 0.75, 1.25, 3.0];
+        for (kind, category_count, threshold) in [
+            (FeatureKind::Categorical, 2, 16),
+            (FeatureKind::Categorical, 4, 16),
+            (FeatureKind::Categorical, 5, 2),
+            (FeatureKind::Ordinal, 4, 16),
+        ] {
+            let tokens = (0..numeric.len())
+                .map(|row| format!("zone{}", row % category_count))
+                .collect::<Vec<_>>();
+            let schema = FeatureSchema {
+                names: vec!["zone".into(), "distance".into()],
+                kinds: vec![kind, FeatureKind::Numeric],
+            };
+            for sample_weight in [None, Some(weights.as_slice())] {
+                let config = CategoricalEncodingConfig {
+                    low_cardinality_threshold: threshold,
+                    smoothing: 1.5,
+                };
+                let (expected, expected_encoder) = CategoricalEncoder::fit_transform_columns(
+                    &[tokens.clone(), numeric_tokens.clone()],
+                    &targets,
+                    Some(&schema),
+                    sample_weight,
+                    config.clone(),
+                )
+                .unwrap();
+                let (actual, encoder) = CategoricalEncoder::fit_transform_typed_columns(
+                    &[
+                        CategoricalInputColumn::Tokens(&tokens),
+                        CategoricalInputColumn::Numeric(&numeric),
+                    ],
+                    &targets,
+                    Some(&schema),
+                    sample_weight,
+                    config,
+                )
+                .unwrap();
+                assert_eq!(
+                    serde_json::to_string(&encoder).unwrap(),
+                    serde_json::to_string(&expected_encoder).unwrap()
+                );
+                for row in 0..actual.n_rows() {
+                    for column in 0..actual.n_cols() {
+                        assert_eq!(
+                            actual.get(row, column).to_bits(),
+                            expected.get(row, column).to_bits()
+                        );
+                    }
+                }
+                let unseen = vec!["unknown".to_string(), tokens[0].clone()];
+                let query = [5.125, -0.25];
+                let expected = expected_encoder
+                    .transform_columns(&[
+                        unseen.clone(),
+                        query.iter().map(f64::to_string).collect(),
+                    ])
+                    .unwrap();
+                let actual = encoder
+                    .transform_typed_columns(&[
+                        CategoricalInputColumn::Tokens(&unseen),
+                        CategoricalInputColumn::Numeric(&query),
+                    ])
+                    .unwrap();
+                for row in 0..actual.n_rows() {
+                    for column in 0..actual.n_cols() {
+                        assert_eq!(
+                            actual.get(row, column).to_bits(),
+                            expected.get(row, column).to_bits()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn typed_columns_reject_invalid_numeric_and_missing_category_tokens() {
+        let schema = FeatureSchema {
+            names: vec!["zone".into()],
+            kinds: vec![FeatureKind::Categorical],
+        };
+        let result = CategoricalEncoder::fit_transform_typed_columns(
+            &[CategoricalInputColumn::Numeric(&[1.0, 2.0])],
+            &[0.0, 1.0],
+            Some(&schema),
+            None,
+            CategoricalEncodingConfig::default(),
+        );
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("requires category tokens"));
+        let result = CategoricalEncoder::fit_transform_typed_columns(
+            &[CategoricalInputColumn::Numeric(&[1.0, f64::INFINITY])],
+            &[0.0, 1.0],
+            None,
+            None,
+            CategoricalEncodingConfig::default(),
+        );
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("finite numeric values"));
+        let result = CategoricalEncoder::fit_transform_typed_columns(
+            &[
+                CategoricalInputColumn::Numeric(&[1.0]),
+                CategoricalInputColumn::Tokens(&[]),
+            ],
+            &[0.0],
+            None,
+            None,
+            CategoricalEncodingConfig::default(),
+        );
+        assert!(result.unwrap_err().to_string().contains("rectangular"));
     }
 }

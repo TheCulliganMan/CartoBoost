@@ -492,8 +492,10 @@ def test_benchmark_quality_gate_is_documented() -> None:
     assert script.exists()
     assert "scripts/run_v02_modeling_benchmarks.py" not in methodology
     assert "scripts/run_v02_modeling_benchmarks.py" not in index
-    assert "## Required Fields" in methodology
-    assert "forecast accuracy" in methodology
+    assert "{#required-fields}" in methodology
+    for field in ("Data source and sample", "Holdout definition", "Model settings", "Timing"):
+        assert field in methodology
+    assert "Taxi demand forecasting" in methodology
 
 
 def test_v02_public_python_apis_have_docstring_examples() -> None:
@@ -819,3 +821,21 @@ def test_average_ranks_respects_metric_direction() -> None:
     )
 
     assert ranks == {"cartoboost": 1.5, "gbdt": 1.5}
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        'toolchain: "1.85.0"',
+        'cargo-args: "--no-default-features"',
+        'toolchain: "stable"',
+        "cargo test --workspace --locked ${{ matrix.cargo-args }}",
+    ],
+)
+def test_release_gate_requires_executed_msrv_and_stable_matrix(monkeypatch, tmp_path, marker):
+    workflow = release_gate_module.CI_WORKFLOW.read_text(encoding="utf-8")
+    assert marker in workflow
+    damaged = tmp_path / "ci.yml"
+    damaged.write_text(workflow.replace(marker, "removed compatibility setting"), encoding="utf-8")
+    monkeypatch.setattr(release_gate_module, "CI_WORKFLOW", damaged)
+    assert check_ci_release_gates()["passed"] is False

@@ -2,21 +2,15 @@ import {ForecastModelExample} from '@site/src/components/ModelingLabClient';
 
 # Neural Panel
 
-`NeuralPanelForecaster` is the neural panel forecaster for direct
-multi-horizon forecasts across related series. It uses `ForecastFrame` rows
-with `(series_id, timestamp, target, covariates)`, learns from train-only
-normalized windows, and keeps panel series isolated while sharing the same
-configured neural structure.
+Forecast several future steps directly across related series with
+`NeuralPanelForecaster`. Combine target lags with trend, seasonality, events,
+and known-future regressors, then inspect the component and quantile outputs.
+`LaneNeuralPanelForecaster` adds directional origin/destination identity for
+pickup-to-dropoff panels.
 
-Use `LaneNeuralPanelForecaster` when `series_id` is a directional lane such as
-`source_id:target_id`. The lane wrapper keeps `132:138` distinct from
-`138:132`, appends origin/destination/lane embedding features plus directional
-graph summary features into the training frame, and can forecast requested
-cold lane ids through `predict_for_lanes()`.
-
-In the interactive forecast example, `extra_regressors`, `events`, and
-`holidays` flow into the same neural-panel feature contract, so known future
-covariates stay part of the forecast input.
+A lane ID such as `132:138` remains distinct from `138:132`. Use
+`predict_for_lanes()` to request cold lane IDs and inspect their documented
+unknown-lane behavior separately from repeated-lane forecasts.
 
 ## Interactive Example
 
@@ -91,7 +85,7 @@ learn from lane identity and directional graph summaries.
 `holidays` and `country_holidays` are also accepted on the Python wrapper. When
 you fit with a `ForecastFrame`, CartoBoost injects those holiday indicators as
 known-future covariates so the native neural panel can train on them directly.
-Use `make_future_dataframe(frame, periods)` to build the future scaffold and
+Use `make_future_dataframe(frame, periods)` to build the future rows and
 reuse the same holiday injection logic for forecast-time frames.
 You can also add regressors and events after construction with
 `add_seasonality()`, `add_future_regressor()`, `add_lagged_regressor()`,
@@ -208,6 +202,14 @@ uv run --group dev python scripts/forecasting_library_benchmark.py \
 The JSON artifact records the command, split definitions, model settings,
 RMSE/MAE/WAPE metrics, timing, resource usage, and output path for
 rolling-origin, cold-lane, cold-origin, and sparse-tail checks.
+
+## Use When
+
+| Your task | Start with |
+| --- | --- |
+| Direct horizons need lag, event, and regressor components | Neural panel |
+| Tree splits over lag and calendar features are a good fit | [CartoBoost lag](cartoboost-lag.md) |
+| Directed adjacency is a required input | [Graph forecasting](graph-spatiotemporal.md) |
 
 ## Limitations
 

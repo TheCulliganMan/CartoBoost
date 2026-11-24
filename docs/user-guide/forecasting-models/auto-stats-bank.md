@@ -2,10 +2,11 @@ import {ForecastModelExample} from '@site/src/components/ModelingLabClient';
 
 # AutoStatsBank
 
-`AutoStatsBank` validates a fixed bank of local statistical forecasting
-experts. Use it when you want deterministic model selection among reusable
-classical candidates without moving to the broader `AutoForecaster` panel
-selector.
+Choose a local statistical expert by validation with `AutoStatsBank`.
+The model evaluates a fixed, deterministic bank on held-out history, making it
+a useful baseline when you want automatic selection while keeping the candidate
+family narrow. Use `AutoForecaster` when your comparison also needs supervised
+lag and broader panel candidates.
 
 ## When To Use
 
@@ -39,7 +40,7 @@ model.fit(frame)
 forecast = model.predict(12)
 ```
 
-## Browser WASM Example
+## Interactive Example
 
 <ForecastModelExample title="AutoStatsBank browser forecast" model="autostats_bank" />
 

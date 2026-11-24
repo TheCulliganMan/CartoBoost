@@ -1,14 +1,13 @@
 # Spatial Cross-Validation
 
-Use spatial validation when the claim is about generalizing to withheld places
-or regimes. Random CV can overstate quality when nearby pickup/dropoff rows
-share zone effects, road geometry, demand shocks, or weather conditions.
+Spatial validation holds out places rather than individual rows. Nearby taxi
+trips can share zone
+effects, traffic, weather, and route geometry, making a random row split easier
+than deployment in an unfamiliar area.
 
-Build splits with `cartoboost.validation`. A split manifest records fold
-indices, coordinate and time assumptions, dependency versions, and a
-reproducibility hash.
-Store that hash with the benchmark artifact and reuse the exact folds for every
-candidate model.
+Use `cartoboost.validation` to construct spatial, buffered, grouped, and
+time-aware folds. A split manifest records the exact fold indices, coordinate
+assumptions, and reproducibility hash so every candidate can use the same test.
 
 ## Buffered spatial folds
 

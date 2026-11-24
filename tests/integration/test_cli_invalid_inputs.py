@@ -157,3 +157,32 @@ def test_cli_dense_predict_rejects_sparse_list_artifact(tmp_path: Path) -> None:
 
     assert result.returncode != 0
     assert "prediction requires sparse_sets" in result.stderr
+
+
+def test_cli_rejects_missing_option_value_before_another_option():
+    result = _run_cli("train", "--data", "--model-out", "model.json")
+    assert result.returncode != 0
+    assert "missing value for '--data'" in result.stderr
+
+
+def test_cli_rejects_duplicate_options():
+    result = _run_cli("inspect", "--data", "one.csv", "--data", "two.csv")
+    assert result.returncode != 0
+    assert "duplicate option '--data'" in result.stderr
+
+
+def test_cli_rejects_unterminated_csv_quotes(tmp_path: Path):
+    data = tmp_path / "train.csv"
+    data.write_text('x,target\n"0,1\n', encoding="utf-8")
+    result = _run_cli("inspect", "--data", str(data))
+    assert result.returncode != 0
+    assert "unterminated quoted CSV field" in result.stderr
+
+
+def test_cli_json_output_escapes_control_characters(tmp_path: Path):
+    import json
+
+    config = _write_config(tmp_path, 'target = "taxi\tzone"\n')
+    result = _run_cli("inspect", "--config", str(config))
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["config"]["target"] == "taxi\tzone"

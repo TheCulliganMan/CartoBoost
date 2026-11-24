@@ -57,7 +57,7 @@ export default function AgentCopyControls(): React.JSX.Element {
         ? 'LLM guide copied'
         : state === 'error'
           ? 'Copy failed'
-          : 'Copy tools';
+          : '';
 
   return (
     <div className="agent-copy-controls" aria-label="Copy tools">

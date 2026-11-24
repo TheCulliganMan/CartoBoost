@@ -1,11 +1,13 @@
 # Taxi Zone Feature Checks
 
-## Bottom Line
+Sparse memberships recover the designed lane effect exactly, periodic splits
+connect hours across midnight, and the combined model reduces synthetic holdout
+RMSE from **12.68 to 4.86**. The table below separates each feature check.
 
-This benchmark checks whether CartoBoost can express taxi-lane feature
-families: sparse lane membership, route midpoint geometry, periodic hour, and
-combined geotemporal effects. It is deterministic feature acceptance, not a
-model comparison against external baselines.
+This deterministic taxi-lane fixture measures whether the model can express
+known patterns. The comparison is against axis-based feature variants, not
+external modeling libraries. See [lane-level acceptance](lane-level.md) for the
+dataset shape and [NYC taxi results](nyc-taxi.md) for real-data evidence.
 
 ## Reproduce
 

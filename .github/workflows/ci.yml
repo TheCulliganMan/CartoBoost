@@ -144,7 +144,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        toolchain: ["1.85.0", "stable"]
+        include:
+          - toolchain: "1.85.0"
+            cargo-args: "--no-default-features"
+          - toolchain: "stable"
+            cargo-args: ""
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -156,8 +160,10 @@ jobs:
         with:
           toolchain: ${{ matrix.toolchain }}
 
+      # The CPU API supports Rust 1.85. Optional WebGPU dependencies require
+      # newer Rust and are exercised by the stable/default-feature job.
       - name: Test workspace
-        run: PYO3_PYTHON=python3 cargo test --workspace
+        run: PYO3_PYTHON=python3 cargo test --workspace --locked ${{ matrix.cargo-args }}
 
   quality-controls:
     name: UI, fuzz, and dependency audits

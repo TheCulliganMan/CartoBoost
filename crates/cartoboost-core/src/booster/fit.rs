@@ -353,7 +353,7 @@ fn validate_training_config(
             }
         }
         LossConfig::LogL2(loss) => {
-            if (loss.offset - 1.0).abs() > 1e-12 {
+            if !loss.offset.is_finite() || (loss.offset - 1.0).abs() > 1e-12 {
                 return Err(CartoBoostError::InvalidInput(
                     "log_l2 currently supports offset=1.0".to_string(),
                 ));
@@ -597,6 +597,18 @@ mod tests {
     use crate::graph_regularization::{CsrGraph, GraphLeafSmoothing, GraphSplitRegularization};
     use crate::loss::{L2Loss, LossConfig, QuantileLossConfig};
     use crate::tree::{Split, MODEL_ARTIFACT_VERSION};
+
+    #[test]
+    fn log_l2_rejects_non_finite_and_unsupported_offsets() {
+        let x = Dataset::from_rows(vec![vec![0.0], vec![1.0]]).unwrap();
+        for offset in [f64::NAN, f64::INFINITY, 2.0] {
+            let config = BoosterConfig {
+                loss: LossConfig::LogL2(crate::loss::LogL2LossConfig::new(offset)),
+                ..BoosterConfig::default()
+            };
+            assert!(Booster::new(config).fit(&x, &[1.0, 2.0], None).is_err());
+        }
+    }
 
     #[test]
     fn one_tree_booster_predicts_training_stump_with_learning_rate_one() {

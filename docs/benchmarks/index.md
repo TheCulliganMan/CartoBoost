@@ -1,42 +1,31 @@
 # Benchmarks
 
-These reports show where CartoBoost has been measured, what the comparisons
-mean, and where the evidence is still limited. Start with the result table for
-the task closest to your own, then inspect its data, split, features, command,
-runtime, and artifact before transferring the conclusion.
+Compare CartoBoost with baseline models on documented datasets and splits. The reports below separate real NYC taxi comparisons from
+controlled synthetic checks, with commands and artifacts for inspection.
 
-Each report answers the same reader questions:
+Start with the task you care about:
 
-- What data was used?
-- What split was used?
-- Which models saw which features?
-- What command produced the artifact?
-- What did the metric table say?
-- Which plots should I inspect?
-- What claim is allowed, and what claim is not allowed?
+- **Fare and duration:** the [NYC taxi comparison](nyc-taxi.md) includes random,
+  spatial, and later-time holdouts. Results differ by target and split.
+- **Pickup demand:** the [forecasting comparison](forecasting.md) includes a
+  real 24-lane NYC panel. Seasonal naive is the strongest reported RMSE baseline.
+- **Model mechanisms:** [taxi zone checks](taxi-zone.md),
+  [neural embedding checks](neural-embedding-benchmark-latest.md), and
+  [deep model checks](deep-claims.md) isolate specific behavior on synthetic data.
 
-CartoBoost is evaluated on taxi-shaped structure: pickup and dropoff zones,
-route distance, periodic hour/day effects, repeated IDs, pickup/dropoff
-topology, and lane-demand history. The benchmark docs separate real NYC TLC
-evidence from synthetic mechanism checks and report mixed results when external
-baselines are lower on a task.
-
-The maintained evidence covers NYC TLC zone and lane tasks, graph forecasting,
-air-quality interpolation, housing sanity checks, synthetic spatial fields,
-synthetic graph diffusion, and synthetic geo-causal panels. Real datasets
-support task-specific quality comparisons; synthetic datasets demonstrate
-mechanisms and failure modes only.
+Use [Reading benchmark results](methodology.md) to interpret target scales,
+validation splits, timing, and the limits of a comparison.
 
 ## Report Map
 
 | Report | Evidence type | What to inspect first |
 | --- | --- | --- |
-| [Benchmark Methodology](methodology.md) | Shared evaluation protocol. | Data identity, split rules, metric roster, timing, and reproducibility. |
+| [Reading Benchmark Results](methodology.md) | Guide to interpreting the reports. | Target scale, holdout type, metric meaning, and timing. |
 | [NYC Taxi Benchmarks](nyc-taxi.md) | Real TLC fare, duration, and pickup-demand regression. | Current-code CartoBoost versus external baselines, RMSE/MAE/R2/WAPE tables, timing breakdown. |
 | [NYC Taxi Path C Claims](nyc-taxi-path-c.md) | Real TLC tests of geo-temporal behavior. | Directional, temporal, known-future, spatial-transfer, and residual-correction results. |
-| [Forecasting Tool Benchmark](forecasting.md) | Real taxi lane demand, synthetic taxi-shaped forecasting, M4 sample, M5 full-roster sample, and M5/M6 full-run protocols. | RMSE/WAPE tables, M5/M6 model rosters, run commands, horizon plot, forecast-line plot. |
+| [Forecasting Results](forecasting.md) | Real taxi demand, synthetic demand, M4 samples, M5 demand, and M6 return proxies. | Ranked model tables, metric-specific winners, run commands, and diagnostic plots. |
 | [Model Benchmark Suite](model-suite.md) | Public tabular regression and graph diagnostics. | CartoBoost versus external baselines, validation-search selections, full RMSE/MAE/R2/WAPE tables. |
-| [Deep Claim Benchmarks](deep-claims.md) | Synthetic mechanism checks for deep models. | Seven result rows, exact command, and JSON artifact. |
+| [Deep Model Mechanism Checks](deep-claims.md) | Synthetic mechanism checks for deep models. | Six result rows, exact command, and JSON artifact. |
 | [Taxi Zone Acceptance](taxi-zone.md) | Deterministic taxi-lane feature acceptance. | Lane heatmap, hour profile, route midpoint geometry. |
 | [Neural Embedding Benchmark](neural-embedding-benchmark-latest.md) | Synthetic repeated-ID/cold-ID diagnostic. | Scenario table showing random/tail gains and cold-origin failure. |
 
@@ -74,12 +63,11 @@ mechanisms and failure modes only.
 
 ## How To Read The Results
 
-A result is usable as benchmark evidence when it names the dataset, command,
-split, feature policy, models, metrics, and artifact path. It is only a public
-quality claim when the comparison uses complete required baselines, same rows,
-comparable feature access, no test-set peeking, equal tuning budget, and
-uncertainty or repeatability evidence.
+Compare the task and holdout with your deployment. A model that handles familiar
+pickup zones may behave differently on a cold-zone split; a strong one-step
+forecast may weaken over a longer horizon. Inspect the per-split rows before
+using an aggregate score to choose a model.
 
-Random splits show interpolation. Spatial, grouped, cold-ID, or out-of-time
-splits are the evidence for deployment risk. Synthetic fixtures are useful for
-debugging and feature acceptance, not for real-world superiority claims.
+The reports retain weaker results as well as wins. Synthetic fixtures show
+controlled behavior, while real-data tables support conclusions only for their
+stated samples, features, settings, and baselines.

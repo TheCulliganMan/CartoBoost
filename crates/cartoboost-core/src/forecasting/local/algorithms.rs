@@ -618,6 +618,43 @@ fn piecewise_linear_seasonal_feature_count(
         + config.extra_regressors.len()
 }
 
+// Per-operation metadata only: no history-sized design cache or artifact fields.
+struct PiecewiseFeaturePlan {
+    event_terms: Vec<PiecewiseEventTerm>,
+    active_event_columns: BTreeMap<chrono::NaiveDate, Vec<usize>>,
+}
+
+impl PiecewiseFeaturePlan {
+    fn new(config: &PiecewiseLinearSeasonalConfig) -> Self {
+        let event_terms = piecewise_event_terms(config);
+        let mut active_event_columns: BTreeMap<chrono::NaiveDate, Vec<usize>> = BTreeMap::new();
+        for event in &config.events {
+            for offset in event.lower_window..=event.upper_window {
+                let term = PiecewiseEventTerm {
+                    name: event.name.clone(),
+                    offset,
+                };
+                let column = event_terms.binary_search(&term).expect("event term exists");
+                if let Some(date) = event
+                    .timestamp
+                    .date()
+                    .checked_add_signed(chrono::Duration::days(i64::from(offset)))
+                {
+                    active_event_columns.entry(date).or_default().push(column);
+                }
+            }
+        }
+        for columns in active_event_columns.values_mut() {
+            columns.sort_unstable();
+            columns.dedup();
+        }
+        Self {
+            event_terms,
+            active_event_columns,
+        }
+    }
+}
+
 fn fill_piecewise_linear_seasonal_features(
     features: &mut [f64],
     elapsed_days: f64,
@@ -689,19 +726,36 @@ fn fill_piecewise_linear_seasonal_features(
             }
         }
     }
-    for term in piecewise_event_terms(context.config) {
-        features[col] = if event_term_is_active(context.timestamp, &term, &context.config.events) {
-            component_multiplier_for_mode(
+    if let Some(plan) = context.feature_plan {
+        if let Some(columns) = plan.active_event_columns.get(&context.timestamp.date()) {
+            let multiplier = component_multiplier_for_mode(
                 context
                     .config
                     .event_mode
                     .unwrap_or(context.config.component_mode),
                 context.component_multiplier,
-            )
-        } else {
-            0.0
-        };
-        col += 1;
+            );
+            for &offset in columns {
+                features[col + offset] = multiplier;
+            }
+        }
+        col += plan.event_terms.len();
+    } else {
+        for term in piecewise_event_terms(context.config) {
+            features[col] =
+                if event_term_is_active(context.timestamp, &term, &context.config.events) {
+                    component_multiplier_for_mode(
+                        context
+                            .config
+                            .event_mode
+                            .unwrap_or(context.config.component_mode),
+                        context.component_multiplier,
+                    )
+                } else {
+                    0.0
+                };
+            col += 1;
+        }
     }
     for name in &context.config.extra_regressors {
         let mode = context
@@ -793,6 +847,7 @@ fn fit_piecewise_linear_weighted_coefficients(
     let feature_count = piecewise_linear_seasonal_feature_count(config, changepoints.len());
     let mut xtx = vec![vec![0.0; feature_count]; feature_count];
     let mut xty = vec![0.0; feature_count];
+    let feature_plan = PiecewiseFeaturePlan::new(config);
     let mut features = vec![0.0; feature_count];
     for (idx, (row, &t)) in history.iter().zip(elapsed.iter()).enumerate() {
         let weight = weights.map(|values| values[idx]).unwrap_or(1.0);
@@ -810,6 +865,7 @@ fn fit_piecewise_linear_weighted_coefficients(
             &mut features,
             t,
             &PiecewiseLinearFeatureContext {
+                feature_plan: Some(&feature_plan),
                 series_id: None,
                 timestamp: row.timestamp,
                 covariates: Some(&row.covariates),
@@ -827,6 +883,10 @@ fn fit_piecewise_linear_weighted_coefficients(
             },
         )?;
         for i in 0..feature_count {
+            // Inactive changepoint/event columns contribute exact zeros.
+            if features[i] == 0.0 {
+                continue;
+            }
             xty[i] += weight * features[i] * target;
             for j in i..feature_count {
                 xtx[i][j] += weight * features[i] * features[j];
@@ -949,6 +1009,7 @@ fn piecewise_transformed_residuals(
     trend_coefficients: &[f64],
     coefficients: &[f64],
 ) -> Result<Vec<f64>> {
+    let feature_plan = PiecewiseFeaturePlan::new(config);
     let mut features =
         vec![0.0; piecewise_linear_seasonal_feature_count(config, changepoints.len())];
     history
@@ -961,6 +1022,7 @@ fn piecewise_transformed_residuals(
                 &mut features,
                 t,
                 &PiecewiseLinearFeatureContext {
+                    feature_plan: Some(&feature_plan),
                     series_id: None,
                     timestamp: row.timestamp,
                     covariates: Some(&row.covariates),
@@ -1256,7 +1318,16 @@ fn predict_piecewise_linear_value(
             0.0;
             piecewise_linear_seasonal_feature_count(context.config, context.changepoints.len())
         ];
-    fill_piecewise_linear_seasonal_features(&mut features, elapsed_days, context)?;
+    predict_piecewise_linear_value_with_buffer(elapsed_days, coefficients, context, &mut features)
+}
+
+fn predict_piecewise_linear_value_with_buffer(
+    elapsed_days: f64,
+    coefficients: &[f64],
+    context: &PiecewiseLinearFeatureContext<'_>,
+    features: &mut [f64],
+) -> Result<f64> {
+    fill_piecewise_linear_seasonal_features(features, elapsed_days, context)?;
     Ok(features
         .iter()
         .zip(coefficients.iter())
@@ -1451,6 +1522,7 @@ fn event_term_is_active(
 fn piecewise_regressor_stats(
     history: &[ForecastRow],
     config: &PiecewiseLinearSeasonalConfig,
+    overrides: &BTreeMap<String, PiecewiseRegressorStandardizationOverride>,
 ) -> Result<BTreeMap<String, PiecewiseLinearRegressorStats>> {
     config
         .extra_regressors
@@ -1471,7 +1543,28 @@ fn piecewise_regressor_stats(
                 .collect::<Result<Vec<_>>>()?;
             Ok((
                 name.clone(),
-                piecewise_regressor_stat(&values, config.regressor_standardization),
+                match overrides.get(name) {
+                    Some(PiecewiseRegressorStandardizationOverride::None) => {
+                        piecewise_regressor_stat(
+                            &values,
+                            PiecewiseLinearRegressorStandardization::None,
+                        )
+                    }
+                    Some(PiecewiseRegressorStandardizationOverride::Auto) => {
+                        piecewise_regressor_stat(
+                            &values,
+                            PiecewiseLinearRegressorStandardization::Auto,
+                        )
+                    }
+                    Some(PiecewiseRegressorStandardizationOverride::Standardize) => {
+                        piecewise_regressor_stat_with_force(
+                            &values,
+                            PiecewiseLinearRegressorStandardization::Auto,
+                            true,
+                        )
+                    }
+                    None => piecewise_regressor_stat(&values, config.regressor_standardization),
+                },
             ))
         })
         .collect()
@@ -1480,6 +1573,14 @@ fn piecewise_regressor_stats(
 fn piecewise_regressor_stat(
     values: &[f64],
     standardization: PiecewiseLinearRegressorStandardization,
+) -> PiecewiseLinearRegressorStats {
+    piecewise_regressor_stat_with_force(values, standardization, false)
+}
+
+fn piecewise_regressor_stat_with_force(
+    values: &[f64],
+    standardization: PiecewiseLinearRegressorStandardization,
+    force: bool,
 ) -> PiecewiseLinearRegressorStats {
     if standardization == PiecewiseLinearRegressorStandardization::None || values.is_empty() {
         return PiecewiseLinearRegressorStats {
@@ -1491,7 +1592,7 @@ fn piecewise_regressor_stat(
     let is_binary = values
         .iter()
         .all(|value| (*value - 0.0).abs() < 1.0e-12 || (*value - 1.0).abs() < 1.0e-12);
-    if is_binary {
+    if is_binary && !force {
         return PiecewiseLinearRegressorStats {
             mean: 0.0,
             scale: 1.0,
@@ -3114,4 +3215,3 @@ fn validate_local_history_requirement(
 fn not_fitted() -> CartoBoostError {
     CartoBoostError::InvalidInput("forecaster must be fitted before predict".to_string())
 }
-

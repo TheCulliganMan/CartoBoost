@@ -2,9 +2,10 @@ import {ForecastModelExample} from '@site/src/components/ModelingLabClient';
 
 # SBA Forecasting
 
-`SbaForecaster` implements the Syntetos-Boylan approximation for intermittent
-demand. It starts from Croston-style demand and interval smoothing, then applies
-the standard bias adjustment to reduce Croston's upward bias on sparse series.
+Apply bias-adjusted Croston smoothing to sparse pickup counts with
+`SbaForecaster`. The Syntetos-Boylan approximation smooths demand size and
+intervals, then adjusts the resulting level to address Croston's upward bias.
+It remains a simple local model with a flat forecast across the horizon.
 
 ## Interactive Example
 

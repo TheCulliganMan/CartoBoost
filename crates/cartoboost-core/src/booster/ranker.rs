@@ -5,6 +5,7 @@ use crate::objectives::{
     pairwise_gradients_with_accelerated_rhos, GradientPair, LambdaRankObjective, Objective,
     PairwiseLogitObjective,
 };
+use crate::tree::{map_prediction_rows, validate_dense_prediction_matrix};
 use crate::tree::{
     FuzzyKernel, LeafPredictorKind, ModelMetadata, SplitterKind, TrainingMetric, Tree, TreeBuilder,
 };
@@ -278,6 +279,38 @@ impl Ranker {
 }
 
 impl RankerModel {
+    // Ranking row traversal benefits from parallelism at a smaller forest
+    // workload than regression. Keep this weight aligned with the PyO3 gate.
+    /// Predict from borrowed dense row-major inputs without constructing a Dataset.
+    pub fn predict_dense(&self, rows: usize, cols: usize, values: &[f64]) -> Result<Vec<f64>> {
+        validate_dense_prediction_matrix(rows, cols, values, self.feature_count)?;
+        if self.requires_sparse_sets() {
+            return Err(CartoBoostError::InvalidInput(
+                "prediction requires sparse_sets for a model with list-valued sparse splits"
+                    .to_string(),
+            ));
+        }
+        if self
+            .artifact_backend()
+            .is_some_and(|backend| backend.selected != "cpu")
+        {
+            return self.predict(&Dataset::from_flat(rows, cols, values.to_vec())?);
+        }
+        Ok(map_prediction_rows(
+            rows,
+            self.trees.len().saturating_mul(4),
+            |row| {
+                let input = &values[row * cols..(row + 1) * cols];
+                self.init_score
+                    + self
+                        .trees
+                        .iter()
+                        .map(|tree| self.learning_rate * tree.predict_one(input))
+                        .sum::<f64>()
+            },
+        ))
+    }
+
     pub fn predict(&self, x: &Dataset) -> Result<Vec<f64>> {
         if let Some(backend) = self.artifact_backend() {
             return self.predict_with_selection(x, backend);
@@ -287,10 +320,11 @@ impl RankerModel {
 
     fn predict_cpu(&self, x: &Dataset) -> Result<Vec<f64>> {
         self.validate_dataset(x)?;
-        Ok((0..x.n_rows())
-            .into_par_iter()
-            .map(|row| self.predict_dataset_row(x, row))
-            .collect())
+        Ok(map_prediction_rows(
+            x.n_rows(),
+            self.trees.len().saturating_mul(4),
+            |row| self.predict_dataset_row(x, row),
+        ))
     }
 
     pub fn predict_with_backend(&self, x: &Dataset, backend: Option<&str>) -> Result<Vec<f64>> {
@@ -312,19 +346,16 @@ impl RankerModel {
         {
             return self.predict_cpu(x);
         }
-        let additive = (0..x.n_rows())
-            .into_par_iter()
-            .map(|row| {
-                std::iter::once(self.init_score)
-                    .chain(
-                        self.trees
-                            .iter()
-                            .map(move |tree| self.learning_rate * tree.predict_dataset_row(x, row)),
-                    )
-                    .map(|value| value as f32)
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
+        let additive = map_prediction_rows(x.n_rows(), self.trees.len().saturating_mul(4), |row| {
+            std::iter::once(self.init_score)
+                .chain(
+                    self.trees
+                        .iter()
+                        .map(move |tree| self.learning_rate * tree.predict_dataset_row(x, row)),
+                )
+                .map(|value| value as f32)
+                .collect::<Vec<_>>()
+        });
         backend_dense_layer_f32(selection, &additive, &vec![1.0; width], &[0.0])
             .map(|values| values.into_iter().map(|row| f64::from(row[0])).collect())
             .map_err(|error| CartoBoostError::InvalidInput(error.to_string()))
@@ -357,6 +388,11 @@ impl RankerModel {
                 model.artifact_version
             )));
         }
+        crate::serialize::validate_model_layout(
+            model.feature_count,
+            model.feature_schema.as_ref(),
+            &model.trees,
+        )?;
         Ok(model)
     }
 
@@ -388,6 +424,52 @@ impl RankerModel {
 }
 
 pub fn ranking_metrics(y: &[f64], scores: &[f64], groups: &[usize]) -> Result<RankingMetricSet> {
+    validate_ranking_inputs(y, scores)?;
+    let ranges = group_ranges(groups, y.len())?;
+    let mut ndcg = 0.0;
+    let mut map = 0.0;
+    let mut mrr = 0.0;
+    for range in &ranges {
+        let mut predicted = range.clone().collect::<Vec<_>>();
+        predicted.sort_by(|left, right| scores[*right].total_cmp(&scores[*left]));
+        let dcg = predicted
+            .iter()
+            .enumerate()
+            .map(|(position, &row)| ranking_gain(y[row]) * ranking_discount(position))
+            .sum::<f64>();
+        let mut ideal = range.clone().collect::<Vec<_>>();
+        ideal.sort_by(|left, right| y[*right].total_cmp(&y[*left]));
+        let idcg = ideal
+            .iter()
+            .enumerate()
+            .map(|(position, &row)| ranking_gain(y[row]) * ranking_discount(position))
+            .sum::<f64>();
+        ndcg += if idcg > 0.0 { dcg / idcg } else { 0.0 };
+
+        let mut relevant_seen = 0usize;
+        let mut precision_sum = 0.0;
+        for (position, &row) in predicted.iter().enumerate() {
+            if y[row] > 0.0 {
+                if relevant_seen == 0 {
+                    mrr += 1.0 / (position + 1) as f64;
+                }
+                relevant_seen += 1;
+                precision_sum += relevant_seen as f64 / (position + 1) as f64;
+            }
+        }
+        if relevant_seen > 0 {
+            map += precision_sum / relevant_seen as f64;
+        }
+    }
+    let count = ranges.len().max(1) as f64;
+    Ok(RankingMetricSet {
+        ndcg: ndcg / count,
+        map: map / count,
+        mrr: mrr / count,
+    })
+}
+
+fn validate_ranking_inputs(y: &[f64], scores: &[f64]) -> Result<()> {
     validate_targets(y)?;
     if scores.len() != y.len() {
         return Err(CartoBoostError::InvalidInput(
@@ -399,21 +481,11 @@ pub fn ranking_metrics(y: &[f64], scores: &[f64], groups: &[usize]) -> Result<Ra
             "ranking scores must be finite".to_string(),
         ));
     }
-    validate_groups(groups, y.len())?;
-    Ok(RankingMetricSet {
-        ndcg: ndcg_at_k(y, scores, groups, None)?,
-        map: mean_average_precision(y, scores, groups)?,
-        mrr: mean_reciprocal_rank(y, scores, groups)?,
-    })
+    Ok(())
 }
 
 pub fn ndcg_at_k(y: &[f64], scores: &[f64], groups: &[usize], k: Option<usize>) -> Result<f64> {
-    validate_targets(y)?;
-    if scores.len() != y.len() {
-        return Err(CartoBoostError::InvalidInput(
-            "ranking scores length must match target length".to_string(),
-        ));
-    }
+    validate_ranking_inputs(y, scores)?;
     let mut total = 0.0;
     let mut count = 0usize;
     for range in group_ranges(groups, y.len())? {
@@ -445,12 +517,7 @@ pub fn ndcg_at_k(y: &[f64], scores: &[f64], groups: &[usize], k: Option<usize>) 
 }
 
 pub fn mean_average_precision(y: &[f64], scores: &[f64], groups: &[usize]) -> Result<f64> {
-    validate_targets(y)?;
-    if scores.len() != y.len() {
-        return Err(CartoBoostError::InvalidInput(
-            "ranking scores length must match target length".to_string(),
-        ));
-    }
+    validate_ranking_inputs(y, scores)?;
     let mut total = 0.0;
     let mut group_count = 0usize;
     for range in group_ranges(groups, y.len())? {
@@ -480,12 +547,7 @@ pub fn mean_average_precision(y: &[f64], scores: &[f64], groups: &[usize]) -> Re
 }
 
 pub fn mean_reciprocal_rank(y: &[f64], scores: &[f64], groups: &[usize]) -> Result<f64> {
-    validate_targets(y)?;
-    if scores.len() != y.len() {
-        return Err(CartoBoostError::InvalidInput(
-            "ranking scores length must match target length".to_string(),
-        ));
-    }
+    validate_ranking_inputs(y, scores)?;
     let mut total = 0.0;
     let mut group_count = 0usize;
     for range in group_ranges(groups, y.len())? {
@@ -668,7 +730,9 @@ fn validate_groups(groups: &[usize], row_count: usize) -> Result<()> {
                 "ranking group sizes must be positive".to_string(),
             ));
         }
-        total += group_size;
+        total = total.checked_add(group_size).ok_or_else(|| {
+            CartoBoostError::InvalidInput("ranking group sizes exceed target length".to_string())
+        })?;
     }
     if total != row_count {
         return Err(CartoBoostError::InvalidInput(format!(
@@ -709,6 +773,79 @@ fn ranking_discount(position: usize) -> f64 {
 mod tests {
     use super::*;
     use crate::graph_regularization::{CsrGraph, GraphLeafSmoothing};
+
+    #[test]
+    fn ranker_load_rejects_invalid_tree_features() {
+        let x = Dataset::from_rows(vec![vec![0.0], vec![1.0]]).unwrap();
+        let mut model = Ranker::new(RankerConfig {
+            n_estimators: 1,
+            ..RankerConfig::default()
+        })
+        .fit(&x, &[0.0, 1.0], &[2], None)
+        .unwrap();
+        model.trees[0].root = crate::tree::Node::Branch {
+            split: crate::tree::Split::Axis {
+                feature: usize::MAX,
+                threshold: 0.5,
+                missing_goes_left: false,
+            },
+            left: Box::new(crate::tree::Node::Leaf {
+                value: 0.0,
+                sample_weight_sum: 1.0,
+                training_loss: 0.0,
+            }),
+            right: Box::new(crate::tree::Node::Leaf {
+                value: 1.0,
+                sample_weight_sum: 1.0,
+                training_loss: 0.0,
+            }),
+            gain: 1.0,
+            sample_weight_sum: 2.0,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ranker.json");
+        model.save(&path).unwrap();
+        assert!(RankerModel::load(&path)
+            .unwrap_err()
+            .to_string()
+            .contains("feature index"));
+    }
+
+    #[test]
+    fn combined_ranking_metrics_match_individual_metrics_with_ties_and_empty_relevance() {
+        for seed in 0..20 {
+            let y = (0..39)
+                .map(|row| ((row * 7 + seed) % 5) as f64 - 2.0)
+                .collect::<Vec<_>>();
+            let scores = (0..39)
+                .map(|row| ((row * 3 + seed) % 7) as f64)
+                .collect::<Vec<_>>();
+            let groups = [1, 5, 7, 11, 15];
+            let combined = ranking_metrics(&y, &scores, &groups).unwrap();
+            assert_eq!(
+                combined.ndcg,
+                ndcg_at_k(&y, &scores, &groups, None).unwrap()
+            );
+            assert_eq!(
+                combined.map,
+                mean_average_precision(&y, &scores, &groups).unwrap()
+            );
+            assert_eq!(
+                combined.mrr,
+                mean_reciprocal_rank(&y, &scores, &groups).unwrap()
+            );
+        }
+        for scores in [[f64::NAN], [f64::INFINITY], [f64::NEG_INFINITY]] {
+            assert!(ndcg_at_k(&[1.0], &scores, &[1], None).is_err());
+            assert!(mean_average_precision(&[1.0], &scores, &[1]).is_err());
+            assert!(mean_reciprocal_rank(&[1.0], &scores, &[1]).is_err());
+        }
+    }
+
+    #[test]
+    fn ranking_groups_reject_integer_overflow() {
+        assert!(ranking_metrics(&[0.0, 1.0], &[0.0, 1.0], &[1, usize::MAX]).is_err());
+    }
 
     #[test]
     fn ranker_improves_ndcg_over_reversed_scores_and_roundtrips() {

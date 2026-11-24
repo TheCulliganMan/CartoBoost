@@ -1083,7 +1083,7 @@ pub async fn layer_norm_f32_async(
 ) -> Result<Vec<f32>> {
     if rows == 0
         || width == 0
-        || values.len() != rows * width
+        || rows.checked_mul(width) != Some(values.len())
         || gamma.len() != width
         || beta.len() != width
         || values

@@ -19,7 +19,7 @@ def test_ranker_fit_predict_metrics_and_roundtrip(tmp_path: Path):
         max_depth=1,
         min_samples_leaf=1,
         min_gain=0.0,
-        splitters=["axis"],
+        split_policy="axis_only",
     ).fit(X, y, groups=groups)
 
     scores = ranker.predict(X)
@@ -58,7 +58,7 @@ def test_ranker_accepts_contiguous_query_ids_as_groups():
         max_depth=1,
         min_samples_leaf=1,
         min_gain=0.0,
-        splitters=["axis"],
+        split_policy="axis_only",
         objective="pairwise_logit",
     ).fit(X, y, groups=query_ids)
 
@@ -75,7 +75,7 @@ def test_ranker_treats_same_length_numeric_groups_as_query_ids():
         max_depth=1,
         min_samples_leaf=1,
         min_gain=0.0,
-        splitters=["axis"],
+        split_policy="axis_only",
     ).fit(X, y, groups=query_ids)
 
     assert ranker.groups_ == [3, 3]
@@ -109,7 +109,7 @@ def test_ranker_accepts_tuple_query_ids_as_groups():
         max_depth=1,
         min_samples_leaf=1,
         min_gain=0.0,
-        splitters=["axis"],
+        split_policy="axis_only",
     ).fit(X, y, groups=query_ids)
 
     assert ranker.groups_ == [3, 3]
@@ -127,7 +127,7 @@ def test_ranker_accepts_native_categorical_features(tmp_path: Path):
         max_depth=1,
         min_samples_leaf=1,
         min_gain=0.0,
-        splitters=["axis"],
+        split_policy="axis_only",
     ).fit(X, y, groups=groups, feature_schema=schema)
     scores = ranker.predict(X)
     model_path = tmp_path / "categorical-ranker.json"
@@ -161,7 +161,7 @@ def test_ranker_group_col_is_removed_from_feature_matrix(tmp_path: Path):
         min_samples_leaf=1,
         min_gain=0.0,
         group_col=0,
-        splitters=["axis"],
+        split_policy="axis_only",
     ).fit(X, y)
 
     assert ranker.n_features_in_ == 1
@@ -201,7 +201,7 @@ def test_ranker_group_col_removes_matching_feature_schema_entry():
         min_samples_leaf=1,
         min_gain=0.0,
         group_col=0,
-        splitters=["axis"],
+        split_policy="axis_only",
     ).fit(X, y, feature_schema=schema)
 
     assert ranker.feature_schema_["names"] == ["route_score"]
@@ -235,7 +235,7 @@ def test_ranker_group_col_with_pandas_categorical_schema():
         min_samples_leaf=1,
         min_gain=0.0,
         group_col="query_id",
-        splitters=["axis"],
+        split_policy="axis_only",
     ).fit(X, y, feature_schema=schema)
 
     full_scores = ranker.predict(X)
@@ -306,3 +306,82 @@ def test_ranker_graph_smoothing_roundtrip(tmp_path: Path):
     assert ranker.selected_backend_ == "cpu"
     assert loaded.selected_backend_ == "cpu"
     assert loaded.predict([[0.0], [1.0]]) == pytest.approx(expected)
+
+
+def test_ranker_fit_group_column_is_retained_without_changing_constructor(tmp_path: Path):
+    X = np.asarray([[10.0, 0.0], [10.0, 1.0], [20.0, 0.0], [20.0, 1.0]])
+    y = [0.0, 1.0, 0.0, 2.0]
+    model = CartoBoostRanker(n_estimators=2, min_samples_leaf=1).fit(X, y, group_col=0)
+
+    assert model.get_params()["group_col"] is None
+    assert model.group_col_ == 0
+    expected = model.predict(X[:, 1:])
+    np.testing.assert_array_equal(model.predict(X), expected)
+    assert model.score_groups(X, y) == model.score_groups(X[:, 1:], y, groups=[2, 2])
+    path = tmp_path / "ranker.json"
+    model.save(path)
+    restored = CartoBoostRanker.load(path)
+    assert restored.get_params()["group_col"] is None
+    assert restored.group_col_ == 0
+    np.testing.assert_array_equal(restored.predict(X), expected)
+
+
+@pytest.mark.parametrize("groups", [[2.9, 2.1], [True, 3], [float("inf"), 2], [float("nan"), 2]])
+def test_ranker_rejects_noninteger_group_sizes(groups):
+    with pytest.raises(ValueError, match="positive integers"):
+        _normalize_groups(groups, 4)
+
+
+@pytest.mark.parametrize("table_format", ["polars", "duckdb"])
+def test_ranker_group_column_accepts_optional_tables_and_preserves_names(table_format, tmp_path):
+    module = pytest.importorskip(table_format)
+    columns = {
+        "query": ["a", "a", "b", "b"],
+        "distance": [0.0, 1.0, 0.0, 1.0],
+    }
+    if table_format == "duckdb":
+        pd = pytest.importorskip("pandas")
+        frame = module.from_df(pd.DataFrame(columns))
+        features = frame.select("distance")
+    else:
+        frame = module.DataFrame(columns)
+        features = frame.drop("query")
+    y = [0.0, 1.0, 0.0, 2.0]
+    model = CartoBoostRanker(n_estimators=2, min_samples_leaf=1).fit(frame, y, group_col="query")
+    assert list(model.feature_names_in_) == ["distance"]
+    np.testing.assert_array_equal(model.predict(frame), model.predict(features))
+    assert model.score_groups(frame, y) == model.score_groups(features, y, groups=[2, 2])
+    path = tmp_path / "ranker.json"
+    model.save(path)
+    np.testing.assert_array_equal(CartoBoostRanker.load(path).predict(frame), model.predict(frame))
+
+
+@pytest.mark.parametrize("layout", ["fortran", "reversed", "strided"])
+def test_ranker_wrapper_layout_and_row_batch_parity(layout):
+    X = np.arange(48, dtype=float).reshape(12, 4)
+    if layout == "fortran":
+        X = np.asfortranarray(X)
+    elif layout == "reversed":
+        X = X[::-1, ::-1]
+    else:
+        X = X[::2, ::2]
+    model = CartoBoostRanker(n_estimators=2, min_samples_leaf=1).fit(
+        X, [index % 2 for index in range(len(X))], groups=[2] * (len(X) // 2)
+    )
+    expected = model.predict(np.ascontiguousarray(X))
+    np.testing.assert_array_equal(model.predict(X), expected)
+    np.testing.assert_array_equal(
+        np.concatenate([model.predict(X[index : index + 1]) for index in range(len(X))]), expected
+    )
+    with pytest.raises(ValueError, match="empty"):
+        model.predict(X[:0])
+
+
+def test_ranker_accepts_query_group_sizes_from_a_duckdb_relation():
+    duckdb = pytest.importorskip("duckdb")
+    X = [[0.0], [1.0], [0.0], [1.0]]
+    y = [0.0, 1.0, 0.0, 2.0]
+    groups = duckdb.sql("select * from (values (2), (2)) as rows(size)")
+    model = CartoBoostRanker(n_estimators=2, min_samples_leaf=1).fit(X, y, groups=groups)
+    assert model.groups_ == [2, 2]
+    assert model.score_groups(X, y, groups=groups) == model.score_groups(X, y, groups=[2, 2])

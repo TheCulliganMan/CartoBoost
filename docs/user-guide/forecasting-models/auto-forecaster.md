@@ -2,14 +2,13 @@ import {ForecastModelExample} from '@site/src/components/ModelingLabClient';
 
 # AutoForecaster
 
-`AutoForecaster` is CartoBoost's guarded default forecasting model for demand
-panels. It is not a black-box hyperparameter search. The Python class
-normalizes user-facing configuration, fits a fixed candidate roster, validates
-members on trailing origins, gates fragile candidates, refits selected members,
-and records prediction metadata.
+Let validation choose a forecasting strategy while keeping the choice
+inspectable. `AutoForecaster` fits a fixed candidate roster, tests it on trailing
+origins, applies selection safeguards, and refits the selected members.
 
-Use it when you want one reproducible default for panel demand forecasting and
-you still want to inspect which candidate models earned forecast weight.
+Use it for taxi demand panels when you want a reproducible starting point and
+need to see which models earned weight. Its metadata exposes the selected
+candidates and their contributions.
 
 ## Interactive Example
 
@@ -180,7 +179,7 @@ the configured objective value is extracted.
 The default objective is `rmse_wape`, which blends normalized RMSE and WAPE so
 selection is sensitive to both scale-aware squared error and aggregate absolute
 error. Other objective strings such as `rmse`, `mae`, or `wape` can be used
-when that metric is the scientific target for the panel.
+when that metric is the evaluation target for the panel.
 
 For each candidate, the scorer emits:
 
@@ -340,7 +339,7 @@ remaining roster.
 
 ## Use When
 
-Use a simpler model when the scientific question requires a single interpretable
+Use a simpler model when the decision needs a single interpretable
 assumption:
 
 - Use [Naive And Seasonal Naive](naive-seasonal.md) for mandatory baselines.

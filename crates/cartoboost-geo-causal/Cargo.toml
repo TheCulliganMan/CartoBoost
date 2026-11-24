@@ -1,14 +1,15 @@
 [package]
 name = "cartoboost-geo-causal"
-version = "0.3.12"
+version = "0.3.13"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "Causal geographic panel estimators and experiment design tools for CartoBoost"
 
 [dependencies]
 cartoboost-geo-core = { path = "../cartoboost-geo-core" }
 cartoboost-neural = { path = "../cartoboost-neural" }
-rayon = "1.11"
+rayon.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

@@ -1,10 +1,10 @@
 # Migrating to CartoBoost 0.3
 
-CartoBoost 0.3 reorganizes the Python API around a small stable root package.
-Use this page when upgrading application code or loading an older model artifact.
-The stable root package contains only
-the Rust-backed `CartoBoostRegressor`, `CartoBoostClassifier`,
-`CartoBoostRanker`, `BoosterConfig`, and `__version__`.
+CartoBoost 0.3 exposes a unified Python package. Use this page when upgrading
+application code or loading an older model artifact. The root includes the
+Rust-backed `CartoBoostRegressor`, `CartoBoostClassifier`, `CartoBoostRanker`,
+`BoosterConfig`, model-family modules, and direct model imports. Named modules
+remain the clearest way to identify a model family.
 
 ## Import Changes
 
@@ -15,8 +15,9 @@ Use named modules for the rest of the package:
   and native manifest constructors such as `native_spatial_split` and
   `native_out_of_time_split`.
 - `cartoboost.forecasting` for `ForecastFrame`, forecasters, backtesting, and metrics.
-- `cartoboost.supported` for graph, geostatistical, probabilistic, causal, neural, and
-  accelerator surfaces without a compatibility promise.
+- `cartoboost.graph`, `cartoboost.geostats`, `cartoboost.prob`,
+  `cartoboost.causal`, `cartoboost.neural`, and `cartoboost.accelerators` for
+  their respective model families. There is no `cartoboost.supported` namespace.
 
 ## Artifact Compatibility
 

@@ -1,16 +1,14 @@
 from __future__ import annotations
 
 import json
-import tempfile
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 from .._artifacts import ArtifactPersistenceMixin
-from ..accelerators import dense_layer, workload_decision
 from ..config import Backend
-from ._native import dumps, loads, require_native
+from ._native import loads, require_native
 from .flow import flow_uncertainty_report
 from .frames import DirectionalPairFrame, EntityPanelFrame
 
@@ -60,7 +58,7 @@ class DirectionalPairForecaster:
         self.is_fitted_ = False
 
     def fit(self, frame: DirectionalPairFrame) -> DirectionalPairForecaster:
-        fit = require_native("deep_directional_pair_fit_value")
+        fit = require_native("deep_directional_pair_fit_records")
         rows = [
             {
                 "source_id": row["source_id"],
@@ -84,7 +82,7 @@ class DirectionalPairForecaster:
             "seed": self.seed,
             "loss": self.loss,
         }
-        self._artifact_json = fit(dumps(rows), dumps(options), self.backend)
+        self._artifact_json = fit(rows, options, self.backend)
         self.metadata_ = loads(self._artifact_json)
         self.backend_ = str(self.metadata_["backend"]["selected"])
         self.metadata_["preserve_direction"] = self.preserve_direction
@@ -106,7 +104,7 @@ class DirectionalPairForecaster:
     def predict(self, frame: DirectionalPairFrame) -> np.ndarray:
         if not self.is_fitted_:
             raise RuntimeError("model must be fit before prediction")
-        predict = require_native("deep_directional_pair_predict_artifact_value")
+        predict = require_native("deep_directional_pair_predict_arrays")
         rows = [
             {
                 "source_id": row["source_id"],
@@ -116,7 +114,7 @@ class DirectionalPairForecaster:
             }
             for row in frame.rows
         ]
-        return np.asarray(predict(self._artifact_json, dumps(rows)), dtype=float)
+        return np.asarray(predict(self._artifact_json, rows), dtype=float)
 
     def score(self, frame: DirectionalPairFrame) -> float:
         actual = np.asarray([row["target"] for row in frame.rows], dtype=float)
@@ -171,6 +169,8 @@ class TemporalEntityTransformer:
         self.is_fitted_ = False
 
     def fit(self, frame: EntityPanelFrame) -> TemporalEntityTransformer:
+        self._training_y = np.array(frame.y, dtype=float, copy=True)
+        self._training_timestamps = list(frame.timestamps)
         if self.architecture == "inverted_transformer":
             self._inverted_model = InvertedTemporalTransformer(
                 lookback=self.lookback,
@@ -181,9 +181,9 @@ class TemporalEntityTransformer:
             self.metadata_ = dict(self._inverted_model.metadata_)
             self.is_fitted_ = True
             return self
-        fit = require_native("deep_temporal_entity_fit_value")
+        fit = require_native("deep_temporal_entity_fit_arrays")
         self._artifact_json = fit(
-            dumps(np.asarray(frame.y, dtype=float).tolist()),
+            np.asarray(frame.y, dtype=float),
             self.lookback,
             self.horizon,
             self.backend,
@@ -205,16 +205,60 @@ class TemporalEntityTransformer:
         if self.architecture == "inverted_transformer":
             return self._inverted_model.predict(horizon)
         horizon = int(horizon or self.horizon)
-        predict = require_native("deep_temporal_entity_predict_value")
-        return np.asarray(loads(predict(self._artifact_json, horizon)), dtype=float)
+        predict = require_native("deep_temporal_entity_predict_arrays")
+        return np.asarray(predict(self._artifact_json, horizon), dtype=float)
 
     def predict_quantiles(self, horizon: int | None = None) -> dict[float, np.ndarray]:
-        pred = self.predict(horizon)
-        return {0.1: pred, 0.5: pred, 0.9: pred}
+        """Gaussian residual quantiles; residual scales are fitted at one step."""
+        if not self.is_fitted_:
+            raise RuntimeError("model must be fit before prediction")
+        if self.architecture == "inverted_transformer":
+            return self._inverted_model.predict_quantiles(horizon)
+        return require_native("deep_temporal_entity_quantiles_arrays")(
+            self._artifact_json, int(horizon or self.horizon)
+        )
 
     def backtest(self, splitter: Any = None) -> dict[str, Any]:
-        del splitter
-        return {"folds": []}
+        """Refit each rolling-origin fold using only its training history."""
+        if not self.is_fitted_:
+            raise RuntimeError("model must be fit before backtesting")
+        from ..forecasting.splitters import RollingOriginSplitter
+
+        if splitter is None:
+            splitter = RollingOriginSplitter(
+                horizon=self.horizon,
+                step=self.horizon,
+                min_train_size=(
+                    3
+                    if self.architecture == "inverted_transformer"
+                    else self.lookback + self.horizon + 1
+                ),
+            )
+
+        class PanelTimes:
+            index = np.asarray(self._training_timestamps)
+
+            def __getitem__(self, key: str) -> Any:
+                if key == getattr(splitter, "series_id_col", None):
+                    return np.zeros(len(self.index), dtype=int)
+                return self.index
+
+        folds = list(splitter.split(PanelTimes()))
+        result = require_native("deep_temporal_entity_backtest_arrays")(
+            self._training_y,
+            [(fold.train_indices.tolist(), fold.validation_indices.tolist()) for fold in folds],
+            self.lookback,
+            self.horizon,
+            self.backend,
+            self.architecture == "inverted_transformer",
+        )
+        for row, fold in zip(result, folds, strict=True):
+            row.update(
+                fold_id=fold.fold_id,
+                train_end=fold.train_end,
+                validation_start=fold.validation_start,
+            )
+        return {"folds": result}
 
     def score(self, actual: Any) -> float:
         actual_arr = np.asarray(actual, dtype=float)
@@ -259,34 +303,14 @@ class InvertedTemporalTransformer(ArtifactPersistenceMixin):
         self.cutoff_ = str(frame.timestamps[-1])
         self.history_ = y.copy()
         self.recent_ = y[-min(self.lookback, y.shape[0]) :]
-        centered = self.recent_ - self.recent_.mean(axis=0, keepdims=True)
-        norm = np.linalg.norm(centered, axis=0, keepdims=True)
-        norm = np.maximum(norm, 1e-12)
-        similarity_work = int(centered.shape[0] * centered.shape[1] ** 2)
-        dispatch = workload_decision(self.backend, "dense", similarity_work, 16_384)
-        if dispatch["executed"] == "cpu":
-            similarity_products = centered.T @ centered
-        else:
-            similarity_products = dense_layer(
-                centered.T,
-                centered,
-                np.zeros(centered.shape[1], dtype=np.float32),
-                backend=str(dispatch["executed"]),
-            ).astype(float)
-        similarity = similarity_products / (norm.T @ norm)
-        self.attention_weights_ = _row_softmax(similarity)
-        if y.shape[0] >= 2:
-            self.local_trend_ = self.recent_[-1] - self.recent_[-2]
-        else:
-            self.local_trend_ = np.zeros(y.shape[1], dtype=float)
-        peer_level, peer_dispatch = _dense_vector_product(
-            self.recent_[-1],
-            self.attention_weights_.T,
-            self.backend,
-        )
-        self.cross_entity_delta_ = peer_level - self.recent_[-1]
-        self.delta_coef_ = self._fit_delta_head(self.recent_)
-        self.last_values_ = self.recent_[-1].copy()
+        state = require_native("deep_inverted_temporal_fit_arrays")(y, self.lookback, self.backend)
+        self.attention_weights_ = state["attention_weights"]
+        self.local_trend_ = state["local_trend"]
+        self.cross_entity_delta_ = state["cross_entity_delta"]
+        self.delta_coef_ = state["delta_coef"]
+        self.last_values_ = state["last_values"]
+        self.residual_scales_ = state["residual_scales"]
+        dispatch = state["backend"]
         self.metadata_ = {
             "model_class": "InvertedTemporalTransformer",
             "architecture": self.architecture,
@@ -299,11 +323,7 @@ class InvertedTemporalTransformer(ArtifactPersistenceMixin):
             "attention_shape": list(self.attention_weights_.shape),
             "quadratic_time_token_attention": False,
             "backend": dispatch,
-            "accelerated_operations": (
-                ["dense"]
-                if bool(dispatch["accelerated"]) or bool(peer_dispatch["accelerated"])
-                else []
-            ),
+            "accelerated_operations": (["dense"] if state["accelerated"] else []),
             "shared_representation": None,
             "shared_representation_consumed": False,
             "save_load_parity_checked": False,
@@ -316,29 +336,26 @@ class InvertedTemporalTransformer(ArtifactPersistenceMixin):
         if not self.is_fitted_:
             raise RuntimeError("model must be fit before prediction")
         horizon = int(horizon or self.horizon)
-        rows = []
-        current = self.last_values_.copy()
-        local_delta = self.local_trend_.copy()
-        for step in range(1, horizon + 1):
-            del step
-            peer_level, _ = _dense_vector_product(
-                current,
-                self.attention_weights_.T,
-                self.backend,
+        return require_native("deep_inverted_temporal_predict_arrays")(
+            self.last_values_,
+            self.local_trend_,
+            self.delta_coef_,
+            self.attention_weights_,
+            horizon,
+            cross_entity,
+            self.backend,
+        )
+
+    def predict_quantiles(self, horizon: int | None = None) -> dict[float, np.ndarray]:
+        """Gaussian residual quantiles from the fitted one-step delta errors."""
+        scales = getattr(self, "residual_scales_", None)
+        if scales is None or len(scales) == 0:
+            raise ValueError(
+                "refit with at least three lookback rows to estimate residual quantiles"
             )
-            cross_delta = peer_level - current
-            design = np.column_stack(
-                [
-                    np.ones(current.shape[0], dtype=float),
-                    local_delta,
-                    cross_delta if cross_entity else np.zeros_like(cross_delta),
-                ]
-            )
-            delta = np.sum(design * self.delta_coef_, axis=1)
-            current = current + delta
-            local_delta = delta
-            rows.append(current.copy())
-        return np.vstack(rows)
+        return require_native("deep_temporal_residual_quantiles_arrays")(
+            self.predict(horizon), scales
+        )
 
     def horizon_metrics(self, actual: Any) -> dict[str, list[float]]:
         actual_arr = np.asarray(actual, dtype=float)
@@ -379,6 +396,9 @@ class InvertedTemporalTransformer(ArtifactPersistenceMixin):
             "cross_entity_delta": self.cross_entity_delta_.tolist(),
             "delta_coef": self.delta_coef_.tolist(),
             "attention_weights": self.attention_weights_.tolist(),
+            "residual_scales": None
+            if getattr(self, "residual_scales_", None) is None
+            else self.residual_scales_.tolist(),
             "metadata": self.metadata_,
         }
         path = Path(path)
@@ -401,90 +421,26 @@ class InvertedTemporalTransformer(ArtifactPersistenceMixin):
         obj.cross_entity_delta_ = np.asarray(payload["cross_entity_delta"], dtype=float)
         obj.delta_coef_ = np.asarray(payload["delta_coef"], dtype=float)
         obj.attention_weights_ = np.asarray(payload["attention_weights"], dtype=float)
+        obj.residual_scales_ = (
+            None
+            if payload.get("residual_scales") is None
+            else np.asarray(payload["residual_scales"], dtype=float)
+        )
         obj.metadata_ = dict(payload["metadata"])
         obj.is_fitted_ = True
         return obj
 
     def _save_load_parity(self) -> bool:
-        self.is_fitted_ = True
-        before = self.predict(self.horizon)
-        handle = tempfile.NamedTemporaryFile(
-            prefix="cartoboost_inverted_temporal_transformer_", suffix=".json", delete=False
+        # Check the exact serialized prediction state without disk I/O or running
+        # the forecast twice during every fit. Public save/load parity is tested.
+        state = [self.last_values_, self.local_trend_, self.delta_coef_, self.attention_weights_]
+        restored = json.loads(json.dumps([value.tolist() for value in state]))
+        return all(
+            np.array_equal(original, value) for original, value in zip(state, restored, strict=True)
         )
-        handle.close()
-        path = Path(handle.name)
-        self.save(path)
-        try:
-            after = self.load(path).predict(self.horizon)
-        finally:
-            path.unlink(missing_ok=True)
-        return bool(np.array_equal(before, after))
-
-    def _fit_delta_head(self, recent: np.ndarray) -> np.ndarray:
-        if recent.shape[0] < 3:
-            return np.column_stack(
-                [
-                    np.zeros(recent.shape[1], dtype=float),
-                    np.ones(recent.shape[1], dtype=float),
-                    np.zeros(recent.shape[1], dtype=float),
-                ]
-            )
-        coef = np.zeros((recent.shape[1], 3), dtype=float)
-        peer_levels, _ = _dense_product(
-            recent[1:-1],
-            self.attention_weights_.T,
-            self.backend,
-        )
-        for entity_idx in range(recent.shape[1]):
-            rows = []
-            target = []
-            for time_idx in range(1, recent.shape[0] - 1):
-                local_delta = recent[time_idx, entity_idx] - recent[time_idx - 1, entity_idx]
-                peer_delta = (peer_levels[time_idx - 1] - recent[time_idx])[entity_idx]
-                rows.append([1.0, local_delta, peer_delta])
-                target.append(recent[time_idx + 1, entity_idx] - recent[time_idx, entity_idx])
-            coef[entity_idx], *_ = np.linalg.lstsq(
-                np.asarray(rows, dtype=float),
-                np.asarray(target, dtype=float),
-                rcond=None,
-            )
-        return coef
 
 
 InvertedEntityTransformer = InvertedTemporalTransformer
-
-
-def _dense_vector_product(
-    values: np.ndarray,
-    weights: np.ndarray,
-    backend: str,
-) -> tuple[np.ndarray, dict[str, Any]]:
-    output, dispatch = _dense_product(values.reshape(1, -1), weights, backend)
-    return output[0], dispatch
-
-
-def _dense_product(
-    values: np.ndarray,
-    weights: np.ndarray,
-    backend: str,
-) -> tuple[np.ndarray, dict[str, Any]]:
-    workload_size = int(values.shape[0] * values.shape[1] * weights.shape[1])
-    dispatch = workload_decision(backend, "dense", workload_size, 16_384)
-    if dispatch["executed"] == "cpu":
-        return values @ weights, dispatch
-    output = dense_layer(
-        values,
-        weights,
-        np.zeros(weights.shape[1], dtype=np.float32),
-        backend=str(dispatch["executed"]),
-    )
-    return output.astype(float), dispatch
-
-
-def _row_softmax(values: np.ndarray) -> np.ndarray:
-    shifted = values - np.max(values, axis=1, keepdims=True)
-    exp = np.exp(np.clip(shifted, -50.0, 50.0))
-    return exp / np.sum(exp, axis=1, keepdims=True)
 
 
 def _temporal_regime_report(frame: EntityPanelFrame) -> dict[str, Any]:

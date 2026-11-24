@@ -180,6 +180,9 @@ class CartoBoostLagForecaster(NativeForecastWrapper):
                         known_future_covariates=self.covariate_features,
                         allow_irregular=self.allow_irregular,
                     )
+                    # Reuse the validated schema for native fitting and the safe
+                    # refit snapshot, including identifiers and covariates.
+                    args = (self._training_frame, *args[1:])
                 except ValueError as exc:
                     if "duplicate timestamp rows" in str(exc):
                         raise ValueError(

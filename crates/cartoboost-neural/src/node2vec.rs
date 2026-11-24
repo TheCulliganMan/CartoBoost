@@ -140,6 +140,14 @@ impl AliasSampler {
             .iter()
             .map(|weight| *weight * n as f32 / total)
             .collect::<Vec<_>>();
+        if !total.is_finite() || scaled.iter().any(|value| !value.is_finite()) {
+            // Keep the established f32 path for ordinary weights, but avoid
+            // overflow in either the sum or weight * count for large inputs.
+            let total = weights.iter().map(|weight| f64::from(*weight)).sum::<f64>();
+            for (scaled, weight) in scaled.iter_mut().zip(weights) {
+                *scaled = (f64::from(*weight) * n as f64 / total) as f32;
+            }
+        }
         let mut probabilities = vec![0.0; n];
         let mut aliases = (0..n).collect::<Vec<_>>();
         let mut small = Vec::new();
@@ -931,15 +939,36 @@ fn sample_next(
     rng: &mut SplitMix64,
 ) -> usize {
     let neighbors = &graph.outgoing[current];
-    let weights = neighbors
+    let mut weights = neighbors
         .iter()
         .map(|&(candidate, weight)| {
             let bias = previous.map_or(1.0, |prev| transition_bias(config, graph, prev, candidate));
             weight * bias
         })
         .collect::<Vec<_>>();
-    if weights.iter().sum::<f32>() <= 0.0 {
-        return neighbors[rng.next_usize(neighbors.len())].0;
+    if weights.iter().any(|weight| !weight.is_finite()) || weights.iter().sum::<f32>() <= 0.0 {
+        // Extreme but finite p/q and edge weights can overflow or underflow
+        // f32 transition products. Normalize in f64 before constructing the
+        // same sampler, retaining the requested transition distribution.
+        let precise = neighbors
+            .iter()
+            .map(|&(candidate, weight)| {
+                let bias = previous.map_or(1.0, |previous| {
+                    if candidate == previous {
+                        1.0 / f64::from(config.p)
+                    } else if graph.has_edge_or_reverse(previous, candidate) {
+                        1.0
+                    } else {
+                        1.0 / f64::from(config.q)
+                    }
+                });
+                f64::from(weight) * bias
+            })
+            .collect::<Vec<_>>();
+        let maximum = precise.iter().copied().fold(0.0_f64, f64::max);
+        for (weight, precise) in weights.iter_mut().zip(precise) {
+            *weight = (precise / maximum) as f32;
+        }
     }
     let sampler = AliasSampler::new(&weights).expect("positive transition weights");
     neighbors[sampler.sample_with_rng(rng)].0
@@ -1052,17 +1081,21 @@ fn validate_config(config: &Node2VecConfig) -> Result<()> {
             "epochs and negative_samples must be positive".to_string(),
         ));
     }
-    if config.learning_rate <= 0.0 || config.min_learning_rate < 0.0 {
+    if !config.learning_rate.is_finite()
+        || !config.min_learning_rate.is_finite()
+        || config.learning_rate <= 0.0
+        || config.min_learning_rate < 0.0
+    {
         return Err(NeuralError::InvalidArgument(
             "learning rates must be positive/non-negative".to_string(),
         ));
     }
-    if config.p <= 0.0 || config.q <= 0.0 {
+    if !config.p.is_finite() || !config.q.is_finite() || config.p <= 0.0 || config.q <= 0.0 {
         return Err(NeuralError::InvalidArgument(
             "p and q must be positive".to_string(),
         ));
     }
-    if config.l2_regularization < 0.0 {
+    if !config.l2_regularization.is_finite() || config.l2_regularization < 0.0 {
         return Err(NeuralError::InvalidArgument(
             "l2_regularization must be non-negative".to_string(),
         ));
@@ -1215,6 +1248,67 @@ impl SplitMix64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn alias_sampler_handles_large_finite_weights_without_changing_distribution() {
+        let small = AliasSampler::new(&[2.0, 1.0, 0.0]).unwrap();
+        let large = AliasSampler::new(&[f32::MAX, f32::MAX / 2.0, 0.0]).unwrap();
+        assert_eq!(small.sample_many(7, 4096), large.sample_many(7, 4096));
+    }
+
+    #[test]
+    fn random_walks_handle_extreme_finite_transition_weights() {
+        let config = Node2VecConfig {
+            p: f32::MIN_POSITIVE / 16.0,
+            q: f32::MAX,
+            ..small_config()
+        };
+        let graph = WeightedGraph::from_edges(
+            3,
+            &[(0, 1), (1, 0), (1, 2), (2, 1)],
+            &[f32::MAX, f32::MAX, f32::MIN_POSITIVE, f32::MIN_POSITIVE],
+        )
+        .unwrap();
+        let walks = generate_walks(&config, &graph);
+        assert_eq!(walks.len(), 3 * config.walks_per_node);
+        assert!(walks.iter().all(|walk| walk.len() == config.walk_length));
+        for walk in walks {
+            assert!(walk.windows(2).all(|pair| graph.outgoing[pair[0]]
+                .iter()
+                .any(|&(target, _)| target == pair[1])));
+        }
+    }
+
+    #[test]
+    fn node2vec_rejects_nonfinite_hyperparameters() {
+        for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let base = small_config();
+            for config in [
+                Node2VecConfig {
+                    p: value,
+                    ..base.clone()
+                },
+                Node2VecConfig {
+                    q: value,
+                    ..base.clone()
+                },
+                Node2VecConfig {
+                    learning_rate: value,
+                    ..base.clone()
+                },
+                Node2VecConfig {
+                    min_learning_rate: value,
+                    ..base.clone()
+                },
+                Node2VecConfig {
+                    l2_regularization: value,
+                    ..base.clone()
+                },
+            ] {
+                assert!(Node2VecEncoder::new(config).is_err());
+            }
+        }
+    }
 
     fn small_config() -> Node2VecConfig {
         Node2VecConfig {

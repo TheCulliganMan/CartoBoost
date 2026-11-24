@@ -10,6 +10,7 @@ import numpy as np
 
 from .._native import NeuralEmbeddingFeatures as _NativeNeuralEmbeddingFeatures
 from ..config import Backend
+from ..standalone import _integer_array
 
 
 class ArtifactFallback(str):
@@ -61,7 +62,7 @@ class NeuralEmbeddingFeatures:
         id_values = _as_1d_array(ids, np.uint64, "ids")
         if id_values.size == 0:
             return np.empty((0, self.dim), dtype=np.float32)
-        return np.asarray(self._backend.transform(id_values), dtype=np.float32)
+        return np.asarray(self._backend.transform_arrays(id_values), dtype=np.float32)
 
     def transform_with_fallback(
         self,
@@ -124,7 +125,9 @@ class NeuralEmbeddingFeatures:
             self.fit(id_values, target_values)
             return np.empty((0, self.dim), dtype=np.float32)
 
-        output = np.asarray(self._backend.fit_transform(id_values, target_values), dtype=np.float32)
+        output = np.asarray(
+            self._backend.fit_transform_arrays(id_values, target_values), dtype=np.float32
+        )
         self._row_cache = None
         return output
 
@@ -167,7 +170,7 @@ class NeuralEmbeddingFeatures:
 
 
 def _as_1d_array(values: Iterable[Any], dtype: Any, name: str) -> np.ndarray:
-    array = np.asarray(values, dtype=dtype)
+    array = _as_u64_array(values, name) if dtype == np.uint64 else np.asarray(values, dtype=dtype)
     if array.ndim == 0:
         raise ValueError(f"{name} must be 1D")
     if array.ndim != 1:
@@ -176,7 +179,7 @@ def _as_1d_array(values: Iterable[Any], dtype: Any, name: str) -> np.ndarray:
 
 
 def _as_fallback_matrix(values: Iterable[Any], row_count: int) -> np.ndarray:
-    array = np.asarray(values)
+    array = _as_u64_array(values, "fallback_ids")
     if array.ndim == 0:
         raise ValueError("fallback_ids must be 1D or 2D")
     if array.ndim == 1:
@@ -192,7 +195,52 @@ def _as_fallback_matrix(values: Iterable[Any], row_count: int) -> np.ndarray:
 
 
 def _iter_u64_values(values: Iterable[Any]) -> np.ndarray:
-    array = np.asarray(list(values) if not isinstance(values, np.ndarray) else values)
+    array = _as_u64_array(values, "neighbor_ids")
     if array.size == 0:
         return np.empty(0, dtype=np.uint64)
-    return np.ravel(array).astype(np.uint64)
+    return np.ravel(array)
+
+
+def _as_u64_array(values: Any, name: str = "ids") -> np.ndarray:
+    """Validate integer IDs without routing their bits through floating point."""
+
+    if callable(getattr(values, "to_numpy", None)):
+        array = _integer_array(values)
+    elif isinstance(values, np.ndarray) or hasattr(values, "__array__"):
+        array = np.asarray(values)
+    else:
+        try:
+            # NumPy may infer float64 from a mix of large and small Python ints.
+            array = np.asarray(list(values), dtype=object)
+        except TypeError as exc:
+            raise ValueError(f"{name} must be an array of unsigned 64-bit integers") from exc
+    error = f"{name} must contain unsigned 64-bit integers"
+    if array.ndim == 0:
+        raise ValueError(f"{name} must be an array of unsigned 64-bit integers")
+    if array.dtype.kind == "u":
+        return np.ascontiguousarray(array, dtype=np.uint64)
+    if array.dtype.kind == "i":
+        if np.any(array < 0):
+            raise ValueError(error)
+        return np.ascontiguousarray(array, dtype=np.uint64)
+    if array.dtype.kind == "f":
+        if not np.all(np.isfinite(array)):
+            raise ValueError(f"{name} must be finite")
+        if np.any(array < 0) or np.any(array >= 2**64) or np.any(array != np.floor(array)):
+            raise ValueError(error)
+        return np.ascontiguousarray(array, dtype=np.uint64)
+    result = np.empty(array.shape, dtype=np.uint64)
+    for index, value in np.ndenumerate(array):
+        try:
+            integer = int(value)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(error) from exc
+        if (
+            isinstance(value, (bool, np.bool_))
+            or integer < 0
+            or integer >= 2**64
+            or (not isinstance(value, (str, np.str_)) and integer != value)
+        ):
+            raise ValueError(error)
+        result[index] = integer
+    return result

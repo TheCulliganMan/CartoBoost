@@ -1,7 +1,8 @@
 [package]
 name = "cartoboost-py"
-version = "0.3.12"
+version = "0.3.13"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "PyO3 bindings for the CartoBoost Python package"
 
@@ -10,6 +11,7 @@ name = "_native"
 crate-type = ["cdylib"]
 
 [dependencies]
+serde.workspace = true
 cartoboost-core = { path = "../cartoboost-core" }
 cartoboost-geo-causal = { path = "../cartoboost-geo-causal" }
 cartoboost-geo-core = { path = "../cartoboost-geo-core" }
@@ -21,7 +23,7 @@ cartoboost-spatial-econ = { path = "../cartoboost-spatial-econ" }
 chrono.workspace = true
 numpy = "0.30"
 pyo3.workspace = true
-rayon = "1.11"
+rayon.workspace = true
 serde_json.workspace = true
 
 [features]

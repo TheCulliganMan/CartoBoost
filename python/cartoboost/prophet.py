@@ -86,6 +86,8 @@ class Prophet:
         self.changepoints_t: np.ndarray | None = None
         self._model: PiecewiseLinearSeasonalForecaster | None = None
         self._freq: str = "D"
+        self._history_component_model: Any | None = None
+        self._history_component_records: dict[str, Mapping[str, Any]] = {}
 
     def add_seasonality(
         self,
@@ -143,6 +145,31 @@ class Prophet:
         self._freq = pd.infer_freq(frame["ds"]) or "D"
         regressors = list(self.extra_regressors)
         _require_columns(frame, regressors)
+        future_covariates = list(regressors)
+        uses_floor = self.growth == "logistic" and "floor" in frame
+        if self.growth == "logistic":
+            _require_columns(frame, ["cap"])
+            future_covariates.append("cap")
+            if uses_floor:
+                future_covariates.append("floor")
+        future_covariates = list(dict.fromkeys(future_covariates))
+        regressor_penalties: dict[str, float] = {}
+        standardization_overrides: dict[str, str] = {}
+        for name, config in self.extra_regressors.items():
+            scale = float(config["prior_scale"])
+            if not np.isfinite(scale) or scale <= 0.0:
+                raise ValueError(f"prior_scale for regressor {name!r} must be finite and positive")
+            try:
+                regressor_penalties[name] = 1.0 / (scale * scale)
+            except (ZeroDivisionError, OverflowError) as exc:
+                raise ValueError(f"prior_scale for regressor {name!r} is too small") from exc
+            standardize = config["standardize"]
+            if isinstance(standardize, (bool, np.bool_)):
+                standardization_overrides[name] = "standardize" if standardize else "none"
+            elif standardize is None:
+                standardization_overrides[name] = "none"
+            elif standardize != "auto":
+                raise ValueError("standardize must be True, False, None, or 'auto'")
         if self.changepoints is None:
             prophet_changepoints = _prophet_generated_changepoints(
                 frame["ds"], self.n_changepoints, self.changepoint_range
@@ -162,7 +189,7 @@ class Prophet:
             timestamp_col="ds",
             target_col="y",
             freq=self._freq,
-            known_future_covariates=regressors,
+            known_future_covariates=future_covariates,
             allow_irregular=True,
             allow_missing_targets=True,
         )
@@ -202,22 +229,39 @@ class Prophet:
                 if value["mode"] is not None
             },
             regressor_standardization="auto",
+            regressor_l2_regularization_by_name=regressor_penalties,
             prediction_interval_levels=[self.interval_width],
             uncertainty_samples=self.uncertainty_samples,
+            cap_regressor="cap" if self.growth == "logistic" else None,
+            floor_regressor="floor" if uses_floor else None,
+            **(
+                {"regressor_standardization_by_name": standardization_overrides}
+                if standardization_overrides
+                else {}
+            ),
         ).fit(forecast_frame)
+        self._future_covariates = future_covariates
+        self._history_component_model = None
+        self._history_component_records = {}
         self.history = frame.reset_index(drop=True)
+        self._last_training_timestamp = self.history["ds"].iloc[-1]
         self.start = self.history["ds"].iloc[0]
         self.t_scale = self.history["ds"].iloc[-1] - self.start
         if self.t_scale <= pd.Timedelta(0):
             self.t_scale = pd.Timedelta(days=1)
         self.y_min = 0.0 if self.scaling == "absmax" else float(self.history["y"].min())
         self.y_scale = _prophet_y_scale(self.history["y"], self.scaling)
-        self.logistic_floor = False
+        self.logistic_floor = uses_floor
         self.history["t"] = (self.history["ds"] - self.start).dt.total_seconds() / (
             self.t_scale.total_seconds()
         )
-        self.history["floor"] = self.y_min
+        if not uses_floor:
+            self.history["floor"] = 0.0 if self.growth == "logistic" else self.y_min
         self.history["y_scaled"] = (self.history["y"] - self.history["floor"]) / self.y_scale
+        if self.growth == "logistic":
+            self.history["cap_scaled"] = (
+                self.history["cap"] - self.history["floor"]
+            ) / self.y_scale
         if isinstance(self.changepoints, int):
             changepoint_series = pd.Series(pd.to_datetime([]), name="ds")
         else:
@@ -247,55 +291,114 @@ class Prophet:
         pd = require_pandas()
         if int(periods) < 0:
             raise ValueError("periods must be nonnegative")
+        if int(periods) == 0:
+            dates = self.history[["ds"]] if include_history else self.history[["ds"]].iloc[:0]
+            return dates.reset_index(drop=True).copy()
         future = pd.date_range(
-            start=self.history["ds"].iloc[-1], periods=int(periods) + 1, freq=freq
+            start=getattr(self, "_last_training_timestamp", self.history["ds"].iloc[-1]),
+            periods=int(periods) + 1,
+            freq=freq,
         )[1:]
-        dates = pd.concat([self.history[["ds"]], pd.DataFrame({"ds": future})], ignore_index=True)
-        return dates if include_history else dates.iloc[len(self.history) :].reset_index(drop=True)
+        dates = pd.DataFrame({"ds": future})
+        if not include_history:
+            return dates
+        return pd.concat([self.history[["ds"]], dates], ignore_index=True)
 
     def predict(self, df: Any = None, vectorized: bool = True) -> Any:
+        frame, future = self._prediction_frames(df)
+        return self._predict_frame(frame, future, intervals=True)
+
+    def _prediction_frames(self, df: Any) -> tuple[Any, Any]:
         if self._model is None or self.history is None:
             raise RuntimeError("Prophet must be fitted before predict")
-        if df is None:
-            df = self.make_future_dataframe(0)
-        frame = _to_pandas(df).copy()
-        _require_columns(frame, ["ds", *self.extra_regressors])
-        frame["ds"] = require_pandas().to_datetime(frame["ds"], errors="raise")
-        last_history = self.history["ds"].max()
-        future_mask = frame["ds"] > last_history
-        future = frame.loc[future_mask]
-        future_regressors = {
-            name: future[name].to_numpy(dtype=float).tolist() for name in self.extra_regressors
-        }
-        result_records: list[dict[str, Any]] = []
+        pd = require_pandas()
+        frame = _to_pandas(self.history if df is None else df).copy(deep=False)
+        covariates = getattr(self, "_future_covariates", list(self.extra_regressors))
+        _require_columns(frame, ["ds", *covariates])
+        frame["ds"] = pd.to_datetime(frame["ds"], errors="raise")
+        if frame["ds"].isna().any():
+            raise ValueError("Found NaN in column ds.")
+        anchor = getattr(self, "_last_training_timestamp", None)
+        if anchor is None:
+            anchor = self.history["ds"].max()
+        future = frame.loc[frame["ds"] > anchor]
+        if len(future):
+            future = future.sort_values("ds", kind="mergesort")
+            if future["ds"].duplicated().any():
+                distinct = future[["ds", *covariates]].drop_duplicates()
+                if distinct["ds"].duplicated().any():
+                    raise ValueError(
+                        "duplicate future timestamps must have identical regressor values"
+                    )
+                future = future.drop_duplicates("ds", keep="first")
+        return frame, future
+
+    def _history_records(self) -> dict[str, Mapping[str, Any]]:
+        native_model = getattr(self._model, "_native_model", self._model)
+        if getattr(self, "_history_component_model", None) is not native_model:
+            records = self._model.history_components()["records"]
+            self._history_component_records = {
+                _timestamp_key(row["timestamp"]): row for row in records
+            }
+            self._history_component_model = native_model
+        return self._history_component_records
+
+    def _predict_frame(self, frame: Any, future: Any, *, intervals: bool) -> Any:
+        result_records: list[Mapping[str, Any]] = []
         component_records: list[Mapping[str, Any]] = []
         if len(future):
-            result = self._model.predict(
-                len(future),
-                future_timestamps=future["ds"].tolist(),
-                future_regressors=future_regressors or None,
-                prediction_interval_levels=[self.interval_width],
-                uncertainty_samples=self.uncertainty_samples,
-            )
-            result_records.extend(json.loads(result.to_json())["records"])
-            component_records.extend(
-                self._model.components(len(future), future_regressors=future_regressors or None)[
-                    "records"
-                ]
-            )
-        history_records = (
-            self._model.history_components()["records"] if bool((~future_mask).any()) else []
-        )
-        result_by_timestamp = {
-            str(row["timestamp"]): row for row in [*history_records, *result_records]
-        }
+            future_regressors = {
+                name: future[name].to_numpy(dtype=float).tolist()
+                for name in getattr(self, "_future_covariates", self.extra_regressors)
+            }
+            options = {
+                "future_timestamps": future["ds"].tolist(),
+                "future_regressors": future_regressors or None,
+            }
+            if intervals:
+                combined = getattr(self._model, "predict_with_components", None)
+                if callable(combined):
+                    result, components = combined(
+                        len(future),
+                        **options,
+                        prediction_interval_levels=[self.interval_width],
+                        uncertainty_samples=self.uncertainty_samples,
+                    )
+                else:
+                    result = self._model.predict(
+                        len(future),
+                        **options,
+                        prediction_interval_levels=[self.interval_width],
+                        uncertainty_samples=self.uncertainty_samples,
+                    )
+                    components = self._model.components(len(future), **options)
+                records = getattr(result, "records", None)
+                result_records = (
+                    records() if callable(records) else json.loads(result.to_json())["records"]
+                )
+                component_records = components["records"]
+            else:
+                component_records = self._model.components(len(future), **options)["records"]
+                result_records = component_records
+        keys = [_timestamp_key(value) for value in frame["ds"]]
+        result_by_timestamp = {_timestamp_key(row["timestamp"]): row for row in result_records}
         components_by_timestamp = {
-            str(row["timestamp"]): row for row in [*history_records, *component_records]
+            _timestamp_key(row["timestamp"]): row for row in component_records
         }
-        ordered_results = [result_by_timestamp[_timestamp_key(value)] for value in frame["ds"]]
-        ordered_components = [
-            components_by_timestamp[_timestamp_key(value)] for value in frame["ds"]
-        ]
+        history = (
+            self._history_records() if any(key not in result_by_timestamp for key in keys) else {}
+        )
+        try:
+            ordered_results = [
+                result_by_timestamp[key] if key in result_by_timestamp else history[key]
+                for key in keys
+            ]
+            ordered_components = [
+                components_by_timestamp[key] if key in components_by_timestamp else history[key]
+                for key in keys
+            ]
+        except KeyError as exc:
+            raise ValueError(f"timestamp {exc.args[0]!r} is not present in fitted history") from exc
         return _prophet_result_frame(
             frame, ordered_results, ordered_components, self.interval_width
         )
@@ -303,35 +406,53 @@ class Prophet:
     def predictive_samples(self, df: Any, vectorized: bool = True) -> dict[str, np.ndarray]:
         if self._model is None or self.history is None:
             raise RuntimeError("Prophet must be fitted before predictive_samples")
-        frame = _to_pandas(df).copy()
-        frame["ds"] = require_pandas().to_datetime(frame["ds"], errors="raise")
-        future = frame.loc[frame["ds"] > self.history["ds"].max()]
+        frame, future = self._prediction_frames(df)
+        # Components provide the point trend directly; requesting full forecasts
+        # here would simulate uncertainty again just to discard its intervals.
+        forecast = self._predict_frame(frame, future, intervals=False)
         if not len(future):
-            forecast = self.predict(frame)
             return {
                 "yhat": forecast["yhat"].to_numpy()[:, None],
                 "trend": forecast["trend"].to_numpy()[:, None],
             }
         future_regressors = {
-            name: future[name].to_numpy(dtype=float).tolist() for name in self.extra_regressors
+            name: future[name].to_numpy(dtype=float).tolist()
+            for name in getattr(self, "_future_covariates", self.extra_regressors)
         }
-        samples = self._model.samples(len(future), future_regressors=future_regressors or None)
-        sample_count = int(samples.get("sample_count", 0))
+        options = {
+            "future_regressors": future_regressors or None,
+            "future_timestamps": future["ds"].tolist(),
+            "uncertainty_samples": self.uncertainty_samples,
+        }
+        sample_arrays = getattr(self._model, "samples_arrays", None)
+        if callable(sample_arrays):
+            _, timestamps, samples = sample_arrays(len(future), **options)
+            samples = np.asarray(samples, dtype=float)
+            sample_keys = [_timestamp_key(timestamp) for timestamp in timestamps]
+            sample_count = samples.shape[1]
+        else:
+            payload = self._model.samples(len(future), **options)
+            sample_count = int(payload.get("sample_count", 0))
+            samples = np.full((len(future), sample_count), np.nan, dtype=float)
+            for row in payload["records"]:
+                samples[int(row["horizon"]) - 1, int(row["sample"])] = float(row["prediction"])
+            sample_keys = [_timestamp_key(value) for value in future["ds"]]
         if sample_count == 0:
-            forecast = self.predict(frame)
             return {
                 "yhat": forecast["yhat"].to_numpy()[:, None],
                 "trend": forecast["trend"].to_numpy()[:, None],
             }
-        values = np.full((len(frame), sample_count), np.nan, dtype=float)
-        for row in samples["records"]:
-            horizon = int(row["horizon"]) - 1
-            future_index = int(future.index[horizon])
-            values[future_index, int(row["sample"])] = float(row["prediction"])
-        history_prediction = self.predict(frame.loc[~frame["ds"].gt(self.history["ds"].max())])
-        history_values = history_prediction["yhat"].to_numpy()
-        values[: len(history_values), :] = history_values[:, None]
-        trend = self.predict(frame)["trend"].to_numpy()[:, None]
+        requested_keys = [_timestamp_key(timestamp) for timestamp in frame["ds"]]
+        if requested_keys == sample_keys:
+            values = samples
+        else:
+            values = np.repeat(forecast["yhat"].to_numpy()[:, None], sample_count, axis=1)
+            sample_index = {key: index for index, key in enumerate(sample_keys)}
+            for position, key in enumerate(requested_keys):
+                index = sample_index.get(key)
+                if index is not None:
+                    values[position] = samples[index]
+        trend = forecast["trend"].to_numpy()[:, None]
         return {"yhat": values, "trend": np.repeat(trend, sample_count, axis=1)}
 
     def setup_dataframe(self, df: Any, initialize_scales: bool = False) -> Any:
@@ -359,7 +480,9 @@ class Prophet:
         frame = frame.sort_values("ds", kind="mergesort").reset_index(drop=True)
         if initialize_scales:
             self.initialize_scales(True, frame)
-        if self.scaling == "absmax":
+        if self.growth == "logistic" and getattr(self, "logistic_floor", "floor" in frame):
+            _require_columns(frame, ["floor"])
+        elif self.growth == "logistic" or self.scaling == "absmax":
             frame["floor"] = 0.0
         else:
             frame["floor"] = getattr(self, "y_min", 0.0)
@@ -638,7 +761,10 @@ class Prophet:
         frame["ds"] = pd.to_datetime(frame["ds"])
         expanded: dict[str, np.ndarray] = {}
         prior_scales: dict[str, float] = {}
-        date_index = pd.DatetimeIndex(dates.dt.date)
+        day_positions: dict[int, list[int]] = {}
+        day_keys = dates.dt.tz_localize(None).to_numpy(dtype="datetime64[D]").astype(np.int64)
+        for position, key in enumerate(day_keys):
+            day_positions.setdefault(int(key), []).append(position)
         for row in frame.itertuples(index=False):
             values_by_name = row._asdict()
             name = str(values_by_name["holiday"])
@@ -655,10 +781,14 @@ class Prophet:
             prior_scales[name] = prior
             for offset in range(lower, upper + 1):
                 column = f"{name}_delim_{'+' if offset >= 0 else '-'}{abs(offset)}"
-                values = expanded.setdefault(column, np.zeros(len(dates), dtype=float))
+                if column not in expanded:
+                    expanded[column] = np.zeros(len(dates), dtype=float)
+                values = expanded[column]
                 occurrence = pd.Timestamp(values_by_name["ds"]) + timedelta(days=offset)
-                locations = np.flatnonzero(date_index == occurrence.date())
-                values[locations] = 1.0
+                day_key = int(
+                    np.datetime64(occurrence.tz_localize(None).date(), "D").astype(np.int64)
+                )
+                values[day_positions.get(day_key, [])] = 1.0
         columns = sorted(expanded)
         result = pd.DataFrame({column: expanded[column] for column in columns})
         priors = [prior_scales[column.split("_delim_", 1)[0]] for column in columns]
@@ -710,10 +840,12 @@ class Prophet:
         return result
 
     def predict_trend(self, df: Any) -> Any:
-        return self.predict(df)["trend"].to_numpy()
+        frame, future = self._prediction_frames(df)
+        return self._predict_frame(frame, future, intervals=False)["trend"].to_numpy()
 
     def predict_seasonal_components(self, df: Any) -> Any:
-        forecast = self.predict(df)
+        frame, future = self._prediction_frames(df)
+        forecast = self._predict_frame(frame, future, intervals=False)
         return forecast[
             [
                 column
@@ -888,28 +1020,34 @@ def _prophet_result_frame(
     interval: float,
 ) -> Any:
     pd = require_pandas()
-    output = pd.DataFrame(
-        {
-            "ds": frame["ds"].to_numpy(),
-            "yhat": [row.get("prediction", row.get("fitted")) for row in result],
-        }
-    )
     suffix = int(round(interval * 100))
     lower = f"prediction_lower_p{suffix}"
     upper = f"prediction_upper_p{suffix}"
-    output["yhat_lower"] = [row.get(lower, np.nan) for row in result]
-    output["yhat_upper"] = [row.get(upper, np.nan) for row in result]
+    columns: dict[str, Any] = {
+        "ds": frame["ds"].to_numpy(),
+        "yhat": [row.get("prediction", row.get("fitted")) for row in result],
+        "yhat_lower": [row.get(lower, np.nan) for row in result],
+        "yhat_upper": [row.get(upper, np.nan) for row in result],
+    }
+    for name in ("cap", "floor"):
+        if name in frame:
+            columns[name] = frame[name].to_numpy()
+    if components:
+        columns["trend"] = np.empty(len(frame), dtype=float)
+        columns["additive_terms"] = np.empty(len(frame), dtype=float)
     for row, record in enumerate(components):
         component_values = record.get("components", {})
-        output.loc[row, "trend"] = component_values.get("trend_linear", np.nan)
-        output.loc[row, "additive_terms"] = component_values.get("non_trend_total", 0.0)
+        columns["trend"][row] = record.get("trend", component_values.get("trend_linear", np.nan))
+        columns["additive_terms"][row] = component_values.get("non_trend_total", 0.0)
         for name, value in component_values.get("regressors", {}).items():
-            output.loc[row, name] = value
-    return output
+            if name not in columns:
+                columns[name] = np.full(len(frame), np.nan, dtype=float)
+            columns[name][row] = value
+    return pd.DataFrame(columns)
 
 
 def _timestamp_key(value: Any) -> str:
-    return require_pandas().Timestamp(value).to_pydatetime().replace(tzinfo=None).isoformat()
+    return require_pandas().Timestamp(value).tz_localize(None).isoformat()
 
 
 __all__ = ["Prophet"]

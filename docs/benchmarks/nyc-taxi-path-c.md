@@ -1,8 +1,14 @@
 # NYC Taxi Geo-Temporal Tests
 
-These experiments use 2024 NYC TLC yellow taxi data to test five concrete
-geo-temporal modeling questions. Results apply to the documented sample and
-splits; they do not establish universal superiority or evaluate deep models.
+Five experiments ask where taxi-trip structure matters: direction, hourly
+history, known-future covariates, transfer to held-out pickup zones, and residual
+correction. They use 2024 NYC TLC yellow taxi data with explicit comparison
+models for each question.
+
+The table below describes each experiment and its decision threshold. Detailed
+scores and timings are in the linked [JSON artifact](../assets/nyc_taxi_benchmarks/path_c_claims.json).
+The evidence applies to the recorded sample and splits; these are individual
+geo-temporal tests, not a deep-model comparison.
 
 ## Data And Outputs
 

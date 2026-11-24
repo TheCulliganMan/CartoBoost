@@ -36,6 +36,7 @@ pub struct CartoBoostLagForecaster {
     sample_weight_mode: GlobalForecastSampleWeightMode,
     backend: BackendSelection,
     fitted: Option<FittedGlobalState>,
+    intervals: Option<super::conformal::ResidualForecastIntervals>,
 }
 
 #[derive(Debug, Clone)]
@@ -97,11 +98,23 @@ impl CartoBoostLagForecaster {
             sample_weight_mode,
             backend,
             fitted: None,
+            intervals: None,
         })
     }
 
     pub fn lag_builder(&self) -> &LagFeatureBuilder {
         &self.lag_builder
+    }
+
+    /// Configure training-residual Gaussian intervals before fitting.
+    pub fn with_prediction_interval_levels(mut self, levels: Vec<f64>) -> Result<Self> {
+        if self.fitted.is_some() {
+            return Err(CartoBoostError::InvalidInput(
+                "configure prediction intervals before fitting".into(),
+            ));
+        }
+        self.intervals = super::conformal::ResidualForecastIntervals::configured(levels)?;
+        Ok(self)
     }
 
     pub fn booster_config(&self) -> &BoosterConfig {
@@ -146,6 +159,7 @@ impl CartoBoostLagForecaster {
             .into_par_iter()
             .map(|(series_id, fitted_history)| {
                 let mut history = fitted_history.clone();
+                let mut recursive_state = self.lag_builder.recursive_state(series_id, &history)?;
                 let last = history
                     .last()
                     .ok_or_else(|| {
@@ -157,14 +171,13 @@ impl CartoBoostLagForecaster {
                     let timestamp = fitted.frame.frequency().advance(last.timestamp, step)?;
                     let future_covariates =
                         known_future_covariates.get(&(series_id.clone(), timestamp));
-                    let features = self
-                        .lag_builder
-                        .transform_next_sorted_prior_with_covariates(
-                            series_id,
-                            &history,
-                            timestamp,
-                            future_covariates,
-                        )?;
+                    let features = self.lag_builder.transform_next_recursive(
+                        series_id,
+                        &history,
+                        timestamp,
+                        future_covariates,
+                        &mut recursive_state,
+                    )?;
                     let raw_prediction = fitted.model.predict_one(&features);
                     let mean = match self.target_mode {
                         GlobalForecastTargetMode::Level => raw_prediction,
@@ -211,7 +224,7 @@ impl CartoBoostLagForecaster {
             .into_iter()
             .flatten()
             .collect();
-        ForecastResult::new(predictions)
+        super::conformal::residual_interval_result(predictions, self.intervals.as_ref(), 0)
     }
 }
 
@@ -268,6 +281,24 @@ impl Forecaster for CartoBoostLagForecaster {
         let model =
             Booster::new_with_backend(self.booster_config.clone(), Some(&self.backend.selected))?
                 .fit(&x, &y, sample_weights.as_deref())?;
+        let mut intervals = self
+            .intervals
+            .as_ref()
+            .map(super::conformal::ResidualForecastIntervals::reset);
+        if let Some(calibration) = &mut intervals {
+            let predictions = model.try_predict(&x)?;
+            let mut residuals: BTreeMap<&str, Vec<f64>> = BTreeMap::new();
+            for ((row, actual), prediction) in training_rows.iter().zip(&y).zip(predictions) {
+                residuals
+                    .entry(&row.series_id)
+                    .or_default()
+                    .push(actual - prediction);
+            }
+            for (series_id, values) in residuals {
+                calibration.fit_series(series_id, values.into_iter())?;
+            }
+        }
+        self.intervals = intervals;
         self.fitted = Some(FittedGlobalState {
             frame: frame.clone(),
             history_by_series,
@@ -290,6 +321,7 @@ impl Forecaster for CartoBoostLagForecaster {
             .into_par_iter()
             .map(|(series_id, fitted_history)| {
                 let mut history = fitted_history.clone();
+                let mut recursive_state = self.lag_builder.recursive_state(series_id, &history)?;
                 let last = history
                     .last()
                     .ok_or_else(|| {
@@ -299,9 +331,13 @@ impl Forecaster for CartoBoostLagForecaster {
                 let mut predictions = Vec::with_capacity(horizon);
                 for step in 1..=horizon {
                     let timestamp = fitted.frame.frequency().advance(last.timestamp, step)?;
-                    let features = self
-                        .lag_builder
-                        .transform_next_sorted_prior(series_id, &history, timestamp)?;
+                    let features = self.lag_builder.transform_next_recursive(
+                        series_id,
+                        &history,
+                        timestamp,
+                        None,
+                        &mut recursive_state,
+                    )?;
                     let raw_prediction = fitted.model.predict_one(&features);
                     let mean = match self.target_mode {
                         GlobalForecastTargetMode::Level => raw_prediction,
@@ -348,7 +384,7 @@ impl Forecaster for CartoBoostLagForecaster {
             .into_iter()
             .flatten()
             .collect();
-        ForecastResult::new(predictions)
+        super::conformal::residual_interval_result(predictions, self.intervals.as_ref(), 0)
     }
 
     fn model_name(&self) -> &'static str {
@@ -370,6 +406,10 @@ impl Forecaster for CartoBoostLagForecaster {
             payload["series_count"] = json!(fitted.history_by_series.len());
             payload["native_model_metadata"] = json!(fitted.model.metadata);
         }
+        if let Some(calibration) = &self.intervals {
+            payload["prediction_intervals"] =
+                calibration.metadata("constant_residual_approximation");
+        }
         payload
     }
 }
@@ -390,6 +430,10 @@ impl CartoBoostLagForecaster {
             .iter()
             .map(|(series_id, history)| (series_id.clone(), history.clone()))
             .collect::<Vec<_>>();
+        let mut recursive_states = series
+            .iter()
+            .map(|(series_id, history)| self.lag_builder.recursive_state(series_id, history))
+            .collect::<Result<Vec<_>>>()?;
         let base_timestamps = series
             .iter()
             .map(|(series_id, history)| {
@@ -409,15 +453,13 @@ impl CartoBoostLagForecaster {
                     .advance(base_timestamps[index], step)?;
                 let future_covariates = known_future_covariates
                     .and_then(|values| values.get(&(series_id.clone(), timestamp)));
-                feature_rows.push(
-                    self.lag_builder
-                        .transform_next_sorted_prior_with_covariates(
-                            series_id,
-                            history,
-                            timestamp,
-                            future_covariates,
-                        )?,
-                );
+                feature_rows.push(self.lag_builder.transform_next_recursive(
+                    series_id,
+                    history,
+                    timestamp,
+                    future_covariates,
+                    &mut recursive_states[index],
+                )?);
                 timestamps.push(timestamp);
             }
             let raw = fitted
@@ -468,7 +510,11 @@ impl CartoBoostLagForecaster {
                 ));
             }
         }
-        ForecastResult::new(predictions.into_iter().flatten().collect())
+        super::conformal::residual_interval_result(
+            predictions.into_iter().flatten().collect(),
+            self.intervals.as_ref(),
+            0,
+        )
     }
 }
 
@@ -667,6 +713,69 @@ mod tests {
         NaiveDate::from_ymd_opt(2026, 1, day)
             .and_then(|date| date.and_hms_opt(0, 0, 0))
             .expect("valid timestamp")
+    }
+
+    #[test]
+    fn lag_intervals_use_actual_fitted_target_residuals_for_each_target_mode() {
+        let frame = ForecastFrame::new(
+            (1..=14)
+                .map(|day| ForecastRow::new("PU1-DO2", ts(day), f64::from(day * day % 19) + 10.0))
+                .collect(),
+            crate::forecasting::ForecastFrequency::Daily,
+        )
+        .unwrap();
+        for target_mode in [
+            GlobalForecastTargetMode::Level,
+            GlobalForecastTargetMode::DeltaFromLast,
+            GlobalForecastTargetMode::SeasonalDelta { season_length: 2 },
+        ] {
+            let mut model = CartoBoostLagForecaster::new_with_target_mode(
+                LagFeatureConfig {
+                    lags: vec![1, 2],
+                    rolling_mean_windows: Vec::new(),
+                    ..LagFeatureConfig::default()
+                },
+                BoosterConfig {
+                    n_estimators: 3,
+                    max_depth: 1,
+                    min_samples_leaf: 1,
+                    ..BoosterConfig::default()
+                },
+                target_mode,
+            )
+            .unwrap()
+            .with_prediction_interval_levels(vec![0.8])
+            .unwrap();
+            model.fit(&frame).unwrap();
+            let fitted = model.fitted.as_ref().unwrap();
+            let rows = model.lag_builder.transform_frame(&frame).unwrap();
+            let rows: Vec<_> = rows
+                .iter()
+                .filter_map(|row| {
+                    target_for_mode(&target_mode, &fitted.history_by_series, row)
+                        .unwrap()
+                        .map(|target| (row, target))
+                })
+                .collect();
+            let x = Dataset::from_rows(rows.iter().map(|(row, _)| row.features.clone()).collect())
+                .unwrap();
+            let predictions = fitted.model.try_predict(&x).unwrap();
+            let scale = (rows
+                .iter()
+                .zip(predictions)
+                .map(|((_, actual), prediction)| (actual - prediction).powi(2))
+                .sum::<f64>()
+                / rows.len() as f64)
+                .sqrt();
+            let result = model.predict(3).unwrap();
+            assert_eq!(result.intervals().len(), 3);
+            for (point, interval) in result.predictions().iter().zip(result.intervals()) {
+                assert!(
+                    (interval.upper - point.mean - 1.281_551_565_544_600_4 * scale).abs() < 1e-7
+                );
+                assert!((interval.lower + interval.upper - 2.0 * point.mean).abs() < 1e-10);
+            }
+        }
     }
 
     #[test]

@@ -8,6 +8,8 @@ from typing import Any
 
 import numpy as np
 
+from .. import _native
+
 
 def _safe_float_array(values: Sequence[float] | Sequence[int]) -> np.ndarray:
     array = np.asarray(values, dtype=np.float64)
@@ -22,19 +24,7 @@ def binary_auc(labels: Sequence[int], scores: Sequence[float]) -> float:
     s = _safe_float_array(scores)
     if y.shape != s.shape:
         raise ValueError("labels and scores must have equal length")
-    positive_mask = y > 0.5
-    negative_mask = y <= 0.5
-    if not positive_mask.any() or not negative_mask.any():
-        return 0.0
-
-    pos_scores = s[positive_mask]
-    neg_scores = s[negative_mask]
-    greater = 0.0
-    ties = 0.0
-    for pos in pos_scores:
-        greater += float(np.sum(neg_scores < pos))
-        ties += float(np.sum(neg_scores == pos))
-    return (greater + 0.5 * ties) / (float(len(pos_scores)) * float(len(neg_scores)))
+    return float(_native.binary_roc_auc_value(y.tolist(), s.tolist()))
 
 
 def binary_average_precision(labels: Sequence[int], scores: Sequence[float]) -> float:
@@ -111,26 +101,9 @@ def mean_reciprocal_rank(
     if not (y.shape == s.shape == (len(query_values),)):
         raise ValueError("labels, scores, and query_ids must align")
 
-    query_to_indices: dict[Any, list[int]] = defaultdict(list)
-    for index, query_id in enumerate(query_values):
-        query_to_indices[query_id].append(index)
-
-    ranks: list[float] = []
-    for indices in query_to_indices.values():
-        positives = [index for index in indices if y[index] > 0.5]
-        if not positives:
-            continue
-        ordered = sorted(indices, key=lambda idx: s[idx], reverse=True)
-        best_pos = min(
-            (rank + 1 for rank, idx in enumerate(ordered) if idx in positives),
-            default=None,
-        )
-        if best_pos is not None:
-            ranks.append(1.0 / float(best_pos))
-
-    if not ranks:
-        return 0.0
-    return float(np.mean(ranks))
+    group_lookup: dict[Any, int] = {}
+    group_ids = [group_lookup.setdefault(key, len(group_lookup)) for key in query_values]
+    return float(_native.graph_mean_reciprocal_rank_value(y.tolist(), s.tolist(), group_ids))
 
 
 def link_prediction_report(

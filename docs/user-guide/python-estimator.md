@@ -1,8 +1,9 @@
 # Using The Python Estimator
 
-`CartoBoostRegressor` is the public Python estimator for row-level regression.
-It follows sklearn conventions for parameter inspection, cloning, pipelines,
-and grid search over the supported API surface.
+Fit, inspect, and save a row-level model with `CartoBoostRegressor`.
+The estimator follows sklearn conventions for parameters, cloning, pipelines,
+and grid search. Start with measured trip features, then add spatial, periodic,
+or membership structure when the validation results justify it.
 
 ## Start With The Row Definition
 
@@ -19,7 +20,7 @@ expected to vary with structured place/time effects:
   radial neighborhoods.
 - Fuzzy regions where nearby coordinates or times should not jump abruptly at a
   learned split.
-- Objectives where the mean is not the scientific estimand, such as robust
+- Objectives that target something other than the mean, such as robust
   residual modeling or conditional quantiles.
 
 Use a baseline before adding specialized structure. A typical study starts with
@@ -154,7 +155,7 @@ model.fit(
 )
 ```
 
-Use schemas when the fitted artifact needs to communicate the scientific role
+Use schemas when the fitted artifact needs to communicate the modeling role
 of each column, not only its position in an array. See
 [Feature Schema](../feature_schema.md) for validation rules and saved schema
 representation.
@@ -224,7 +225,7 @@ routing, losses, or linear leaves only after the validation design is fixed.
 
 `predict_additive_values(X)` returns per-row additive components whose sums
 match `predict(X)`. Use these artifacts to inspect which fitted components
-move predictions before turning the model into a scientific claim.
+move predictions before drawing conclusions about the learned relationships.
 
 For original-feature attribution with LightGBM's array layout, use the native
 background-free path-dependent TreeSHAP surface:

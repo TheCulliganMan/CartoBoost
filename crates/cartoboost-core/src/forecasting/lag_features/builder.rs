@@ -1,3 +1,8 @@
+pub(crate) struct RecursiveLagState {
+    processed: usize,
+    ewm: Vec<f64>,
+}
+
 impl LagFeatureBuilder {
     pub fn new(config: LagFeatureConfig) -> Result<Self> {
         validate_config(&config)?;
@@ -221,6 +226,75 @@ impl LagFeatureBuilder {
             &history[..prior_end],
             timestamp,
             covariate_source.as_ref(),
+        )?
+        .ok_or_else(|| {
+            CartoBoostError::InvalidInput(format!(
+                "series {series_id} does not have enough prior history for lag features"
+            ))
+        })
+    }
+
+    /// Validate once before an internally owned history is extended recursively.
+    pub(crate) fn recursive_state(
+        &self,
+        series_id: &str,
+        history: &[ForecastRow],
+    ) -> Result<RecursiveLagState> {
+        if history.is_empty()
+            || history.iter().any(|row| row.series_id != series_id)
+            || history
+                .windows(2)
+                .any(|pair| pair[0].timestamp >= pair[1].timestamp)
+        {
+            return Err(CartoBoostError::InvalidInput(format!(
+                "history for series {series_id} must be nonempty and strictly sorted within the series"
+            )));
+        }
+        Ok(RecursiveLagState {
+            processed: 0,
+            ewm: vec![0.0; self.config.ewm_alpha_percents.len()],
+        })
+    }
+
+    pub(crate) fn transform_next_recursive(
+        &self,
+        series_id: &str,
+        history: &[ForecastRow],
+        timestamp: NaiveDateTime,
+        covariates: Option<&BTreeMap<String, f64>>,
+        state: &mut RecursiveLagState,
+    ) -> Result<Vec<f64>> {
+        if history.len() < state.processed
+            || history.last().is_none_or(|row| row.timestamp >= timestamp)
+        {
+            return Err(CartoBoostError::InvalidInput(
+                "recursive lag history must extend its validated prefix before the forecast"
+                    .to_string(),
+            ));
+        }
+        for (index, row) in history.iter().enumerate().skip(state.processed) {
+            for (value, percent) in state.ewm.iter_mut().zip(&self.config.ewm_alpha_percents) {
+                if index == 0 {
+                    *value = row.target;
+                } else {
+                    let alpha = f64::from(*percent) / 100.0;
+                    *value = alpha * row.target + (1.0 - alpha) * *value;
+                }
+            }
+        }
+        state.processed = history.len();
+        let covariate_source = covariates.map(|values| ForecastRow {
+            series_id: series_id.to_string(),
+            timestamp,
+            target: 0.0,
+            covariates: values.clone(),
+        });
+        self.features_from_prior_with_ewm(
+            series_id,
+            history,
+            timestamp,
+            covariate_source.as_ref(),
+            Some(&state.ewm),
         )?
         .ok_or_else(|| {
             CartoBoostError::InvalidInput(format!(
@@ -464,6 +538,17 @@ impl LagFeatureBuilder {
         timestamp: NaiveDateTime,
         covariate_source: Option<&ForecastRow>,
     ) -> Result<Option<Vec<f64>>> {
+        self.features_from_prior_with_ewm(series_id, prior, timestamp, covariate_source, None)
+    }
+
+    fn features_from_prior_with_ewm(
+        &self,
+        series_id: &str,
+        prior: &[ForecastRow],
+        timestamp: NaiveDateTime,
+        covariate_source: Option<&ForecastRow>,
+        cached_ewm: Option<&[f64]>,
+    ) -> Result<Option<Vec<f64>>> {
         let mut features = Vec::with_capacity(self.feature_names.len());
         for lag in &self.config.lags {
             if prior.len() < *lag {
@@ -556,15 +641,21 @@ impl LagFeatureBuilder {
             }
             features.push(max);
         }
-        for alpha_percent in &self.config.ewm_alpha_percents {
+        for (alpha_index, alpha_percent) in self.config.ewm_alpha_percents.iter().enumerate() {
             if prior.is_empty() {
                 return Ok(None);
             }
-            let alpha = f64::from(*alpha_percent) / 100.0;
-            let mut ewm = prior[0].target;
-            for row in &prior[1..] {
-                ewm = alpha * row.target + (1.0 - alpha) * ewm;
-            }
+            let ewm = cached_ewm.map_or_else(
+                || {
+                    let alpha = f64::from(*alpha_percent) / 100.0;
+                    let mut ewm = prior[0].target;
+                    for row in &prior[1..] {
+                        ewm = alpha * row.target + (1.0 - alpha) * ewm;
+                    }
+                    ewm
+                },
+                |values| values[alpha_index],
+            );
             if !ewm.is_finite() {
                 return Err(CartoBoostError::InvalidInput(format!(
                     "exponentially weighted mean for series {series_id} is not finite"
@@ -771,4 +862,3 @@ pub(crate) fn lag_config_supported_by_prior(
     sort_dedup_lag_config(&mut supported);
     supported
 }
-

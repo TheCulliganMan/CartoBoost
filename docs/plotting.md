@@ -1,12 +1,12 @@
 # Plotting
 
-`cartoboost.plotting` turns fitted model outputs, forecast artifacts, and
-benchmark metric rows into Matplotlib figures. It is separate from model
-fitting: the plots consume predictions and metrics that were already computed
-by CartoBoost, the CLI, or an external baseline.
+Plot model behavior: inspect forecast trends, interval coverage,
+held-out errors, and the features that shape a prediction. `cartoboost.plotting`
+creates figures from predictions and metrics you have already computed.
 
-The API covers forecast component, uncertainty, and model-comparison
-diagnostics for CartoBoost benchmark evidence:
+Choose a diagnostic below. For an interactive first look without a Python
+session, open the [Modeling Lab](../modeling-lab). Python plotting dependencies
+are optional and installed separately from CartoBoost.
 
 | Diagnostic need | CartoBoost plotting helper |
 | --- | --- |
@@ -89,15 +89,10 @@ implements the same names in `cartoboost.plotting`:
 | `get_forecast_component_plotly_props` | `get_forecast_component_plotly_props` | Plotly trace and axis props for one forecast component. |
 | `get_seasonality_plotly_props` | `get_seasonality_plotly_props` | Plotly trace and axis props for one seasonality. |
 
-The compatibility tests in `tests/python/test_plotting.py` lock this list as
-`PROPHET_PLOT_122_PUBLIC_UTILITIES` and lock the exact parameter/default
-surface as `PROPHET_PLOT_122_SIGNATURES`. They also render representative
-Matplotlib and Plotly figures from a Prophet-shaped local model. Those tests
-prove the local module has the same public plotting utility names and call
-signatures as `prophet==1.2.2`, and that the helpers operate on the same
-forecast columns and model attributes (`history`, `seasonalities`,
-`extra_regressors`, `component_modes`, `changepoints`, `params["delta"]`, and
-`predict_seasonal_components`).
+The helpers follow the public names and call signatures of `prophet==1.2.2`.
+They consume Prophet-shaped forecast columns and model attributes, including
+`history`, `seasonalities`, `extra_regressors`, `component_modes`,
+`changepoints`, `params["delta"]`, and `predict_seasonal_components`.
 
 The plotting helpers can be used directly or through the reusable
 `cartoboost.Prophet` façade. The façade delegates fitting and prediction to the
@@ -600,9 +595,9 @@ uv add geopandas matplotlib pydeck shapely
 
 ## Saving figures
 
-All plotting helpers return a Matplotlib `Figure`. `save_figure` creates parent
-directories, writes the file with a stable default DPI, and can close the figure
-after writing:
+Matplotlib helpers return a `Figure`. `save_figure` creates parent directories,
+writes the file with a stable default DPI, and can close the figure after
+writing:
 
 ```python
 from cartoboost.plotting import save_figure
@@ -610,6 +605,6 @@ from cartoboost.plotting import save_figure
 save_figure(fig, "target/plots/chart.png", dpi=180, close=True)
 ```
 
-Prefer `target/` for exploratory plots. Commit generated plots only when they
-are part of a maintained benchmark artifact and the benchmark documentation
-identifies the command and source data that produced them.
+Keep the predictions, metric rows, and model settings with exported figures so
+you can trace a chart back to its inputs. Plotly helpers return interactive
+figures; use their own export methods rather than `save_figure`.

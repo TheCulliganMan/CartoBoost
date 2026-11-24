@@ -1,7 +1,8 @@
 [package]
 name = "cartoboost-prob"
-version = "0.3.12"
+version = "0.3.13"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "Probabilistic prediction, calibration, and distributional metrics for CartoBoost."
 
@@ -11,7 +12,7 @@ cartoboost-neural = { path = "../cartoboost-neural" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-rayon = "1.11"
+rayon.workspace = true
 
 [features]
 default = []

@@ -1,3 +1,5 @@
+mod inverted_temporal;
+
 use cartoboost_core::booster::BoosterConfig;
 use cartoboost_core::data::{Dataset, FeatureKind, FeatureSchema, SparseSetColumn};
 use cartoboost_core::forecasting::{
@@ -1784,51 +1786,18 @@ pub async fn deep_event_outcome_predict_webgpu_wasm(
         .map_err(|error| JsValue::from_str(&format!("invalid event artifact: {error}")))?;
     let features: Vec<Vec<f64>> = serde_wasm_bindgen::from_value(features)
         .map_err(|error| JsValue::from_str(&format!("invalid event features: {error}")))?;
-    if features.is_empty()
-        || artifact.hidden_weights.is_empty()
-        || features
-            .iter()
-            .any(|row| row.len() != artifact.feature_means.len())
-    {
-        return Err(JsValue::from_str(
-            "WebGPU event prediction requires nonempty rectangular features and a hidden-layer artifact",
-        ));
-    }
-    let standardized = features
-        .iter()
-        .map(|row| {
-            row.iter()
-                .zip(&artifact.feature_means)
-                .map(|(value, mean)| (value - mean) as f32)
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
-    let input = artifact.feature_means.len();
-    let weights = (0..input)
-        .flat_map(|column| {
-            artifact
-                .hidden_weights
-                .iter()
-                .map(move |row| row[column] as f32)
-        })
-        .collect::<Vec<_>>();
-    let biases = artifact
-        .hidden_biases
-        .iter()
-        .map(|value| *value as f32)
-        .collect::<Vec<_>>();
-    let hidden_values = webgpu_dense_layer_f32_async(&standardized, &weights, &biases)
-        .await
-        .map_err(|error| JsValue::from_str(&error.to_string()))?;
-    let predictions = hidden_values
-        .iter()
-        .map(|row| {
-            let logit = artifact.intercept
-                + row
-                    .iter()
-                    .zip(&artifact.output_weights)
-                    .map(|(value, weight)| f64::from(value.tanh()) * weight)
-                    .sum::<f64>();
+    let logits = webgpu_hidden_scores(
+        &features,
+        &artifact.feature_means,
+        &artifact.hidden_weights,
+        &artifact.hidden_biases,
+        &artifact.output_weights,
+        &vec![artifact.intercept; features.len()],
+    )
+    .await?;
+    let predictions = logits
+        .into_iter()
+        .map(|logit| {
             let probability = 1.0 / (1.0 + (-logit).exp());
             let calibrated_probability =
                 1.0 / (1.0 + (-(logit / artifact.temperature.max(1.0e-6))).exp());
@@ -1851,15 +1820,15 @@ async fn webgpu_hidden_scores(
     output_weights: &[f64],
     intercepts: &[f64],
 ) -> std::result::Result<Vec<f64>, JsValue> {
-    if features.is_empty()
-        || hidden_weights.is_empty()
-        || features.iter().any(|row| row.len() != means.len())
-        || hidden_biases.len() != hidden_weights.len()
-        || output_weights.len() != hidden_weights.len()
-        || intercepts.len() != features.len()
-    {
-        return Err(JsValue::from_str("invalid WebGPU hidden-layer inputs"));
-    }
+    cartoboost_neural::deep::validate_tanh_network_inputs(
+        features,
+        means,
+        hidden_weights,
+        hidden_biases,
+        output_weights,
+        intercepts,
+    )
+    .map_err(|error| JsValue::from_str(&error.to_string()))?;
     let standardized = features
         .iter()
         .map(|row| {
@@ -2277,47 +2246,20 @@ pub fn deep_regime_moe_report_wasm(
             "regime features and target must be finite fixed-width arrays",
         ));
     }
-    let target_mean = target.iter().sum::<f64>() / target.len() as f64;
-    let predictions = features
-        .iter()
-        .map(|row| {
-            let signal = row.iter().sum::<f64>() / row.len() as f64;
-            target_mean + 0.15 * signal
-        })
-        .collect::<Vec<_>>();
-    let rmse = (predictions
-        .iter()
-        .zip(target.iter())
-        .map(|(&pred, &actual)| (pred - actual).powi(2))
-        .sum::<f64>()
-        / target.len() as f64)
-        .sqrt();
-    let mut usage = BTreeMap::new();
-    for name in [
-        "stable_recurring_pattern",
-        "sparse_cold_start",
-        "high_volume_hub",
-        "volatile_shock",
-        "long_distance_pair",
-        "low_signal_fallback",
-    ] {
-        usage.insert(name, 1.0 / 6.0);
-    }
-    serialize_json_response(
-        &json!({
-            "model_class": "RegimeMoEForecaster",
-            "architecture": "regime_moe",
-            "predictions": predictions,
-            "train_metrics": {
-                "rmse": rmse,
-                "single_expert_rmse": rmse + 0.05,
-                "beats_single_expert": true
-            },
-            "expert_usage": usage,
-            "router_entropy": (6.0_f64).ln(),
-        }),
-        "deep regime MoE report",
+    let rows = features.len();
+    let flat: Vec<_> = features.into_iter().flatten().collect();
+    let router = vec![0.; rows * 6];
+    let model = cartoboost_neural::regime::RegimeMoEModel::fit(
+        &flat, rows, width, &target, &router, &[1; 6], 1e-6, "cpu",
     )
+    .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    let predictions = model
+        .predict(&flat, rows, width, &router, &[1; 6], false)
+        .map_err(|error| JsValue::from_str(&error.to_string()))?
+        .combined;
+    let mut report = model.metadata;
+    report["predictions"] = json!(predictions);
+    serialize_json_response(&report, "deep regime MoE report")
 }
 
 #[wasm_bindgen(js_name = deepConstrainedDecisionSelect)]

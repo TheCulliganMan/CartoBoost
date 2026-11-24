@@ -1,18 +1,31 @@
 # NYC Taxi Benchmarks
 
-## Bottom Line
+CartoBoost has lower RMSE than the strongest completed external baseline on five
+of the six reported fare and duration splits. **Fare on held-out pickup zones
+is the exception:** HistGradientBoosting is stronger there.
 
-The maintained JSON records a bounded real-data run on 2024 NYC TLC yellow taxi
-data. It compares one primary `cartoboost` row with XGBoost, LightGBM, CatBoost,
-and scikit-learn HistGradientBoosting under fixed settings. This current 50,000-
-row, 24-tree qualification run includes random, spatial-holdout, and temporal
-holdouts for duration and fare. Lane-demand evidence is reported separately in
-the maintained forecasting artifact; neither artifact claims an AutoGeo selector
-result because that selector is not shipped.
+The run uses 50,000 yellow taxi trips from January–April 2024, a fixed 24-tree
+budget, and random, spatial, and out-of-time holdouts. Targets are log trip
+duration and log total fare. These results describe that bounded sample and
+configuration; timing reflects the local benchmark environment.
 
-This is bounded evidence, not a universal claim: it uses four months, a
-50,000-row sampled trip frame, fixed hyperparameters, and local hardware
-timing.
+See [forecasting results](forecasting.md#nyc-taxi-demand) for lane demand.
+
+## Comparison Summary
+
+For each runnable learned-model split, the table compares the single primary
+`cartoboost` row with the lowest-RMSE external baseline that finished under the
+same task, split, sample, target transformation, and global settings.
+
+| Task / split | CartoBoost RMSE | CartoBoost WAPE | Best external baseline | External RMSE | External WAPE | RMSE delta | R2 delta | Result |
+| --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | --- |
+| Duration / random | 0.325729 | 0.037797 | HistGradientBoosting | 0.341885 | 0.039919 | -0.016156 | +0.022112 | CartoBoost lower RMSE |
+| Duration / spatial holdout | 0.328395 | 0.036862 | HistGradientBoosting | 0.352826 | 0.040023 | -0.024431 | +0.025444 | CartoBoost lower RMSE |
+| Duration / out of time | 0.330825 | 0.038554 | HistGradientBoosting | 0.345772 | 0.040406 | -0.014947 | +0.020301 | CartoBoost lower RMSE |
+| Fare / random | 0.172949 | 0.041365 | HistGradientBoosting | 0.179155 | 0.042961 | -0.006206 | +0.008249 | CartoBoost lower RMSE |
+| Fare / spatial holdout | 0.274082 | 0.058724 | HistGradientBoosting | 0.241167 | 0.053757 | +0.032915 | -0.037310 | External lower RMSE |
+| Fare / out of time | 0.179687 | 0.042392 | HistGradientBoosting | 0.186056 | 0.044033 | -0.006369 | +0.008575 | CartoBoost lower RMSE |
+
 
 ## Data
 
@@ -28,9 +41,9 @@ timing.
 | Dataset hash | `see maintained results.json` |
 | Zone treatment | Train-only smoothed target-mean zone features for all eligible models |
 
-Raw TLC files stay under `data/nyc_taxi/` and are not committed. The maintained
-run used `--no-plots`, so missing local real inputs still hard-fail instead of
-silently downgrading the benchmark.
+Raw TLC files are read from `data/nyc_taxi/`. This run used `--no-plots`;
+its numerical comparisons are available in the JSON and Markdown artifacts.
+The runner requires the real input files.
 
 ## Reproduce
 
@@ -83,27 +96,11 @@ other learned baselines in the validated environment.
 | Skipped requested external baselines | none |
 | CartoBoost/external comparison rows | 7 |
 
-## Comparison Summary
-
-For each runnable learned-model split, the table compares the single primary
-`cartoboost` row with the lowest-RMSE external baseline that finished under the
-same task, split, sample, target transformation, and global settings.
-
-| Task / split | CartoBoost RMSE | CartoBoost WAPE | Best external baseline | External RMSE | External WAPE | RMSE delta | R2 delta | Result |
-| --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | --- |
-| Duration / random | 0.325729 | 0.037797 | HistGradientBoosting | 0.341885 | 0.039919 | -0.016156 | +0.022112 | CartoBoost lower RMSE |
-| Duration / spatial holdout | 0.328395 | 0.036862 | HistGradientBoosting | 0.352826 | 0.040023 | -0.024431 | +0.025444 | CartoBoost lower RMSE |
-| Duration / out of time | 0.330825 | 0.038554 | HistGradientBoosting | 0.345772 | 0.040406 | -0.014947 | +0.020301 | CartoBoost lower RMSE |
-| Fare / random | 0.172949 | 0.041365 | HistGradientBoosting | 0.179155 | 0.042961 | -0.006206 | +0.008249 | CartoBoost lower RMSE |
-| Fare / spatial holdout | 0.274082 | 0.058724 | HistGradientBoosting | 0.241167 | 0.053757 | +0.032915 | -0.037310 | External lower RMSE |
-| Fare / out of time | 0.179687 | 0.042392 | HistGradientBoosting | 0.186056 | 0.044033 | -0.006369 | +0.008575 | CartoBoost lower RMSE |
-
-
 ## What the Rows Mean
 
 | Task / split | Prediction unit | Target | Validation question | Signal used by CartoBoost |
 | --- | --- | --- | --- | --- |
-| Duration / random | One completed taxi trip | Log trip duration in seconds | Can the model explain ordinary held-out trips drawn from the same year-wide trip distribution? | Trip distance, passenger count, hour/day periodicity, pickup/dropoff zones, and route geometry. |
+| Duration / random | One completed taxi trip | Log trip duration in seconds | Can the model explain ordinary held-out trips drawn from the same sampled trip distribution? | Trip distance, passenger count, hour/day periodicity, pickup/dropoff zones, and route geometry. |
 | Duration / spatial holdout | One completed taxi trip from held-out pickup zones | Log trip duration in seconds | Does the duration structure transfer when pickup zones are held out? | Spatial splitters and route geometry rather than memorizing the validation rows. |
 | Fare / random | One completed taxi trip | Log total fare amount | Can the model recover fare structure for ordinary held-out trips? | Distance, pickup/dropoff zones, hour/day effects, and cartometric route features. |
 | Fare / spatial holdout | One completed taxi trip from held-out pickup zones | Log total fare amount | Does fare modeling generalize to zones not present in the training pickup set? | Route and zone geometry carry transferable fare signal beyond target-mean zone encodings. |
@@ -116,8 +113,7 @@ same task, split, sample, target transformation, and global settings.
   duration/fare spatial and out-of-time
   comparisons. Fare spatial holdout remains the documented miss.
 - The official AutoGeo admission audit counts zero real family wins because the
-  selector is not shipped and this artifact is not a leakage-safe AutoGeo
-  evidence package.
+  selector is not shipped; these results evaluate the listed individual models.
 - The comparisons are fair at the benchmark level: same sample, same split
   rules, same fixed estimator budget, and the same feature-access policy.
 - The pickup-demand spatial holdout skips learned models because held-out pickup

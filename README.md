@@ -81,14 +81,14 @@ Install the released package from PyPI:
 uv add cartoboost
 ```
 
-CartoBoost 0.3 keeps the root import surface intentionally small. Read the
-[0.3 migration guide](docs/migration-v0.3.md) when upgrading imports from 0.2;
-forecasting and validation use named modules, while advanced model families
-are explicitly under `cartoboost.supported`.
+CartoBoost exposes estimators and model families from the root package. Named
+modules such as `cartoboost.forecasting`, `cartoboost.graph`, and
+`cartoboost.deep` keep application imports explicit. Read the
+[0.3 migration guide](docs/migration-v0.3.md) when upgrading from 0.2.
 
-CartoBoost does not publish package extras. The base install contains only the
-runtime dependencies needed by the core Python API. Install each third-party
-integration directly when your workflow needs it:
+The base install requires only NumPy. Optional integrations can be installed
+directly or through the named extras in the package metadata. Install each
+integration only when your workflow needs it:
 
 ```sh
 uv add shap          # SHAP support

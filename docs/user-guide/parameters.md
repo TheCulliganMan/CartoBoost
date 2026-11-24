@@ -1,16 +1,16 @@
 # Parameters
 
-This page explains the training controls on `CartoBoostRegressor` and how they
-change fitting behavior. Start with defaults, establish a validation split,
-and tune only parameters that correspond to the structure in your data.
+`CartoBoostRegressor` controls cover tree capacity,
+loss, split geometry, fuzzy boundaries, and leaf predictions. Establish a fixed
+validation split first, then change the controls that match your taxi fare,
+duration, or demand problem.
 
 ## Choose Parameters From The Data
 
-Before tuning ranges, decide what claim the model needs to support. In
-structured regression work, parameters should usually map to a modeling
-question:
+Start with the pattern you need to represent. These controls connect common
+taxi-modeling questions to a concrete configuration:
 
-| Scientific question | Controls to consider |
+| Modeling question | Controls to consider |
 | --- | --- |
 | Is a dense tabular baseline enough for fare, duration, demand, or residual prediction? | `split_policy=SplitPolicy.AXIS_ONLY` |
 | Are pickup/dropoff coordinates or projected x/y values defining spatial boundaries? | `SplitPolicy.STRUCTURED` plus declared spatial-pair schema entries |
@@ -136,6 +136,6 @@ dense feature:
 - `0` leaves the feature unconstrained.
 
 Current constraints require constant leaves, non-fuzzy training, and axis-style
-split policy. Use `SplitPolicy.STRUCTURED` when the scientific design requires directional behavior,
+split policy. Use `SplitPolicy.STRUCTURED` when the model requires directional behavior,
 such as non-decreasing fare with distance after accounting for the rest of the
 feature set, and document that constraint in the model artifact or report.

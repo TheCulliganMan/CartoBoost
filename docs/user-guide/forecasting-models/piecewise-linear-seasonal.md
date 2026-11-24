@@ -2,10 +2,10 @@ import {ForecastModelExample} from '@site/src/components/ModelingLabClient';
 
 # Piecewise Linear Seasonal
 
-`PiecewiseLinearSeasonalForecaster` is the local model for interpretable trend,
-changepoints, seasonalities, events, extra regressors, and component
-decomposition. Use it when the forecast needs to show which named components
-move the prediction, not just the final point estimate.
+Explain a forecast as trend, seasonality, events, and known regressors with
+`PiecewiseLinearSeasonalForecaster`. Inspect which component moves the next
+hour's pickup demand, where the trend changes, and how much uncertainty remains.
+Use it when the components are as important as the final prediction.
 
 ## When To Use
 
@@ -22,7 +22,7 @@ when the forecast should be explained as:
 - residual intervals or quantile-style uncertainty summaries.
 
 It is a good fit for demand with event windows, recurring weekday and hour
-effects, or lane-level aggregate demand where a scientist needs to inspect the
+effects, or lane-level aggregate demand where you need to inspect the
 trend and seasonal contribution separately.
 
 Prefer seasonal naive, theta, ETS, ARIMA, or Kalman when the question is only a
@@ -33,22 +33,18 @@ many related zones or lanes should share supervised lag features.
 
 <ForecastModelExample title="Piecewise linear seasonal panel forecast" model="piecewise_linear_seasonal" />
 
-The embedded example runs in this page and returns forecast rows from the
-interactive example. Use the full Python API when you need to persist component
-decomposition, fitted history diagnostics, residuals, trend movement, and named
-components for a report.
+Inspect the forecast shape in the browser, then use the Python API to save
+components, fitted-history diagnostics, and residuals for a report. The browser
+sample demonstrates behavior; it does not establish forecast accuracy.
 
-## Scientific Role
+## What The Model Learns {#scientific-role}
 
-Piecewise linear seasonal forecasting is a component model. It asks whether the
-future can be explained by a trend path plus named seasonal, event, and
-regressor effects. That makes it useful when the model output must support a
-claim such as "the weekday seasonality explains the recurring lift, while the
-trend changed after this cutoff."
+The forecast is assembled from named contributions: a trend path, recurring
+seasonal terms, event effects, and regressors. Those components let you inspect
+whether a rise in taxi demand comes from the weekly cycle or a changed trend.
 
-The component rows are part of the evidence. If a benchmark or report uses this
-model, preserve the forecast table, component decomposition, changepoints,
-input cadence, regressors, and validation split with the metrics.
+Keep the component table with the forecast when that explanation matters.
+Changepoints describe fitted movement; they do not establish its cause.
 
 ## Assumptions And Failure Modes
 
@@ -385,6 +381,14 @@ non-trend totals, fitted movement, and trend movement.
 Select changepoints, seasonalities, events, and regressors using training-side
 rolling origins. Compare against seasonal naive and a simpler trend model on
 identical rows. Report errors by horizon and inspect residuals around events.
+
+## Use When
+
+| Your task | Start with |
+| --- | --- |
+| Named trend, seasonal, and event contributions are important | Piecewise linear seasonal |
+| Nearby series share errors after temporal fitting | [Spatial piecewise kriging](spatial-piecewise-kriging.md) |
+| Many panels should share nonlinear lag patterns | [CartoBoost lag](cartoboost-lag.md) |
 
 ## Limitations
 

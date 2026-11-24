@@ -4,6 +4,7 @@ import json
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 from cartoboost.forecasting import (
     DCRNNForecaster,
     GraphTemporalFrame,
@@ -19,6 +20,60 @@ from cartoboost.forecasting import (
     STGormerForecaster,
     available_graph_st_backends,
 )
+
+
+@pytest.mark.parametrize(
+    "model_type",
+    [
+        DCRNNForecaster,
+        STAEformerForecaster,
+        GraphWaveNetForecaster,
+        STGormerForecaster,
+        STGformerForecaster,
+        LSTTNForecaster,
+        SpatialTemporalGraphGatedTransformerForecaster,
+        SpatialShiftGraphonMoEForecaster,
+    ],
+)
+def test_graph_forecast_array_outputs_match_legacy_values(model_type):
+    target = np.asarray([[10.0 + np.sin(t / 3.0), 12.0 + np.cos(t / 4.0)] for t in range(32)])
+    frame = GraphTemporalFrame(
+        node_ids=["PU1-DO2", "PU3-DO4"],
+        timestamps=list(range(32)),
+        target=target,
+        indptr=[0, 1, 2],
+        indices=[1, 0],
+        data=[1.0, 1.0],
+        horizon=2,
+        frequency="hourly",
+    )
+    options = {"epochs": 2, "hidden_size": 4}
+    if model_type is not DCRNNForecaster:
+        options["lookback"] = 8
+    if model_type not in {DCRNNForecaster, STAEformerForecaster, GraphWaveNetForecaster}:
+        options.update(attention_heads=2, periodicity=1, recent_window=4)
+    model = model_type(**options).fit(frame)
+    native = model._native_model
+    expected = np.asarray(native.predict(2), dtype=float)
+    actual = native.predict_arrays(2)
+    assert isinstance(actual, np.ndarray)
+    assert actual.flags.c_contiguous
+    np.testing.assert_array_equal(actual, expected)
+    np.testing.assert_array_equal(model.predict(2), expected)
+    for method in ("predict_owned", "predict_median"):
+        if hasattr(native, method):
+            np.testing.assert_array_equal(
+                getattr(native, f"{method}_arrays")(2),
+                getattr(native, method)(2),
+            )
+
+
+def test_graph_array_adapter_preserves_native_array_ownership():
+    from cartoboost.forecasting.graph_st import _native_prediction_array
+
+    output = np.arange(6, dtype=float).reshape(2, 3)
+    native = SimpleNamespace(predict_arrays=lambda horizon: output)
+    assert _native_prediction_array(native, "predict", 2) is output
 
 
 def test_market_structure_wrappers_keep_targets_generic(monkeypatch):
@@ -326,11 +381,18 @@ def test_native_graph_frame_does_not_expose_list_constructor():
         )
 
 
-def test_dcrnn_backtest_accepts_rolling_origin_splitter(monkeypatch):
+@pytest.mark.parametrize("window", ["expanding", "sliding", "custom"])
+def test_dcrnn_backtest_accepts_rolling_origin_splitter(monkeypatch, window):
+    trained_frames = []
+
     class NativeGraphTemporalFrame:
         @staticmethod
         def from_numpy(*args):
-            return NativeGraphTemporalFrame(*args[:9])
+            frame = NativeGraphTemporalFrame(*args[:9])
+            frame.target_mask = args[10]
+            frame.imputed_mask = args[11]
+            frame.target_weights = args[12]
+            return frame
 
         def __init__(
             self,
@@ -345,6 +407,9 @@ def test_dcrnn_backtest_accepts_rolling_origin_splitter(monkeypatch):
             covariates,
         ):
             self.node_ids = node_ids
+            self.timestamps = timestamps
+            self.target = target
+            self.covariates = covariates
             self.horizon = horizon
             self.frequency = frequency
 
@@ -352,11 +417,13 @@ def test_dcrnn_backtest_accepts_rolling_origin_splitter(monkeypatch):
         def __init__(self, *_args):
             pass
 
-        def fit(self, _frame):
+        def fit(self, frame):
+            trained_frames.append(frame)
+            self.last = frame.target[-1]
             return None
 
         def predict(self, horizon):
-            return [[float(horizon), float(horizon + 1)] for _ in range(horizon)]
+            return [self.last + 2 * (step + 1) for step in range(horizon)]
 
     import cartoboost
 
@@ -379,15 +446,62 @@ def test_dcrnn_backtest_accepts_rolling_origin_splitter(monkeypatch):
         data=[1.0, 1.0],
         horizon=2,
         frequency="hourly",
+        covariates=np.arange(16, dtype=float).reshape(8, 2, 1),
+        target_mask=np.ones((8, 2), dtype=bool),
+        imputed_mask=np.zeros((8, 2), dtype=bool),
+        target_weights=np.arange(16, dtype=float).reshape(8, 2) + 1.0,
     )
     model = DCRNNForecaster(epochs=3).fit(frame)
-    splitter = RollingOriginSplitter(horizon=2, min_train_size=4, n_splits=2)
+    if window == "custom":
+        splitter = SimpleNamespace(
+            split=lambda data: [
+                SimpleNamespace(
+                    fold_id="gap_fold",
+                    train_indices=np.array([1, 2, 3]),
+                    validation_indices=np.array([5, 7]),
+                    horizon=2,
+                )
+            ]
+        )
+        expected_timestamps = [[1, 2, 3]]
+    else:
+        splitter = RollingOriginSplitter(
+            horizon=2,
+            min_train_size=4,
+            max_train_size=4 if window == "sliding" else None,
+            window=window,
+            n_splits=2,
+        )
+        expected_timestamps = (
+            [[1, 2, 3, 4], [2, 3, 4, 5]]
+            if window == "sliding"
+            else [list(range(5)), list(range(6))]
+        )
 
     result = model.backtest(splitter)
 
-    assert len(result["folds"]) == 2
+    assert len(result["folds"]) == len(expected_timestamps)
+    assert [frame.timestamps for frame in trained_frames[1:]] == expected_timestamps
+    for trained, indices in zip(trained_frames[1:], expected_timestamps, strict=True):
+        np.testing.assert_array_equal(trained.covariates, frame._covariates[indices])
+        np.testing.assert_array_equal(trained.target_mask, frame._target_mask[indices])
+        np.testing.assert_array_equal(trained.imputed_mask, frame._imputed_mask[indices])
+        np.testing.assert_array_equal(trained.target_weights, frame._target_weights[indices])
     assert result["folds"][0]["by_horizon"][0]["horizon"] == 1
     assert {"mae", "rmse", "wape"}.issubset(result["folds"][0]["by_horizon"][0])
+    assert all(horizon["mae"] == 0.0 for fold in result["folds"] for horizon in fold["by_horizon"])
+
+    monkeypatch.setattr(NativeDcrnnForecaster, "predict", lambda self, horizon: [[0.0, 0.0]])
+    with pytest.raises(ValueError, match="full forecast horizon"):
+        model.backtest(splitter)
+
+
+@pytest.mark.parametrize("indices", [[-1, 0], [0, 8], [1, 1], [2, 1], [0.5, 1.5], []])
+def test_graph_backtest_rejects_invalid_fold_indices(indices):
+    from cartoboost.forecasting.graph_st import _fold_indices
+
+    with pytest.raises(ValueError, match="indices"):
+        _fold_indices(indices, 8, "training")
 
 
 def test_dcrnn_backend_parameter_and_availability_delegate(monkeypatch):

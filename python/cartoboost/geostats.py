@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +21,7 @@ except ImportError:  # pragma: no cover
         pass
 
     def clone(estimator: Any) -> Any:  # type: ignore[no-redef]
-        return estimator
+        return deepcopy(estimator)
 
 
 from ._artifacts import (
@@ -106,9 +107,11 @@ class NearestNeighborGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseE
             self._model.fit_from_distance_matrix(distance_array, y_array)
         self.backend_ = str(self._model.backend())
         self.n_features_in_ = n_features
-        self._fit_coords = coords_array
-        self._fit_distance_matrix = distance_array
-        self._fit_y = y_array
+        # Refit artifacts must retain the same training values owned by Rust,
+        # even if the caller subsequently changes its input arrays.
+        self._fit_coords = None if coords_array is None else coords_array.copy()
+        self._fit_distance_matrix = None if distance_array is None else distance_array.copy()
+        self._fit_y = y_array.copy()
         return self
 
     def predict(
@@ -132,6 +135,8 @@ class NearestNeighborGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseE
                 raise ValueError("coordinate model prediction requires coords only")
             means, variances, _neighbors = model.predict(_as_coords(coords))
         mean_array = np.asarray(means, dtype=float)
+        if not return_var and not return_std:
+            return mean_array
         var_array = np.maximum(np.asarray(variances, dtype=float), 0.0)
         if return_var:
             return mean_array, var_array
@@ -272,9 +277,21 @@ class ResidualNNGPRegressor(ArtifactPersistenceMixin, RegressorMixin, BaseEstima
         x_array = np.asarray(X, dtype=float)
         y_array = _as_vector(y, "y")
         try:
-            self.base_estimator_ = clone(self.base_estimator)
+            base_estimator = clone(self.base_estimator)
         except Exception:
-            self.base_estimator_ = self.base_estimator
+            base_estimator = None
+        if base_estimator is None or base_estimator is self.base_estimator:
+            try:
+                base_estimator = deepcopy(self.base_estimator)
+            except Exception as exc:
+                raise ValueError(
+                    "base_estimator must support independent cloning or deep copying"
+                ) from exc
+        if base_estimator is self.base_estimator:
+            raise ValueError(
+                "base_estimator cloning or deep copying must return an independent object"
+            )
+        self.base_estimator_ = base_estimator
         self.base_estimator_.fit(x_array, y_array)
         base_pred = np.asarray(self.base_estimator_.predict(x_array), dtype=float)
         residuals = y_array - base_pred

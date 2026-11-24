@@ -66,6 +66,14 @@ impl GeoCausalPanel {
                     "row {idx} outcome must be finite"
                 )));
             }
+            if row.covariates.values().any(|value| !value.is_finite())
+                || row.latitude.is_some_and(|value| !value.is_finite())
+                || row.longitude.is_some_and(|value| !value.is_finite())
+            {
+                return Err(GeoCausalError::InvalidInput(format!(
+                    "row {idx} covariates and coordinates must be finite"
+                )));
+            }
             if row.latitude.is_some() != row.longitude.is_some() {
                 return Err(GeoCausalError::InvalidInput(format!(
                     "row {idx} must provide both latitude and longitude or neither"
@@ -1048,13 +1056,17 @@ fn region_feature_means(
         .collect()
 }
 
-fn ridge_fit_indexed(features: &[Vec<f64>], outcomes: &[f64], indices: &[usize]) -> Vec<f64> {
+fn ridge_fit_indexed(
+    features: &[Vec<f64>],
+    outcomes: &[f64],
+    indices: &[usize],
+) -> Result<Vec<f64>> {
     let cols = features[0].len() + 1;
     let mut xtx = vec![vec![0.0; cols]; cols];
     let mut xty = vec![0.0; cols];
+    let mut x = vec![1.0; cols];
     for &idx in indices {
-        let mut x = vec![1.0];
-        x.extend_from_slice(&features[idx]);
+        x[1..].copy_from_slice(&features[idx]);
         for r in 0..cols {
             xty[r] += x[r] * outcomes[idx];
             for c in 0..cols {
@@ -1079,7 +1091,7 @@ fn ridge_fit_indexed_with_backend(
         || indices.len().saturating_mul(cols).saturating_mul(cols)
             < GEO_CAUSAL_DENSE_DISPATCH_MIN_OPS
     {
-        return Ok(ridge_fit_indexed(features, outcomes, indices));
+        return ridge_fit_indexed(features, outcomes, indices);
     }
     let design = indices
         .iter()
@@ -1112,11 +1124,24 @@ fn ridge_fit_indexed_with_backend(
         .into_iter()
         .map(|row| f64::from(row[0]))
         .collect::<Vec<_>>();
-    Ok(solve_linear(xtx, xty))
+    solve_linear(xtx, xty)
 }
 
-fn solve_linear(mut matrix: Vec<Vec<f64>>, mut rhs: Vec<f64>) -> Vec<f64> {
+fn solve_linear(mut matrix: Vec<Vec<f64>>, mut rhs: Vec<f64>) -> Result<Vec<f64>> {
     let n = rhs.len();
+    if n == 0
+        || matrix.len() != n
+        || matrix.iter().any(|row| row.len() != n)
+        || matrix
+            .iter()
+            .flatten()
+            .chain(&rhs)
+            .any(|value| !value.is_finite())
+    {
+        return Err(GeoCausalError::InvalidInput(
+            "linear system must be a finite non-empty square matrix".to_string(),
+        ));
+    }
     for pivot in 0..n {
         let mut best = pivot;
         for row in pivot + 1..n {
@@ -1127,8 +1152,10 @@ fn solve_linear(mut matrix: Vec<Vec<f64>>, mut rhs: Vec<f64>) -> Vec<f64> {
         matrix.swap(pivot, best);
         rhs.swap(pivot, best);
         let diag = matrix[pivot][pivot];
-        if diag.abs() < 1.0e-12 {
-            continue;
+        if !diag.is_finite() || diag.abs() < 1.0e-12 {
+            return Err(GeoCausalError::InvalidInput(
+                "linear system is singular or ill-conditioned".to_string(),
+            ));
         }
         for value in matrix[pivot].iter_mut().skip(pivot) {
             *value /= diag;
@@ -1146,7 +1173,12 @@ fn solve_linear(mut matrix: Vec<Vec<f64>>, mut rhs: Vec<f64>) -> Vec<f64> {
             rhs[row] -= factor * rhs[pivot];
         }
     }
-    rhs
+    if rhs.iter().any(|value| !value.is_finite()) {
+        return Err(GeoCausalError::InvalidInput(
+            "linear solve produced non-finite coefficients".to_string(),
+        ));
+    }
+    Ok(rhs)
 }
 
 fn indexed_rmse_with_backend(
@@ -1541,5 +1573,16 @@ mod tests {
                 "{backend}"
             );
         }
+    }
+
+    #[test]
+    fn linear_solver_rejects_singular_and_overflowing_systems() {
+        assert!(solve_linear(vec![vec![1.0, 1.0], vec![1.0, 1.0]], vec![1.0, 2.0]).is_err());
+        assert!(solve_linear(vec![vec![f64::INFINITY]], vec![1.0]).is_err());
+        assert!(solve_linear(vec![vec![1.0e-10]], vec![f64::MAX]).is_err());
+        let solution = solve_linear(vec![vec![2.0, 1.0], vec![1.0, 3.0]], vec![4.0, 7.0])
+            .expect("valid solve");
+        assert!((solution[0] - 1.0).abs() < 1.0e-12);
+        assert!((solution[1] - 2.0).abs() < 1.0e-12);
     }
 }

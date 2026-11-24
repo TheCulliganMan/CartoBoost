@@ -1,23 +1,13 @@
 # Deep Model Mechanism Checks
 
-These deterministic synthetic experiments test whether each deep model can
-recover the specific mechanism it was designed for. They are implementation
-checks, not evidence of accuracy on real taxi, traffic, or spatial data.
+All six listed models improve on their named baseline in these controlled
+synthetic experiments. Each fixture isolates one intended mechanism, such as
+directional pair effects, delayed graph propagation, or candidate competition.
 
-Command:
+The results describe designed patterns. They do not measure accuracy on real
+taxi trips or establish production readiness for experimental models.
 
-```bash
-PYTHONPATH=python python scripts/run_deep_claim_benchmarks.py --output docs/assets/deep_claim_benchmarks/results.json
-PYTHONPATH=python python scripts/check_deep_claim_gates.py
-```
-
-Artifacts:
-
-| Artifact | Path |
-| --- | --- |
-| JSON summary | `docs/assets/deep_claim_benchmarks/results.json` |
-| JSONL rows | `docs/assets/deep_claim_benchmarks/results.jsonl` |
-| Markdown table | `docs/assets/deep_claim_benchmarks/results.md` |
+## Results
 
 | Claim | Architecture | Metric | Model | Baseline | Improvement | Result |
 | --- | --- | --- | ---: | ---: | ---: | --- |
@@ -28,17 +18,31 @@ Artifacts:
 | `conditional_flow_distribution_head_calibration_sharpness` | `conditional_residual_sampler` | calibration/sharpness score | 0.000000 | 0.269389 | 100.00% | passed |
 | `choice_set_utility_softmax_candidate_competition` | `choice_set_utility_softmax` | choice log loss | 0.022234 | 0.693147 | 96.79% | passed |
 
+## Reproduce
+
+```bash
+PYTHONPATH=python python scripts/run_deep_claim_benchmarks.py --output docs/assets/deep_claim_benchmarks/results.json
+PYTHONPATH=python python scripts/check_deep_claim_gates.py
+```
+
+## Artifacts
+
+| Artifact | Path |
+| --- | --- |
+| JSON summary | `docs/assets/deep_claim_benchmarks/results.json` |
+| JSONL rows | `docs/assets/deep_claim_benchmarks/results.jsonl` |
+| Markdown table | `docs/assets/deep_claim_benchmarks/results.md` |
+
 Each JSON/JSONL row records `claim_id`, `architecture`, `capability_tier`,
 `implementation_backend`, `falsifier_baseline`, `dataset_hash`, `split_hash`,
 `seed`, `primary_metric`, `improvement_threshold`, `percent_improvement`,
 `fit_seconds`, `predict_seconds`, `peak_memory_mb`, `save_load_max_abs_diff`,
 `leakage_policy`, and `experimental_status`.
 
-Interpretation: every listed model recovered its controlled synthetic pattern
-better than the named baseline. This does not establish real-data accuracy or
-make experimental models suitable for production.
+## Interpretation and limits
 
-Limitations: these fixtures are small, deterministic, and designed to isolate
-the advertised mechanism. Real deployment claims still require a dataset-specific
-split, serious baselines, timing, and recorded artifacts under the benchmark
-standard used elsewhere in CartoBoost.
+Every listed model recovers its controlled pattern better than the comparison
+baseline. The fixtures are small and deterministic, with data designed around
+the mechanism being tested. Use the [real NYC taxi comparisons](nyc-taxi.md)
+for evidence on observed trips, and the [deep model guides](../user-guide/deep-models.md)
+for input contracts and model-specific limitations.

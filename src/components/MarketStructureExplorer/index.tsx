@@ -199,13 +199,16 @@ export default function MarketStructureExplorer({nodes, edges, targetNames}: Mar
     if (!mapContainer.current || h3Nodes.length === 0) return undefined;
     let cancelled = false;
     void (async () => {
-      const [{default: maplibregl}, {MapboxOverlay}, {ArcLayer, TextLayer}] = await Promise.all([
+      const [maplibregl, {MapboxOverlay}, {ArcLayer, TextLayer}] = await Promise.all([
         import('maplibre-gl'),
         import('@deck.gl/mapbox'),
         import('@deck.gl/layers'),
       ]);
       if (cancelled || !mapContainer.current) return;
       const center = h3Nodes.reduce<[number, number]>((sum, node) => [sum[0] + node.longitude / h3Nodes.length, sum[1] + node.latitude / h3Nodes.length], [0, 0]);
+      maplibregl.setWorkerUrl(
+        new URL('maplibre-gl/dist/maplibre-gl-worker.mjs', import.meta.url).href,
+      );
       const map = new maplibregl.Map({
         attributionControl: false,
         center,
@@ -373,10 +376,13 @@ export function H3TaxiFlowDemo(): React.ReactElement {
     if (!mapContainer.current || network.cells.length === 0) return undefined;
     let cancelled = false;
     void (async () => {
-      const [{default: maplibregl}, {MapboxOverlay}, {ArcLayer, PolygonLayer, ScatterplotLayer}] = await Promise.all([
+      const [maplibregl, {MapboxOverlay}, {ArcLayer, PolygonLayer, ScatterplotLayer}] = await Promise.all([
         import('maplibre-gl'), import('@deck.gl/mapbox'), import('@deck.gl/layers'),
       ]);
       if (cancelled || !mapContainer.current) return;
+      maplibregl.setWorkerUrl(
+        new URL('maplibre-gl/dist/maplibre-gl-worker.mjs', import.meta.url).href,
+      );
       const map = new maplibregl.Map({
         attributionControl: false,
         center: [-73.92, 40.71],

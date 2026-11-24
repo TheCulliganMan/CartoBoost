@@ -5,6 +5,7 @@ use crate::objectives::{
     BinaryLogLossObjective, GradientPair, MetricValue, MulticlassLogLossObjective, Objective,
     PredictionTransformKind,
 };
+use crate::tree::{map_prediction_rows, validate_dense_prediction_matrix};
 use crate::tree::{
     FuzzyKernel, LeafPredictorKind, ModelMetadata, SplitterKind, TrainingMetric, Tree, TreeBuilder,
 };
@@ -334,6 +335,97 @@ impl ClassifierModel {
         margins
     }
 
+    fn map_dense_margins<T: Send>(
+        &self,
+        rows: usize,
+        cols: usize,
+        values: &[f64],
+        transform: impl Fn(Vec<f64>) -> T + Send + Sync,
+    ) -> Result<Vec<T>> {
+        validate_dense_prediction_matrix(rows, cols, values, self.feature_count)?;
+        if self.requires_sparse_sets() {
+            return Err(CartoBoostError::InvalidInput(
+                "prediction requires sparse_sets for a model with list-valued sparse splits"
+                    .to_string(),
+            ));
+        }
+        Ok(map_prediction_rows(
+            rows,
+            self.trees
+                .len()
+                .max(1)
+                .saturating_mul(self.output_dimension()),
+            |row| {
+                let input = &values[row * cols..(row + 1) * cols];
+                let mut margins = self.init_margins.clone();
+                for tree_group in &self.trees {
+                    for (output, tree) in tree_group.iter().enumerate() {
+                        margins[output] += self.learning_rate * tree.predict_one(input);
+                    }
+                }
+                transform(margins)
+            },
+        ))
+    }
+
+    /// Predict dense row-major margins without copying the input into a Dataset.
+    pub fn decision_function_dense(
+        &self,
+        rows: usize,
+        cols: usize,
+        values: &[f64],
+    ) -> Result<Vec<Vec<f64>>> {
+        if self
+            .artifact_backend()
+            .is_some_and(|backend| backend.selected != "cpu")
+        {
+            return self.decision_function(&Dataset::from_flat(rows, cols, values.to_vec())?);
+        }
+        self.map_dense_margins(rows, cols, values, |margins| margins)
+    }
+
+    /// Predict probabilities from borrowed dense row-major inputs.
+    pub fn predict_proba_dense(
+        &self,
+        rows: usize,
+        cols: usize,
+        values: &[f64],
+    ) -> Result<Vec<Vec<f64>>> {
+        if self
+            .artifact_backend()
+            .is_some_and(|backend| backend.selected != "cpu")
+        {
+            return self.predict_proba(&Dataset::from_flat(rows, cols, values.to_vec())?);
+        }
+        let transform =
+            make_objective(self.objective, self.class_values.len())?.prediction_transform();
+        self.map_dense_margins(rows, cols, values, |margins| {
+            transform_margin_row(transform, &margins)
+        })
+    }
+
+    /// Predict labels from borrowed dense row-major inputs.
+    pub fn predict_dense(&self, rows: usize, cols: usize, values: &[f64]) -> Result<Vec<f64>> {
+        if self
+            .artifact_backend()
+            .is_some_and(|backend| backend.selected != "cpu")
+        {
+            return self.predict(&Dataset::from_flat(rows, cols, values.to_vec())?);
+        }
+        let transform =
+            make_objective(self.objective, self.class_values.len())?.prediction_transform();
+        self.map_dense_margins(rows, cols, values, |margins| {
+            let probabilities = transform_margin_row(transform, &margins);
+            let class = probabilities
+                .iter()
+                .enumerate()
+                .max_by(|left, right| left.1.total_cmp(right.1))
+                .map(|(index, _)| index)
+                .unwrap_or(0);
+            self.class_values[class]
+        })
+    }
+
     pub fn decision_function(&self, x: &Dataset) -> Result<Vec<Vec<f64>>> {
         if let Some(backend) = self.artifact_backend() {
             return self.decision_function_with_selection(x, backend);
@@ -343,10 +435,14 @@ impl ClassifierModel {
 
     fn decision_function_cpu(&self, x: &Dataset) -> Result<Vec<Vec<f64>>> {
         self.validate_dataset(x)?;
-        Ok((0..x.n_rows())
-            .into_par_iter()
-            .map(|row| self.raw_predict_dataset_row(x, row))
-            .collect())
+        Ok(map_prediction_rows(
+            x.n_rows(),
+            self.trees
+                .len()
+                .max(1)
+                .saturating_mul(self.output_dimension()),
+            |row| self.raw_predict_dataset_row(x, row),
+        ))
     }
 
     pub fn decision_function_with_backend(
@@ -374,9 +470,10 @@ impl ClassifierModel {
         {
             return self.decision_function_cpu(x);
         }
-        let input = (0..x.n_rows())
-            .into_par_iter()
-            .map(|row| {
+        let input = map_prediction_rows(
+            x.n_rows(),
+            self.trees.len().max(1).saturating_mul(outputs),
+            |row| {
                 self.init_margins
                     .iter()
                     .copied()
@@ -387,8 +484,8 @@ impl ClassifierModel {
                     }))
                     .map(|value| value as f32)
                     .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
+            },
+        );
         let mut weights = vec![0.0_f32; width * outputs];
         for round in 0..=self.trees.len() {
             for output in 0..outputs {
@@ -427,8 +524,19 @@ impl ClassifierModel {
     ) -> Result<Vec<Vec<f64>>> {
         let objective = make_objective(self.objective, self.class_values.len())?;
         let transform = objective.prediction_transform();
+        if selection.selected == "cpu" {
+            self.validate_dataset(x)?;
+            return Ok(map_prediction_rows(
+                x.n_rows(),
+                self.trees
+                    .len()
+                    .max(1)
+                    .saturating_mul(self.output_dimension()),
+                |row| transform_margin_row(transform, &self.raw_predict_dataset_row(x, row)),
+            ));
+        }
         let margins = self.decision_function_with_selection(x, selection)?;
-        if transform == PredictionTransformKind::Softmax {
+        if transform == PredictionTransformKind::Softmax && selection.selected != "cpu" {
             let width = self.output_dimension();
             let logits = margins.iter().flatten().copied().collect::<Vec<_>>();
             if let Some(values) = accelerated_row_softmax(selection, &logits, margins.len(), width)?
@@ -439,10 +547,11 @@ impl ClassifierModel {
                     .collect());
             }
         }
-        Ok(margins
-            .into_par_iter()
-            .map(|row| transform_margin_row(transform, &row))
-            .collect())
+        Ok(map_prediction_rows(
+            margins.len(),
+            self.output_dimension(),
+            |row| transform_margin_row(transform, &margins[row]),
+        ))
     }
 
     pub fn predict(&self, x: &Dataset) -> Result<Vec<f64>> {
@@ -503,6 +612,23 @@ impl ClassifierModel {
                 model.artifact_version
             )));
         }
+        let outputs = model.output_dimension();
+        if model.class_values.len() < 2
+            || (model.objective == ClassificationObjective::BinaryLogLoss
+                && model.class_values.len() != 2)
+            || model.init_margins.len() != outputs
+            || model.trees.iter().any(|group| group.len() != outputs)
+        {
+            return Err(CartoBoostError::InvalidInput(
+                "classifier artifact class, margin, and tree output dimensions do not match"
+                    .to_string(),
+            ));
+        }
+        crate::serialize::validate_model_layout(
+            model.feature_count,
+            model.feature_schema.as_ref(),
+            model.trees.iter().flatten(),
+        )?;
         Ok(model)
     }
 
@@ -705,13 +831,18 @@ fn validate_classifier_config(config: &ClassifierConfig, feature_count: usize) -
 }
 
 fn resolve_class_count(config: &ClassifierConfig, targets: &[f64]) -> Result<usize> {
-    let observed = targets
-        .iter()
-        .copied()
-        .filter(|target| target.is_finite())
-        .map(|target| target as usize)
-        .max()
-        .map_or(0, |max_class| max_class + 1);
+    let mut observed = 0usize;
+    for &target in targets {
+        if !target.is_finite() || target.fract() != 0.0 || target < 0.0 {
+            return Err(CartoBoostError::InvalidInput(
+                "classifier targets must be finite non-negative integer class ids".to_string(),
+            ));
+        }
+        let class_count = (target as usize).checked_add(1).ok_or_else(|| {
+            CartoBoostError::InvalidInput("classifier target class id is out of range".to_string())
+        })?;
+        observed = observed.max(class_count);
+    }
     let class_count = config.class_count.max(observed);
     match config.objective {
         ClassificationObjective::BinaryLogLoss => {
@@ -857,6 +988,46 @@ mod tests {
     use crate::objectives::{
         LogisticBoostingObjective, ObjectiveTask, PredictionTransformKind, ProbabilityBooster,
     };
+
+    #[test]
+    fn classifier_load_rejects_inconsistent_output_dimensions() {
+        let x = Dataset::from_rows(vec![vec![0.0], vec![1.0]]).unwrap();
+        let model = Classifier::new(ClassifierConfig {
+            n_estimators: 1,
+            ..ClassifierConfig::default()
+        })
+        .fit(&x, &[0.0, 1.0], None)
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("classifier.json");
+        for case in 0..3 {
+            let mut malformed = model.clone();
+            match case {
+                0 => malformed.init_margins.clear(),
+                1 => malformed.class_values.clear(),
+                _ => {
+                    let extra = malformed.trees[0][0].clone();
+                    malformed.trees[0].push(extra);
+                }
+            }
+            malformed.save(&path).unwrap();
+            assert!(ClassifierModel::load(&path)
+                .unwrap_err()
+                .to_string()
+                .contains("dimensions"));
+        }
+    }
+
+    #[test]
+    fn classifier_rejects_out_of_range_class_ids_before_allocation() {
+        let x = Dataset::from_rows(vec![vec![0.0], vec![1.0]]).unwrap();
+        for invalid in [f64::MAX, usize::MAX as f64, f64::NAN, -1.0, 0.5] {
+            let error = Classifier::new(ClassifierConfig::default())
+                .fit(&x, &[0.0, invalid], None)
+                .unwrap_err();
+            assert!(error.to_string().contains("class id"));
+        }
+    }
 
     #[test]
     fn binary_classifier_learns_separable_boundary_and_roundtrips() {

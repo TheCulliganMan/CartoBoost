@@ -2,6 +2,131 @@ use crate::{CartoBoostError, Result};
 use serde::{Deserialize, Serialize};
 
 use super::quantiles::{validate_finite_values, validate_quantile, validate_same_non_empty};
+use super::{ForecastIntervalPrediction, ForecastPrediction, ForecastResult};
+use std::collections::BTreeMap;
+
+/// Gaussian residual approximation. This does not claim split-conformal coverage.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ResidualForecastIntervals {
+    pub(crate) levels: Vec<f64>,
+    scales: BTreeMap<String, f64>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) origin_age_steps: BTreeMap<String, f64>,
+}
+
+impl ResidualForecastIntervals {
+    pub(crate) fn reset(&self) -> Self {
+        Self {
+            levels: self.levels.clone(),
+            scales: BTreeMap::new(),
+            origin_age_steps: BTreeMap::new(),
+        }
+    }
+    pub(crate) fn configured(mut levels: Vec<f64>) -> Result<Option<Self>> {
+        for &level in &levels {
+            validate_quantile(level)?;
+        }
+        levels.sort_by(f64::total_cmp);
+        if levels.windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err(CartoBoostError::InvalidInput(
+                "prediction interval levels must be unique".into(),
+            ));
+        }
+        Ok((!levels.is_empty()).then(|| Self {
+            levels,
+            scales: BTreeMap::new(),
+            origin_age_steps: BTreeMap::new(),
+        }))
+    }
+
+    pub(crate) fn fit_series(
+        &mut self,
+        series_id: &str,
+        residuals: impl Iterator<Item = f64>,
+    ) -> Result<()> {
+        let mut sum = 0.0;
+        let mut count = 0usize;
+        for residual in residuals {
+            sum += residual * residual;
+            count += 1;
+        }
+        if count < 2 || !sum.is_finite() {
+            return Err(CartoBoostError::InvalidInput(format!(
+                "series {series_id} prediction intervals require at least two finite residuals with finite squared sum"
+            )));
+        }
+        self.scales
+            .insert(series_id.to_string(), (sum / count as f64).sqrt());
+        Ok(())
+    }
+
+    pub(crate) fn metadata(&self, horizon_scaling: &str) -> serde_json::Value {
+        serde_json::json!({
+            "method": "residual_gaussian", "levels": self.levels,
+            "scale": "training_residual_root_mean_square", "horizon_scaling": horizon_scaling,
+            "coverage_assumption": "Gaussian residual approximation; not held-out conformal calibration"
+        })
+    }
+}
+
+pub(crate) fn residual_interval_result(
+    predictions: Vec<ForecastPrediction>,
+    calibration: Option<&ResidualForecastIntervals>,
+    recurrence_period: usize,
+) -> Result<ForecastResult> {
+    let Some(calibration) = calibration else {
+        return ForecastResult::new(predictions);
+    };
+    let mut intervals =
+        Vec::with_capacity(predictions.len().saturating_mul(calibration.levels.len()));
+    let quantiles: Vec<_> = calibration
+        .levels
+        .iter()
+        .map(|&level| {
+            (
+                level,
+                -super::local::inverse_standard_normal_cdf((1.0 - level) / 2.0),
+            )
+        })
+        .collect();
+    for prediction in &predictions {
+        let scale = calibration
+            .scales
+            .get(&prediction.series_id)
+            .ok_or_else(|| {
+                CartoBoostError::InvalidInput(format!(
+                    "missing residual scale for series {}",
+                    prediction.series_id
+                ))
+            })?;
+        let growth = if recurrence_period == 0 {
+            1.0
+        } else if recurrence_period == 1 {
+            (prediction.horizon as f64
+                + calibration
+                    .origin_age_steps
+                    .get(&prediction.series_id)
+                    .copied()
+                    .unwrap_or(0.0))
+            .sqrt()
+        } else {
+            (prediction.horizon.div_ceil(recurrence_period) as f64).sqrt()
+        };
+        for &(level, quantile) in &quantiles {
+            let width = quantile * scale * growth;
+            intervals.push(ForecastIntervalPrediction {
+                series_id: prediction.series_id.clone(),
+                timestamp: prediction.timestamp,
+                horizon: prediction.horizon,
+                model: prediction.model.clone(),
+                level,
+                lower: prediction.mean - width,
+                upper: prediction.mean + width,
+            });
+        }
+    }
+    ForecastResult::new_with_intervals(predictions, intervals)
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConformalInterval {
@@ -76,6 +201,7 @@ impl ConformalCalibrator {
         calibration_prediction: &[f64],
         split_order: ConformalSplitOrder,
     ) -> Result<()> {
+        validate_quantile(self.alpha)?;
         split_order.validate()?;
         validate_same_non_empty(
             calibration_actual,
@@ -102,7 +228,7 @@ impl ConformalCalibrator {
             .zip(calibration_prediction)
             .map(|(&actual, &prediction)| (actual - prediction).abs())
             .collect::<Vec<_>>();
-        scores.sort_by(f64::total_cmp);
+        validate_finite_values(&scores, "calibration residuals")?;
         let rank = (((scores.len() + 1) as f64) * (1.0 - self.alpha)).ceil() as usize;
         if rank > scores.len() {
             return Err(CartoBoostError::InvalidInput(format!(
@@ -113,7 +239,8 @@ impl ConformalCalibrator {
             )));
         }
         let index = rank.saturating_sub(1);
-        self.residual_quantile = Some(scores[index]);
+        let (_, quantile, _) = scores.select_nth_unstable_by(index, f64::total_cmp);
+        self.residual_quantile = Some(*quantile);
         self.split_order = Some(split_order);
         Ok(())
     }
@@ -144,6 +271,7 @@ impl ConformalCalibrator {
         test_prediction: &[f64],
         test_start: usize,
     ) -> Result<ConformalInterval> {
+        validate_quantile(self.alpha)?;
         validate_finite_values(test_prediction, "test_prediction")?;
         if test_prediction.is_empty() {
             return Err(CartoBoostError::InvalidInput(
@@ -155,6 +283,7 @@ impl ConformalCalibrator {
                 "conformal calibrator must be fit before prediction".into(),
             )
         })?;
+        order.validate()?;
         if test_start < order.test_start {
             return Err(CartoBoostError::InvalidInput(
                 "test_start must not precede the validated test split".to_string(),
@@ -163,15 +292,24 @@ impl ConformalCalibrator {
         let residual_quantile = self.residual_quantile.ok_or_else(|| {
             CartoBoostError::InvalidInput("conformal calibrator has no residual quantile".into())
         })?;
+        if !residual_quantile.is_finite() || residual_quantile < 0.0 {
+            return Err(CartoBoostError::InvalidInput(
+                "conformal residual quantile must be finite and nonnegative".into(),
+            ));
+        }
+        let lower = test_prediction
+            .iter()
+            .map(|prediction| prediction - residual_quantile)
+            .collect::<Vec<_>>();
+        let upper = test_prediction
+            .iter()
+            .map(|prediction| prediction + residual_quantile)
+            .collect::<Vec<_>>();
+        validate_finite_values(&lower, "conformal lower bounds")?;
+        validate_finite_values(&upper, "conformal upper bounds")?;
         Ok(ConformalInterval {
-            lower: test_prediction
-                .iter()
-                .map(|prediction| prediction - residual_quantile)
-                .collect(),
-            upper: test_prediction
-                .iter()
-                .map(|prediction| prediction + residual_quantile)
-                .collect(),
+            lower,
+            upper,
             residual_quantile,
             alpha: self.alpha,
         })
@@ -289,5 +427,49 @@ mod tests {
 
         assert!(error.to_string().contains("insufficient"));
         assert!(calibrator.residual_quantile().is_none());
+    }
+
+    #[test]
+    fn calibration_rejects_overflow_and_invalid_deserialized_alpha() {
+        let mut calibrator = ConformalCalibrator::new(0.5).expect("calibrator");
+        assert!(calibrator
+            .fit_with_strict_ordering(&[f64::MAX], &[-f64::MAX], 1, 1, 2, 2)
+            .is_err());
+        assert!(calibrator.residual_quantile().is_none());
+        let mut invalid: ConformalCalibrator = serde_json::from_value(serde_json::json!({
+            "alpha": -0.5, "residual_quantile": null, "split_order": null
+        }))
+        .expect("deserialized state");
+        assert!(invalid
+            .fit_with_strict_ordering(&[1.0], &[1.0], 1, 1, 2, 2)
+            .is_err());
+    }
+
+    #[test]
+    fn interval_prediction_rejects_nonfinite_bounds_and_invalid_state() {
+        let mut calibrator = ConformalCalibrator::new(0.5).expect("calibrator");
+        calibrator
+            .fit_with_strict_ordering(&[f64::MAX], &[0.0], 1, 1, 2, 2)
+            .expect("finite residual");
+        assert!(calibrator.predict_interval(&[f64::MAX], 2).is_err());
+        calibrator.residual_quantile = Some(-1.0);
+        assert!(calibrator.predict_interval(&[1.0], 2).is_err());
+    }
+
+    #[test]
+    fn selected_conformal_quantile_matches_sorted_reference() {
+        let actual = (0..101)
+            .map(|index| ((index * 37) % 23) as f64)
+            .collect::<Vec<_>>();
+        let mut sorted = actual.clone();
+        sorted.sort_by(f64::total_cmp);
+        for alpha in [0.01, 0.1, 0.2, 0.5, 0.9] {
+            let mut calibrator = ConformalCalibrator::new(alpha).expect("calibrator");
+            calibrator
+                .fit_with_strict_ordering(&actual, &vec![0.0; actual.len()], 1, 1, 102, 102)
+                .expect("fit");
+            let rank = ((102.0_f64 * (1.0 - alpha)).ceil() as usize).saturating_sub(1);
+            assert_eq!(calibrator.residual_quantile(), Some(sorted[rank]));
+        }
     }
 }

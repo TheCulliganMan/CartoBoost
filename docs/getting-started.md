@@ -1,250 +1,192 @@
-# Getting Started
+---
+sidebar_label: Your first model
+description: Fit a taxi-duration model, compare a structured schema with an axis baseline, and save the result.
+---
 
-This guide takes you from a modeling question to a validated CartoBoost model.
-It is written for Python developers and data scientists working with tabular,
-spatial, or time-indexed data. You will install the package, fit a model, choose
-an appropriate validation split, compare a baseline, and save the result.
+# Your first model
 
-If you already know which API you need, jump to [Choose A Model](user-guide/model-types.md)
-or the [Python API Reference](reference/python-api.md).
+Fit a taxi-duration regressor, hold out the latest observations, and compare
+ordinary axis splits with a schema that understands the daily cycle. Then save
+and reload the fitted model.
 
-## 1. Define The Prediction Task
+This walkthrough uses a small, generated taxi-shaped dataset so you can run it
+immediately. Its scores demonstrate the workflow; they are not evidence of
+performance on NYC taxi trips.
 
-CartoBoost is meant for regression and forecasting tasks where temporal or
-spatial structure is part of the hypothesis. Typical questions include:
-
-- Can time, location, and distance explain the target under a leakage-aware split?
-- Does source-to-target direction change the estimate compared with treating the two ends as unordered IDs?
-- Can demand be forecast from lagged demand, calendar features, and context?
-- Do spatial splitters or sparse zone memberships recover signal that an
-  axis-only model misses?
-
-Define the target and evaluation split before selecting model features. For
-temporal-spatial data, random splits can overstate quality when near-duplicate
-times, zones, or route patterns appear in both train and validation data.
-
-## 2. Match Features To The Data Structure
-
-A first regression table might include:
-
-- dense numeric columns: distance, coordinates, time of day, weekday, passenger count;
-- periodic columns: hour-of-day with period `24`, day-of-week with period `7`;
-- sparse-set columns: zones, route cells, or memberships derived from source
-  and target identifiers;
-- graph context: directed source-to-target flows when source and target roles should remain distinct.
-
-Declare the split policy and feature schema for the scientific structure you
-want to test:
-
-- use `SplitPolicy.AXIS_ONLY` as the dense baseline;
-- use `SplitPolicy.STRUCTURED` with periodic, spatial-pair, and sparse-set
-  schema entries when those structures are part of the question.
-
-## 3. Install
+## Install
 
 ```sh
 uv add cartoboost
 ```
 
-Verify the install:
+NumPy is the only required Python runtime dependency. See
+[Installation](installation.md) for supported platforms, optional integrations,
+and source builds.
 
-```sh
-python -c "import cartoboost; print(cartoboost.__version__)"
-python examples/quickstart.py
-```
+## Create the data and holdout
 
-For pandas-backed forecasting examples, install pandas directly:
-
-```sh
-uv add pandas
-```
-
-Optional packages are installed only when needed. Install `polars` for Polars
-inputs, `optuna` for Optuna tuning, or `onnx` for the supported ONNX export
-subset.
-
-## 4. Fit A Regression Model
-
-Run the maintained [NumPy quickstart](../examples/quickstart.py) for a
-complete fit, leakage-aware split, baseline comparison, and artifact
-round-trip. It is the canonical first example used by the README and browser
-documentation.
-
-Start with `SplitPolicy.AXIS_ONLY` if the study only needs dense numeric
-features. Use `SplitPolicy.STRUCTURED` only when the schema declares the
-periodic, spatial, or sparse structure and the same validation split is used.
-
-## 5. Use Sparse Memberships
-
-Use sparse-set features when a trip belongs to multiple route or zone-derived
-sets and a wide one-hot matrix would be awkward or unstable.
+The rows below represent hourly trip observations. The features are trip
+distance and pickup hour; the target is duration in minutes. A native temporal
+split keeps the final 48 observations out of training.
 
 ```python
-schema = {
-    "dense": [
-        {"name": "trip_distance", "kind": "numeric"},
-        {"name": "pickup_hour", "kind": "periodic", "period": 24},
-        {"name": "pickup_x", "kind": "numeric"},
-        {"name": "pickup_y", "kind": "numeric"},
-    ],
-    "sparse_sets": [
-        {"name": "zone_ids", "kind": "sparse_set"},
-    ],
-}
+from datetime import datetime, timedelta
 
-model = CartoBoostRegressor(
-    n_estimators=200,
-    learning_rate=0.04,
-    max_depth=5,
-    min_samples_leaf=30,
-    split_policy="structured",
-)
-
-model.fit(
-    X_train_dense,
-    y_train,
-    sparse_sets={"zone_ids": zone_ids_train},
-    feature_schema=schema,
-)
-```
-
-See [Spatial Modeling](spatial_modeling.md) and
-[Sparse Features](sparse_features.md) for zone membership examples and blocked
-evaluation patterns.
-
-## 6. Forecast Demand
-
-Use `ForecastFrame` when the target is future demand, fare, duration, or another
-time-indexed quantity. Panel data should identify the series, such as
-pickup/dropoff lane or pickup zone.
-
-```python
-from cartoboost.forecasting import ForecastFrame, ThetaForecaster
-
-import pandas as pd
-
-daily_lanes = pd.DataFrame(
-    {
-        "lane_id": ["route_a"] * 10 + ["route_b"] * 10,
-        "date": list(pd.date_range("2026-01-01", periods=10, freq="D")) * 2,
-        "pickup_trips": [
-            20, 21, 24, 23, 25, 28, 29, 27, 30, 31,
-            35, 36, 38, 37, 40, 42, 43, 41, 45, 46,
-        ],
-    }
-)
-
-frame = ForecastFrame.from_pandas(
-    daily_lanes,
-    timestamp_col="date",
-    target_col="pickup_trips",
-    series_id_col="lane_id",
-    freq="D",
-)
-
-model = ThetaForecaster(season_length=7, prediction_interval_levels=[0.8, 0.95])
-model.fit(frame)
-forecast = model.predict(horizon=3).to_pandas()
-```
-
-Forecast tables are deterministic: `series_id`, `timestamp`, `horizon`,
-`model`, `mean`, and interval columns such as `lower_80` and `upper_80`.
-Use [Forecasting](forecasting.md) for rolling-origin backtesting, CartoBoost lag
-features, artifact persistence, CLI workflows, and model selection.
-
-## 7. Validate Against Strong Baselines
-
-For temporal-spatial problems, hold out the latest rows before trusting model
-quality:
-
-```python
 import cartoboost
+import numpy as np
+from cartoboost import CartoBoostRegressor
 from cartoboost.geo import PanelIndex, TimeIndex
+from cartoboost.schema import FeatureSchema, NumericSpec, PeriodicSpec
 from cartoboost.validation import native_out_of_time_split
 
-time = TimeIndex(pickup_times, frequency="h")
-panel = PanelIndex(["nyc_taxi"] * len(pickup_times), time=time)
-manifest = native_out_of_time_split(
+rng = np.random.default_rng(7)
+rows = 240
+pickup_hour = np.arange(rows, dtype=float) % 24
+trip_distance = rng.uniform(1, 8, rows)
+X = np.column_stack([trip_distance, pickup_hour])
+y = (
+    8 + 1.8 * trip_distance
+    + 2 * np.sin(2 * np.pi * pickup_hour / 24)
+    + rng.normal(0, 0.15, rows)
+)
+
+pickup_times = [
+    (datetime(2026, 1, 1) + timedelta(hours=i)).isoformat()
+    for i in range(rows)
+]
+panel = PanelIndex(
+    ["nyc_taxi"] * rows,
+    time=TimeIndex(pickup_times, frequency="h"),
+)
+split = native_out_of_time_split(
     panel,
-    min_train_size=int(len(pickup_times) * 0.8),
-    horizon=len(pickup_times) - int(len(pickup_times) * 0.8),
-    step=len(pickup_times) - int(len(pickup_times) * 0.8),
-    dataset_fingerprint="sha256:...",
+    min_train_size=192,
+    horizon=48,
+    step=48,
+    dataset_fingerprint="sha256:generated-taxi-quickstart",
     coordinate_crs_note="not_applicable",
     model_version=cartoboost.__version__,
     dependency_versions={"cartoboost": cartoboost.__version__},
 )
-_, train_idx, validation_idx = manifest.folds()[0]
-
-model.fit(X_all[train_idx], y_all[train_idx])
-predictions = model.predict(X_all[validation_idx])
+_, train_idx, test_idx = split.folds()[0]
 ```
 
-Report the split design, target transform, feature set, RMSE, MAE, R2, training
-time, prediction time, and model settings. Compare against serious baselines on
-the same train/validation rows, such as LightGBM or XGBoost for tabular
-regression and appropriate local or external forecasting models for demand
-forecasting.
+For real data, record a fingerprint of the actual input and choose the holdout
+from the deployment question. Use [spatial validation](user-guide/spatial-cv-best-practices.md)
+when the goal is prediction in withheld pickup zones or route corridors.
 
-For benchmark claims, document out-of-time, spatial-blocked, grouped, and
-leakage-aware validation details in the benchmark writeup.
+## Fit two comparable models
 
-## 8. Add Graph Or Neural Structure When Justified
-
-Graph, neural, and causal surfaces solve more specialized problems. Add them
-only when the data and validation design can test the extra structure; they are
-intentionally excluded from the core quickstart.
-
-Use learned embeddings when high-cardinality IDs carry stable signal that is not
-captured by dense features alone.
+The schema identifies pickup hour as periodic with a 24-hour cycle. Both models
+use the same observations, features, and training settings. Only the split
+policy changes.
 
 ```python
-from cartoboost import NeuralEmbeddingRegressor
-
-neural_model = NeuralEmbeddingRegressor(
-    dim=16,
-    base_model_kwargs={"n_estimators": 80, "split_policy": "axis_only"},
-    final_model_kwargs={
-        "n_estimators": 120,
-        "split_policy": "structured",
-    },
+schema = FeatureSchema.from_specs([
+    NumericSpec("trip_distance"),
+    PeriodicSpec("pickup_hour", 24),
+])
+settings = dict(
+    n_estimators=40,
+    learning_rate=0.06,
+    max_depth=4,
+    min_samples_leaf=8,
+    random_state=7,
 )
 
-neural_model.fit(X_train, y_train, ids=pickup_zone_ids_train)
-predictions = neural_model.predict(X_validation, ids=pickup_zone_ids_validation)
+baseline = CartoBoostRegressor(split_policy="axis_only", **settings)
+model = CartoBoostRegressor(split_policy="structured", **settings)
+
+for candidate in (baseline, model):
+    candidate.fit(X[train_idx], y[train_idx], feature_schema=schema)
+
+predictions = model.predict(X[test_idx])
+print("Prediction shape:", predictions.shape)  # (48,)
+print("Axis holdout RMSE:", -baseline.score(X[test_idx], y[test_idx]))
+print("Structured holdout RMSE:", -model.score(X[test_idx], y[test_idx]))
 ```
 
-Use CartoBoost graph features or CartoBoost graph models when the observed
-units are connected entities, such as directed pickup/dropoff lanes,
-borough-zone hierarchies, or repeated OD-pair flow patterns. See
-[CartoBoost Graph Models And Features](graph-features.md) and
-[CartoBoost Neural Embedding Models And Features](neural-features.md).
+`axis_only` is a useful dense baseline. `structured` enables the structures
+declared by the feature schema. On your own data, keep the same holdout and
+compare against LightGBM or XGBoost as well. Report RMSE, MAE, R², training time,
+and prediction time with the model settings. `score` returns negative RMSE,
+so the example negates it to display error in minutes. This generated-data
+comparison is not a model-selection result.
 
-## 9. Save Reproducible Artifacts
+## Save what you fitted
+
+A model artifact preserves the information needed for prediction, including its
+feature schema. Keep inference columns in the same order as training columns.
 
 ```python
-model.save("cartoboost-regressor.json")
-loaded = CartoBoostRegressor.load("cartoboost-regressor.json")
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
-model.save_weights("cartoboost-regressor.weights.json")
-weights_loaded = CartoBoostRegressor.load_weights("cartoboost-regressor.weights.json")
+with TemporaryDirectory() as directory:
+    artifact = Path(directory) / "taxi-duration.json"
+    model.save(artifact)
+    restored = CartoBoostRegressor.load(artifact)
+    np.testing.assert_allclose(
+        predictions,
+        restored.predict(X[test_idx]),
+    )
 ```
 
-Use `save` for CartoBoost JSON model artifacts and `save_weights` for portable
-prediction artifacts. ONNX export is available only for dense axis-tree
-constant-leaf models when the optional `onnx` dependency is installed.
+Choose a persistent path in your application. Use `save_weights` and
+`load_weights` for portable prediction artifacts. The
+[artifact guide](model_artifact.md) explains compatibility and the supported
+ONNX export subset.
 
-## 10. Source Checkout Checks
+## Add the structure your task needs
 
-For a source checkout, run the full local validation suite with:
+You now have a fit, a holdout, a baseline, and an artifact. The next step depends
+on the information available at prediction time.
 
-```sh
-just validate
+| Your data contains… | Add… | Read |
+| --- | --- | --- |
+| Pickup coordinates | A spatial pair in the feature schema. Use projected units for distance-based validation. | [Spatial modeling](spatial_modeling.md) |
+| `PULocationID` or `DOLocationID` | A categorical feature with a mapping fitted on training data. | [Categorical features](user-guide/categorical-features.md) |
+| Several route cells or zone memberships per trip | Sparse-set inputs, with matching names at fit and predict time. | [Sparse features](sparse_features.md) |
+| Repeated pickup or dropoff IDs | Learned embeddings, evaluated on temporal and unseen-ID holdouts where relevant. | [Neural models](user-guide/neural-models/index.md) |
+| Observed connections between zones | Graph inputs with an explicit direction and observation cutoff. | [Graph models](user-guide/graph-models/index.md) |
+| A future demand target | A `ForecastFrame`, a horizon, and rolling-origin backtests. | [Forecasting](forecasting.md) |
+
+For example, sparse memberships accompany the dense matrix rather than becoming
+a wide one-hot table:
+
+```python
+# Supply one membership collection per trip in each split.
+model.fit(
+    X_train_dense,
+    y_train,
+    sparse_sets={"zone_ids": zone_ids_train},
+    feature_schema={
+        "dense": [
+            {"name": "trip_distance", "kind": "numeric"},
+            {"name": "pickup_hour", "kind": "periodic", "period": 24},
+        ],
+        "sparse_sets": [{"name": "zone_ids", "kind": "sparse_set"}],
+    },
+)
+predictions = model.predict(
+    X_test_dense,
+    sparse_sets={"zone_ids": zone_ids_test},
+)
 ```
 
-For a faster Python-focused loop:
+This last fragment uses your own dense matrices and memberships. The earlier
+three Python blocks form the complete runnable first model.
 
-```sh
-uv run --group dev pre-commit run --all-files
-uv run --group dev pytest
-```
+## Where to go next
+
+- [Choose a model](user-guide/model-types.md) for classification, ranking,
+  demand forecasting, spatial estimation, and deep models.
+- [Inspect a browser model](../modeling-lab) to explore a fitted example
+  interactively without installing Python.
+- [Read the benchmark reports](benchmarks/index.md) for real data, comparable
+  baselines, and task-specific results.
+- [Use the Python API](reference/python-api.md) for method contracts and
+  [parameters](user-guide/parameters.md) for estimator controls.
+
+From a source checkout, `uv run python examples/quickstart.py` runs the maintained
+NumPy example with a spatial pair, baseline comparison, and artifact round-trip.

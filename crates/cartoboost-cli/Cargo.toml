@@ -1,8 +1,9 @@
 [package]
 name = "cartoboost-cli"
-version = "0.3.12"
-edition = "2021"
-license = "MIT"
+version = "0.3.13"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
 description = "Command-line smoke-test interface for CartoBoost workflows"
 
 [[bin]]

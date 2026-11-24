@@ -104,11 +104,19 @@ class GraphTemporalFrame:
     def train_slice(self, size: int) -> GraphTemporalFrame:
         if size <= 0 or size > len(self._target):
             raise ValueError("size must be positive and within the frame length")
-        covariates = None if self._covariates is None else self._covariates[:size]
+        return self._take_rows(slice(None, size))
+
+    def _take_rows(self, rows: np.ndarray | slice) -> GraphTemporalFrame:
+        covariates = None if self._covariates is None else self._covariates[rows]
+        timestamps = (
+            self._timestamps[rows]
+            if isinstance(rows, slice)
+            else [self._timestamps[int(index)] for index in rows]
+        )
         return GraphTemporalFrame(
             node_ids=self._node_ids,
-            timestamps=self._timestamps[:size],
-            target=self._target[:size],
+            timestamps=timestamps,
+            target=self._target[rows],
             indptr=self._indptr,
             indices=self._indices,
             data=self._data,
@@ -116,9 +124,9 @@ class GraphTemporalFrame:
             frequency=self._frequency,
             covariates=covariates,
             owner_mask=self._owner_mask,
-            target_mask=None if self._target_mask is None else self._target_mask[:size],
-            imputed_mask=None if self._imputed_mask is None else self._imputed_mask[:size],
-            target_weights=None if self._target_weights is None else self._target_weights[:size],
+            target_mask=None if self._target_mask is None else self._target_mask[rows],
+            imputed_mask=None if self._imputed_mask is None else self._imputed_mask[rows],
+            target_weights=None if self._target_weights is None else self._target_weights[rows],
             covariate_roles=self._covariate_roles,
         )
 
@@ -429,7 +437,7 @@ class DCRNNForecaster(ArtifactPersistenceMixin):
 
     def predict(self, horizon: int) -> np.ndarray:
         self._check_is_fitted()
-        return np.asarray(self._native_model.predict(int(horizon)), dtype=float)
+        return _native_prediction_array(self._native_model, "predict", horizon)
 
     def score(self, actual: Any, *, horizon: int | None = None) -> float:
         actual_arr = np.asarray(actual, dtype=float)
@@ -488,14 +496,23 @@ class DCRNNForecaster(ArtifactPersistenceMixin):
             else np.asarray(frame._timestamps)
         )
         for fold in splitter.split(split_data):
-            train_count = len(fold.train_indices)
-            fitted = self._clone_unfit()
-            fitted.fit(frame.train_slice(train_count))
-            predictions = fitted.predict(fold.horizon)
-            actual = np.asarray(
-                frame._target[train_count : train_count + fold.horizon],
-                dtype=float,
+            train_indices = _fold_indices(fold.train_indices, len(frame._target), "training")
+            validation_indices = _fold_indices(
+                fold.validation_indices, len(frame._target), "validation"
             )
+            if len(validation_indices) != fold.horizon:
+                raise ValueError("validation indices must contain the full forecast horizon")
+            if train_indices[-1] >= validation_indices[0]:
+                raise ValueError("training indices must precede validation indices")
+            train_count = len(train_indices)
+            fitted = self._clone_unfit()
+            fitted.fit(frame._take_rows(train_indices))
+            forecast_span = int(validation_indices[-1] - train_indices[-1])
+            predictions = fitted.predict(forecast_span)
+            if predictions.shape != (forecast_span, len(frame._node_ids)):
+                raise ValueError("predictions must match the full forecast horizon and node count")
+            predictions = predictions[validation_indices - train_indices[-1] - 1]
+            actual = frame._target[validation_indices]
             fold_results.append(
                 {
                     "fold_id": fold.fold_id,
@@ -618,7 +635,7 @@ class STAEformerForecaster(ArtifactPersistenceMixin):
 
     def predict(self, horizon: int) -> np.ndarray:
         self._check_is_fitted()
-        return np.asarray(self._native_model.predict(int(horizon)), dtype=float)
+        return _native_prediction_array(self._native_model, "predict", horizon)
 
     def score(self, actual: Any, *, horizon: int | None = None) -> float:
         actual_arr = np.asarray(actual, dtype=float)
@@ -738,7 +755,7 @@ class GraphWaveNetForecaster(ArtifactPersistenceMixin):
 
     def predict(self, horizon: int) -> np.ndarray:
         self._check_is_fitted()
-        return np.asarray(self._native_model.predict(int(horizon)), dtype=float)
+        return _native_prediction_array(self._native_model, "predict", horizon)
 
     def score(self, actual: Any, *, horizon: int | None = None) -> float:
         actual_arr = np.asarray(actual, dtype=float)
@@ -913,17 +930,17 @@ class _PaperGraphTransformerForecaster(ArtifactPersistenceMixin):
 
     def predict(self, horizon: int) -> np.ndarray:
         self._check_is_fitted()
-        return np.asarray(self._native_model.predict(int(horizon)), dtype=float)
+        return _native_prediction_array(self._native_model, "predict", horizon)
 
     def predict_owned(self, horizon: int) -> np.ndarray:
         """Return only owner-node forecasts from a sharded graph frame."""
         self._check_is_fitted()
-        return np.asarray(self._native_model.predict_owned(int(horizon)), dtype=float)
+        return _native_prediction_array(self._native_model, "predict_owned", horizon)
 
     def predict_median(self, horizon: int) -> np.ndarray:
         """Return the stable native direct-decoder median."""
         self._check_is_fitted()
-        return np.asarray(self._native_model.predict_median(int(horizon)), dtype=float)
+        return _native_prediction_array(self._native_model, "predict_median", horizon)
 
     def predict_conformal(
         self,
@@ -1164,9 +1181,17 @@ def _native_class(name: str) -> Any | None:
     return getattr(_native, name, None)
 
 
+def _native_prediction_array(model: Any, method: str, horizon: int) -> np.ndarray:
+    array_method = getattr(model, f"{method}_arrays", None)
+    predict = array_method if callable(array_method) else getattr(model, method)
+    return np.asarray(predict(int(horizon)), dtype=float)
+
+
 def _horizon_metrics(prediction: np.ndarray, actual: np.ndarray) -> list[dict[str, float]]:
+    if prediction.shape != actual.shape or prediction.ndim != 2:
+        raise ValueError("prediction and actual must have the same horizon by node shape")
     rows: list[dict[str, float]] = []
-    for idx, (pred_row, actual_row) in enumerate(zip(prediction, actual, strict=False), start=1):
+    for idx, (pred_row, actual_row) in enumerate(zip(prediction, actual, strict=True), start=1):
         err = np.asarray(pred_row, dtype=float) - np.asarray(actual_row, dtype=float)
         abs_err = np.abs(err)
         denom = float(np.sum(np.abs(actual_row)))
@@ -1179,6 +1204,17 @@ def _horizon_metrics(prediction: np.ndarray, actual: np.ndarray) -> list[dict[st
             }
         )
     return rows
+
+
+def _fold_indices(values: Any, row_count: int, name: str) -> np.ndarray:
+    indices = np.asarray(values)
+    if indices.ndim != 1 or indices.size == 0 or indices.dtype.kind not in {"i", "u"}:
+        raise ValueError(f"{name} indices must be a non-empty one-dimensional integer array")
+    if np.any(indices < 0) or np.any(indices >= row_count):
+        raise ValueError(f"{name} indices must be within the frame length")
+    if np.any(indices[1:] <= indices[:-1]):
+        raise ValueError(f"{name} indices must be unique and increasing")
+    return indices.astype(np.intp, copy=False)
 
 
 __all__ = [

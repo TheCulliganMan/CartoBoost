@@ -47,8 +47,8 @@ export default function AgentLlmsCallout(): React.JSX.Element {
       <div>
         <h2>LLM Guide</h2>
         <p>
-          Agents can use the maintained LLM guide for repo navigation, edit
-          boundaries, validation commands, and docs update rules.
+          Give your coding assistant a map of the package, public APIs, and
+          documentation with the plain-text llms.txt guide.
         </p>
       </div>
       <div className="agent-llms-actions">

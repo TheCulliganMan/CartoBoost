@@ -1,10 +1,15 @@
+---
+sidebar_label: GraphSAGE
+---
+
 import {NeuralModelExample} from '@site/src/components/ModelingLabClient';
 
 # CartoBoost GraphSAGE Models
 
-Use GraphSAGE when node attributes should shape the graph representation. The
-graph is homogeneous: one node type and one edge type, with numeric features on
-each node.
+Combine a zone's attributes with its neighbors using GraphSAGE. This family
+uses one node type, one edge type, and a numeric feature matrix—for example,
+taxi-zone demand summaries on a pickup/dropoff graph. Choose a regressor for
+row targets or a link predictor for pair scores.
 
 ## When To Use
 
@@ -14,6 +19,9 @@ each node.
 - A graph-free tabular baseline is part of the comparison.
 
 ## Interactive Example
+
+Run the small example to inspect inputs and model behavior. It is a browser
+demonstration, not a benchmark on held-out taxi trips.
 
 <NeuralModelExample title="GraphSAGE browser model" pipeline="graphsage" />
 

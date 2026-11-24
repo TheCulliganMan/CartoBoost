@@ -1,11 +1,16 @@
+---
+sidebar_label: Inverted temporal transformer
+---
+
 import {DeepModelWasmExample} from '@site/src/components/ModelingLabClient';
 
-# CartoBoost InvertedTemporalTransformer
+# Inverted Temporal Transformer
 
-Use `InvertedTemporalTransformer` for wide synchronized panels where entities
-are the attention tokens. This avoids treating every time step as an attention
-token and reports cross-entity ablations so the graph-free entity interaction
-claim can be checked.
+Learn relationships across synchronized taxi-zone histories with
+`InvertedTemporalTransformer`. Each entity is an attention token, letting the
+model compare zones without requiring a supplied adjacency graph. Cross-entity
+ablations help show whether those interactions contribute beyond each zone's
+own history.
 
 ## Python Example
 
@@ -15,7 +20,7 @@ from cartoboost.deep import EntityPanelFrame, InvertedTemporalTransformer
 frame = EntityPanelFrame(
     entity_ids=["PULocationID:161", "PULocationID:236", "PULocationID:132"],
     timestamps=[0, 1, 2, 3, 4, 5],
-    target=[
+    y=[
         [42, 35, 18],
         [44, 36, 19],
         [51, 40, 24],
@@ -23,26 +28,42 @@ frame = EntityPanelFrame(
         [55, 45, 34],
         [49, 43, 30],
     ],
-    horizon=2,
-    frequency="hourly",
+    freq="hourly",
 )
 
 model = InvertedTemporalTransformer(lookback=4, horizon=2)
 model.fit(frame)
 forecast = model.predict(2)
+quantiles = model.predict_quantiles(2)  # Keys: 0.1, 0.5, 0.9
 ```
 
 `InvertedEntityTransformer` is an alias. The same implementation is reachable
 through `TemporalEntityTransformer(architecture="inverted_transformer")`.
+That facade also exposes `backtest(splitter)` with a `RollingOriginSplitter`:
+each fold refits on its training rows and returns held-out predictions, actual
+values, RMSE, and MAE. Panels must have ordered, contiguous time rows.
 
-## Browser WASM Example
+Quantiles use a Gaussian residual assumption with one scale per entity,
+estimated from fitted one-step delta errors. The median equals the point
+forecast; these intervals do not claim horizon-specific calibration. Assess
+coverage on held-out rolling-origin folds. Artifacts saved without residual
+scales still support point forecasts and require refitting before quantile
+prediction.
+
+## Interactive Example
+
+Run the small example to inspect inputs and model behavior. It is a browser
+demonstration, not a benchmark on held-out taxi trips.
 
 <DeepModelWasmExample model="InvertedTemporalTransformer" />
 
 ## Use When
 
-Use this model for synchronized panels where cross-entity dependence matters
-and entities are more useful as attention tokens than individual timestamps.
+| Your task | Start with |
+| --- | --- |
+| Cross-zone attention without supplied adjacency. | `InvertedTemporalTransformer` |
+| Directed edges are known and meaningful. | [SpatioTemporalGraphForecaster](cartoboost-spatiotemporal-graph-forecaster.md) |
+| Shared supervised lag and calendar features. | [CartoBoost Lag](../forecasting-models/cartoboost-lag.md) |
 
 ## Validation
 

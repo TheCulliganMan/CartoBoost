@@ -1,24 +1,32 @@
 # Graph Models
 
-Use graph models when relationship structure is the thing you want to test.
-That usually means directed origin-to-destination flow, repeated route
-markets, neighborhood structure, or link likelihood.
-
-Use [CartoBoost Boosting Model Guides](../boosting-models/index.md) for
-row-level trees and [CartoBoost Neural Model Guides](../neural-models/index.md)
-when repeated IDs should be embedded without an explicit graph.
+Graph models use directed pickup-to-dropoff flows, neighborhood structure,
+and different relation types to learn representations for regression or link
+prediction.
 
 ## Choose A Guide
 
-| Guide | Best when |
+| What the graph tells you | Start with |
 | --- | --- |
-| [CartoBoost Node2Vec Graph Models](cartoboost-node2vec.md) | Topology and flow patterns matter more than node attributes. |
-| [CartoBoost GraphSAGE Models](cartoboost-graphsage.md) | Node attributes should shape the learned representation. |
-| [CartoBoost HeteroGraphSAGE Models](cartoboost-hetero-graphsage.md) | Relation IDs matter, but a single node-feature table is enough. |
-| [CartoBoost HinSAGE Models](cartoboost-hinsage.md) | Node types and valid source-relation-target combinations must be enforced. |
+| Connectivity and flow patterns carry the signal | [Node2Vec](cartoboost-node2vec.md) |
+| Node measurements should be combined with neighborhood information | [GraphSAGE](cartoboost-graphsage.md) |
+| Different edge relations need different treatment, with one node-feature table | [HeteroGraphSAGE](cartoboost-hetero-graphsage.md) |
+| Node types and allowed source/relation/target triples must be enforced | [HinSAGE](cartoboost-hinsage.md) |
 
-Keep direction explicit. A source-to-target fact is usually not the same as
-the reverse fact.
+Each guide covers regression and link prediction, a Python example, a browser
+demonstration, and validation choices.
 
-See [Graph Features](../../graph-features.md) for input shapes, directionality,
-generated features, saving and loading, and common failure modes.
+## Keep Direction And Time Explicit
+
+A pickup-to-dropoff edge is different from its reverse. Build the graph from
+information available before the validation cutoff, and keep held-out labels
+or edges out of representation training. Report repeated-node performance
+separately from cold-node and cold-edge results.
+
+A graph is useful only if it adds information. Compare with a
+[boosted tree](../boosting-models/index.md) on measured trip features and an
+[ID embedding model](../neural-models/index.md) without adjacency.
+
+For future values on a node-time matrix, use
+[graph forecasting](../forecasting-models/graph-spatiotemporal.md). For graph
+construction, input shapes, and persistence, see [Graph Features](../../graph-features.md).

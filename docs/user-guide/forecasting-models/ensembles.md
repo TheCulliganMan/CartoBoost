@@ -2,10 +2,11 @@ import {ForecastModelExample} from '@site/src/components/ModelingLabClient';
 
 # Weighted Ensembles
 
-`WeightedEnsembleForecaster` combines CartoBoost forecasting models with
-explicit fixed weights. The ensemble is intentionally simple: each member is
-fitted, each member predicts the same horizon, and the final forecast is the
-weighted average of aligned predictions.
+`WeightedEnsembleForecaster` combines models with explicit weights. It fits
+each member, aligns its predictions to the
+same series and horizon, and averages them using your chosen weights. A taxi
+demand ensemble might retain a seasonal pattern while adding a smaller trend
+or state-space contribution.
 
 ## Interactive Example
 
@@ -26,17 +27,15 @@ Do not use an ensemble just to add complexity. It should clear the best
 individual member on a fixed validation split or encode a clear operating policy
 such as "mostly seasonal, with a smaller trend correction."
 
-## Scientific Role
+## What The Model Learns {#scientific-role}
 
-A weighted ensemble is a fixed mixture of scientific hypotheses. Each component
-should represent a different defensible mechanism, such as persistence,
-seasonal repetition, smooth trend, state-space updating, spatial borrowing, or
-shared supervised lag structure. The ensemble is useful only when those
-mechanisms make complementary errors under the same validation design.
+Each member contributes a different forecast assumption: persistence, a
+repeating season, a trend, a latent state, or a spatial relationship. Averaging
+helps when the members make complementary errors.
 
-Choose it when validation shows that no single component dominates all horizons
-or all panels, and when the selected weights can be explained. The weights
-are part of the model claim; they are not learned automatically by the ensemble.
+Weights are supplied explicitly and are part of the model configuration. Choose
+them using training-side validation, then compare the ensemble with its best
+individual member on untouched origins.
 
 ## Assumptions And Failure Modes
 
@@ -56,7 +55,7 @@ Failure modes include keeping a weak member because one split moved by chance,
 changing component parameters while tuning weights, or reporting only ensemble
 metrics without component metrics. Compare against the best individual member
 and inspect horizon-specific errors before claiming that averaging adds
-scientific value.
+predictive value.
 
 ## Python Example
 
@@ -242,6 +241,14 @@ For taxi benchmarks, include:
 Use rolling-origin splits and keep the exact train/test rows fixed across all
 members. If the ensemble only passes one horizon but misses most others,
 document that horizon-specific behavior instead of presenting it as general.
+
+## Use When
+
+| Your task | Start with |
+| --- | --- |
+| You want a fixed, explicit mixture of validated members | Weighted ensemble |
+| Validation should select members and weights | [AutoForecaster](auto-forecaster.md) |
+| One local statistical expert is enough | [AutoStatsBank](auto-stats-bank.md) |
 
 ## Limitations
 

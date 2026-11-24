@@ -115,13 +115,11 @@ impl Forecaster for NHiTSForecaster {
         self.frequency = Some(dataset.frequency());
         self.tails = dataset.tails().clone();
         self.last_rows = frame
-            .series_ids()
-            .into_iter()
-            .filter_map(|series_id| {
-                frame
-                    .rows_for_series(&series_id)
-                    .last()
-                    .map(|row| (series_id, (*row).clone()))
+            .rows()
+            .chunk_by(|left, right| left.series_id == right.series_id)
+            .map(|history| {
+                let row = history.last().expect("nonempty series chunk");
+                (row.series_id.clone(), row.clone())
             })
             .collect();
         Ok(())

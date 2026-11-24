@@ -1,7 +1,8 @@
 [package]
 name = "cartoboost-core"
-version = "0.3.12"
+version = "0.3.13"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
@@ -9,7 +10,7 @@ serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
 thiserror.workspace = true
-rayon = "1.11"
+rayon.workspace = true
 cartoboost-accelerator = { path = "../cartoboost-accelerator" }
 toml.workspace = true
 
@@ -25,7 +26,7 @@ webgpu = ["cartoboost-accelerator/webgpu"]
 
 [dev-dependencies]
 criterion.workspace = true
-tempfile = "3"
+tempfile.workspace = true
 
 [[bench]]
 name = "prediction"

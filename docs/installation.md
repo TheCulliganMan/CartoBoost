@@ -1,13 +1,15 @@
-# Installation
+---
+sidebar_label: Installation
+description: Install CartoBoost, verify your Python environment, and add only the integrations you need.
+---
 
-CartoBoost is published on PyPI as `cartoboost`.
+# Install CartoBoost
 
-Install CartoBoost when you need structured tabular or panel prediction with
-place, cyclic time, memberships, or direction in a Python environment. The
-core package keeps a small numerical runtime; dataframe and other integrations
-are installed directly only when needed.
+One package gets you the Python modeling API and its native implementation.
+NumPy is the only required Python runtime dependency. Add dataframe,
+geospatial, and plotting packages when your workflow needs them.
 
-## Install From PyPI
+## Install from PyPI
 
 ```sh
 uv add cartoboost
@@ -24,21 +26,13 @@ plus free-threaded CPython 3.14t and 3.15t, on:
 If no compatible wheel exists, `uv` may try to build from source, which requires
 the project build toolchain.
 
-## Optional Dependencies
+## Add the integrations you need
 
-Install optional integrations only when the scientific workflow needs them:
+Install only the packages used by your workflow. For example, a Polars
+preparation step and H3 spatial cells need:
 
 ```sh
-uv add shap
-uv add h3
-uv add holidays
-uv add s2sphere
-uv add duckdb
-uv add optuna
-uv add polars
-uv add pandas
-uv add onnx
-uv add geopandas matplotlib pydeck shapely
+uv add polars h3
 ```
 
 | Package | Adds | Use when |
@@ -54,14 +48,13 @@ uv add geopandas matplotlib pydeck shapely
 | `onnx` | ONNX export for the supported dense axis-tree subset. | Deployment requires ONNX and the model stays inside the supported subset. |
 | `matplotlib`, `geopandas`, `shapely`, `pydeck` | Plotting helpers. | You need diagnostic plots, static spatial plots, or interactive taxi route maps. |
 
-## Verify The Install
+## Check your environment
 
 ```sh
-python -c "import cartoboost; print(cartoboost.__version__)"
-python examples/quickstart.py
+uv run python -c "import cartoboost; print(cartoboost.__version__)"
 ```
 
-Python usage should work immediately after install:
+Then create an estimator:
 
 ```python
 from cartoboost import CartoBoostRegressor
@@ -69,7 +62,18 @@ from cartoboost import CartoBoostRegressor
 model = CartoBoostRegressor(n_estimators=10, max_depth=2)
 ```
 
-## CUDA Development Build
+The [first-model walkthrough](getting-started.md) contains a complete NumPy
+example you can run after installation. From a repository checkout,
+`uv run python examples/quickstart.py` runs the maintained example.
+
+## Build from Rust source
+
+CPU builds support Rust 1.85 and later. The optional WebGPU backend requires
+Rust 1.87 or later through wgpu. Use the stable toolchain for the complete
+workspace, whose browser crate enables WebGPU by default. To check the CPU
+workspace on Rust 1.85, use `cargo +1.85.0 check --workspace --no-default-features`.
+
+### CUDA
 
 CartoBoost's CUDA kernels are built with [cuda-oxide](https://nvlabs.github.io/cuda-oxide/).
 This path is for native development and validation; published Python wheels do
@@ -105,7 +109,7 @@ CUDA_OXIDE_DEBUG=off RUSTUP_TOOLCHAIN=nightly-2026-04-03 \
 The CUDA target must not exceed the installed GPU's capability. For example, a
 Turing GPU uses `sm_75`; an `sm_80` artifact cannot run there.
 
-## HIP/ROCm Development Build
+### HIP / ROCm
 
 CartoBoost's HIP backend supports AMD GPUs on Linux and Windows. It dynamically
 loads HIP and HIPRTC, so ordinary builds remain independent of ROCm. Install the
@@ -133,7 +137,7 @@ The runtime searches `HIP_PATH` and `ROCM_PATH`, standard Linux shared-library
 names, and versioned Windows SDKs under `Program Files\\AMD\\ROCm`. Model
 configuration accepts both `hip` and `rocm` for this backend.
 
-## DirectML Development Build
+### DirectML
 
 On Windows 10 or later, build the native neural crate with `directml` to use a
 DirectX 12 adapter through the system DirectML runtime. No CUDA or ROCm toolkit
@@ -154,5 +158,9 @@ unavailable.
 | --- | --- |
 | `ImportError` during import | Reinstall CartoBoost in a clean Python environment. |
 | `uv` tries to compile from source | Use CPython 3.10-3.15 or free-threaded CPython 3.14t/3.15t on a supported platform, or install the project build toolchain before building. |
-| `examples/quickstart.py` cannot import CartoBoost | Make sure the Python environment where `cartoboost` was installed is active. |
+| `ModuleNotFoundError` after installation | Run the script with `uv run python` from the project where you installed CartoBoost. |
+| `examples/quickstart.py` does not exist | That file belongs to the source checkout. Use the complete example in [Your first model](getting-started.md) for a PyPI install. |
 | cuda-oxide reports an artifact for a newer GPU architecture | Rebuild with `cargo oxide ... --arch sm_XX`, where `sm_XX` matches `nvidia-smi --query-gpu=compute_cap --format=csv,noheader`. |
+
+**Ready to fit?** Continue with [Your first model](getting-started.md), or
+[choose a model family](user-guide/model-types.md) for your prediction task.

@@ -2,9 +2,11 @@ import {ForecastModelExample} from '@site/src/components/ModelingLabClient';
 
 # CartoBoost Lag
 
-`CartoBoostLagForecaster` is the global supervised forecasting model. It builds
-leakage-safe lag, rolling, calendar, and trend features, then fits a CartoBoost
-regressor to forecast future horizons.
+Learn one forecasting model across related taxi-zone histories.
+`CartoBoostLagForecaster` turns past targets, rolling summaries, calendar values,
+and trends into supervised features, then fits a CartoBoost regressor. It is a
+useful next step when each individual series has limited history but many
+series share recurring patterns.
 
 ## Interactive Example
 
@@ -14,32 +16,30 @@ regressor to forecast future horizons.
 
 Use it when many related time series should share one model:
 
-- hourly demand by zone, store, product, or region;
-- route counts or event counts;
-- grouped fare, duration, or usage aggregates.
+- hourly pickup demand by zone or borough;
+- pickup-to-dropoff route counts;
+- grouped fare, duration, or trip-distance aggregates.
 
 For a single short series, start with seasonal naive, theta, ETS, ARIMA, or
 Kalman instead. The lag model is most useful when repeated structure across
 panels gives the global regressor more examples than any one series can
 provide.
 
-## Scientific Role
+## What The Model Learns {#scientific-role}
 
-`CartoBoostLagForecaster` is a supervised panel model. It tests whether a
-shared nonlinear mapping from historical lags, rolling summaries, calendar
-features, trend features, and panel identity can forecast many related series
-under the same split used for local one-series models.
+Each forecast training row combines past observations with calendar and panel
+features. A shared nonlinear model learns across those rows, allowing repeated
+patterns across pickup zones to contribute to the same fit.
 
-Choose it when the scientific unit is a system of related panels, not a single
-isolated sequence. It is appropriate when repeated behavior across groups gives
-the model more evidence than any one series contains.
+The benefit comes from related histories. Compare per-zone errors to detect
+whether a global improvement masks poor predictions for quiet or unusual zones.
 
 ## Assumptions And Failure Modes
 
 The model assumes historical features are constructed strictly before the
 forecast row and that panel histories are aligned at the declared frequency.
 It also assumes the configured lags and rolling windows represent mechanisms a
-scientist is willing to defend, such as same-hour-yesterday demand, recent
+analyst can justify, such as same-hour-yesterday demand, recent
 pickup pressure, or weekly recurrence.
 
 Failure modes are usually leakage, under-specified features, or overfit tree
@@ -47,6 +47,20 @@ settings. Random row splits leak future taxi patterns. Lags that do not match
 the cadence can look plausible while answering the wrong question. A global
 model can also hide poor behavior for sparse or atypical zones, so report
 error by horizon and by zone or lane in addition to aggregate RMSE and MAE.
+
+## Prediction Intervals
+
+Set `prediction_interval_levels=(0.8, 0.95)` to include symmetric Gaussian
+intervals centered on recursive point forecasts. Each series' scale is the
+root mean square of the fitted booster's training residuals, including when
+learning target differences. At least two supervised residuals per series are
+required. Levels and calibration behavior persist through save/load and refit.
+
+These training-residual intervals have constant width across horizons and can
+underestimate error from overfitting and recursive propagation. They are a
+Gaussian approximation, not held-out conformal intervals or a guaranteed
+coverage level. Use rolling-origin evaluation to assess coverage for the
+requested horizon.
 
 ## Python Example
 
@@ -259,6 +273,14 @@ For panel forecasts, report at least:
 
 Do not validate on randomly shuffled rows. A shuffled split leaks future pickup
 patterns into training and makes lag features look stronger than they are.
+
+## Use When
+
+| Your task | Start with |
+| --- | --- |
+| Related panels share nonlinear lag and calendar patterns | CartoBoost lag |
+| One short local history needs a compact baseline | [Theta](theta.md) or [ETS](ets.md) |
+| Validation should choose across several strategies | [AutoForecaster](auto-forecaster.md) |
 
 ## Limitations
 

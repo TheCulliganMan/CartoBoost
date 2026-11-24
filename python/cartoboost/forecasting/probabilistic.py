@@ -100,20 +100,16 @@ class ConformalCalibrator:
             "calibration_prediction",
         )
         native = _native_prob_call(
-            "prob_split_conformal_residual_quantile_value",
-            actual.tolist(),
-            prediction.tolist(),
+            "prob_split_conformal_residual_quantile_arrays",
+            actual,
+            prediction,
             self.alpha,
             int(train_end_exclusive),
             int(calibration_start),
             int(calibration_end_exclusive),
             int(test_start),
         )
-        self.residual_quantile_ = (
-            float(native)
-            if native is not None
-            else _conformal_quantile(np.abs(actual - prediction), self.alpha)
-        )
+        self.residual_quantile_ = float(native)
         self._test_start = int(test_start)
         return self
 
@@ -322,6 +318,10 @@ class QuantileCartoBoostRegressor(ArtifactPersistenceMixin):
         if not self.models_ and native_class is not None and native_params is not None:
             try:
                 dense = np.ascontiguousarray(np.asarray(x, dtype=np.float64))
+            except (TypeError, ValueError):
+                # Categorical/mixed data use the per-estimator input encoder.
+                dense = None
+            if dense is not None:
                 targets = np.ascontiguousarray(_vector(y, "y"), dtype=np.float64)
                 if dense.ndim != 2:
                     raise ValueError("X must be a two-dimensional numeric matrix")
@@ -337,10 +337,6 @@ class QuantileCartoBoostRegressor(ArtifactPersistenceMixin):
                 self.models_ = {}
                 self.selected_backend_ = str(getattr(native, "selected_backend", self.backend))
                 return self
-            except (TypeError, ValueError):
-                # Categorical/mixed inputs and options outside the native set's
-                # contract retain the full per-estimator compatibility path.
-                self._native_model = None
         if not self.models_:
             self._build_models()
         for model in self.models_.values():
@@ -685,17 +681,14 @@ def pinball_loss(
     _validate_quantile(quantile, "quantile")
     truth, pred = _paired(y_true, y_pred, "y_true", "y_pred")
     native = _native_prob_call(
-        "prob_pinball_loss_value",
-        truth.tolist(),
-        pred.tolist(),
+        "prob_pinball_loss_arrays",
+        truth,
+        pred,
         float(quantile),
         str(backend),
         None,
     )
-    if native is not None:
-        return float(native)
-    residual = truth - pred
-    return float(np.mean(np.maximum(quantile * residual, (quantile - 1.0) * residual)))
+    return float(native)
 
 
 def interval_coverage(
@@ -713,17 +706,14 @@ def interval_coverage(
     if weights is not None and weights.shape != truth.shape:
         raise ValueError("sample_weight must have the same length as y_true")
     native = _native_prob_call(
-        "prob_interval_coverage_value",
-        truth.tolist(),
-        lower_arr.tolist(),
-        upper_arr.tolist(),
+        "prob_interval_coverage_arrays",
+        truth,
+        lower_arr,
+        upper_arr,
         str(backend),
-        None if weights is None else weights.tolist(),
+        weights,
     )
-    if native is not None:
-        return float(native)
-    covered = ((truth >= lower_arr) & (truth <= upper_arr)).astype(float)
-    return float(np.mean(covered) if weights is None else np.average(covered, weights=weights))
+    return float(native)
 
 
 def mean_interval_width(
@@ -739,16 +729,13 @@ def mean_interval_width(
     if weights is not None and weights.shape != lower_arr.shape:
         raise ValueError("sample_weight must have the same length as lower")
     native = _native_prob_call(
-        "prob_mean_interval_width_value",
-        lower_arr.tolist(),
-        upper_arr.tolist(),
+        "prob_mean_interval_width_arrays",
+        lower_arr,
+        upper_arr,
         str(backend),
-        None if weights is None else weights.tolist(),
+        weights,
     )
-    if native is not None:
-        return float(native)
-    widths = upper_arr - lower_arr
-    return float(np.mean(widths) if weights is None else np.average(widths, weights=weights))
+    return float(native)
 
 
 def weighted_conformal_residual_quantile(
@@ -763,24 +750,17 @@ def weighted_conformal_residual_quantile(
     if np.any(weight_arr <= 0.0):
         raise ValueError("weights must be positive")
     native = _native_prob_call(
-        "prob_weighted_conformal_residual_quantile_value",
-        truth.tolist(),
-        pred.tolist(),
-        weight_arr.tolist(),
+        "prob_weighted_conformal_residual_quantile_arrays",
+        truth,
+        pred,
+        weight_arr,
         float(alpha),
         1,
         1,
         int(truth.shape[0] + 1),
         int(truth.shape[0] + 1),
     )
-    if native is not None:
-        return float(native)
-    order = np.argsort(np.abs(truth - pred), kind="mergesort")
-    scores = np.abs(truth - pred)[order]
-    sorted_weights = weight_arr[order]
-    threshold = (1.0 - float(alpha)) * float(np.sum(sorted_weights))
-    index = int(np.searchsorted(np.cumsum(sorted_weights), threshold, side="left"))
-    return float(scores[min(index, scores.size - 1)])
+    return float(native)
 
 
 def group_conformal_residual_quantiles(
@@ -805,13 +785,7 @@ def group_conformal_residual_quantiles(
         int(truth.shape[0] + 1),
         int(truth.shape[0] + 1),
     )
-    if native is not None:
-        return {str(key): float(value) for key, value in json.loads(str(native)).items()}
-    result = {}
-    for group in np.unique(group_arr):
-        mask = group_arr == group
-        result[str(group)] = _conformal_quantile(np.abs(truth[mask] - pred[mask]), alpha)
-    return result
+    return {str(key): float(value) for key, value in json.loads(str(native)).items()}
 
 
 def nearest_conformal_residual_quantiles(
@@ -848,17 +822,7 @@ def nearest_conformal_residual_quantiles(
         int(truth.shape[0] + 1),
         str(backend),
     )
-    if native is not None:
-        return np.asarray(native, dtype=float)
-    residuals = np.abs(truth - pred)
-    result = []
-    for query in query_xy:
-        distances = np.sum((calibration_xy - query) ** 2, axis=1)
-        nearest = np.argsort(distances, kind="mergesort")[
-            : min(int(neighbor_count), residuals.size)
-        ]
-        result.append(_conformal_quantile(residuals[nearest], alpha))
-    return np.asarray(result, dtype=float)
+    return np.asarray(native, dtype=float)
 
 
 def benchmark_calibration_report_fields(
@@ -894,50 +858,18 @@ def benchmark_calibration_report_fields(
         if residual_morans_i_after_calibration is None
         else float(residual_morans_i_after_calibration),
     )
-    if native is not None:
-        decoded = json.loads(str(native))
-        return {
-            "coverage_by_horizon": {
-                int(key): float(value) for key, value in decoded["coverage_by_horizon"].items()
-            },
-            "coverage_by_spatial_block": {
-                str(key): float(value)
-                for key, value in decoded["coverage_by_spatial_block"].items()
-            },
-            "width_by_horizon": {
-                int(key): float(value) for key, value in decoded["width_by_horizon"].items()
-            },
-            "residual_morans_i_after_calibration": decoded["residual_morans_i_after_calibration"],
-        }
+    decoded = json.loads(str(native))
     return {
         "coverage_by_horizon": {
-            int(horizon): interval_coverage(
-                truth[horizon_arr == horizon],
-                lower_arr[horizon_arr == horizon],
-                upper_arr[horizon_arr == horizon],
-            )
-            for horizon in sorted(np.unique(horizon_arr))
+            int(key): float(value) for key, value in decoded["coverage_by_horizon"].items()
         },
         "coverage_by_spatial_block": {
-            str(block): interval_coverage(
-                truth[block_arr == block],
-                lower_arr[block_arr == block],
-                upper_arr[block_arr == block],
-            )
-            for block in sorted(np.unique(block_arr), key=str)
+            str(key): float(value) for key, value in decoded["coverage_by_spatial_block"].items()
         },
         "width_by_horizon": {
-            int(horizon): mean_interval_width(
-                lower_arr[horizon_arr == horizon],
-                upper_arr[horizon_arr == horizon],
-            )
-            for horizon in sorted(np.unique(horizon_arr))
+            int(key): float(value) for key, value in decoded["width_by_horizon"].items()
         },
-        "residual_morans_i_after_calibration": (
-            None
-            if residual_morans_i_after_calibration is None
-            else float(residual_morans_i_after_calibration)
-        ),
+        "residual_morans_i_after_calibration": decoded["residual_morans_i_after_calibration"],
     }
 
 
@@ -956,17 +888,7 @@ def crps_approximation(
         matrix.tolist(),
         str(backend),
     )
-    if native is not None:
-        return float(native)
-    total = 0.0
-    for idx, level in enumerate(levels):
-        total += 2.0 * pinball_loss(
-            truth,
-            matrix[:, idx],
-            float(level),
-            backend=backend,
-        )
-    return float(total / len(levels))
+    return float(native)
 
 
 def weighted_interval_score(
@@ -980,18 +902,11 @@ def weighted_interval_score(
     if not intervals:
         raise ValueError("intervals must contain at least one interval")
     native_intervals = []
-    total = 0.5 * np.abs(truth - med)
-    weight_sum = 0.5
     for alpha, lower, upper in intervals:
         _validate_quantile(alpha, "alpha")
         lower_arr, upper_arr = _paired(lower, upper, "lower", "upper")
         _validate_interval_bounds(lower_arr, upper_arr)
         native_intervals.append((float(alpha), lower_arr.tolist(), upper_arr.tolist()))
-        below = np.maximum(lower_arr - truth, 0.0) * 2.0 / float(alpha)
-        above = np.maximum(truth - upper_arr, 0.0) * 2.0 / float(alpha)
-        weight = float(alpha) / 2.0
-        weight_sum += weight
-        total += weight * (upper_arr - lower_arr + below + above)
     native = _native_prob_call(
         "prob_weighted_interval_score_value",
         truth.tolist(),
@@ -999,9 +914,7 @@ def weighted_interval_score(
         native_intervals,
         str(backend),
     )
-    if native is not None:
-        return float(native)
-    return float(np.mean(total / weight_sum))
+    return float(native)
 
 
 def pit_bins(
@@ -1023,13 +936,7 @@ def pit_bins(
         int(bins),
         str(backend),
     )
-    if native is not None:
-        return json.loads(str(native))
-    pit = np.zeros(truth.shape[0], dtype=float)
-    for idx, level in enumerate(levels):
-        pit = np.where(truth >= matrix[:, idx], float(level), pit)
-    counts, edges = np.histogram(pit, bins=int(bins), range=(0.0, 1.0))
-    return {"edges": edges.tolist(), "counts": counts.astype(int).tolist()}
+    return json.loads(str(native))
 
 
 def repair_non_crossing_quantiles(values: Any) -> np.ndarray:
@@ -1135,11 +1042,22 @@ def _validate_interval_bounds(lower: np.ndarray, upper: np.ndarray) -> None:
 
 
 def _conformal_quantile(residuals: Any, alpha: float) -> float:
-    scores = np.sort(_vector(residuals, "residuals"))
+    scores = _vector(residuals, "residuals")
     if scores.size == 0:
         raise ValueError("residuals must contain at least one value")
-    rank = int(np.ceil((scores.size + 1) * (1.0 - float(alpha))))
-    return float(scores[min(max(rank - 1, 0), scores.size - 1)])
+    end = int(scores.size) + 1
+    return float(
+        _native_prob_call(
+            "prob_split_conformal_residual_quantile_arrays",
+            scores,
+            np.zeros_like(scores),
+            float(alpha),
+            1,
+            1,
+            end,
+            end,
+        )
+    )
 
 
 def _quantile_matrix(
@@ -1163,12 +1081,14 @@ def _validate_estimator(estimator: Any) -> None:
         raise TypeError("estimator must expose fit and predict methods")
 
 
-def _native_prob_call(name: str, *args: Any) -> Any | None:
+def _native_prob_call(name: str, *args: Any) -> Any:
     try:
         native = importlib.import_module("cartoboost._native")
-        function = getattr(native, name)
-    except (AttributeError, ImportError, ModuleNotFoundError):
-        return None
+    except ImportError as exc:
+        raise ImportError("probabilistic APIs require the CartoBoost native extension") from exc
+    function = getattr(native, name, None)
+    if not callable(function):
+        raise RuntimeError(f"required CartoBoost native binding {name!r} is unavailable")
     return function(*args)
 
 

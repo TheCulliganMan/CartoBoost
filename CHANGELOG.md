@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.13 — Faster batch prediction and forecasting
+
+- Reduced data conversion work for numeric tables, graph and neural models, and forecasting.
+- Preserved logical NumPy row order and full-width categorical IDs across supported table inputs.
+- Added residual forecast intervals and batch-independent predictions for newly fitted mixture-of-experts models.
+- Improved Prophet-compatible forecasts and uncertainty samples, and updated model guides and browser examples.
+
 ## 0.3.12 — Bounded Split Search
 
 - Added optional `max_split_candidates` for deterministic, bounded direct split

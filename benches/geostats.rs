@@ -1,5 +1,7 @@
-use cartoboost_geostats::{CovarianceKernel, NearestNeighborGPRegressor, NngpConfig};
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use cartoboost_geostats::{
+    deterministic_neighbors, CovarianceKernel, NearestNeighborGPRegressor, NngpConfig,
+};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 
 fn geostats_nngp_scaling(c: &mut Criterion) {
     let mut group = c.benchmark_group("geostats_nngp_predict");
@@ -28,6 +30,10 @@ fn geostats_nngp_scaling(c: &mut Criterion) {
         }
     }
     group.finish();
+    let coords = synthetic_coords(10000);
+    c.bench_function("geostats_neighbors_10000_k16", |bench| {
+        bench.iter(|| black_box(deterministic_neighbors(black_box(&coords), [0.2, 0.3], 16)));
+    });
 }
 
 fn synthetic_coords(n: usize) -> Vec<[f64; 2]> {

@@ -1,10 +1,16 @@
+---
+sidebar_label: Propagation-delay forecaster
+---
+
 import {DeepModelWasmExample} from '@site/src/components/ModelingLabClient';
 
-# CartoBoost PropagationDelayGraphForecaster
+# Propagation-Delay Graph Forecaster
 
-Use `PropagationDelayGraphForecaster` when directed graph edges carry known or
-estimated propagation delays. The model consumes node-time panels, directed
-edges, edge distances, known future covariates, and delay priors.
+Forecast how signal moves through a directed graph over time with
+`PropagationDelayGraphForecaster`. Use it when a change in one taxi zone can
+precede a change elsewhere and you have defensible edge-delay priors available
+at the forecast cutoff. Inputs include node histories, directed edges, edge
+distances, and optional known-future covariates.
 
 ## Python Example
 
@@ -32,14 +38,20 @@ forecast = model.predict(2)
 `SpatioTemporalGraphForecaster(backbone="delay_aware_graph_transformer")`
 routes to the same implementation.
 
-## Browser WASM Example
+## Interactive Example
+
+Run the small example to inspect inputs and model behavior. It is a browser
+demonstration, not a benchmark on held-out taxi trips.
 
 <DeepModelWasmExample model="PropagationDelayGraphForecaster" />
 
 ## Use When
 
-Use this model when directed edges have meaningful propagation delays known
-before the forecast cutoff. Prefer a simpler graph model when delay priors are unavailable.
+| Your task | Start with |
+| --- | --- |
+| Directed edges have defensible delay priors. | `PropagationDelayGraphForecaster` |
+| Static adjacency is available but delays are not. | [Graph forecasting](../forecasting-models/graph-spatiotemporal.md) |
+| No meaningful graph is available. | [CartoBoost Lag](../forecasting-models/cartoboost-lag.md) |
 
 ## Validation
 

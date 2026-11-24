@@ -10,6 +10,537 @@ mod tests {
             .expect("valid fixture timestamp")
     }
 
+    fn interval_fixture(values: &[f64]) -> ForecastFrame {
+        ForecastFrame::new(
+            values
+                .iter()
+                .enumerate()
+                .map(|(index, &value)| ForecastRow::new("PU1-DO2", ts(index as u32 + 1), value))
+                .collect(),
+            ForecastFrequency::Daily,
+        )
+        .unwrap()
+    }
+
+    fn assert_residual_intervals(result: &ForecastResult, scale: f64, period: usize) {
+        assert_eq!(result.intervals().len(), result.predictions().len() * 2);
+        for interval in result.intervals() {
+            let point = result
+                .predictions()
+                .iter()
+                .find(|row| row.series_id == interval.series_id && row.horizon == interval.horizon)
+                .unwrap();
+            let quantile = if interval.level == 0.8 {
+                1.281_551_565_544_600_4
+            } else {
+                assert_eq!(interval.level, 0.95);
+                1.959_963_984_540_054
+            };
+            let growth = if period == 0 {
+                1.0
+            } else {
+                (interval.horizon.div_ceil(period) as f64).sqrt()
+            };
+            assert!((interval.lower - (point.mean - quantile * scale * growth)).abs() < 1e-7);
+            assert!((interval.upper - (point.mean + quantile * scale * growth)).abs() < 1e-7);
+        }
+    }
+
+    #[test]
+    fn residual_naive_intervals_have_known_quantiles_growth_and_serde_roundtrip() {
+        let frame = interval_fixture(&[1.0, 3.0, 2.0, 6.0]);
+        let mut plain = NaiveForecaster::new();
+        plain.fit(&frame).unwrap();
+        let legacy = serde_json::to_string(&plain).unwrap();
+        assert!(!legacy.contains("intervals"));
+        let restored_plain: NaiveForecaster = serde_json::from_str(&legacy).unwrap();
+        assert_eq!(
+            restored_plain.predict(4).unwrap().to_json_value(),
+            plain.predict(4).unwrap().to_json_value()
+        );
+        let mut naive = NaiveForecaster::new()
+            .with_prediction_interval_levels(vec![0.95, 0.8])
+            .unwrap();
+        naive.fit(&frame).unwrap();
+        let expected = naive.predict(4).unwrap();
+        assert_eq!(
+            expected.predictions(),
+            plain.predict(4).unwrap().predictions()
+        );
+        assert_residual_intervals(&expected, 7.0_f64.sqrt(), 1);
+        let restored: NaiveForecaster =
+            serde_json::from_str(&serde_json::to_string(&naive).unwrap()).unwrap();
+        assert_eq!(
+            expected.to_json_value(),
+            restored.predict(4).unwrap().to_json_value()
+        );
+        let seasonal_frame = interval_fixture(&[10.0, 20.0, 12.0, 23.0, 15.0, 27.0]);
+        let mut seasonal = SeasonalNaiveForecaster::new(2)
+            .unwrap()
+            .with_prediction_interval_levels(vec![0.8, 0.95])
+            .unwrap();
+        seasonal.fit(&seasonal_frame).unwrap();
+        assert_residual_intervals(&seasonal.predict(4).unwrap(), 9.5_f64.sqrt(), 2);
+        let restored: SeasonalNaiveForecaster =
+            serde_json::from_str(&serde_json::to_string(&seasonal).unwrap()).unwrap();
+        assert_eq!(
+            restored.predict(4).unwrap().to_json_value(),
+            seasonal.predict(4).unwrap().to_json_value()
+        );
+        naive.fit(&interval_fixture(&[7.0, 7.0, 7.0, 7.0])).unwrap();
+        assert!(naive
+            .predict(2)
+            .unwrap()
+            .intervals()
+            .iter()
+            .all(|row| row.lower == 7.0 && row.upper == 7.0));
+    }
+
+    #[test]
+    fn residual_intervals_validate_levels_history_and_only_use_fitted_prefix() {
+        for levels in [vec![0.8, 0.8], vec![0.0], vec![1.0], vec![f64::NAN]] {
+            assert!(NaiveForecaster::new()
+                .with_prediction_interval_levels(levels)
+                .is_err());
+        }
+        let mut naive = NaiveForecaster::new()
+            .with_prediction_interval_levels(vec![0.8])
+            .unwrap();
+        assert!(naive.fit(&interval_fixture(&[1.0, 2.0])).is_err());
+        let mut seasonal = SeasonalNaiveForecaster::new(2)
+            .unwrap()
+            .with_prediction_interval_levels(vec![0.8])
+            .unwrap();
+        assert!(seasonal.fit(&interval_fixture(&[1.0, 2.0, 3.0])).is_err());
+        let mut frame = interval_fixture(&[1.0, 2.0, 4.0, 7.0]);
+        naive.fit(&frame).unwrap();
+        let expected = naive.predict(3).unwrap().to_json_value();
+        frame = interval_fixture(&[100.0, -20.0, 3.0, 80.0]);
+        assert_eq!(expected, naive.predict(3).unwrap().to_json_value());
+        naive.fit(&frame).unwrap();
+        assert_ne!(expected, naive.predict(3).unwrap().to_json_value());
+    }
+
+    #[test]
+    fn naive_intervals_preserve_missing_targets_and_extreme_valid_levels() {
+        let values = [1.0, 3.0, 2.0, f64::NAN, 1000.0, f64::NAN];
+        let frame = ForecastFrame::with_metadata(
+            values
+                .iter()
+                .enumerate()
+                .map(|(index, &value)| ForecastRow::new("PU1-DO2", ts(index as u32 + 1), value))
+                .collect(),
+            ForecastFrequency::Daily,
+            ForecastFrameMetadata {
+                allow_missing_targets: true,
+                ..ForecastFrameMetadata::default()
+            },
+        )
+        .unwrap();
+        let mut model = NaiveForecaster::new()
+            .with_prediction_interval_levels(vec![0.8, f64::from_bits(1.0_f64.to_bits() - 1)])
+            .unwrap();
+        model.fit(&frame).unwrap();
+        let forecast = model.predict(2).unwrap();
+        assert_eq!(forecast.predictions()[0].timestamp, ts(7));
+        for row in forecast.intervals() {
+            assert!(row.lower.is_finite() && row.upper.is_finite());
+            if row.level == 0.8 {
+                let width = 1.281_551_565_544_600_4 * (2.5 * (row.horizon + 1) as f64).sqrt();
+                assert!((row.upper - 1000.0 - width).abs() < 1e-7);
+            }
+        }
+        let restored: NaiveForecaster =
+            serde_json::from_str(&serde_json::to_string(&model).unwrap()).unwrap();
+        assert_eq!(
+            forecast.to_json_value(),
+            restored.predict(2).unwrap().to_json_value()
+        );
+    }
+
+    #[test]
+    fn theta_intervals_use_selected_fitted_residuals_without_changing_forecasts() {
+        let frame = interval_fixture(&[10.0, 12.0, 11.0, 17.0, 18.0, 16.0, 21.0, 20.0]);
+        let mut manual = ThetaForecaster::new(2.0, 0.4)
+            .unwrap()
+            .with_prediction_interval_levels(vec![0.8, 0.95])
+            .unwrap();
+        manual.fit(&frame).unwrap();
+        let residuals = manual.residuals("PU1-DO2").unwrap();
+        let scale = (residuals
+            .iter()
+            .skip(1)
+            .map(|value| value * value)
+            .sum::<f64>()
+            / (residuals.len() - 1) as f64)
+            .sqrt();
+        assert_residual_intervals(&manual.predict(4).unwrap(), scale, 0);
+        let mut plain = ThetaForecaster::new(2.0, 0.4).unwrap();
+        plain.fit(&frame).unwrap();
+        assert_eq!(
+            plain.predict(4).unwrap().predictions(),
+            manual.predict(4).unwrap().predictions()
+        );
+        let mut optimized = OptimizedThetaForecaster::new(vec![1.0, 2.0], vec![0.2, 0.8])
+            .unwrap()
+            .with_prediction_interval_levels(vec![0.8, 0.95])
+            .unwrap();
+        optimized.fit(&frame).unwrap();
+        let selected = optimized.fitted.as_ref().unwrap();
+        let residuals = selected.residuals("PU1-DO2").unwrap();
+        let scale = (residuals
+            .iter()
+            .skip(1)
+            .map(|value| value * value)
+            .sum::<f64>()
+            / (residuals.len() - 1) as f64)
+            .sqrt();
+        assert_residual_intervals(&optimized.predict(4).unwrap(), scale, 0);
+        let mut plain = OptimizedThetaForecaster::new(vec![1.0, 2.0], vec![0.2, 0.8]).unwrap();
+        plain.fit(&frame).unwrap();
+        assert_eq!(
+            plain.predict(4).unwrap().predictions(),
+            optimized.predict(4).unwrap().predictions()
+        );
+        assert_eq!(plain.selected_theta, optimized.selected_theta);
+        assert_eq!(plain.selected_alpha, optimized.selected_alpha);
+    }
+
+    #[test]
+    fn borrowed_histories_preserve_canonical_rows_and_covariates() {
+        let frame = ForecastFrame::new(
+            (0..6)
+                .rev()
+                .map(|index| {
+                    ForecastRow::with_covariates(
+                        if index % 2 == 0 { "PU1-DO2" } else { "PU3-DO4" },
+                        ts(index / 2 + 1),
+                        index as f64,
+                        BTreeMap::from([("distance".into(), index as f64 + 0.25)]),
+                    )
+                })
+                .collect(),
+            ForecastFrequency::Daily,
+        )
+        .unwrap();
+        let owned = FittedLocalState::from_frame(&frame);
+        let borrowed = borrowed_histories(&frame);
+        assert_eq!(borrowed.len(), 2);
+        for (series_id, history) in borrowed {
+            assert_eq!(history, owned.history_by_series[series_id].as_slice());
+            assert!(frame
+                .rows()
+                .iter()
+                .any(|row| std::ptr::eq(row, &history[0])));
+        }
+    }
+
+    #[test]
+    fn piecewise_per_regressor_standardization_preserves_explicit_modes() {
+        let frame = ForecastFrame::new(
+            (1..=28)
+                .map(|day| {
+                    let distance = f64::from(day);
+                    let airport = f64::from(day % 2);
+                    ForecastRow::with_covariates(
+                        "__single__",
+                        ts(day),
+                        30.0 + distance + airport,
+                        BTreeMap::from([
+                            ("trip_distance".into(), distance),
+                            ("airport".into(), airport),
+                        ]),
+                    )
+                })
+                .collect(),
+            ForecastFrequency::Daily,
+        )
+        .unwrap();
+        let config = PiecewiseLinearSeasonalConfig {
+            extra_regressors: vec!["trip_distance".into(), "airport".into()],
+            future_regressors: BTreeMap::from([
+                ("trip_distance".into(), vec![29.0, 30.0]),
+                ("airport".into(), vec![1.0, 0.0]),
+            ]),
+            ..PiecewiseLinearSeasonalConfig::default()
+        };
+        let mut model = PiecewiseLinearSeasonalForecaster::new(config.clone()).unwrap();
+        let legacy = serde_json::to_value(&model).unwrap();
+        assert!(legacy.get("regressor_standardization_by_name").is_none());
+        assert!(model
+            .set_regressor_standardization_by_name(BTreeMap::from([(
+                "missing".into(),
+                "auto".into()
+            )]))
+            .is_err());
+        assert!(model
+            .set_regressor_standardization_by_name(BTreeMap::from([(
+                "airport".into(),
+                "invalid".into()
+            )]))
+            .is_err());
+        let overrides = BTreeMap::from([
+            ("trip_distance".into(), "none".into()),
+            ("airport".into(), "standardize".into()),
+        ]);
+        model
+            .set_regressor_standardization_by_name(overrides.clone())
+            .unwrap();
+        model.fit(&frame).unwrap();
+        let stats = &model.fitted.as_ref().unwrap().series["__single__"].regressor_stats;
+        assert!(!stats["trip_distance"].standardized);
+        assert_eq!(stats["trip_distance"].mean, 0.0);
+        assert!(stats["airport"].standardized);
+        assert_eq!(stats["airport"].mean, 0.5);
+        assert_eq!(stats["airport"].scale, 0.5);
+        let expected = model.predict(2).unwrap().to_json_value();
+        let mut restored =
+            PiecewiseLinearSeasonalForecaster::from_json_string(&model.to_json_string().unwrap())
+                .unwrap();
+        assert_eq!(restored.regressor_standardization_by_name(), overrides);
+        restored.fit(&frame).unwrap();
+        assert_eq!(restored.predict(2).unwrap().to_json_value(), expected);
+        let mut cloned = model.clone();
+        cloned.fit(&frame).unwrap();
+        assert_eq!(cloned.regressor_standardization_by_name(), overrides);
+        let mut auto = PiecewiseLinearSeasonalForecaster::new(config).unwrap();
+        auto.fit(&frame).unwrap();
+        let auto_stats = &auto.fitted.as_ref().unwrap().series["__single__"].regressor_stats;
+        assert!(auto_stats["trip_distance"].standardized);
+        assert!(!auto_stats["airport"].standardized);
+    }
+
+    #[test]
+    fn piecewise_event_plan_matches_reference_features_exactly() {
+        let config = PiecewiseLinearSeasonalConfig {
+            events: vec![
+                PiecewiseLinearEvent {
+                    name: "taxi_holiday".into(),
+                    timestamp: ts(8),
+                    lower_window: -1,
+                    upper_window: 2,
+                },
+                PiecewiseLinearEvent {
+                    name: "taxi_holiday".into(),
+                    timestamp: ts(9),
+                    lower_window: 0,
+                    upper_window: 1,
+                },
+                PiecewiseLinearEvent {
+                    name: "airport_peak".into(),
+                    timestamp: ts(20),
+                    lower_window: -2,
+                    upper_window: 0,
+                },
+            ],
+            ..PiecewiseLinearSeasonalConfig::default()
+        };
+        let plan = PiecewiseFeaturePlan::new(&config);
+        let changepoints = [3.0, 9.0];
+        for day in 1..=30 {
+            let context = PiecewiseLinearFeatureContext {
+                series_id: None,
+                timestamp: ts(day),
+                covariates: None,
+                horizon_step: None,
+                component_multiplier: 2.5,
+                changepoints: &changepoints,
+                config: &config,
+                regressor_stats: None,
+                feature_plan: None,
+            };
+            let mut reference =
+                vec![0.0; piecewise_linear_seasonal_feature_count(&config, changepoints.len())];
+            let mut actual = reference.clone();
+            fill_piecewise_linear_seasonal_features(&mut reference, f64::from(day), &context)
+                .unwrap();
+            let planned = PiecewiseLinearFeatureContext {
+                feature_plan: Some(&plan),
+                ..context
+            };
+            fill_piecewise_linear_seasonal_features(&mut actual, f64::from(day), &planned).unwrap();
+            assert_eq!(actual, reference);
+        }
+    }
+
+    #[test]
+    fn piecewise_shared_fitted_state_keeps_artifacts_and_refits_isolated() {
+        let frame = ForecastFrame::new(
+            (1..=28)
+                .map(|day| {
+                    ForecastRow::single(
+                        ts(day),
+                        50.0 + f64::from(day) + (f64::from(day) * 0.7).sin(),
+                    )
+                })
+                .collect(),
+            ForecastFrequency::Daily,
+        )
+        .unwrap();
+        let mut model = PiecewiseLinearSeasonalForecaster::new(PiecewiseLinearSeasonalConfig {
+            uncertainty_samples: 1000,
+            interval_levels: vec![0.8],
+            ..PiecewiseLinearSeasonalConfig::default()
+        })
+        .unwrap();
+        model.fit(&frame).unwrap();
+        let before = model.predict(3).unwrap().to_json_value();
+        let artifact = model.to_json_string().unwrap();
+        let model_value = serde_json::to_value(&model).unwrap();
+        assert_eq!(
+            model_value["fitted"],
+            serde_json::to_value(model.fitted.as_deref().unwrap()).unwrap()
+        );
+        let mut cloned = model.clone();
+        assert!(Arc::ptr_eq(
+            model.fitted.as_ref().unwrap(),
+            cloned.fitted.as_ref().unwrap()
+        ));
+        let changed = ForecastFrame::new(
+            (1..=28)
+                .map(|day| ForecastRow::single(ts(day), 150.0 + f64::from(day)))
+                .collect(),
+            ForecastFrequency::Daily,
+        )
+        .unwrap();
+        cloned.fit(&changed).unwrap();
+        assert!(!Arc::ptr_eq(
+            model.fitted.as_ref().unwrap(),
+            cloned.fitted.as_ref().unwrap()
+        ));
+        assert_eq!(model.to_json_string().unwrap(), artifact);
+        assert_eq!(model.predict(3).unwrap().to_json_value(), before);
+        assert_ne!(cloned.predict(3).unwrap().to_json_value(), before);
+    }
+
+    #[test]
+    fn piecewise_combined_and_array_samples_preserve_reference_outputs() {
+        for growth in [
+            PiecewiseLinearGrowth::Linear,
+            PiecewiseLinearGrowth::Logistic,
+            PiecewiseLinearGrowth::Flat,
+        ] {
+            let frame = ForecastFrame::new(
+                (1..=28)
+                    .map(|day| {
+                        ForecastRow::single(
+                            ts(day),
+                            30.0 + 0.5 * f64::from(day) + (f64::from(day) * 0.7).sin(),
+                        )
+                    })
+                    .collect(),
+                ForecastFrequency::Daily,
+            )
+            .unwrap();
+            let mut model = PiecewiseLinearSeasonalForecaster::new(PiecewiseLinearSeasonalConfig {
+                growth,
+                cap: Some(100.0),
+                uncertainty_samples: 1000,
+                interval_levels: vec![0.8, 0.95],
+                ..PiecewiseLinearSeasonalConfig::default()
+            })
+            .unwrap();
+            model.fit(&frame).unwrap();
+            let fitted = model.fitted.as_ref().unwrap();
+            let series = &fitted.series["__single__"];
+            let schedule = model.horizon_schedule(fitted, 3).unwrap();
+            let (combined, components) = model.predict_with_components(3).unwrap();
+            assert_eq!(
+                combined.to_json_value(),
+                model.predict(3).unwrap().to_json_value()
+            );
+            for (index, &timestamp) in schedule["__single__"].iter().enumerate() {
+                let elapsed = elapsed_days(series.start_timestamp, timestamp);
+                assert_eq!(
+                    components["records"][index],
+                    series
+                        .predict_component_record(
+                            "__single__",
+                            elapsed,
+                            timestamp,
+                            index + 1,
+                            &model.config
+                        )
+                        .unwrap()
+                );
+                let bounds =
+                    piecewise_bounds(Some("__single__"), None, Some(index + 1), &model.config)
+                        .unwrap();
+                let terms = series
+                    .prediction_terms_at(
+                        "__single__",
+                        elapsed,
+                        timestamp,
+                        index + 1,
+                        bounds,
+                        &model.config,
+                    )
+                    .unwrap();
+                let reference = piecewise_prediction_intervals(
+                    &combined.predictions()[index],
+                    series.residual_scale(),
+                    terms.coefficient_scale,
+                    series.transformed_residual_scale,
+                    terms.linear_predictor,
+                    terms.linear_coefficient_scale,
+                    series
+                        .trend_uncertainty_offsets(
+                            "__single__",
+                            elapsed,
+                            timestamp,
+                            index + 1,
+                            &model.config,
+                        )
+                        .unwrap(),
+                    series.trend_uncertainty_linear_offsets(
+                        "__single__",
+                        elapsed,
+                        index + 1,
+                        &model.config,
+                    ),
+                    &model.config.interval_levels,
+                    bounds,
+                    &model.config,
+                )
+                .unwrap();
+                for interval in reference {
+                    assert!(combined.intervals().contains(&interval));
+                }
+            }
+            let legacy = model.predict_samples_json_value(3).unwrap();
+            let (ids, timestamps, values) = model.predict_samples_array(3).unwrap();
+            assert_eq!(ids, vec!["__single__"; 3]);
+            assert_eq!(timestamps, schedule["__single__"]);
+            for (index, row) in values.iter().enumerate() {
+                assert_eq!(row.len(), 1000);
+                for (sample, value) in row.iter().enumerate() {
+                    assert_eq!(
+                        *value,
+                        legacy["records"][index * 1000 + sample]["prediction"]
+                            .as_f64()
+                            .unwrap()
+                    );
+                }
+            }
+            let explicit = BTreeMap::from([("__single__".into(), vec![ts(29), ts(31)])]);
+            let (predicted, components) = model
+                .predict_with_components_at_timestamps(explicit.clone())
+                .unwrap();
+            assert_eq!(predicted.predictions()[1].timestamp, ts(31));
+            assert_eq!(components["records"][1]["timestamp"], "2026-01-31T00:00:00");
+            let legacy = model
+                .predict_samples_at_timestamps_json_value(explicit.clone())
+                .unwrap();
+            let (_, timestamps, values) =
+                model.predict_samples_array_at_timestamps(explicit).unwrap();
+            assert_eq!(timestamps, vec![ts(29), ts(31)]);
+            assert_eq!(
+                values[1][999],
+                legacy["records"][1999]["prediction"].as_f64().unwrap()
+            );
+        }
+    }
+
     #[test]
     fn piecewise_linear_predicts_irregular_history_at_future_timestamps() {
         let frame = ForecastFrame::with_metadata(
@@ -1126,6 +1657,7 @@ mod tests {
             elapsed,
             &series.coefficients,
             &PiecewiseLinearFeatureContext {
+                feature_plan: None,
                 series_id: Some("__single__"),
                 timestamp,
                 covariates: None,
@@ -3150,10 +3682,8 @@ mod tests {
 
     #[test]
     fn kriging_models_record_selected_backend() {
-        let coordinates = BTreeMap::from([
-            ("a".to_string(), (0.0, 0.0)),
-            ("b".to_string(), (1.0, 0.0)),
-        ]);
+        let coordinates =
+            BTreeMap::from([("a".to_string(), (0.0, 0.0)), ("b".to_string(), (1.0, 0.0))]);
         let kriging = KrigingForecaster::with_config_and_backend(
             coordinates.clone(),
             OrdinaryKrigingConfig::new(1.0, 1.0e-6).expect("kriging config"),
@@ -3168,8 +3698,7 @@ mod tests {
                 coordinates,
                 mode: SpatialPiecewiseKrigingMode::ResidualKriging,
                 piecewise_config: PiecewiseLinearSeasonalConfig::default(),
-                kriging_config: OrdinaryKrigingConfig::new(1.0, 1.0e-6)
-                    .expect("kriging config"),
+                kriging_config: OrdinaryKrigingConfig::new(1.0, 1.0e-6).expect("kriging config"),
                 spatial_regressors: Vec::new(),
                 residual_shrinkage: 1.0,
                 allow_neighbor_fallback: false,

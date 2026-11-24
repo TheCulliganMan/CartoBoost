@@ -80,6 +80,11 @@ pub fn fit_embedding_table_with_options_and_backend(
             "ids and target must have the same length".to_string(),
         ));
     }
+    if target.iter().any(|value| !value.is_finite()) {
+        return Err(NeuralError::InvalidArgument(
+            "embedding targets must be finite".to_string(),
+        ));
+    }
 
     let mut stats: HashMap<u64, (f64, usize)> = HashMap::new();
     for (&id, &value) in ids.iter().zip(target.iter()) {
@@ -110,6 +115,10 @@ pub fn fit_embedding_table_with_options_and_backend(
         let artifact = build_embedding_table_artifact(dim, Vec::new(), fallback)?;
         return crate::artifact::EmbeddingTable::from_artifact(artifact);
     }
+
+    // HashMap iteration order changes between fits. Fix the reduction order
+    // before computing any shared floating-point training state.
+    states.sort_by_key(|state| state.id);
 
     let mut head = initial_head_vector(dim, &states, &seed);
     let mut bias = states
@@ -423,6 +432,49 @@ fn normalize(values: &mut [f32]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn embedding_training_is_bitwise_reproducible_for_fixed_seed() {
+        let ids = (0..64).map(|row| (row % 19) as u64).collect::<Vec<_>>();
+        let targets = (0..64)
+            .map(|row| (row as f32 * 0.13).sin())
+            .collect::<Vec<_>>();
+        let fit = || {
+            fit_embedding_table_with_options_and_backend(
+                5,
+                &ids,
+                &targets,
+                ArtifactFallbackKind::GlobalMeanVector,
+                Some(42),
+                1.0,
+                Some("cpu"),
+            )
+            .unwrap()
+        };
+        let expected = fit();
+        for _ in 0..4 {
+            let actual = fit();
+            assert_eq!(actual.artifact_metadata(), expected.artifact_metadata());
+            for (actual, expected) in actual.rows().iter().zip(expected.rows()) {
+                assert_eq!(actual.id, expected.id);
+                assert_eq!(actual.values, expected.values);
+            }
+        }
+    }
+
+    #[test]
+    fn embedding_training_rejects_nonfinite_targets() {
+        for target in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert!(fit_embedding_table(
+                2,
+                &[1],
+                &[target],
+                ArtifactFallbackKind::ZeroVector,
+                None
+            )
+            .is_err());
+        }
+    }
 
     #[test]
     fn embedding_training_runs_on_every_available_backend() {

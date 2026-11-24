@@ -1,27 +1,26 @@
 # Deep Models
 
-Use `cartoboost.deep` when one row is not enough to describe the prediction
-problem. These models handle ordered source-target pairs, candidate response
-curves, event probabilities, residual correction, graph sequences, scenario
-generation, and constrained decisions.
+`cartoboost.deep` covers
+ordered pickup/dropoff pairs, competing candidate choices, calibrated events,
+residual corrections, graph sequences, and spatial scenarios.
 
-Start with the table below. Open the dedicated guide for a runnable Python and
-browser example, required inputs, validation design, and limitations. Most of
-these models are specialized or experimental, so compare them against a simpler
-boosting, forecasting, graph, or statistical baseline on the same holdout.
+Choose a guide by its required inputs and output below. Each guide includes a
+Python example, a browser example, validation advice, and limitations. Evidence
+varies by model: distinguish an API demonstration, a synthetic mechanism check,
+and measured performance on real taxi data.
 
 ## Maturity And Evidence
 
 | Model surface | Architecture | Evidence label |
 | --- | --- | --- |
-| `DirectionalPairForecaster(architecture="pair_embedding_mlp")` | `pair_embedding_mlp` | synthetic claim evidence |
-| `InvertedTemporalTransformer` | `inverted_transformer` | synthetic claim evidence |
-| `PropagationDelayGraphForecaster` | `delay_aware_graph_transformer` | synthetic claim evidence |
-| `ConditionalFlowDistributionHead` | `conditional_residual_sampler` | synthetic claim evidence |
-| `ChoiceSetTransformer` | `choice_set_utility_softmax` | synthetic claim evidence |
-| `ResponseCurveModel`, `EventOutcomeModel`, `ServiceTimeResidualModel`, `ConstrainedDecisionOptimizer` | native utility/residual heads | API behavior only |
-| `GeoTemporalDiffusionScenarioModel` | `conditional_residual_diffusion` | experimental only |
-| `GraphNeuralOperator` | `graph_neural_operator` | experimental only |
+| `DirectionalPairForecaster(architecture="pair_embedding_mlp")` | `pair_embedding_mlp` | Synthetic mechanism checks |
+| `InvertedTemporalTransformer` | `inverted_transformer` | Synthetic mechanism checks |
+| `PropagationDelayGraphForecaster` | `delay_aware_graph_transformer` | Synthetic mechanism checks |
+| `ConditionalFlowDistributionHead` | `conditional_residual_sampler` | Synthetic mechanism checks |
+| `ChoiceSetTransformer` | `choice_set_utility_softmax` | Synthetic mechanism checks |
+| `ResponseCurveModel`, `EventOutcomeModel`, `ServiceTimeResidualModel`, `ConstrainedDecisionOptimizer` | Utility and residual heads | API behavior only |
+| `GeoTemporalDiffusionScenarioModel` | `conditional_residual_diffusion` | Experimental |
+| `GraphNeuralOperator` | `graph_neural_operator` | Experimental |
 
 See the [Model Capabilities](../reference/capability-matrix.md) table for
 backend, parameter, evidence, and maturity details.
@@ -37,7 +36,6 @@ backend, parameter, evidence, and maturity details.
 | Experimental graph-wide residual scenario generation | [CartoBoost GeoTemporalDiffusionScenarioModel](deep-models/cartoboost-geotemporal-diffusion-scenario-model.md) |
 | Advanced experimental spatial field-to-field mapping | [CartoBoost GraphNeuralOperator](deep-models/cartoboost-graph-neural-operator.md) |
 | Candidate competition and counterfactual best selection | [CartoBoost ChoiceSetTransformer](deep-models/cartoboost-choice-set-transformer.md) |
-| Optional foundation model features and baselines | `cartoboost.FoundationForecastFeatures` |
 | Repeated ordered source-target rows | [CartoBoost DirectionalPairForecaster](deep-models/cartoboost-directional-pair-forecaster.md) |
 | Candidate values with monotone response | [CartoBoost ResponseCurveModel](deep-models/cartoboost-response-curve-model.md) |
 | Calibrated binary event probability | [CartoBoost EventOutcomeModel](deep-models/cartoboost-event-outcome-model.md) |
@@ -47,150 +45,69 @@ backend, parameter, evidence, and maturity details.
 
 ## Backend Choice
 
-Deep model constructors default to `backend="cpu"`. `backend="auto"` is accepted
-as a CPU-resolving alias for ordinary workflows. Request a specific accelerator
-only when the environment has been provisioned for it and the run needs that
-hardware contract.
+CPU is the default. Check the installed build before requesting an accelerator:
 
-`backend="webgpu"` is available in native builds that include the WebGPU
-feature and expose a compatible adapter. It implements the complete shared
-operation contract: dense and affine work, pair scoring and distance, sparse
-CSR forward/backward kernels, row softmax, AdamW, layer normalization, scalar
-graphs, and tanh-MLP training. An explicit request fails when the feature or
-adapter is unavailable.
+```python
+from cartoboost.deep import available_deep_backends
 
-The browser bundle exposes the same adapter through the asynchronous
-`webgpuCapabilities` and operation-specific asynchronous exports. Capability
-probing resolves only after a real WebGPU compute pass and readback complete,
-so browser applications can verify availability without blocking the
-JavaScript event loop. The browser exports cover all operations in the native
-contract and return updated optimizer/training state where mutation cannot be
-represented directly across the JavaScript boundary.
+print(available_deep_backends())
+```
 
-Browser N-BEATS and N-HiTS can use `runNeuralForecastWebgpu`. The asynchronous
-route performs window training with the WebGPU tanh-MLP kernel and dispatches
-every recursive hidden layer through WebGPU dense inference; its response uses
-the same forecast and backend-metadata shape as `runForecast`.
+A backend request needs both a compatible build and a usable device. An explicit
+request fails when either is unavailable. Read the fitted metadata to see which
+backend and operations ran; accelerating one stage does not mean the entire
+pipeline ran on the GPU.
 
-Browser Node2Vec pipelines can use `runNode2VecModelWebgpu`. The asynchronous
-route batches skip-gram pairs into the shared scalar-graph training kernel,
-including reverse-mode gradients and optimizer updates on WebGPU. Random-walk
-generation and the branch-heavy CartoBoost tree stage remain on CPU, and the
-response metadata reports both stages instead of claiming the entire pipeline
-ran on the GPU.
+| Backend | Environment |
+| --- | --- |
+| `cpu` | Default execution |
+| `metal` | Apple-platform build with Metal support |
+| `cuda` | Compatible Windows or Linux build, CUDA driver, and NVRTC |
+| `rocm` | Linux or WSL build with ROCm support and a usable HIP device |
+| `directml` | Windows build with DirectML support and a DirectX 12 adapter |
+| `webgpu` | WebGPU-enabled build with a compatible adapter |
 
-`runGraphDiffusionWebgpu` accepts the standard browser graph-temporal frame,
-normalizes its CSR edge weights, and keeps every configured diffusion and
-horizon step on browser WebGPU. It returns the normal graph forecast response,
-including optional graph-aware metrics and explicit accelerated-operation
-metadata.
+Supported operations depend on the model. Some neural forecasting paths
+accelerate dense prediction while retaining training and feature construction
+on the CPU. The [capability matrix](../reference/capability-matrix.md) records
+backend and model details.
 
-Browser nearest-neighbor Gaussian-process prediction accepts a backend in its
-geostatistics options. `runGeostatisticsWebgpu` computes the full transformed
-query-by-observation distance matrix on WebGPU, then performs only the small
-per-neighborhood covariance solves on CPU. Metadata distinguishes the GPU
-distance operation from the retained CPU solve.
+Browser examples run through the Rust/WASM exports. Where a WebGPU path is
+available, capability checks perform a real compute pass and readback before
+reporting availability. The example's reported backend describes that run.
 
-`empiricalSemivariogramWebgpu` accelerates both quadratic matrices needed for
-large empirical variograms: transformed coordinate distances and squared value
-differences. Pair filtering and bin reduction remain on CPU because they are
-branch-heavy; the response reports the split explicitly.
+## Read Model Names Alongside Their Contracts
 
-Large geo-temporal diffusion scenario ensembles now keep both graph diffusion
-and the scenario-axis mean reduction on the selected accelerator. Small
-ensembles retain the lower-overhead CPU reduction, and
-`scenario_mean_backend` records which path executed. Browser WebGPU uses the
-same thresholded model-level contract asynchronously.
+Several specialized names need a precise interpretation:
 
-`InvertedTemporalTransformer` models synchronized wide panels with entities as
-tokens. It reports horizon-wise metrics, cross-entity ablation, and metadata
-showing that it avoids quadratic time-token attention. The same path is exposed
-through `TemporalEntityTransformer(architecture="inverted_transformer")`.
+| Model | Current behavior |
+| --- | --- |
+| `ConditionalFlowDistributionHead` | A conditional location/scale residual sampler, not an invertible normalizing flow |
+| `ChoiceSetTransformer` | Utility scoring and softmax within a choice set, not candidate-to-candidate attention |
+| `GeoTemporalDiffusionScenarioModel` | Experimental residual scenarios around an existing point forecast |
+| `GraphNeuralOperator` | Experimental field mapping through graph smoothing, coordinate signals, and temporal changes |
 
-`PropagationDelayGraphForecaster` models directed graph diffusion where an
-upstream node can affect a downstream node after an explicit lag. It is also
-available through
-`SpatioTemporalGraphForecaster(backbone="delay_aware_graph_transformer")`.
-Artifacts include edge-delay sensitivity, save/load parity metadata, and a
-shared backend contract supporting CPU, CUDA, ROCm/HIP, Metal, DirectML, and
-WebGPU. Explicit unavailable devices raise clearly; `auto` resolves to a
-compatible available backend during model construction and stores that concrete
-selection with the fitted artifact.
-
-`ConditionalFlowDistributionHead` reports
-`architecture="conditional_residual_sampler"` because the current native math is
-a conditional location/scale residual sampler, not an invertible normalizing
-flow. Fit it on the hidden state emitted by a deep
-forecaster and the matching residual vector; pass optional horizon embeddings,
-entity or pair embeddings, and graph context when those features are part of
-the upstream model state. Prediction returns samples, marginal quantiles, joint
-scenario paths, log likelihood, tail-risk metrics, and calibration diagnostics
-such as CRPS proxy, pinball loss, interval coverage, interval width, joint-path
-calibration, and tail-event calibration when actuals are provided. Save/load
-round trips preserve the fitted native JSON artifact.
-
-`GeoTemporalDiffusionScenarioModel` generates plausible future residual
-scenario panels from a point forecast and directed weighted graph edges. It is
-for stress and scenario analysis, not the primary point forecast. The current
-surface is native-backed, deterministic, and experimental: metadata sets
-`capability_tier="experimental"`, `auto_geo_enabled="false"`, and
-`primary_benchmark_evidence="false"`.
-
-`GraphNeuralOperator` maps spatial fields to future fields with graph smoothing,
-coordinate Fourier signals, temporal deltas, and optional exogenous fields. Use
-it for gridded or regional field experiments such as residual field evolution
-or event-intensity-to-response maps. It is marked
-`capability_tier="advanced_experimental"` until real-data benchmark evidence is
-available.
-
-`ChoiceSetTransformer` reports `architecture="choice_set_utility_softmax"`.
-It models candidate competition within decision groups through a native utility
-softmax, not candidate-candidate attention. Candidate value, candidate features,
-context features, optional entity or pair embeddings, and existing
-utility/probability fields feed the utility head. The report includes
-choice probabilities, nested probabilities when `nest_id` is present,
-counterfactual best candidates by decision, and Brier/ECE calibration when
-binary `chosen` labels are supplied.
-
-Foundation model adapters are optional comparators and feature generators. Use
-the adapter-specific packages such as `chronos-forecasting`, `timesfm`,
-`uni2ts`, `nixtla`, or `tabpfn`, or provide an explicit backend. Missing dependencies
-raise a clear skip reason. Cached outputs include external version metadata,
-model hash, input hash, output shape, and whether the adapter was explicitly
-enabled for orchestration.
-
-Use `cartoboost.deep.available_deep_backends()` to inspect the installed wheel.
-If a requested accelerator is unavailable, treat that as an environment error
-rather than silently changing the benchmark or production contract.
-On Apple-platform builds with the native Metal feature, `backend="metal"` is
-available for the shared dense, affine, and graph-score kernels used by the
-deep response, event, service-residual, graph, and neural forecasting surfaces.
-That includes macOS, iOS, tvOS, and visionOS builds where the native backend is
-compiled in. On Linux or WSL builds with ROCm support compiled in and a usable
-HIP device present, `backend="rocm"` is advertised for the same verified shared
-kernels. On Windows or Linux builds with the CUDA driver and NVRTC available,
-`backend="cuda"` is advertised for the same verified shared kernels.
-On Windows builds with the `directml` feature and a DirectX 12-capable adapter,
-`backend="directml"` provides the CUDA-parity tensor surface for dense and
-affine scoring, pair scoring, sparse diffusion and softmax forward/backward,
-AdamW, layer normalization, and scalar-graph inference.
+The dedicated guides describe aliases, inputs, outputs, and limitations. Use
+the architecture reported by the model when interpreting a result.
 
 ## Input Validation
 
-Deep model frames require finite numeric targets, features, covariates,
-baseline predictions, candidate values, coordinates, and edge weights. Missing
-or infinite numeric values hard-fail at frame construction or model fitting
-instead of being replaced with defaults. Impute numeric values upstream when
-missingness is meaningful; keep missing identifiers as explicit string tokens
-when the model should learn an unknown or fallback identity.
+Targets, features, covariates, baselines, candidate values, coordinates, and
+edge weights must be finite. Invalid numeric inputs fail at frame construction
+or fitting. Handle meaningful missingness explicitly before training, and keep
+unknown identifiers distinct when the model supports an unknown-ID policy.
 
 ## Validation Defaults
 
-| Model family | Minimum comparison |
+| Model family | Useful comparison |
 | --- | --- |
-| Ordered pair forecasting | Pair baseline or row-level `CartoBoostRegressor` on the same pair covariates. |
-| Response curves | Simple candidate rule and grouped holdout response metrics. |
-| Event outcomes | Dummy probability, calibration metrics, and threshold-free classification metrics. |
-| Residual correction | Required baseline alone versus corrected prediction. |
-| Graph sequences | Seasonal naive, `CartoBoostLagForecaster`, and graph-free panel model. |
-| Decision optimization | Baseline rule, selected utility, constraint violations, and fallback rate. |
+| Ordered pairs | Pair baseline or row-level CartoBoost on the same covariates |
+| Response curves | Simple candidate rules, with whole decisions held out |
+| Event outcomes | Dummy probabilities, calibration, and threshold-free classification metrics |
+| Residual correction | The required baseline alone versus the corrected prediction |
+| Graph sequences | Seasonal naive, CartoBoost lag, and a graph-free panel model |
+| Decision optimization | The baseline rule, selected utility, and constraint violations |
+
+Use the [deep-model benchmark report](../benchmarks/deep-claims.md) for the
+recorded experiments and their limits. A successful browser run establishes
+that the example executes; it does not establish performance on your data.

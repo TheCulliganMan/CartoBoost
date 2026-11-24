@@ -1151,7 +1151,7 @@ def plot_components_plotly(
         xaxis.update(props["xaxis"])
         yaxis.update(props["yaxis"])
         for trace in props["traces"]:
-            figure.append_trace(trace, index, 1)
+            figure.add_trace(trace, row=index, col=1)
     return figure
 
 

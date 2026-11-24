@@ -182,14 +182,13 @@ class SignedEdgeSampler:
             if source < 0 or target < 0 or source >= node_count or target >= node_count:
                 raise ValueError("edge endpoints must be in [0, node_count)")
 
-            candidates = candidates_by_source.setdefault(
-                source,
-                [
+            if source not in candidates_by_source:
+                candidates_by_source[source] = [
                     candidate
                     for candidate in range(node_count)
                     if (source, candidate) not in existing
-                ],
-            )
+                ]
+            candidates = candidates_by_source[source]
             sample_count = min(self.negative_samples, len(candidates))
             sampled = [
                 (source, negative_target)

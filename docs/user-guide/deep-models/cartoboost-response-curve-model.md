@@ -1,11 +1,16 @@
+---
+sidebar_label: Response curve model
+---
+
 import {DeepModelWasmExample} from '@site/src/components/ModelingLabClient';
 
-# CartoBoost ResponseCurveModel
+# Response Curve Model
 
-Use `ResponseCurveModel` when rows contain context features, candidate values,
-and observed responses, and you want to estimate how response changes as the
-candidate value changes. This is useful for price, threshold, bid, dose, offer,
-or service-level curves.
+Estimate how a response changes across candidate values with
+`ResponseCurveModel`. For example, compare a set of proposed taxi service
+levels within the same decision, using context features and observed responses.
+The model returns a response curve, individual response predictions, and a
+best candidate under its scoring rule.
 
 ## Python Example
 
@@ -34,7 +39,10 @@ response = model.predict_response(frame)
 best = model.best_candidate(frame)
 ```
 
-## Browser WASM Example
+## Interactive Example
+
+Run the small example to inspect inputs and model behavior. It is a browser
+demonstration, not a benchmark on held-out taxi trips.
 
 <DeepModelWasmExample model="ResponseCurveModel" />
 

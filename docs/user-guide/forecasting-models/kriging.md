@@ -2,14 +2,13 @@ import {ForecastModelExample} from '@site/src/components/ModelingLabClient';
 
 # Kriging
 
-`KrigingForecaster` is an ordinary-kriging panel forecaster. It borrows signal
-across series using explicit coordinates keyed by series id.
+Borrow information from nearby locations with `KrigingForecaster`. The model
+uses ordinary kriging and explicit coordinates for every series, making it a
+useful comparison when neighboring pickup zones or route midpoints share
+signal that separate time-series models miss.
 
-Kriging is most useful when the thing being forecast has spatial structure:
-nearby locations should be related to nearby locations, and route midpoint
-aggregates can share signal with nearby corridors. CartoBoost exposes both the
-panel forecaster and lower-level utilities for one-off interpolation,
-variogram fitting, and residual diagnostics.
+Use the panel forecaster for future rows, or the lower-level utilities for
+interpolation, variogram fitting, and spatial residual diagnostics.
 
 ## Interactive Example
 
@@ -34,17 +33,15 @@ single-series rush-hour pattern. In that case, compare against seasonal naive,
 Kalman, ARIMA, or a lag model with hour/day features. Kriging is strongest when
 spatial borrowing adds information that a per-series temporal model cannot see.
 
-## Scientific Role
+## What The Model Learns {#scientific-role}
 
-Kriging is a spatial covariance model. It asks whether differences between
-series are related to coordinate distance after the chosen temporal summary has
-been formed. A scientist should choose it when geography is part of the
-mechanism being tested, not merely because locations have coordinates.
+Kriging represents similarity through coordinate distance and a covariance
+model. Its variogram and neighbor settings make spatial borrowing explicit.
 
-For panel demand, a defensible kriging claim is: nearby locations or route
-midpoints have correlated residual demand, and the variogram plus neighbor
-rules make that borrowing explicit. The model is weaker as a pure time-series
-forecaster because it does not learn hour-of-day dynamics by itself.
+For taxi demand, the useful hypothesis is that nearby zones or route midpoints
+retain related signal after temporal summaries are formed. Coordinates alone
+do not establish that relationship, and kriging does not learn an hour-of-day
+pattern by itself.
 
 ## Assumptions And Failure Modes
 
@@ -365,6 +362,14 @@ prediction time, sample size, split boundaries, and the exact variogram and
 neighbor settings. Compare against serious temporal baselines on the same
 train/test split. If the kriging model is only used as a residual smoother or an
 interpolation utility, state that narrower role explicitly.
+
+## Use When
+
+| Your task | Start with |
+| --- | --- |
+| Distance explains shared signal between series | Kriging |
+| Temporal components leave spatial residual structure | [Spatial piecewise kriging](spatial-piecewise-kriging.md) |
+| Directed connections matter more than distance | [Graph forecasting](graph-spatiotemporal.md) |
 
 ## Limitations
 

@@ -1,1 +1,1 @@
-// Histogram-based split search is planned for later milestones.
+// Histogram construction and split scoring live in tree::builder.

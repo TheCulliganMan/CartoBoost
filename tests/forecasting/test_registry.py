@@ -588,3 +588,50 @@ def test_piecewise_linear_seasonal_wrapper_accepts_prophet_country_holiday_and_p
     assert init_params["seasonality_l2_regularization"] == pytest.approx(0.04)
     assert ("New Year's Day", "2026-01-01T00:00:00", 0, 0) in init_params["events"]
     assert ("Independence Day", "2026-07-04T00:00:00", 0, 0) in init_params["events"]
+
+
+def test_piecewise_loaded_refit_preserves_native_configuration_and_standardization():
+    import json
+
+    import pandas as pd
+
+    frame = ForecastFrame.from_pandas(
+        pd.DataFrame(
+            {
+                "timestamp": pd.date_range("2026-01-01", periods=28),
+                "fare": [40.0 + index % 7 + index % 2 for index in range(28)],
+                "airport": [float(index % 2) for index in range(28)],
+            }
+        ),
+        timestamp_col="timestamp",
+        target_col="fare",
+        freq="D",
+        known_future_covariates=["airport"],
+    )
+    params = dict(
+        growth="flat",
+        weekly_fourier_order=1,
+        auto_weekly_seasonality=False,
+        extra_regressors=["airport"],
+        regressor_standardization_by_name={"airport": "standardize"},
+        future_regressors={"airport": [0.0, 1.0]},
+    )
+    model = PiecewiseLinearSeasonalForecaster(**params).fit(frame)
+    expected = model.predict(2).to_json()
+    restored = PiecewiseLinearSeasonalForecaster.from_json(model.to_json())
+    restored.fit(frame)
+
+    assert restored.predict(2).to_json() == expected
+    payload = json.loads(restored.to_json())["model"]
+    assert payload["config"]["growth"] == "Flat"
+    assert payload["config"]["weekly_fourier_order"] == 1
+    assert payload["regressor_standardization_by_name"] == {"airport": "standardize"}
+    assert payload["fitted"]["series"]["__single__"]["regressor_stats"]["airport"]["standardized"]
+
+    restored.set_params(growth="linear", weekly_fourier_order=0, auto_weekly_seasonality=False)
+    assert not restored.is_fitted_
+    restored.fit(frame)
+    fresh = PiecewiseLinearSeasonalForecaster(
+        growth="linear", weekly_fourier_order=0, auto_weekly_seasonality=False
+    ).fit(frame)
+    assert restored.predict(2).to_json() == fresh.predict(2).to_json()

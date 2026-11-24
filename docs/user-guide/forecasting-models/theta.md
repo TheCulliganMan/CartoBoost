@@ -2,9 +2,10 @@ import {ForecastModelExample} from '@site/src/components/ModelingLabClient';
 
 # Theta
 
-Theta models provide lightweight trend extrapolation for local forecasting.
-They are useful when a series has a clear local level and drift, but you do
-not need the larger ARIMA or lag-model surface.
+Extend a recent level and trend with Theta. It is a compact local forecasting
+baseline for taxi pickup counts, fare totals, or duration aggregates whose
+recent direction may continue into the next few horizons. Choose fixed
+parameters or let `OptimizedThetaForecaster` select them on held-out history.
 
 ## Interactive Example
 
@@ -23,18 +24,14 @@ zone geometry, route relationships, road distance, or graph structure. Compare
 it against seasonal naive and lag-feature models on the same rolling-origin
 folds before using it as a production benchmark.
 
-## Scientific Role
+## What The Model Learns {#scientific-role}
 
-Theta is a low-dimensional extrapolator. It asks whether the future can be
-explained by a smoothed level plus a controlled trend component, optionally
-after applying a simple seasonal adjustment. That makes it useful when a
-scientist wants a transparent trend baseline before moving to richer
-autocorrelation, state-space, or supervised lag models.
+Theta combines a smoothed level with a controlled trend contribution. Optional
+seasonal adjustment removes a repeating pattern before extrapolation.
 
-Choose theta when the research question is close to: "Does recent demand
-continue its local direction?" It is especially useful for short windows where
-a large lag model would have too few examples, but where naive persistence is
-too flat.
+This makes Theta useful when a short history contains a clear rise or fall but
+too few examples for a larger supervised model. It will continue that recent
+movement; it cannot anticipate an airport event that is absent from the series.
 
 ## Assumptions And Failure Modes
 
@@ -73,6 +70,18 @@ forecast(T + h) = SES(T + h)
 Here `b0` is the fitted linear slope and `T` is the prefix length. The
 sample-length and smoothing adjustment matters most on short histories; it is
 not equivalent to adding an unadjusted `h * slope` term.
+
+## Prediction Intervals
+
+Set `prediction_interval_levels=(0.8, 0.95)` for symmetric Gaussian intervals
+using each series' fitted training-residual root mean square. Initialization
+residuals are excluded, and at least two residuals are required. Optimized Theta
+uses the winning model refitted on the full training history; requesting
+intervals does not change candidate selection or point forecasts.
+
+Width remains constant across horizons. This is a training-residual Gaussian
+approximation, not a held-out conformal guarantee; long-horizon uncertainty can
+be larger. Save/load and refit preserve the requested levels.
 
 ## Python Example
 
@@ -161,7 +170,7 @@ short; fitting fails with the required history length instead.
 | `alpha_grid` | Non-empty smoothing candidates in `(0, 1]`. |
 | `seasonality` | Optional seasonal adjustment mode: `None`, `"additive"`, or `"multiplicative"`. |
 | `season_length` | Required when `seasonality` is set. Use `24` for hourly daily cycles, `7` for daily weekly cycles. |
-| `prediction_interval_levels` | Validated interval levels between `0` and `1`. |
+| `prediction_interval_levels` | Unique interval levels between `0` and `1`; uses the fitted residual Gaussian approximation. |
 
 ## Tuning Pattern
 
@@ -274,6 +283,14 @@ and seasonal naive on the same split.
 When reporting results, include RMSE, MAE, R2 when available, training time,
 prediction time, horizon, split dates, model settings, sample size, and whether
 the data came from real taxi trips or generated acceptance data.
+
+## Use When
+
+| Your task | Start with |
+| --- | --- |
+| A short series has a local level and drift | Theta |
+| A repeated additive cycle needs its own state | [ETS](ets.md) |
+| Measured history is noisy and state uncertainty matters | [Kalman](kalman.md) |
 
 ## Limitations
 

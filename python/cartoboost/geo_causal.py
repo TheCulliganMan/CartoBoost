@@ -5,6 +5,9 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
+from . import _native
 from ._artifacts import (
     ArtifactPersistenceMixin,
     require_artifact_payload,
@@ -12,12 +15,12 @@ from ._artifacts import (
 )
 from ._native import (
     geo_causal_design_summary,
-    geo_causal_representation_report_value,
     geo_causal_spatial_placebos,
     geo_causal_spillover_diagnostics,
     geo_causal_synthetic_did_summary,
 )
 from .config import Backend
+from .regressor import _to_numpy
 
 __all__ = [
     "GeoCausalPanel",
@@ -83,10 +86,14 @@ class InvariantRiskEncoder:
         heldout_region: str,
     ) -> dict[str, Any]:
         rows = _matrix(features, "features")
-        y = [float(value) for value in _flatten(outcomes)]
+        y = _real_array(outcomes, "outcomes")
+        if y.ndim == 0:
+            y = y.reshape(1)
+        elif y.ndim != 1:
+            raise ValueError("outcomes must be one-dimensional")
         region_values = [str(value) for value in _flatten(regions)]
         return json.loads(
-            geo_causal_representation_report_value(
+            _native.geo_causal_representation_report_arrays(
                 rows,
                 y,
                 region_values,
@@ -479,14 +486,33 @@ def _coerce_rows(
     longitude_col: str | None,
     region_col: str | None,
 ) -> list[tuple[str, str, float, bool, dict[str, float], float | None, float | None, str | None]]:
-    to_dict = getattr(rows, "to_dict", None)
-    if callable(to_dict):
-        records = to_dict(orient="records")
-    else:
-        records = list(rows)
-    if not records:
-        raise ValueError("GeoCausalPanel requires at least one row")
+    columns = getattr(rows, "columns", None)
+    pandas_rows = hasattr(rows, "itertuples") and getattr(columns, "is_unique", True)
+    polars_rows = hasattr(rows, "iter_rows")
+    required = [unit_col, time_col, outcome_col, treatment_col]
     covariate_cols = list(covariate_cols or [])
+    if columns is not None and (pandas_rows or polars_rows):
+        missing = [name for name in required if name not in columns]
+        if missing:
+            raise ValueError(f"row 0 is missing required column {missing[0]!r}")
+        selected = list(
+            dict.fromkeys(
+                required
+                + covariate_cols
+                + [name for name in (latitude_col, longitude_col, region_col) if name is not None]
+            )
+        )
+        selected = [name for name in selected if name in columns]
+        if pandas_rows:
+            records = (
+                dict(zip(selected, values, strict=True))
+                for values in rows[selected].itertuples(index=False, name=None)
+            )
+        else:
+            records = rows.select(selected).iter_rows(named=True)
+    else:
+        to_dict = getattr(rows, "to_dict", None)
+        records = to_dict(orient="records") if callable(to_dict) else iter(rows)
     coerced = []
     for idx, row in enumerate(records):
         if isinstance(row, (list, tuple)) and len(row) == 8:
@@ -531,6 +557,8 @@ def _coerce_rows(
                 region_id,
             )
         )
+    if not coerced:
+        raise ValueError("GeoCausalPanel requires at least one row")
     return coerced
 
 
@@ -544,23 +572,18 @@ def _coerce_covariate_mapping(value: Any) -> dict[str, float]:
     return {str(key): float(item) for key, item in value.items()}
 
 
-def _matrix(values: Any, name: str) -> list[list[float]]:
-    to_numpy = getattr(values, "to_numpy", None)
-    if callable(to_numpy):
-        values = to_numpy()
-    rows = values.tolist() if hasattr(values, "tolist") else values
-    out = []
-    for row in rows:
-        row_values = [float(value) for value in row]
-        if not row_values or any(value != value for value in row_values):
-            raise ValueError(f"{name} must contain finite rows")
-        out.append(row_values)
-    if not out:
-        raise ValueError(f"{name} must be non-empty")
-    width = len(out[0])
-    if any(len(row) != width for row in out):
-        raise ValueError(f"{name} must have fixed width")
-    return out
+def _matrix(values: Any, name: str) -> np.ndarray:
+    array = _real_array(values, name)
+    if array.ndim != 2:
+        raise ValueError(f"{name} must be a two-dimensional matrix")
+    return array
+
+
+def _real_array(values: Any, name: str) -> np.ndarray:
+    array = _to_numpy(values)
+    if np.iscomplexobj(array):
+        raise ValueError(f"{name} must contain real values")
+    return np.asarray(array, dtype=np.float64)
 
 
 def _flatten(values: Any) -> list[Any]:

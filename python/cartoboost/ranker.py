@@ -24,17 +24,21 @@ from ._native import CartoBoostRanker as _NativeRankerModel
 from .regressor import (
     _as_1d_float_array,
     _as_sample_weight_array,
+    _column_stack,
+    _duckdb_column_mapping,
     _encode_sparse_columns,
     _encoded_feature_schema,
     _feature_schema_metadata,
     _fit_transform_categorical_features,
     _is_empty_sparse_sets,
     _json_attr,
+    _looks_like_duckdb,
     _normalize_sparse_sets,
     _resolve_linear_leaf_features,
     _rust_feature_schema_json,
     _sparse_names_from_feature_schema,
     _split_policy_from_native,
+    _to_numpy,
     _transform_categorical_features,
 )
 from .regressor import (
@@ -192,11 +196,12 @@ class CartoBoostRanker(BaseEstimator):
             feature_schema,
         )
         targets_array = _as_1d_float_array(y)
+        weights_array = _as_sample_weight_array(sample_weight, targets_array.shape[0])
         dense_array, categorical_encoder, feature_names = _fit_transform_categorical_features(
             X_model,
             targets_array,
             model_feature_schema,
-            sample_weight=sample_weight,
+            sample_weight=weights_array,
         )
         if dense_array.shape[0] != targets_array.shape[0]:
             raise ValueError("X and y must contain the same number of rows")
@@ -205,13 +210,13 @@ class CartoBoostRanker(BaseEstimator):
             dense_array.shape[0],
             prefer_query_ids=groups is None and group_values is not None,
         )
-        weights_array = _as_sample_weight_array(sample_weight, targets_array.shape[0])
         sparse_columns, sparse_names = _normalize_sparse_sets(sparse_sets, targets_array.shape[0])
         sparse_offsets, sparse_ids = _encode_sparse_columns(sparse_columns)
         encoded_feature_schema = _encoded_feature_schema(
             model_feature_schema,
             categorical_encoder,
             dense_array.shape[1],
+            sparse_names,
         )
         schema_json = _rust_feature_schema_json(
             encoded_feature_schema,
@@ -276,6 +281,7 @@ class CartoBoostRanker(BaseEstimator):
             schema_json,
         )
         self._model = model
+        self.group_col_ = group_col
         self.feature_schema_ = (
             json.loads(schema_json) if schema_json is not None else schema_metadata
         )
@@ -308,12 +314,13 @@ class CartoBoostRanker(BaseEstimator):
             raise RuntimeError("CartoBoostRanker is not fitted")
         X_model = _maybe_drop_prediction_group_column(
             X,
-            getattr(self, "group_col", None),
+            getattr(self, "group_col_", self.group_col),
             getattr(self, "n_features_in_", None),
         )
         dense_array, sparse_offsets, sparse_ids = self._prediction_inputs(X_model, sparse_sets)
+        predict = getattr(self._model, "predict_numpy", self._model.predict_arrays)
         return np.asarray(
-            self._model.predict_arrays(dense_array, sparse_offsets, sparse_ids),
+            predict(dense_array, sparse_offsets, sparse_ids),
             dtype=float,
         )
 
@@ -338,7 +345,7 @@ class CartoBoostRanker(BaseEstimator):
         """
         if self._model is None:
             raise RuntimeError("CartoBoostRanker is not fitted")
-        group_col = self.group_col if group_col is None else group_col
+        group_col = getattr(self, "group_col_", self.group_col) if group_col is None else group_col
         if groups is None:
             X_model, group_values = _extract_group_column(X, group_col)
         else:
@@ -417,6 +424,9 @@ class CartoBoostRanker(BaseEstimator):
             payload={
                 "categorical_encoder": getattr(self, "categorical_encoder_", None),
                 "group_col": _jsonable_group_col(self.group_col),
+                "fitted_group_col": _jsonable_group_col(
+                    getattr(self, "group_col_", self.group_col)
+                ),
                 "native_model": native_payload,
             },
         )
@@ -480,6 +490,7 @@ class CartoBoostRanker(BaseEstimator):
             native_model = _NativeRankerModel.load(native_path)
         estimator = cls._from_native_model(native_model)
         estimator.group_col = inner.get("group_col")
+        estimator.group_col_ = inner.get("fitted_group_col", estimator.group_col)
         estimator.categorical_encoder_ = inner.get("categorical_encoder")
         if estimator.categorical_encoder_:
             estimator.n_features_in_ = int(estimator.categorical_encoder_["original_feature_count"])
@@ -641,7 +652,15 @@ def _extract_group_column(values: Any, group_col: str | int | None) -> tuple[Any
     if columns is not None:
         if group_col not in columns:
             raise ValueError(f"group_col {group_col!r} is not a column in X")
+        if _looks_like_duckdb(values):
+            mapping = _duckdb_column_mapping(values)
+            if mapping is None:
+                raise ValueError("DuckDB input could not provide its named columns")
+            groups = mapping.pop(str(group_col))
+            return _ColumnArray(mapping), groups
         groups = values[group_col]
+        if type(values).__module__.startswith("polars"):
+            return values.drop(group_col), groups
         return values.drop(columns=[group_col]), groups
     array = np.asarray(values)
     if not isinstance(group_col, int):
@@ -677,7 +696,7 @@ def _maybe_drop_prediction_group_column(
     columns = getattr(values, "columns", None)
     if columns is not None:
         if group_col in columns and len(columns) == int(expected_features) + 1:
-            return values.drop(columns=[group_col])
+            return _extract_group_column(values, group_col)[0]
         return values
     array = np.asarray(values)
     if array.ndim != 2 or array.shape[1] == int(expected_features):
@@ -689,6 +708,25 @@ def _maybe_drop_prediction_group_column(
             raise ValueError("group_col index is out of range")
         return np.delete(array, group_col, axis=1)
     return values
+
+
+class _ColumnArray:
+    """Retain table metadata after materializing a query and removing its group column."""
+
+    def __init__(self, columns: dict[str, Any]) -> None:
+        if not columns:
+            raise ValueError("X rows must contain at least one feature")
+        self.columns = list(columns)
+        self.dtypes = [column.dtype for column in columns.values()]
+        self._columns = list(columns.values())
+        self.shape = (len(self._columns[0]), len(self._columns))
+
+    def to_numpy(self) -> np.ndarray:
+        return self._cartoboost_to_numpy()
+
+    def _cartoboost_to_numpy(self, *, numeric: bool = False) -> np.ndarray:
+        # Defer promotion until the adapter knows whether categorical IDs matter.
+        return _column_stack(self._columns, numeric=numeric)
 
 
 def _group_column_index(values: Any, group_col: str | int) -> int:
@@ -767,9 +805,9 @@ def _normalize_groups(
         if size_values is not None and sum(size_values) == row_count:
             return size_values
     if array.shape[0] != row_count:
-        sizes = [int(value) for value in array.tolist()]
-        if any(size <= 0 for size in sizes):
-            raise ValueError("group sizes must be positive")
+        sizes = _try_group_sizes(array)
+        if sizes is None:
+            raise ValueError("group sizes must be positive integers")
         if sum(sizes) != row_count:
             raise ValueError("group sizes must sum to the number of rows")
         return sizes
@@ -798,7 +836,7 @@ def _try_group_sizes(values: np.ndarray) -> list[int] | None:
             return None
         try:
             size = int(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return None
         if size != value or size <= 0:
             return None
@@ -807,12 +845,15 @@ def _try_group_sizes(values: np.ndarray) -> list[int] | None:
 
 
 def _as_group_array(values: Any) -> np.ndarray:
+    if hasattr(values, "to_numpy") or hasattr(values, "fetchnumpy"):
+        is_table = getattr(values, "columns", None) is not None
+        values = _to_numpy(values)
+        if is_table and values.ndim == 2 and values.shape[1] == 1:
+            values = values[:, 0]
     if isinstance(values, np.ndarray):
         if values.ndim != 1:
             raise ValueError("groups must be a 1D array of group sizes or query ids")
-        array = np.empty(values.shape[0], dtype=object)
-        array[:] = values.tolist()
-        return array
+        return np.asarray(values, dtype=object)
     items = list(values)
     array = np.empty(len(items), dtype=object)
     array[:] = items

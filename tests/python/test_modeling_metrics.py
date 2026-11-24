@@ -29,9 +29,9 @@ def test_conformal_residual_quantile_builds_calibrated_intervals():
     quantile = conformal_residual_quantile(y_true, y_pred, alpha=0.5)
     lower, upper = calibrated_intervals([11.0, 20.0], quantile)
 
-    assert quantile == pytest.approx(1.5)
-    assert lower == pytest.approx([9.5, 18.5])
-    assert upper == pytest.approx([12.5, 21.5])
+    assert quantile == pytest.approx(1.0)
+    assert lower == pytest.approx([10.0, 19.0])
+    assert upper == pytest.approx([12.0, 21.0])
 
 
 def test_calibrated_intervals_can_compute_quantile_from_calibration_data():
@@ -42,8 +42,19 @@ def test_calibrated_intervals_can_compute_quantile_from_calibration_data():
         alpha=0.5,
     )
 
-    assert lower == pytest.approx([2.0])
-    assert upper == pytest.approx([8.0])
+    assert lower == pytest.approx([4.0])
+    assert upper == pytest.approx([6.0])
+
+
+@pytest.mark.parametrize("alpha", [0.01, 0.1, 0.5, 0.75, 0.99])
+def test_conformal_quantile_uses_exact_finite_sample_order_statistic(alpha):
+    residuals = np.arange(10, dtype=float)[::-1]
+    rank = min(len(residuals), int(np.ceil((len(residuals) + 1) * (1.0 - alpha))))
+
+    assert (
+        conformal_residual_quantile(residuals, np.zeros(10), alpha=alpha)
+        == sorted(residuals)[rank - 1]
+    )
 
 
 def test_pinball_interval_coverage_and_width_metrics():
@@ -119,6 +130,34 @@ def test_classification_metrics_cover_probability_quality():
     assert roc_auc(y_true, y_proba) == pytest.approx(1.0)
     assert pr_auc(y_true, y_proba) == pytest.approx(1.0)
     assert ece_calibration_error(y_true, y_proba, n_bins=2) == pytest.approx(0.15)
+
+
+@pytest.mark.parametrize("seed", range(5))
+def test_weighted_auc_matches_pairwise_reference_with_ties(seed):
+    rng = np.random.default_rng(seed)
+    labels = rng.integers(0, 2, 63)
+    scores = rng.integers(-3, 4, 63).astype(float)
+    weights = rng.integers(0, 6, 63).astype(float)
+    positive = np.flatnonzero(labels == 1)
+    negative = np.flatnonzero(labels == 0)
+    numerator = sum(
+        weights[p]
+        * weights[n]
+        * (float(scores[p] > scores[n]) + 0.5 * float(scores[p] == scores[n]))
+        for p in positive
+        for n in negative
+    )
+    expected = numerator / (weights[positive].sum() * weights[negative].sum())
+    assert roc_auc(labels, scores, positive_label=1, sample_weight=weights) == pytest.approx(
+        expected, abs=1e-12
+    )
+
+
+def test_weighted_auc_handles_extreme_finite_weights_and_zero_weight_classes():
+    assert roc_auc([0, 1], [0.0, 1.0], sample_weight=[1e-308, 1e308]) == 1.0
+    assert roc_auc([0, 1], [-0.0, 0.0], sample_weight=[np.finfo(float).max] * 2) == 0.5
+    with pytest.raises(ValueError, match="positive weight"):
+        roc_auc([0, 1], [0.0, 1.0], sample_weight=[0.0, 1.0])
 
 
 @pytest.mark.parametrize("backend", available_backends("affine"))
@@ -215,6 +254,13 @@ def test_ranking_metrics_accept_numeric_query_ids_when_not_size_vector():
     assert ndcg_at_k(relevance, scores, groups=query_ids) == pytest.approx(1.0)
     assert mean_average_precision(relevance, scores, groups=query_ids) == pytest.approx(1.0)
     assert mean_reciprocal_rank(relevance, scores, groups=query_ids) == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("metric", [ndcg_at_k, mean_average_precision, mean_reciprocal_rank])
+@pytest.mark.parametrize("groups", [[2.9, 2.1], [True, 3], [float("inf"), 2], [float("nan"), 2]])
+def test_ranking_metrics_reject_invalid_group_sizes(metric, groups):
+    with pytest.raises(ValueError, match="group sizes must be positive integers"):
+        metric([0.0, 1.0, 0.0, 1.0], [0.0, 1.0, 0.0, 1.0], groups=groups)
 
 
 def test_ranking_metrics_accept_tuple_query_ids():

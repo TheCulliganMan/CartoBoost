@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 import pickle
+import pickletools
 from base64 import b64decode, b64encode
+from collections import OrderedDict
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from inspect import Parameter, signature
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
@@ -49,7 +52,11 @@ class NativeForecastWrapper(ArtifactPersistenceMixin):
         result = fit(*native_args, **kwargs)
         self._native_model = native_model if result is None else result
         self.selected_backend_ = _native_selected_backend(self._native_model, self._params)
-        self._fit_artifact = _encode_fit_artifact(args, kwargs)
+        self._fit_artifact = (
+            None
+            if callable(getattr(self._native_model, "save", None))
+            else _encode_fit_artifact(args, kwargs)
+        )
         self.is_fitted_ = True
         return self
 
@@ -163,8 +170,18 @@ class NativeForecastWrapper(ArtifactPersistenceMixin):
                 f"Rust binding {cls.native_class_name!r} does not expose load()."
             )
         obj = cls.__new__(cls)
-        NativeForecastWrapper.__init__(obj)
-        obj._native_model = load(str(path))
+        native_model = load(str(path))
+        params: dict[str, Any] = {}
+        if cls.native_class_name in {"NaiveForecaster", "SeasonalNaiveForecaster"}:
+            metadata = json.loads(native_model.metadata_json())
+            params["prediction_interval_levels"] = tuple(
+                metadata.get("prediction_intervals", {}).get("levels", ())
+            )
+            if cls.native_class_name == "SeasonalNaiveForecaster":
+                params["season_length"] = metadata["season_length"]
+                obj.season_length = metadata["season_length"]
+        NativeForecastWrapper.__init__(obj, **params)
+        obj._native_model = native_model
         obj.selected_backend_ = _native_selected_backend(obj._native_model, obj._params)
         obj._fit_artifact = None
         obj.is_fitted_ = True
@@ -278,15 +295,16 @@ def _native_frame_from_values(values: Any) -> Any:
         lengths = {len(series_values) for series_values in values.values()}
         if len(lengths) != 1:
             raise ValueError("all panel series must have the same length")
+        timestamps = [
+            (datetime(1970, 1, 1) + timedelta(days=index)).strftime("%Y-%m-%dT%H:%M:%S")
+            for index in range(next(iter(lengths)))
+        ]
         for series_id, series_values in values.items():
-            for idx, value in enumerate(series_values):
-                rows.append(
-                    (
-                        str(series_id),
-                        (datetime(1970, 1, 1) + timedelta(days=idx)).strftime("%Y-%m-%dT%H:%M:%S"),
-                        float(value),
-                    )
-                )
+            name = str(series_id)
+            rows.extend(
+                (name, timestamp, float(value))
+                for timestamp, value in zip(timestamps, series_values, strict=True)
+            )
         return native_frame_class(rows, "D")
     arr = np.asarray(values, dtype=float)
     if arr.ndim == 1:
@@ -310,7 +328,7 @@ def _native_frame_from_values(values: Any) -> Any:
 
 
 def _encode_fit_artifact(args: tuple[Any, ...], kwargs: dict[str, Any]) -> dict[str, str]:
-    """Encode the exact public fit inputs used by native wrappers."""
+    """Encode the numeric fit inputs consumed by native wrappers as known data types."""
 
     encoded_args: tuple[Any, ...] = args
     if args and hasattr(args[0], "_native_frame") and hasattr(args[0], "to_pandas"):
@@ -318,6 +336,16 @@ def _encode_fit_artifact(args: tuple[Any, ...], kwargs: dict[str, Any]) -> dict[
             {"forecast_frame": _forecast_frame_to_artifact(args[0])},
             *args[1:],
         )
+    elif args and not _is_native_forecast_frame(args[0]):
+        values = args[0]
+        if isinstance(values, dict):
+            values = {
+                str(series_id): np.asarray(series_values, dtype=np.float64)
+                for series_id, series_values in values.items()
+            }
+        else:
+            values = np.asarray(values, dtype=np.float64)
+        encoded_args = (values, *args[1:])
     try:
         return {
             "args": b64encode(pickle.dumps(encoded_args, protocol=pickle.HIGHEST_PROTOCOL)).decode(
@@ -341,15 +369,62 @@ def _decode_fit_artifact(value: Any) -> tuple[tuple[Any, ...], dict[str, Any]]:
     ):
         raise ValueError("forecast artifact is missing fit inputs")
     try:
-        args = pickle.loads(b64decode(value["args"].encode("ascii"), validate=True))
-        kwargs = pickle.loads(b64decode(value["kwargs"].encode("ascii"), validate=True))
-    except (ValueError, pickle.PickleError) as exc:
+        args = _load_fit_data(b64decode(value["args"].encode("ascii"), validate=True))
+        kwargs = _load_fit_data(b64decode(value["kwargs"].encode("ascii"), validate=True))
+    except (ValueError, pickle.PickleError, EOFError, TypeError, OverflowError) as exc:
         raise ValueError("forecast artifact has invalid fit inputs") from exc
     if not isinstance(args, tuple) or not isinstance(kwargs, dict):
         raise ValueError("forecast artifact fit inputs have invalid types")
-    if args and isinstance(args[0], dict) and set(args[0]) == {"forecast_frame"}:
+    if (
+        args
+        and isinstance(args[0], dict)
+        and set(args[0]) == {"forecast_frame"}
+        and isinstance(args[0]["forecast_frame"], dict)
+    ):
         args = (_forecast_frame_from_artifact(args[0]["forecast_frame"]), *args[1:])
     return args, kwargs
+
+
+class _FitDataUnpickler(pickle.Unpickler):
+    """Read legacy fit data without importing or invoking artifact-supplied code."""
+
+    def find_class(self, module: str, name: str) -> Any:
+        # These are data constructors used by the supported fit inputs. Resolve
+        # exact names to already imported objects; never import a payload's module.
+        constructors = {
+            ("builtins", "bytearray"): bytearray,
+            ("builtins", "complex"): complex,
+            ("builtins", "frozenset"): frozenset,
+            ("builtins", "set"): set,
+            ("collections", "OrderedDict"): OrderedDict,
+            ("datetime", "date"): date,
+            ("datetime", "datetime"): datetime,
+            ("datetime", "timedelta"): timedelta,
+            ("datetime", "timezone"): timezone,
+            ("numpy", "dtype"): np.dtype,
+            ("numpy", "ndarray"): np.ndarray,
+        }
+        # NumPy 2 renamed its private core module. Both names occur in existing
+        # artifacts, and both resolve to the installed NumPy's same constructors.
+        core = getattr(np, "_core", None)
+        if not hasattr(core, "multiarray"):
+            core = np.core
+        for prefix in ("numpy.core", "numpy._core"):
+            constructors[(f"{prefix}.multiarray", "_reconstruct")] = core.multiarray._reconstruct
+            constructors[(f"{prefix}.multiarray", "scalar")] = core.multiarray.scalar
+            constructors[(f"{prefix}.numeric", "_frombuffer")] = core.numeric._frombuffer
+        constructor = constructors.get((module, name))
+        if constructor is None:
+            raise pickle.UnpicklingError(f"unsupported forecast fit data type {module}.{name}")
+        return constructor
+
+
+def _load_fit_data(payload: bytes) -> Any:
+    # Cached pickle extensions bypass find_class, so reject them even when an
+    # unrelated caller has already registered and cached an unsafe constructor.
+    if any(op.name in {"EXT1", "EXT2", "EXT4"} for op, _, _ in pickletools.genops(payload)):
+        raise pickle.UnpicklingError("pickle extensions are not supported in forecast fit data")
+    return _FitDataUnpickler(BytesIO(payload)).load()
 
 
 def _forecast_frame_to_artifact(frame: Any) -> dict[str, Any]:

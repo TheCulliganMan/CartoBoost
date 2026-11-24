@@ -899,6 +899,14 @@ pub fn directional_pair_predict(
             expanded = expand_pair_architecture_rows(rows, &artifact.architecture);
             &expanded
         };
+        if prediction_rows.iter().any(|row| {
+            row.features.len() != artifact.feature_means.len()
+                || row.features.iter().any(|value| !value.is_finite())
+        }) {
+            return invalid(
+                "directional pair prediction features must be finite and match fitted width",
+            );
+        }
         let inputs = rows
             .iter()
             .zip(prediction_rows.iter())
@@ -924,7 +932,7 @@ pub fn directional_pair_predict(
                 } else {
                     artifact.pair_global_bucket
                 };
-                let (input, _, _) = pair_mlp_forward(
+                pair_mlp_input(
                     row,
                     &artifact.feature_means,
                     src,
@@ -934,12 +942,7 @@ pub fn directional_pair_predict(
                     &artifact.target_embeddings,
                     &artifact.pair_bucket_embeddings,
                     &artifact.dense_projection,
-                    &artifact.hidden_weights,
-                    &artifact.hidden_biases,
-                    &artifact.output_weights,
-                    artifact.intercept,
-                );
-                input
+                )
             })
             .collect::<Vec<_>>();
         let hidden_width = artifact.hidden_weights.len();
@@ -1084,6 +1087,39 @@ fn pair_mlp_forward(
     output_weights: &[f64],
     intercept: f64,
 ) -> (Vec<f64>, Vec<f64>, f64) {
+    let input = pair_mlp_input(
+        row,
+        means,
+        src,
+        dst,
+        bucket,
+        source_embeddings,
+        target_embeddings,
+        pair_bucket_embeddings,
+        dense_projection,
+    );
+    let mut acts = vec![0.0; hidden_weights.len()];
+    let mut pred = intercept;
+    for h in 0..hidden_weights.len() {
+        let z = hidden_biases[h] + dot(&hidden_weights[h], &input);
+        acts[h] = z.tanh();
+        pred += output_weights[h] * acts[h];
+    }
+    (input, acts, pred)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn pair_mlp_input(
+    row: &DeepDirectionalPairRow,
+    means: &[f64],
+    src: usize,
+    dst: usize,
+    bucket: usize,
+    source_embeddings: &[Vec<f64>],
+    target_embeddings: &[Vec<f64>],
+    pair_bucket_embeddings: &[Vec<f64>],
+    dense_projection: &[Vec<f64>],
+) -> Vec<f64> {
     let src_e = source_embeddings.get(src).unwrap_or(&source_embeddings[0]);
     let dst_e = target_embeddings.get(dst).unwrap_or(&target_embeddings[0]);
     let pair_e = pair_bucket_embeddings
@@ -1101,7 +1137,7 @@ fn pair_mlp_forward(
         input.push(src_e[i] * dst_e[i]);
     }
     if !dense_projection.is_empty() {
-        for k in 0..dense_projection[0].len() {
+        for (k, _) in dense_projection[0].iter().enumerate() {
             let mut value = 0.0;
             for (j, feature) in row.features.iter().enumerate() {
                 value += (feature - means.get(j).copied().unwrap_or(0.0)) * dense_projection[j][k];
@@ -1109,14 +1145,7 @@ fn pair_mlp_forward(
             input.push(value);
         }
     }
-    let mut acts = vec![0.0; hidden_weights.len()];
-    let mut pred = intercept;
-    for h in 0..hidden_weights.len() {
-        let z = hidden_biases[h] + dot(&hidden_weights[h], &input);
-        acts[h] = z.tanh();
-        pred += output_weights[h] * acts[h];
-    }
-    (input, acts, pred)
+    input
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2203,6 +2232,50 @@ fn fit_tanh_network(
     })
 }
 
+/// Validates the complete input and parameter shapes of a single-hidden-layer
+/// tanh network before native or browser inference transforms its weights.
+#[allow(clippy::too_many_arguments)]
+pub fn validate_tanh_network_inputs(
+    rows: &[Vec<f64>],
+    means: &[f64],
+    hidden_weights: &[Vec<f64>],
+    hidden_biases: &[f64],
+    output_weights: &[f64],
+    intercepts: &[f64],
+) -> Result<()> {
+    let dimensions = means.len();
+    let hidden = hidden_weights.len();
+    if rows.is_empty()
+        || dimensions == 0
+        || hidden == 0
+        || rows.len() != intercepts.len()
+        || hidden != hidden_biases.len()
+        || hidden != output_weights.len()
+        || dimensions.checked_mul(hidden).is_none()
+        || rows.iter().any(|row| row.len() != dimensions)
+        || hidden_weights.iter().any(|row| row.len() != dimensions)
+    {
+        return Err(NeuralError::InvalidArgument(
+            "invalid batched tanh-network shape".to_string(),
+        ));
+    }
+    if rows
+        .iter()
+        .flatten()
+        .chain(means)
+        .chain(hidden_weights.iter().flatten())
+        .chain(hidden_biases)
+        .chain(output_weights)
+        .chain(intercepts)
+        .any(|value| !value.is_finite())
+    {
+        return Err(NeuralError::InvalidArgument(
+            "tanh-network inputs and parameters must be finite".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 fn backend_tanh_scores(
     backend: &BackendSelection,
     rows: &[Vec<f64>],
@@ -2212,11 +2285,14 @@ fn backend_tanh_scores(
     output_weights: &[f64],
     intercepts: &[f64],
 ) -> Result<Vec<f64>> {
-    if rows.len() != intercepts.len() || hidden_weights.len() != hidden_biases.len() {
-        return Err(NeuralError::InvalidArgument(
-            "invalid batched tanh-network shape".to_string(),
-        ));
-    }
+    validate_tanh_network_inputs(
+        rows,
+        means,
+        hidden_weights,
+        hidden_biases,
+        output_weights,
+        intercepts,
+    )?;
     let dimensions = means.len();
     let hidden = hidden_weights.len();
     let centered = rows
@@ -3008,6 +3084,34 @@ mod tests {
             })
             .collect::<Vec<_>>();
         rmse(&pred, rows)
+    }
+
+    #[test]
+    fn hidden_network_prediction_rejects_malformed_artifact_shapes() {
+        let features = vec![vec![0.0, 1.0], vec![1.0, 2.0], vec![2.0, 3.0]];
+        let labels = vec![0.0, 0.0, 1.0];
+        let artifact = event_outcome_fit(&features, &labels).unwrap();
+        let expected = event_outcome_predict(&artifact, &features).unwrap();
+        assert_eq!(expected.len(), features.len());
+
+        let mut short_hidden = artifact.clone();
+        short_hidden.hidden_weights[0].pop();
+        assert!(event_outcome_predict(&short_hidden, &features).is_err());
+        let mut long_hidden = artifact.clone();
+        long_hidden.hidden_weights[0].push(0.0);
+        assert!(event_outcome_predict(&long_hidden, &features).is_err());
+        let mut short_output = artifact.clone();
+        short_output.output_weights.pop();
+        assert!(event_outcome_predict(&short_output, &features).is_err());
+        let mut short_biases = artifact.clone();
+        short_biases.hidden_biases.pop();
+        assert!(event_outcome_predict(&short_biases, &features).is_err());
+        let mut invalid_output = artifact.clone();
+        invalid_output.output_weights[0] = f64::NAN;
+        assert!(event_outcome_predict(&invalid_output, &features).is_err());
+        let mut invalid_mean = artifact;
+        invalid_mean.feature_means[0] = f64::INFINITY;
+        assert!(event_outcome_predict(&invalid_mean, &features).is_err());
     }
 
     #[test]

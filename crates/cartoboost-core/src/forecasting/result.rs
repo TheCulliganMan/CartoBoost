@@ -212,7 +212,11 @@ impl ForecastResult {
             return Self::from_record_values(records);
         }
         let result: Self = serde_json::from_value(value)?;
-        Self::new_with_intervals_and_details(result.predictions, result.intervals, result.details)
+        result.into_validated()
+    }
+
+    pub(crate) fn into_validated(self) -> Result<Self> {
+        Self::new_with_intervals_and_details(self.predictions, self.intervals, self.details)
     }
 
     pub fn prediction_columns() -> Vec<&'static str> {

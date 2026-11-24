@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import numpy as np
 import pytest
 from cartoboost import CartoBoostRegressor, FeatureSchema
 
@@ -13,6 +14,52 @@ def _fit_or_skip(model, *args, **kwargs):
         pytest.skip(str(exc))
 
 
+@pytest.mark.parametrize(
+    "schema",
+    [
+        FeatureSchema(dense=["bias"], sparse_sets=["cells"]),
+        {"dense": ["bias"], "sparse_sets": [{"name": "cells"}]},
+        {"names": ["bias", "cells"], "kinds": ["Numeric", "SparseSet"]},
+    ],
+)
+def test_structured_policy_honors_default_sparse_schema_kinds(schema):
+    X = [[0.0]] * 4
+    y = [4.0, 4.0, -2.0, -2.0]
+    sparse = {"cells": [[7], [7], [8], [8]]}
+    model = CartoBoostRegressor(
+        n_estimators=1,
+        learning_rate=1.0,
+        max_depth=1,
+        min_samples_leaf=1,
+        split_policy="structured",
+    ).fit(X, y, sparse_sets=sparse, feature_schema=schema)
+    assert model.requires_sparse_sets_
+    assert model.predict(X, sparse_sets=sparse) == pytest.approx(y)
+
+
+def test_large_structured_training_retains_informative_sparse_features():
+    X = np.zeros((100_000, 1))
+    y = np.concatenate((np.full(50_000, 4.0), np.full(50_000, -2.0)))
+    sparse = {"cells": [[7]] * 50_000 + [[8]] * 50_000}
+    model = CartoBoostRegressor(
+        n_estimators=1,
+        learning_rate=1.0,
+        max_depth=1,
+        min_samples_leaf=1,
+        split_policy="structured",
+        n_threads=1,
+    ).fit(
+        X,
+        y,
+        sparse_sets=sparse,
+        feature_schema={"dense": ["bias"], "sparse_sets": ["cells"]},
+    )
+    assert model.requires_sparse_sets_
+    assert model.predict([[0.0], [0.0]], sparse_sets={"cells": [[7], [8]]}) == pytest.approx(
+        [4.0, -2.0]
+    )
+
+
 def test_python_native_sparse_list_route_cells_train_predict():
     x = [[0.0], [0.0], [0.0], [0.0]]
     y = [7.0, 7.0, -2.0, -2.0]
@@ -24,7 +71,7 @@ def test_python_native_sparse_list_route_cells_train_predict():
         max_depth=1,
         min_samples_leaf=1,
         min_gain=0.0,
-        splitters=["sparse_set"],
+        split_policy="structured",
     )
 
     _fit_or_skip(model, x, y, sparse_sets=sparse_sets, feature_schema=schema)
@@ -44,10 +91,19 @@ def test_python_native_sparse_list_two_tree_boosting():
         max_depth=1,
         min_samples_leaf=1,
         min_gain=0.0,
-        splitters=["sparse_set"],
+        split_policy="structured",
     )
 
-    _fit_or_skip(model, x, y, sparse_sets=sparse_sets)
+    _fit_or_skip(
+        model,
+        x,
+        y,
+        sparse_sets=sparse_sets,
+        feature_schema={
+            "dense": [("feature_0", "numeric")],
+            "sparse_sets": [("route_cells", "sparse_set")],
+        },
+    )
 
     assert model.predict(x, sparse_sets=sparse_sets) == pytest.approx([8.75, 8.75, 1.25, 1.25])
 
@@ -62,9 +118,18 @@ def test_python_native_sparse_list_save_load_identity(tmp_path: Path):
         max_depth=1,
         min_samples_leaf=1,
         min_gain=0.0,
-        splitters=["sparse_set"],
+        split_policy="structured",
     )
-    _fit_or_skip(model, x, y, sparse_sets=sparse_sets)
+    _fit_or_skip(
+        model,
+        x,
+        y,
+        sparse_sets=sparse_sets,
+        feature_schema={
+            "dense": [("feature_0", "numeric")],
+            "sparse_sets": [("route_cells", "sparse_set")],
+        },
+    )
     path = tmp_path / "sparse-list.json"
     before = model.predict(x, sparse_sets=sparse_sets)
 
@@ -86,9 +151,18 @@ def test_unseen_sparse_ids_route_correctly():
         max_depth=1,
         min_samples_leaf=1,
         min_gain=0.0,
-        splitters=["sparse_set"],
+        split_policy="structured",
     )
-    _fit_or_skip(model, x, y, sparse_sets=train_sparse)
+    _fit_or_skip(
+        model,
+        x,
+        y,
+        sparse_sets=train_sparse,
+        feature_schema={
+            "dense": [("feature_0", "numeric")],
+            "sparse_sets": [("route_cells", "sparse_set")],
+        },
+    )
 
     predictions = model.predict(x, sparse_sets=test_sparse)
 
@@ -106,9 +180,18 @@ def test_empty_sparse_rows_route_correctly():
         max_depth=1,
         min_samples_leaf=1,
         min_gain=0.0,
-        splitters=["sparse_set"],
+        split_policy="structured",
     )
-    _fit_or_skip(model, x, y, sparse_sets=sparse_sets)
+    _fit_or_skip(
+        model,
+        x,
+        y,
+        sparse_sets=sparse_sets,
+        feature_schema={
+            "dense": [("feature_0", "numeric")],
+            "sparse_sets": [("route_cells", "sparse_set")],
+        },
+    )
 
     predictions = model.predict(x, sparse_sets=sparse_sets)
 
@@ -128,9 +211,18 @@ def test_duplicate_sparse_ids_do_not_change_predictions():
         max_depth=1,
         min_samples_leaf=1,
         min_gain=0.0,
-        splitters=["sparse_set"],
+        split_policy="structured",
     )
-    _fit_or_skip(model, x, y, sparse_sets=train_sparse)
+    _fit_or_skip(
+        model,
+        x,
+        y,
+        sparse_sets=train_sparse,
+        feature_schema={
+            "dense": [("feature_0", "numeric")],
+            "sparse_sets": [("route_cells", "sparse_set")],
+        },
+    )
 
     assert model.predict(x, sparse_sets=duplicated_sparse) == pytest.approx(
         model.predict(x, sparse_sets=deduped_sparse)
@@ -154,9 +246,18 @@ def test_sparse_prediction_dict_order_uses_fitted_column_order():
         max_depth=1,
         min_samples_leaf=1,
         min_gain=0.0,
-        splitters=["sparse_set"],
+        split_policy="structured",
     )
-    _fit_or_skip(model, x, y, sparse_sets=sparse_sets)
+    _fit_or_skip(
+        model,
+        x,
+        y,
+        sparse_sets=sparse_sets,
+        feature_schema={
+            "dense": [("feature_0", "numeric")],
+            "sparse_sets": [("route_cells", "sparse_set"), ("unused_cells", "sparse_set")],
+        },
+    )
 
     assert model.predict(x, sparse_sets=reordered) == pytest.approx(
         model.predict(x, sparse_sets=sparse_sets)
@@ -173,9 +274,18 @@ def test_sparse_prediction_list_input_is_positional():
         max_depth=1,
         min_samples_leaf=1,
         min_gain=0.0,
-        splitters=["sparse_set"],
+        split_policy="structured",
     )
-    _fit_or_skip(model, x, y, sparse_sets=sparse_columns)
+    _fit_or_skip(
+        model,
+        x,
+        y,
+        sparse_sets=sparse_columns,
+        feature_schema={
+            "dense": [("feature_0", "numeric")],
+            "sparse_sets": [("sparse_set_0", "sparse_set")],
+        },
+    )
 
     assert model.predict(x, sparse_sets=sparse_columns) == pytest.approx(y)
 

@@ -13,3 +13,5 @@ pub use node::{
     ModelMetadata, Node, PredictionTransform, Split, TrainingConfigMetadata, TrainingMetric, Tree,
     MODEL_ARTIFACT_VERSION,
 };
+
+pub(crate) use node::{map_prediction_rows, validate_dense_prediction_matrix};

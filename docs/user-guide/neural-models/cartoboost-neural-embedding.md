@@ -1,11 +1,16 @@
+---
+sidebar_label: Standalone embedding regressor
+---
+
 import {NeuralModelExample} from '@site/src/components/ModelingLabClient';
 
 # CartoBoost Neural Embedding Regressor
 
-Use `NeuralEmbeddingStandaloneRegressor` when the learned ID embedding model is
-the artifact you want to train, score, save, and serve directly. This works
-best when the train and prediction populations share stable IDs such as entity
-IDs, route pairs, account buckets, item IDs, or recurring operational groups.
+Train and serve the supervised ID model itself with
+`NeuralEmbeddingStandaloneRegressor`. It combines stable identifiers, such as
+pickup zones or route pairs, with optional dense measurements. Use it when you
+want the embedding model's prediction directly rather than embedding columns
+for another estimator.
 
 ## Use When
 
@@ -37,11 +42,14 @@ model = NeuralEmbeddingStandaloneRegressor(dim=4, n_estimators=20, random_state=
 model.fit(entity_id, target, dense=dense)
 
 pred = model.predict(entity_id, dense=dense)
-mae = model.score(entity_id, target, dense=dense)
+r2 = model.score(entity_id, target, dense=dense)
 model.save("neural-standalone.json")
 ```
 
 ## Interactive Example
+
+Run the small example to inspect inputs and model behavior. It is a browser
+demonstration, not a benchmark on held-out taxi trips.
 
 <NeuralModelExample title="Neural embedding browser model" pipeline="embedding" />
 
@@ -49,7 +57,7 @@ model.save("neural-standalone.json")
 
 - `fit(ids, y, dense=None)` trains one supervised embedding model.
 - `predict(ids, dense=None)` returns one prediction per row.
-- `score(ids, y, dense=None)` reports mean absolute error.
+- `score(ids, y, dense=None)` reports R-squared.
 - `save(path)` and `load(path)` persist the complete standalone artifact.
 
 `ids` is a one-dimensional unsigned integer array. When `dense` is provided, it

@@ -394,15 +394,31 @@ def test_distributional_metric_helpers_delegate_to_native_when_available(monkeyp
     calls = []
 
     def native_pinball(actual, prediction, quantile, backend, sample_weight):
-        calls.append((actual, prediction, quantile, backend, sample_weight))
+        assert isinstance(actual, np.ndarray)
+        assert isinstance(prediction, np.ndarray)
+        calls.append((actual.tolist(), prediction.tolist(), quantile, backend, sample_weight))
         return 123.0
 
-    native.prob_pinball_loss_value = native_pinball
+    native.prob_pinball_loss_arrays = native_pinball
     monkeypatch.setitem(sys.modules, "cartoboost", package)
     monkeypatch.setitem(sys.modules, "cartoboost._native", native)
 
     assert pinball_loss([1.0], [0.5], 0.5) == 123.0
     assert calls == [([1.0], [0.5], 0.5, "cpu", None)]
+
+
+def test_distributional_metric_helpers_require_native_binding(monkeypatch):
+    monkeypatch.setitem(sys.modules, "cartoboost._native", ModuleType("cartoboost._native"))
+
+    with pytest.raises(RuntimeError, match="prob_pinball_loss_arrays.*unavailable"):
+        pinball_loss([1.0], [0.5], 0.5)
+
+
+def test_distributional_metric_helpers_require_native_extension(monkeypatch):
+    monkeypatch.setitem(sys.modules, "cartoboost._native", None)
+
+    with pytest.raises(ImportError, match="require the CartoBoost native extension"):
+        pinball_loss([1.0], [0.5], 0.5)
 
 
 def test_spatial_calibration_helpers_cover_groups_weights_and_nearest_residuals():

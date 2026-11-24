@@ -89,12 +89,14 @@ class NeuralEmbeddingStandaloneRegressor(ArtifactPersistenceMixin):
         *,
         dense: Any | None = None,
     ) -> NeuralEmbeddingStandaloneRegressor:
-        self._native.fit(_u64_list(ids, "ids"), _f64_list(y, "y"), _dense_optional(dense))
+        self._native.fit_arrays(
+            _u64_array(ids, "ids"), _f64_array(y, "y"), _dense_array_optional(dense)
+        )
         return self
 
     def predict(self, ids: Any, *, dense: Any | None = None) -> np.ndarray:
         return np.asarray(
-            self._native.predict(_u64_list(ids, "ids"), _dense_optional(dense)),
+            self._native.predict_arrays(_u64_array(ids, "ids"), _dense_array_optional(dense)),
             dtype=np.float64,
         )
 
@@ -180,14 +182,14 @@ class Node2VecStandaloneRegressor(ArtifactPersistenceMixin):
         dense: Any | None = None,
         edge_weights: Any | None = None,
     ) -> Node2VecStandaloneRegressor:
-        self._native.fit(
+        self._native.fit_arrays(
             int(node_count),
-            _edge_pairs(edges),
-            _usize_list(row_nodes, "row_nodes"),
-            _f64_list(y, "y"),
-            None if row_targets is None else _usize_list(row_targets, "row_targets"),
-            _dense_optional(dense),
-            None if edge_weights is None else _f32_list(edge_weights, "edge_weights"),
+            _edge_pairs_array(edges),
+            _usize_array(row_nodes, "row_nodes"),
+            _f64_array(y, "y"),
+            None if row_targets is None else _usize_array(row_targets, "row_targets"),
+            _dense_array_optional(dense),
+            None if edge_weights is None else _f32_array(edge_weights, "edge_weights"),
         )
         return self
 
@@ -199,10 +201,10 @@ class Node2VecStandaloneRegressor(ArtifactPersistenceMixin):
         dense: Any | None = None,
     ) -> np.ndarray:
         return np.asarray(
-            self._native.predict(
-                _usize_list(row_nodes, "row_nodes"),
-                None if row_targets is None else _usize_list(row_targets, "row_targets"),
-                _dense_optional(dense),
+            self._native.predict_arrays(
+                _usize_array(row_nodes, "row_nodes"),
+                None if row_targets is None else _usize_array(row_targets, "row_targets"),
+                _dense_array_optional(dense),
             ),
             dtype=np.float64,
         )
@@ -282,13 +284,13 @@ class GraphSageStandaloneRegressor(ArtifactPersistenceMixin):
         row_targets: Any | None = None,
         dense: Any | None = None,
     ) -> GraphSageStandaloneRegressor:
-        self._native.fit(
-            _f32_matrix(node_features, "node_features"),
-            _edge_pairs(edges),
-            _usize_list(row_nodes, "row_nodes"),
-            _f64_list(y, "y"),
-            None if row_targets is None else _usize_list(row_targets, "row_targets"),
-            _dense_optional(dense),
+        self._native.fit_arrays(
+            _f32_matrix_array(node_features, "node_features"),
+            _edge_pairs_array(edges),
+            _usize_array(row_nodes, "row_nodes"),
+            _f64_array(y, "y"),
+            None if row_targets is None else _usize_array(row_targets, "row_targets"),
+            _dense_array_optional(dense),
         )
         return self
 
@@ -301,11 +303,11 @@ class GraphSageStandaloneRegressor(ArtifactPersistenceMixin):
         dense: Any | None = None,
     ) -> np.ndarray:
         return np.asarray(
-            self._native.predict(
-                _f32_matrix(node_features, "node_features"),
-                _usize_list(row_nodes, "row_nodes"),
-                None if row_targets is None else _usize_list(row_targets, "row_targets"),
-                _dense_optional(dense),
+            self._native.predict_arrays(
+                _f32_matrix_array(node_features, "node_features"),
+                _usize_array(row_nodes, "row_nodes"),
+                None if row_targets is None else _usize_array(row_targets, "row_targets"),
+                _dense_array_optional(dense),
             ),
             dtype=np.float64,
         )
@@ -391,13 +393,13 @@ class HeteroGraphSageStandaloneRegressor(ArtifactPersistenceMixin):
         row_targets: Any | None = None,
         dense: Any | None = None,
     ) -> HeteroGraphSageStandaloneRegressor:
-        self._native.fit(
-            _f32_matrix(node_features, "node_features"),
-            _typed_edges(edges),
-            _usize_list(row_nodes, "row_nodes"),
-            _f64_list(y, "y"),
-            None if row_targets is None else _usize_list(row_targets, "row_targets"),
-            _dense_optional(dense),
+        self._native.fit_arrays(
+            _f32_matrix_array(node_features, "node_features"),
+            _typed_edges_array(edges),
+            _usize_array(row_nodes, "row_nodes"),
+            _f64_array(y, "y"),
+            None if row_targets is None else _usize_array(row_targets, "row_targets"),
+            _dense_array_optional(dense),
         )
         return self
 
@@ -410,11 +412,11 @@ class HeteroGraphSageStandaloneRegressor(ArtifactPersistenceMixin):
         dense: Any | None = None,
     ) -> np.ndarray:
         return np.asarray(
-            self._native.predict(
-                _f32_matrix(node_features, "node_features"),
-                _usize_list(row_nodes, "row_nodes"),
-                None if row_targets is None else _usize_list(row_targets, "row_targets"),
-                _dense_optional(dense),
+            self._native.predict_arrays(
+                _f32_matrix_array(node_features, "node_features"),
+                _usize_array(row_nodes, "row_nodes"),
+                None if row_targets is None else _usize_array(row_targets, "row_targets"),
+                _dense_array_optional(dense),
             ),
             dtype=np.float64,
         )
@@ -488,14 +490,14 @@ class HinSageStandaloneRegressor(ArtifactPersistenceMixin):
         row_targets: Any | None = None,
         dense: Any | None = None,
     ) -> HinSageStandaloneRegressor:
-        self._native.fit(
-            _f32_matrix(node_features, "node_features"),
-            _usize_list(node_types, "node_types"),
-            _typed_edges(edges),
-            _usize_list(row_nodes, "row_nodes"),
-            _f64_list(y, "y"),
-            None if row_targets is None else _usize_list(row_targets, "row_targets"),
-            _dense_optional(dense),
+        self._native.fit_arrays(
+            _f32_matrix_array(node_features, "node_features"),
+            _usize_array(node_types, "node_types"),
+            _typed_edges_array(edges),
+            _usize_array(row_nodes, "row_nodes"),
+            _f64_array(y, "y"),
+            None if row_targets is None else _usize_array(row_targets, "row_targets"),
+            _dense_array_optional(dense),
         )
         return self
 
@@ -508,11 +510,11 @@ class HinSageStandaloneRegressor(ArtifactPersistenceMixin):
         dense: Any | None = None,
     ) -> np.ndarray:
         return np.asarray(
-            self._native.predict(
-                _f32_matrix(node_features, "node_features"),
-                _usize_list(row_nodes, "row_nodes"),
-                None if row_targets is None else _usize_list(row_targets, "row_targets"),
-                _dense_optional(dense),
+            self._native.predict_arrays(
+                _f32_matrix_array(node_features, "node_features"),
+                _usize_array(row_nodes, "row_nodes"),
+                None if row_targets is None else _usize_array(row_targets, "row_targets"),
+                _dense_array_optional(dense),
             ),
             dtype=np.float64,
         )
@@ -544,15 +546,17 @@ class Node2VecLinkPredictor(ArtifactPersistenceMixin):
         edges: Any,
         edge_weights: Any | None = None,
     ) -> Node2VecLinkPredictor:
-        self._native.fit(
+        self._native.fit_arrays(
             int(node_count),
-            _edge_pairs(edges),
-            None if edge_weights is None else _f32_list(edge_weights, "edge_weights"),
+            _edge_pairs_array(edges),
+            None if edge_weights is None else _f32_array(edge_weights, "edge_weights"),
         )
         return self
 
     def predict_scores(self, pairs: Any) -> np.ndarray:
-        return np.asarray(self._native.predict_scores(_edge_pairs(pairs)), dtype=np.float64)
+        return np.asarray(
+            self._native.predict_scores_arrays(_edge_pairs_array(pairs)), dtype=np.float64
+        )
 
     def report(
         self, pairs: Any, labels: Any, *, query_ids: Any | None = None, k: int = 10
@@ -595,14 +599,16 @@ class GraphSageLinkPredictor(ArtifactPersistenceMixin):
         )
 
     def fit(self, *, node_features: Any, edges: Any) -> GraphSageLinkPredictor:
-        self._native.fit(_f32_matrix(node_features, "node_features"), _edge_pairs(edges))
+        self._native.fit_arrays(
+            _f32_matrix_array(node_features, "node_features"), _edge_pairs_array(edges)
+        )
         return self
 
     def predict_scores(self, *, node_features: Any, pairs: Any) -> np.ndarray:
         return np.asarray(
-            self._native.predict_scores(
-                _f32_matrix(node_features, "node_features"),
-                _edge_pairs(pairs),
+            self._native.predict_scores_arrays(
+                _f32_matrix_array(node_features, "node_features"),
+                _edge_pairs_array(pairs),
             ),
             dtype=np.float64,
         )
@@ -656,14 +662,16 @@ class HeteroGraphSageLinkPredictor(ArtifactPersistenceMixin):
         )
 
     def fit(self, *, node_features: Any, edges: Any) -> HeteroGraphSageLinkPredictor:
-        self._native.fit(_f32_matrix(node_features, "node_features"), _typed_edges(edges))
+        self._native.fit_arrays(
+            _f32_matrix_array(node_features, "node_features"), _typed_edges_array(edges)
+        )
         return self
 
     def predict_scores(self, *, node_features: Any, pairs: Any) -> np.ndarray:
         return np.asarray(
-            self._native.predict_scores(
-                _f32_matrix(node_features, "node_features"),
-                _edge_pairs(pairs),
+            self._native.predict_scores_arrays(
+                _f32_matrix_array(node_features, "node_features"),
+                _edge_pairs_array(pairs),
             ),
             dtype=np.float64,
         )
@@ -719,18 +727,18 @@ class HinSageLinkPredictor(ArtifactPersistenceMixin):
         )
 
     def fit(self, *, node_features: Any, node_types: Any, edges: Any) -> HinSageLinkPredictor:
-        self._native.fit(
-            _f32_matrix(node_features, "node_features"),
-            _usize_list(node_types, "node_types"),
-            _typed_edges(edges),
+        self._native.fit_arrays(
+            _f32_matrix_array(node_features, "node_features"),
+            _usize_array(node_types, "node_types"),
+            _typed_edges_array(edges),
         )
         return self
 
     def predict_scores(self, *, node_features: Any, pairs: Any) -> np.ndarray:
         return np.asarray(
-            self._native.predict_scores(
-                _f32_matrix(node_features, "node_features"),
-                _edge_pairs(pairs),
+            self._native.predict_scores_arrays(
+                _f32_matrix_array(node_features, "node_features"),
+                _edge_pairs_array(pairs),
             ),
             dtype=np.float64,
         )
@@ -803,26 +811,71 @@ def _f32_matrix(values: Any, name: str) -> list[list[float]]:
 
 
 def _u64_list(values: Any, name: str) -> list[int]:
-    array = np.asarray(values, dtype=np.uint64)
+    array = _integer_array(values)
     if array.ndim != 1:
         raise ValueError(f"{name} must be 1D")
-    return [int(value) for value in array]
+    return _integer_values(array, name, minimum=0, maximum=2**64 - 1)
 
 
 def _usize_list(values: Any, name: str) -> list[int]:
-    array = np.asarray(values, dtype=np.int64)
+    array = _integer_array(values)
     if array.ndim != 1:
         raise ValueError(f"{name} must be 1D")
-    if np.any(array < 0):
-        raise ValueError(f"{name} must contain non-negative node ids")
-    return [int(value) for value in array]
+    return _integer_values(array, name, minimum=0, maximum=int(np.iinfo(np.uintp).max))
 
 
 def _int_list(values: Any, name: str) -> list[int]:
-    array = np.asarray(values, dtype=np.int64)
+    array = _integer_array(values)
     if array.ndim != 1:
         raise ValueError(f"{name} must be 1D")
-    return [int(value) for value in array]
+    return _integer_values(array, name, minimum=-(2**63), maximum=2**63 - 1)
+
+
+def _integer_array(values: Any) -> np.ndarray:
+    if isinstance(values, np.ndarray) and values.dtype.kind in {"i", "u"}:
+        return values
+    to_numpy = getattr(values, "to_numpy", None)
+    if callable(to_numpy):
+        array = to_numpy()
+        if array.dtype.kind in {"i", "u", "O"}:
+            return array
+        # A table containing both uint64 and int64 columns may materialize as
+        # float64. Recover the original values, never the already rounded array.
+        module = type(values).__module__.split(".", 1)[0]
+        if module == "pandas":
+            return to_numpy(dtype=object)
+        if module == "polars":
+            originals = values.rows() if array.ndim == 2 else values.to_list()
+            return np.asarray(originals, dtype=object).reshape(array.shape)
+    # Avoid coercing mixed Python integer lists through floating point, which
+    # loses precision for valid u64 identifiers above 2**53.
+    return np.asarray(values, dtype=object)
+
+
+def _integer_values(array: np.ndarray, name: str, *, minimum: int, maximum: int) -> list[int]:
+    if array.dtype.kind in {"i", "u"}:
+        bounds = np.iinfo(array.dtype)
+        if bounds.min < minimum and np.any(array < minimum):
+            if minimum == 0:
+                raise ValueError(f"{name} must contain non-negative ids")
+            raise ValueError(f"{name} integers are outside the supported range")
+        if bounds.max > maximum and np.any(array > maximum):
+            raise ValueError(f"{name} integers are outside the supported range")
+        return array.reshape(-1).tolist()
+    integers = []
+    for value in array.flat:
+        try:
+            integer = int(value)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(f"{name} must contain finite integers") from exc
+        if not isinstance(value, (str, bytes, np.str_, np.bytes_)) and integer != value:
+            raise ValueError(f"{name} must contain finite integers")
+        if minimum == 0 and integer < 0:
+            raise ValueError(f"{name} must contain non-negative ids")
+        if not minimum <= integer <= maximum:
+            raise ValueError(f"{name} integers are outside the supported range")
+        integers.append(integer)
+    return integers
 
 
 def _f64_list(values: Any, name: str) -> list[float]:
@@ -844,18 +897,96 @@ def _f32_list(values: Any, name: str) -> list[float]:
 
 
 def _edge_pairs(values: Any) -> list[tuple[int, int]]:
-    array = np.asarray(values, dtype=np.int64)
+    array = _integer_array(values)
     if array.ndim != 2 or array.shape[1] != 2:
         raise ValueError("edges must be a 2D array-like with shape (n_edges, 2)")
-    if np.any(array < 0):
-        raise ValueError("edges must contain non-negative node ids")
-    return [(int(source), int(target)) for source, target in array]
+    integers = _integer_values(array, "edges", minimum=0, maximum=int(np.iinfo(np.uintp).max))
+    return list(zip(integers[::2], integers[1::2], strict=True))
 
 
 def _typed_edges(values: Any) -> list[tuple[int, int, int]]:
-    array = np.asarray(values, dtype=np.int64)
+    array = _integer_array(values)
     if array.ndim != 2 or array.shape[1] != 3:
         raise ValueError("typed edges must be a 2D array-like with shape (n_edges, 3)")
-    if np.any(array < 0):
-        raise ValueError("typed edges must contain non-negative ids")
-    return [(int(source), int(target), int(relation)) for source, target, relation in array]
+    integers = _integer_values(array, "typed edges", minimum=0, maximum=int(np.iinfo(np.uintp).max))
+    return list(zip(integers[::3], integers[1::3], integers[2::3], strict=True))
+
+
+def _integer_typed_array(values: Any, name: str, dtype: Any) -> np.ndarray:
+    array = _integer_array(values)
+    bounds = np.iinfo(dtype)
+    if array.dtype.kind in {"i", "u"}:
+        source = np.iinfo(array.dtype)
+        if source.min < bounds.min and np.any(array < bounds.min):
+            raise ValueError(f"{name} must contain non-negative ids")
+        if source.max > bounds.max and np.any(array > bounds.max):
+            raise ValueError(f"{name} integers are outside the supported range")
+        return np.ascontiguousarray(array, dtype=dtype)
+    values = _integer_values(array, name, minimum=int(bounds.min), maximum=int(bounds.max))
+    return np.asarray(values, dtype=dtype).reshape(array.shape)
+
+
+def _u64_array(values: Any, name: str) -> np.ndarray:
+    array = _integer_typed_array(values, name, np.uint64)
+    if array.ndim != 1:
+        raise ValueError(f"{name} must be 1D")
+    return array
+
+
+def _usize_array(values: Any, name: str) -> np.ndarray:
+    array = _integer_typed_array(values, name, np.uintp)
+    if array.ndim != 1:
+        raise ValueError(f"{name} must be 1D")
+    return array
+
+
+def _f64_array(values: Any, name: str) -> np.ndarray:
+    array = np.asarray(values, dtype=np.float64)
+    if array.ndim != 1:
+        raise ValueError(f"{name} must be 1D")
+    if not np.all(np.isfinite(array)):
+        raise ValueError(f"{name} must contain only finite values")
+    return np.ascontiguousarray(array)
+
+
+def _f32_array(values: Any, name: str) -> np.ndarray:
+    array = np.asarray(values, dtype=np.float32)
+    if array.ndim != 1:
+        raise ValueError(f"{name} must be 1D")
+    if not np.all(np.isfinite(array)):
+        raise ValueError(f"{name} must contain only finite values")
+    return np.ascontiguousarray(array)
+
+
+def _f32_matrix_array(values: Any, name: str) -> np.ndarray:
+    array = np.asarray(values, dtype=np.float32)
+    if array.ndim != 2:
+        raise ValueError(f"{name} must be 2D")
+    if not np.all(np.isfinite(array)):
+        raise ValueError(f"{name} must contain only finite values")
+    return np.ascontiguousarray(array)
+
+
+def _dense_array_optional(values: Any | None) -> np.ndarray | None:
+    if values is None:
+        return None
+    array = np.asarray(values, dtype=np.float64)
+    if array.ndim != 2:
+        raise ValueError("dense must be 2D")
+    if not np.all(np.isfinite(array)):
+        raise ValueError("dense must contain only finite values")
+    return np.ascontiguousarray(array)
+
+
+def _edge_pairs_array(values: Any) -> np.ndarray:
+    array = _integer_typed_array(values, "edges", np.uintp)
+    if array.ndim != 2 or array.shape[1] != 2:
+        raise ValueError("edges must be a 2D array-like with shape (n_edges, 2)")
+    return array
+
+
+def _typed_edges_array(values: Any) -> np.ndarray:
+    array = _integer_typed_array(values, "typed edges", np.uintp)
+    if array.ndim != 2 or array.shape[1] != 3:
+        raise ValueError("typed edges must be a 2D array-like with shape (n_edges, 3)")
+    return array

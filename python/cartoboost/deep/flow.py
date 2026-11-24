@@ -42,10 +42,10 @@ class ConditionalFlowDistributionHead(ArtifactPersistenceMixin):
             graph_context=graph_context,
         )
         residual_arr = np.asarray(residuals, dtype=float).reshape(-1)
-        fit = require_native("prob_conditional_flow_fit_value")
+        fit = require_native("prob_conditional_flow_fit_arrays")
         self._artifact_json = fit(
-            hidden.tolist(),
-            residual_arr.tolist(),
+            hidden,
+            residual_arr,
             list(self.quantiles),
             self.sample_count,
             self.backend,
@@ -73,11 +73,9 @@ class ConditionalFlowDistributionHead(ArtifactPersistenceMixin):
             entity_or_pair_embeddings=entity_or_pair_embeddings,
             graph_context=graph_context,
         )
-        predict = require_native("prob_conditional_flow_predict_value")
-        actual_values = (
-            None if actual is None else np.asarray(actual, dtype=float).reshape(-1).tolist()
-        )
-        output = json.loads(predict(self._artifact_json, hidden.tolist(), actual_values))
+        predict = require_native("prob_conditional_flow_predict_arrays")
+        actual_values = None if actual is None else np.asarray(actual, dtype=float).reshape(-1)
+        output = predict(self._artifact_json, hidden, actual_values)
         return {
             "samples": np.asarray(output["samples"], dtype=float),
             "log_likelihood": np.asarray(output["log_likelihood"], dtype=float),
@@ -214,7 +212,7 @@ def _combined_hidden(
         if part.shape[0] != row_count:
             raise ValueError(f"{name} row count must match model_hidden_state")
         parts.append(part)
-    return np.concatenate(parts, axis=1)
+    return parts[0] if len(parts) == 1 else np.concatenate(parts, axis=1)
 
 
 def _uncertainty_baselines(actual: np.ndarray) -> dict[str, dict[str, float]]:

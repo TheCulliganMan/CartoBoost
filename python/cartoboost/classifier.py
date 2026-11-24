@@ -37,6 +37,7 @@ from .regressor import (
     _rust_feature_schema_json,
     _sparse_names_from_feature_schema,
     _split_policy_from_native,
+    _to_numpy,
     _transform_categorical_features,
 )
 from .regressor import (
@@ -196,7 +197,7 @@ class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
             X,
             encoded,
             feature_schema,
-            sample_weight=sample_weight,
+            sample_weight=weights_array,
         )
         if dense_array.shape[0] != labels.shape[0]:
             raise ValueError("X and y must contain the same number of rows")
@@ -206,6 +207,7 @@ class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
             feature_schema,
             categorical_encoder,
             dense_array.shape[1],
+            sparse_names,
         )
         schema_json = _rust_feature_schema_json(
             encoded_feature_schema,
@@ -304,8 +306,9 @@ class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
         if self._model is None:
             raise RuntimeError("CartoBoostClassifier is not fitted")
         dense_array, sparse_offsets, sparse_ids = self._prediction_inputs(X, sparse_sets)
+        predict = getattr(self._model, "predict_numpy", self._model.predict_arrays)
         encoded = np.asarray(
-            self._model.predict_arrays(dense_array, sparse_offsets, sparse_ids),
+            predict(dense_array, sparse_offsets, sparse_ids),
             dtype=np.int64,
         )
         return self.classes_[encoded]
@@ -327,8 +330,11 @@ class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
         if self._model is None:
             raise RuntimeError("CartoBoostClassifier is not fitted")
         dense_array, sparse_offsets, sparse_ids = self._prediction_inputs(X, sparse_sets)
+        predict_proba = getattr(
+            self._model, "predict_proba_numpy", self._model.predict_proba_arrays
+        )
         return np.asarray(
-            self._model.predict_proba_arrays(dense_array, sparse_offsets, sparse_ids),
+            predict_proba(dense_array, sparse_offsets, sparse_ids),
             dtype=float,
         )
 
@@ -349,15 +355,10 @@ class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
         if self._model is None:
             raise RuntimeError("CartoBoostClassifier is not fitted")
         dense_array, sparse_offsets, sparse_ids = self._prediction_inputs(X, sparse_sets)
-        # Native decision_function accepts list rows today; keep this path until
-        # a dedicated array binding is added.
-        if sparse_offsets or sparse_ids:
-            margins = self._model.decision_function(
-                dense_array.tolist(),
-                _decode_sparse_offsets(sparse_offsets, sparse_ids, dense_array.shape[0]),
-            )
-        else:
-            margins = self._model.decision_function(dense_array.tolist())
+        decision_function = getattr(
+            self._model, "decision_function_numpy", self._model.decision_function_arrays
+        )
+        margins = decision_function(dense_array, sparse_offsets, sparse_ids)
         margins_array = np.asarray(margins, dtype=float)
         if self.n_classes_ == 2 and margins_array.ndim == 2 and margins_array.shape[1] == 1:
             return margins_array[:, 0]
@@ -380,7 +381,7 @@ class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
         """
 
         pred = np.asarray(self.predict(X, sparse_sets=sparse_sets), dtype=object)
-        truth = np.asarray(list(y), dtype=object)
+        truth = _as_label_array(y)
         if pred.shape[0] != truth.shape[0]:
             raise ValueError("X predictions and y must have the same number of rows")
         return float(np.mean(pred == truth))
@@ -471,11 +472,16 @@ class CartoBoostClassifier(ClassifierMixin, BaseEstimator):
             native_path.write_text(json.dumps(native_payload, sort_keys=True), encoding="utf-8")
             native_model = _NativeClassifierModel.load(native_path)
         estimator = cls._from_native_model(native_model)
-        if "classes" not in inner:
+        if "classes" in inner:
+            estimator.classes_ = _object_array_1d(
+                [_decode_class_label(label) for label in inner["classes"]],
+            )
+            if len(estimator.classes_) != len(native_model.class_values):
+                raise ValueError("classifier artifact classes must match native class count")
+        elif "format" in payload or "artifact_type" in payload:
             raise ValueError("stable classifier artifact payload is missing classes")
-        estimator.classes_ = _object_array_1d(
-            [_decode_class_label(label) for label in inner["classes"]],
-        )
+        # Raw native v0.2 artifacts carry numeric class_values directly. The
+        # native reconstruction above preserves those labels during migration.
         estimator.n_classes_ = int(estimator.classes_.shape[0])
         estimator.categorical_encoder_ = inner.get("categorical_encoder")
         if estimator.categorical_encoder_:
@@ -675,9 +681,16 @@ def _encode_labels(labels: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
 
 def _as_label_array(values: Iterable[Any]) -> np.ndarray:
+    if hasattr(values, "to_numpy") or hasattr(values, "fetchnumpy"):
+        is_table = getattr(values, "columns", None) is not None
+        values = _to_numpy(values)
+        if is_table and values.ndim == 2 and values.shape[1] == 1:
+            values = values[:, 0]
     ndim = getattr(values, "ndim", None)
     if ndim is not None and int(ndim) != 1:
         raise ValueError("y must be a 1D array of class labels")
+    if isinstance(values, np.ndarray):
+        return np.asarray(values, dtype=object)
     return _object_array_1d(list(values))
 
 

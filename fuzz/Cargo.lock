@@ -30,9 +30,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
-name = "cartoboost-core"
-version = "0.3.0"
+name = "cartoboost-accelerator"
+version = "0.3.13"
 dependencies = [
+ "serde",
+ "thiserror",
+]
+
+[[package]]
+name = "cartoboost-core"
+version = "0.3.13"
+dependencies = [
+ "cartoboost-accelerator",
  "chrono",
  "rayon",
  "serde",

@@ -2,13 +2,12 @@ import {ForecastModelExample} from '@site/src/components/ModelingLabClient';
 
 # Spatial Piecewise Kriging
 
-`SpatialPiecewiseKrigingForecaster` is for panels that need both inspectable
-temporal structure and spatial borrowing. It fits a piecewise linear seasonal
-base, then uses ordinary kriging to add cutoff-safe spatial signal from stable
-coordinates.
+Combine an inspectable time-series forecast with spatial borrowing.
+`SpatialPiecewiseKrigingForecaster` fits a piecewise linear seasonal base and
+uses ordinary kriging to share information across stable coordinates.
 
-The interactive example below runs the same model when the sample table
-has stable `longitude` and `latitude` columns.
+For taxi demand, this separates a zone's trend and calendar pattern from a
+correction informed by nearby zones. The browser example exposes both parts.
 
 ## When To Use
 
@@ -18,7 +17,7 @@ Use this model when a panel has both of these mechanisms:
   future regressors that should remain inspectable;
 - nearby coordinates have related residuals or known spatial covariates.
 
-Good fits usually look like hourly demand by zone, store, or route panel where
+Good fits usually look like hourly pickup demand by zone or route where
 each series has a stable coordinate such as a centroid or midpoint.
 
 Prefer [Piecewise Linear Seasonal](piecewise-linear-seasonal.md) when geography
@@ -63,12 +62,11 @@ zone_centroids = {
 
 model = SpatialPiecewiseKrigingForecaster(
     coordinates=zone_centroids,
-    mode="hybrid",
-    spatial_regressors=["airport_queue_pressure"],
+    mode="residual_kriging",
     range=2.0,
     nugget=1.0e-6,
     max_neighbors=32,
-    min_neighbors=4,
+    min_neighbors=2,
 )
 model.fit(frame)
 forecast = model.predict(24)
@@ -127,9 +125,15 @@ uv run --group dev python scripts/forecasting_benchmark.py \
 ```
 
 Use [Forecasting Benchmarks](../../benchmarks/forecasting.md) for the maintained
-metric table and interpretation. Keep benchmark-specific labels in benchmark
-artifacts; reusable model code and public APIs should describe the generic
-spatial-temporal behavior.
+metric table, comparison settings, and interpretation.
+
+## Use When
+
+| Your task | Start with |
+| --- | --- |
+| Both temporal components and spatial borrowing matter | Spatial piecewise kriging |
+| Geography adds no useful signal | [Piecewise linear seasonal](piecewise-linear-seasonal.md) |
+| Coordinate-based borrowing is the main model | [Kriging](kriging.md) |
 
 ## Limitations
 

@@ -1,12 +1,19 @@
 # Command-Line Reference
 
-The Rust CLI trains, predicts, inspects, and evaluates models from dense numeric
-CSV files. It is available from a source checkout, not from the PyPI wheel.
-Prefix every command with `cargo run -p cartoboost-cli --`.
+Train, inspect, and score dense CSV models from a source checkout. The Rust CLI
+provides four commands; prefix each with `cargo run -p cartoboost-cli --`.
+The PyPI wheel provides the Python API rather than this executable.
 
-The CLI is intentionally narrower than the Python API. For sparse sets, graph
-features, neural residual embeddings, rolling-origin forecasting, or
-leakage-aware split generation, use the Python API and benchmark scripts.
+| Task | Command | Result |
+| --- | --- | --- |
+| Fit on training rows | [`train`](#train) | A model JSON file. |
+| Score feature rows | [`predict`](#predict) | Row-aligned predictions. |
+| Measure holdout error | [`eval`](#eval) | Mean absolute error. |
+| Inspect inputs or a saved model | [`inspect`](#inspect) | A summary without fitting. |
+
+For sparse memberships, graph or neural features, and richer in-memory inputs,
+use the [Python API](python-api.md). Timestamped demand workflows use the
+separate [forecasting script](#forecasting-script) documented below.
 
 ## `train`
 
@@ -99,7 +106,7 @@ is not a fair model-choice comparison.
 
 ## Forecasting Script
 
-Forecasting V1 is exposed through `scripts/forecast.py`:
+Use `scripts/forecast.py` for CSV forecasting from the source checkout:
 
 ```sh
 python scripts/forecast.py fit \
@@ -145,7 +152,6 @@ Forecast CSVs include `series_id`, `timestamp`, `model`, `horizon`,
 unknown model names, and missing artifact directories exit nonzero with a
 message on stderr.
 
-For scientific forecasting comparisons, prefer `compare` or `backtest` over
-manually fitting separate models. Those commands keep the forecast rows aligned
-by `series_id`, `timestamp`, and `horizon`, which is required for honest
-forecast metrics.
+Use `compare` or `backtest` to evaluate forecasts on aligned rows. These commands
+match `series_id`, `timestamp`, and `horizon`, so each model is scored against
+the same observations.

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import math
+from datetime import datetime, timedelta
 
 import cartoboost.metrics as metrics_module
+import numpy as np
 import pandas as pd
 import pytest
 from cartoboost.forecasting import ForecastMetricSet
@@ -150,3 +152,86 @@ def test_frame_evaluation_rejects_duplicate_metric_keys() -> None:
 
     with pytest.raises(ValueError, match="unique by series_id/timestamp/horizon"):
         ForecastMetricSet().evaluate_frame(frame)
+
+
+@pytest.mark.parametrize("layout", ["contiguous", "strided", "reversed"])
+@pytest.mark.parametrize("rows", [1, 17, 1024])
+def test_native_array_probability_metrics_match_legacy_lists(layout, rows):
+    from cartoboost import _native
+
+    def values(offset):
+        array = np.linspace(0.0, 0.7, rows * 2, dtype=np.float64) + offset
+        if layout == "strided":
+            return array[::2]
+        if layout == "reversed":
+            return array[:rows][::-1]
+        return array[:rows].copy()
+
+    actual, pred, weights = values(0.2), values(0.1), values(1.0)
+    lower, upper = pred - 0.3, pred + 0.3
+    cases = [
+        ("prob_pinball_loss", (actual, pred, 0.7, "cpu", weights)),
+        ("prob_interval_coverage", (actual, lower, upper, "cpu", weights)),
+        ("prob_mean_interval_width", (lower, upper, "cpu", weights)),
+        ("prob_brier_score", ((actual > 0.5).astype(float), pred, "cpu", weights)),
+        ("prob_split_conformal_residual_quantile", (actual, pred, 0.5, 1, 1, rows + 1, rows + 1)),
+        (
+            "prob_weighted_conformal_residual_quantile",
+            (actual, pred, weights, 0.5, 1, 1, rows + 1, rows + 1),
+        ),
+    ]
+    for name, args in cases:
+        legacy = tuple(value.tolist() if isinstance(value, np.ndarray) else value for value in args)
+        expected = getattr(_native, f"{name}_value")(*legacy)
+        assert getattr(_native, f"{name}_arrays")(*args) == expected
+
+
+@pytest.mark.parametrize("groups", [1, 8, 128])
+def test_grouped_metrics_keep_full_scan_reference_order_and_values(groups):
+    from cartoboost.forecasting.metrics import _grouped_metrics, _point_metrics
+
+    rng = np.random.default_rng(20261124)
+    truth = rng.normal(size=groups * 5)
+    pred = truth + rng.normal(size=len(truth)) * 0.2
+    labels = np.array([f"pickup-{index % groups}" for index in range(len(truth))])
+    order = rng.permutation(len(truth))
+    truth, pred, labels = truth[order], pred[order], labels[order]
+    expected = {
+        str(label): _point_metrics(truth[labels == label], pred[labels == label])
+        for label in np.unique(labels)
+    }
+
+    assert _grouped_metrics(truth, pred, labels) == expected
+
+
+@pytest.mark.parametrize("layout", ["contiguous", "strided", "reversed"])
+def test_forecast_metric_array_binding_preserves_mase_and_point_metrics(layout):
+    from cartoboost import _native
+
+    truth = np.linspace(-3.0, 5.0, 34)
+    pred = truth + np.sin(truth)
+    training = np.arange(20, dtype=np.float64)
+    if layout == "strided":
+        truth, pred, training = truth[::2], pred[::2], training[::2]
+    elif layout == "reversed":
+        truth, pred, training = truth[::-1], pred[::-1], training[::-1]
+    timestamps = [
+        (datetime(2025, 1, 1) + timedelta(hours=i)).isoformat() for i in range(len(truth))
+    ]
+    forecast = _native.ForecastResult(
+        [
+            ("pickup-a", timestamp, i + 1, "metric_set", float(pred[i]))
+            for i, timestamp in enumerate(timestamps)
+        ]
+    )
+    actuals = [
+        ("pickup-a", timestamp, i + 1, float(truth[i])) for i, timestamp in enumerate(timestamps)
+    ]
+    training_actuals = [
+        ("pickup-a", (datetime(2024, 1, 1) + timedelta(hours=i)).isoformat(), i + 1, float(value))
+        for i, value in enumerate(training)
+    ]
+    expected = _native.forecast_evaluate_metrics(forecast, actuals, training_actuals, 2)
+    actual = _native.forecast_evaluate_metrics_arrays(truth, pred, training, 2)
+    for name in ("mae", "rmse", "normalized_rmse", "wape", "smape", "bias", "mase"):
+        assert getattr(actual, name) == getattr(expected, name)

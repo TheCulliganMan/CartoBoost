@@ -290,7 +290,9 @@ fn compute_global_mean(dim: usize, rows: &[EmbeddingRow]) -> Vec<f32> {
 }
 
 fn compute_checksum(metadata: &EmbeddingTableMetadata, rows: &[EmbeddingRow]) -> String {
-    let mut rows = rows.to_vec();
+    // Checksums depend on ID order, but do not need copies of the embedding
+    // vectors. Sorting references keeps auxiliary storage linear in row count.
+    let mut rows = rows.iter().collect::<Vec<_>>();
     rows.sort_by_key(|row| row.id);
     let mut hasher = Sha256::new();
 
@@ -310,7 +312,7 @@ fn compute_checksum(metadata: &EmbeddingTableMetadata, rows: &[EmbeddingRow]) ->
 
     for row in rows {
         hasher.update(row.id.to_le_bytes());
-        for value in row.values {
+        for value in &row.values {
             hasher.update(value.to_le_bytes());
         }
     }

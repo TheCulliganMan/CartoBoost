@@ -1,20 +1,27 @@
+---
+sidebar_label: HinSAGE
+---
+
 import {NeuralModelExample} from '@site/src/components/ModelingLabClient';
 
 # CartoBoost HinSAGE Models
 
-Use HinSAGE when node types and relation triples are part of the modeling
-contract. It is the strictest graph surface in the user guide: edges are typed,
-nodes are typed, and allowed source-type/relation/target-type triples are
-validated.
+Enforce the meaning of a typed graph with HinSAGE. Node types, edge relations,
+and allowed source-type/relation/target-type triples are part of the input
+contract. Use it when those distinctions matter to a taxi network model and
+must be checked before fitting.
 
 ## When To Use
 
 - Node types are meaningful, not just labels.
 - Edge relation triples must be validated.
-- Direction and source-target type constraints affect the scientific claim.
+- Direction and source-target type constraints affect the modeling question.
 - You need typed graph regression or typed link scoring.
 
 ## Interactive Example
+
+Run the small example to inspect inputs and model behavior. It is a browser
+demonstration, not a benchmark on held-out taxi trips.
 
 <NeuralModelExample title="HinSAGE browser model" pipeline="hinsage" />
 

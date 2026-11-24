@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -14,7 +15,7 @@ PYTHON_SOURCE = ROOT / "python"
 if str(PYTHON_SOURCE) not in sys.path:
     sys.path.insert(0, str(PYTHON_SOURCE))
 
-from cartoboost import CartoBoostRegressor  # noqa: E402
+from cartoboost._native import CartoBoostRegressor  # noqa: E402
 
 OUT = ROOT / "docs" / "assets"
 PHASE_OUT = OUT / "splitter_tests"
@@ -32,7 +33,7 @@ def train_diagonal() -> CartoBoostRegressor:
         learning_rate=1.0,
         max_depth=1,
         min_samples_leaf=2,
-        split_policy="structured",
+        splitters=["diagonal_2d"],
     )
     model.fit(points, target)
     return model
@@ -50,7 +51,7 @@ def train_radial() -> CartoBoostRegressor:
         learning_rate=1.0,
         max_depth=1,
         min_samples_leaf=2,
-        split_policy="structured",
+        splitters=["gaussian_2d"],
     )
     model.fit(points, target)
     return model
@@ -60,7 +61,7 @@ def plot_segmentation(model: CartoBoostRegressor, path: Path, title: str) -> Non
     grid = np.linspace(-3.0, 3.0, 180)
     xx, yy = np.meshgrid(grid, grid)
     points = np.column_stack([xx.ravel(), yy.ravel()])
-    pred = model.predict(points).reshape(xx.shape)
+    pred = model.predict_arrays(points).reshape(xx.shape)
 
     fig, ax = plt.subplots(figsize=(6, 5), dpi=160)
     mesh = ax.contourf(xx, yy, pred, levels=24, cmap="coolwarm", alpha=0.92)
@@ -94,9 +95,13 @@ def fit_model(
         max_depth=max_depth,
         min_samples_leaf=min_samples_leaf,
         min_gain=0.0,
-        split_policy="structured",
+        splitters=splitters,
         leaf_predictor=leaf_predictor,
-        linear_leaf_features=linear_leaf_features,
+        linear_leaf_features=(
+            [int(feature) for feature in linear_leaf_features]
+            if linear_leaf_features is not None
+            else None
+        ),
         fuzzy=fuzzy,
         fuzzy_bandwidth=fuzzy_bandwidth,
         l2_regularization=0.0,
@@ -197,7 +202,7 @@ def phase_diagonal() -> None:
         PHASE_OUT / "phase_2_diagonal_2d.png",
         "Diagonal 2D segmentation",
         train,
-        model.predict(train),
+        model.predict_arrays(train),
         grid_size=len(values),
     )
 
@@ -212,7 +217,7 @@ def phase_gaussian() -> None:
         PHASE_OUT / "phase_3_gaussian_2d.png",
         "Gaussian radial segmentation",
         train,
-        model.predict(train),
+        model.predict_arrays(train),
         grid_size=len(values),
     )
 
@@ -344,6 +349,12 @@ def generate_phase_proofs() -> None:
 
 
 def main() -> None:
+    global OUT, PHASE_OUT
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output-dir", type=Path, default=OUT)
+    args = parser.parse_args()
+    OUT = args.output_dir
+    PHASE_OUT = OUT / "splitter_tests"
     OUT.mkdir(parents=True, exist_ok=True)
     plot_segmentation(
         train_diagonal(),

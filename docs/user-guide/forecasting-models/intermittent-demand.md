@@ -2,13 +2,14 @@ import {ForecastModelExample} from '@site/src/components/ModelingLabClient';
 
 # Intermittent Demand
 
-`CrostonForecaster`, `SbaForecaster`, and `TsbForecaster` are fixed
-intermittent-demand methods for sparse non-negative series. Use them when zero
-values are real demand periods, not missing observations.
+Croston, SBA, and TSB forecast non-negative
+series with many genuine zeros, such as pickup counts in low-volume taxi zones.
+They model event size and occurrence instead of fitting a smooth trend through
+long stretches of zero demand.
 
-The Rust `IntermittentDemandForecaster` is the corresponding selector. It
-compares an explicit zero baseline, Croston, SBA, TSB, and ADIDA when the ADIDA
-bucket is supported by the training prefix.
+The browser's `intermittent_demand` selector compares a zero baseline, Croston,
+SBA, TSB, and ADIDA when the training prefix supports its aggregation bucket.
+Use the named Python models below for a fixed method.
 
 ## When To Use
 
@@ -54,7 +55,7 @@ sba_forecast = sba.predict(6)
 tsb_forecast = tsb.predict(6)
 ```
 
-## Browser WASM Example
+## Interactive Example
 
 <ForecastModelExample title="Intermittent demand browser forecast" model="intermittent_demand" />
 

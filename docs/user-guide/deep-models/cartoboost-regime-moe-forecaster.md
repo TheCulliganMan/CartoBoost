@@ -1,11 +1,15 @@
+---
+sidebar_label: Mixture-of-experts forecaster
+---
+
 import {DeepModelWasmExample} from '@site/src/components/ModelingLabClient';
 
-# CartoBoost RegimeMoEForecaster
+# Regime Mixture-of-Experts Forecaster
 
-Use `RegimeMoEForecaster` when one global model hides materially different
-geo-temporal regimes. The public surface exposes six named experts: stable
-recurring pattern, sparse cold-start, high-volume hub, volatile shock,
-long-distance pair, and low-signal fallback.
+Let different experts handle recurring patterns, sparse routes, busy hubs,
+shocks, long-distance pairs, and low-signal observations with
+`RegimeMoEForecaster`. Inspect both the combined prediction and expert usage:
+a useful mixture needs distinct, repeatable behavior across its regimes.
 
 ## Python Example
 
@@ -27,16 +31,30 @@ prediction = parts["combined_prediction"]
 ```
 
 `GeoTemporalMixtureOfExperts`, `PairRegimeRouter`, and `EntityRegimeRouter`
-are aliases for this first-cut MoE surface.
+are aliases for the same mixture-of-experts model. Training stores the reference
+mean and first-feature median used by the experts, so a row has the same prediction
+alone or in a batch. Supply recent residuals explicitly when using that router input;
+training targets are never used as prediction-time features.
 
-## Browser WASM Example
+Artifacts preserve the fitted references and backend. Legacy artifacts load with
+a warning and retain their original batch-dependent behavior; refit them to use
+batch-independent predictions. `train_metrics` reports the fitted model's actual
+training predictions. Use held-out data to compare forecast quality.
+
+## Interactive Example
+
+Run the small example to inspect inputs and model behavior. It is a browser
+demonstration, not a benchmark on held-out taxi trips.
 
 <DeepModelWasmExample model="RegimeMoEForecaster" />
 
 ## Use When
 
-Use this model when distinct, repeatable regimes are plausible and expert
-usage can be inspected. Prefer one model when the router collapses.
+| Your task | Start with |
+| --- | --- |
+| Distinct recurring regimes and inspectable expert usage. | `RegimeMoEForecaster` |
+| A single model explains row-level variation. | [CartoBoost Regressor](../boosting-models/cartoboost-regressor.md) |
+| Repeated ordered pickup/dropoff pairs. | [DirectionalPairForecaster](cartoboost-directional-pair-forecaster.md) |
 
 ## Validation
 

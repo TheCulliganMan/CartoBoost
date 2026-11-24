@@ -2,11 +2,11 @@ import {ForecastModelExample} from '@site/src/components/ModelingLabClient';
 
 # N-BEATS And N-HiTS
 
-`NBeatsForecaster` and `NHiTSForecaster` are deterministic neural forecasting
-experts for regular forecast windows. Use them when you want a neural baseline
-for a clean, evenly spaced series or panel, and compare them against seasonal
-naive, local statistical models, and `CartoBoostLagForecaster` on the same
-rolling-origin split.
+Learn from fixed history windows with `NBeatsForecaster` and
+`NHiTSForecaster`. These neural models provide a comparison for regular taxi
+pickup series: N-BEATS projects recent history, while N-HiTS can pool history
+to capture smoother or longer-horizon structure. Evaluate both beside seasonal
+naive, local statistical models, and CartoBoost lag.
 
 ## When To Use
 
@@ -52,7 +52,7 @@ nhits.fit(frame)
 nhits_forecast = nhits.predict(12)
 ```
 
-## Browser WASM Example
+## Interactive Example
 
 <ForecastModelExample title="N-BEATS browser forecast" model="nbeats" />
 

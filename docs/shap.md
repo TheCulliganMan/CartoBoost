@@ -1,26 +1,26 @@
-# SHAP Support
+# SHAP Explanations
 
-SHAP explanations help audit fitted CartoBoost models after training. For
-taxi-trip studies, use them to ask which modeled covariates contributed to a
-prediction: distance, hour, pickup/dropoff memberships, graph-derived columns,
-neural embedding columns, or fitted tree weights.
+Inspect how fitted features contribute to a taxi-trip prediction. SHAP can
+help explain the effect of trip distance, hour, pickup/dropoff memberships,
+and generated graph or neural columns. It explains the fitted model; it does
+not establish causality.
 
-SHAP is an explanation layer, not a new model and not proof of causality. It is
-most useful after the validation design is fixed, because explanations inherit
-the same feature-generation choices, split protocol, and data limitations as
-the model being explained.
+Choose the decomposition that matches your question:
 
-Install the optional dependency before using SHAP:
+| Question | Explanation |
+| --- | --- |
+| Which input columns contributed? | Feature decomposition. |
+| Which fitted trees contributed? | Weight decomposition. |
+| Do contributions reconstruct the prediction? | [Additivity check](#additivity-check). |
+
+Install SHAP only when you need it:
 
 ```sh
 uv add shap
 ```
 
-For a source checkout:
-
-```sh
-uv sync --group dev
-```
+For a source checkout, `uv sync --group dev` prepares the development environment.
+Fix the validation split and feature definitions before interpreting explanations.
 
 ## When To Use It
 
@@ -230,7 +230,7 @@ reconstructed = explanation.base_values + explanation.values.sum(axis=1)
 This additivity property is the main sanity check for dense and sparse-set
 explanations.
 
-## Current Limits
+## Limitations {#current-limits}
 
 - CartoBoost estimators are callable after fitting, so `shap.Explainer(model,
   background)` works directly for dense prediction workflows.

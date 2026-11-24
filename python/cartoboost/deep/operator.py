@@ -41,17 +41,15 @@ class GraphNeuralOperator:
             if exogenous_fields is None
             else _matrix(exogenous_fields, "exogenous_fields")
         )
-        predict = require_native("deep_graph_neural_operator_predict_value")
-        output = json.loads(
-            predict(
-                json.dumps(fields.tolist()),
-                json.dumps(coords.tolist()),
-                _edges(edges),
-                json.dumps(exogenous.tolist()),
-                self.smoothing,
-                self.coordinate_scale,
-                self.backend,
-            )
+        predict = require_native("deep_graph_neural_operator_predict_arrays")
+        output = predict(
+            fields,
+            coords,
+            _edges(edges),
+            exogenous,
+            self.smoothing,
+            self.coordinate_scale,
+            self.backend,
         )
         self.metadata_ = dict(output["metadata"])
         self.backend_ = str(self.metadata_["backend_selected"])

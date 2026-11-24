@@ -1,3 +1,5 @@
+mod spatial_system;
+
 pub use cartoboost_geo_core::SpatialWeights;
 use cartoboost_neural::{
     backend_affine_scores, backend_csr_diffusion_f32, backend_dense_layer_f32, select_backend,
@@ -112,6 +114,8 @@ pub struct SpatialRegressionModel {
     diagnostics: SpatialDiagnostics,
     #[serde(default = "default_backend_selection")]
     backend: BackendSelection,
+    #[serde(skip)]
+    solve_cache: spatial_system::SpatialSolveCache,
 }
 
 fn default_backend_selection() -> BackendSelection {
@@ -183,7 +187,13 @@ impl SpatialRegressionModel {
             }
         }
         if let Some(rho) = self.rho {
-            pred = solve_spatial_lag_mean_with_backend(pred, rho, weights, &self.backend)?;
+            pred = if self.backend.selected == "cpu"
+                || weights.indices.len() < SPATIAL_SPARSE_DISPATCH_MIN_EDGES
+            {
+                self.solve_cache.solve(pred, rho, weights)?
+            } else {
+                solve_spatial_lag_mean_with_backend(pred, rho, weights, &self.backend)?
+            };
         }
         // A spatial-error coefficient changes the disturbance covariance, not E[y | X].
         // Training innovations must not be reused to correct arbitrary prediction rows.
@@ -696,6 +706,7 @@ fn finish_model(
         total_effects,
     };
     Ok(SpatialRegressionModel {
+        solve_cache: Default::default(),
         kind,
         intercept,
         coefficients,
@@ -1435,7 +1446,7 @@ fn validate_xy(x: &[Vec<f64>], y: &[f64], weights: &SpatialWeights) -> Result<()
 
 fn validate_weights_structure(weights: &SpatialWeights) -> Result<()> {
     if weights.n_nodes == 0
-        || weights.indptr.len() != weights.n_nodes + 1
+        || weights.n_nodes.checked_add(1) != Some(weights.indptr.len())
         || weights.indptr.first().copied() != Some(0)
         || weights.indptr.last().copied() != Some(weights.indices.len())
         || weights.indices.len() != weights.data.len()
@@ -1885,6 +1896,7 @@ mod tests {
         let weights = spatial_weights_from_coo(2, 2, vec![0, 1], vec![1, 0], vec![1.0, 1.0], true)
             .expect("weights");
         let model = SpatialRegressionModel {
+            solve_cache: Default::default(),
             kind: SpatialModelKind::SpatialLag,
             intercept: 1.0,
             coefficients: vec![2.0],
@@ -1909,6 +1921,7 @@ mod tests {
         let weights = spatial_weights_from_coo(2, 2, vec![0, 1], vec![1, 0], vec![1.0, 1.0], true)
             .expect("weights");
         let model = SpatialRegressionModel {
+            solve_cache: Default::default(),
             kind: SpatialModelKind::SpatialError,
             intercept: 1.0,
             coefficients: vec![2.0],

@@ -166,3 +166,38 @@ def test_invariant_risk_encoder_improves_heldout_region_and_warns() -> None:
     assert DomainAdversarialGeoEncoder is InvariantRiskEncoder
     assert CounterfactualRepresentationNet is InvariantRiskEncoder
     assert TreatmentEffectRepresentationHead is InvariantRiskEncoder
+
+
+@pytest.mark.parametrize("backend", ["pandas", "polars"])
+def test_panel_table_projection_preserves_mixed_records(backend):
+    table = pytest.importorskip(backend)
+    rows = [dict(row, trip_distance=1.75, unused=[1, 2]) for row in _known_effect_rows()]
+    records = GeoCausalPanel(rows, covariate_cols=["trip_distance"])
+    projected = GeoCausalPanel(table.DataFrame(rows), covariate_cols=["trip_distance"])
+    assert projected.rows == records.rows
+    model = SyntheticDIDEstimator(intervention_time="2026-01-04")
+    assert model.fit(projected).predict() == model.fit(records).predict()
+
+
+def test_representation_arrays_preserve_rust_report_across_layouts():
+    import json
+
+    import numpy as np
+    from cartoboost import _native
+
+    rng = np.random.default_rng(12)
+    x = rng.normal(size=(36, 3))
+    y = x[:, 0] - x[:, 1]
+    regions = np.repeat(["a", "b", "c"], 12)
+    model = InvariantRiskEncoder()
+    for indexes in [slice(None), slice(None, None, -1), slice(None, None, 2)]:
+        x_part, y_part, region_part = x[indexes], y[indexes], regions[indexes]
+        expected = json.loads(
+            _native.geo_causal_representation_report_value(
+                x_part.tolist(), y_part.tolist(), region_part.tolist(), "c", "cpu"
+            )
+        )
+        for layout in [x_part, np.asfortranarray(x_part)]:
+            assert model.fit_report(layout, y_part, region_part, heldout_region="c") == expected
+    with pytest.raises(ValueError, match="real"):
+        model.fit_report(x + 1j, y, regions, heldout_region="c")

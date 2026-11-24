@@ -1,10 +1,17 @@
+---
+sidebar_label: Geotemporal diffusion
+---
+
 import {DeepModelWasmExample} from '@site/src/components/ModelingLabClient';
 
-# CartoBoost GeoTemporalDiffusionScenarioModel
+# Geotemporal Diffusion Scenarios
 
-Use `GeoTemporalDiffusionScenarioModel` for experimental graph-wide residual
-scenario generation around an existing point forecast. It is not a replacement
-for the point forecaster and is excluded from stable model selection.
+Explore graph-wide shocks around an existing point forecast with
+`GeoTemporalDiffusionScenarioModel`. A scenario can vary demand across connected
+taxi zones while retaining the supplied forecast as its center.
+
+This is an experimental scenario generator. Its synthetic evidence supports
+mechanism checks, not calibrated probabilities for real demand shocks.
 
 ## Python Example
 
@@ -26,10 +33,16 @@ scenarios = model.generate(
 
 ## Use When
 
-Use this experimental model for stress scenarios around an existing point
-forecast on a known graph. Do not use it as the primary point forecaster.
+| Your task | Start with |
+| --- | --- |
+| Sensitivity to graph-wide residual shocks. | `GeoTemporalDiffusionScenarioModel` |
+| The primary directed-graph point forecast. | [SpatioTemporalGraphForecaster](cartoboost-spatiotemporal-graph-forecaster.md) |
+| Intervals with explicit held-out calibration. | [Probabilistic and conformal models](../forecasting-models/probabilistic-conformal.md) |
 
-## Browser WASM Example
+## Interactive Example
+
+Run the small example to inspect inputs and model behavior. It is a browser
+demonstration, not a benchmark on held-out taxi trips.
 
 <DeepModelWasmExample model="GeoTemporalDiffusionScenarioModel" />
 

@@ -65,7 +65,7 @@ def test_duckdb_relation_sample_weight_matches_numpy_path():
         max_depth=1,
         min_samples_leaf=1,
         min_gain=0.0,
-        splitters=["axis"],
+        split_policy="axis_only",
     )
     duckdb_model = CartoBoostRegressor(**config)
     numpy_model = CartoBoostRegressor(**config)
@@ -105,17 +105,30 @@ def test_duckdb_sparse_set_relation_train_predict_matches_dict_path():
         max_depth=1,
         min_samples_leaf=1,
         min_gain=0.0,
-        splitters=["sparse_set"],
+        split_policy="structured",
     )
     duckdb_model = CartoBoostRegressor(**config)
     dict_model = CartoBoostRegressor(**config)
 
-    _fit_or_skip(duckdb_model, x, y, sparse_sets=sparse_sets)
+    _fit_or_skip(
+        duckdb_model,
+        x,
+        y,
+        sparse_sets=sparse_sets,
+        feature_schema={
+            "dense": [("feature_0", "numeric")],
+            "sparse_sets": [("taxi_zones", "sparse_set")],
+        },
+    )
     _fit_or_skip(
         dict_model,
         x.fetchnumpy()["bias"].reshape(-1, 1),
         y.fetchnumpy()["target"],
         sparse_sets=dict_sparse_sets,
+        feature_schema={
+            "dense": [("feature_0", "numeric")],
+            "sparse_sets": [("taxi_zones", "sparse_set")],
+        },
     )
 
     assert duckdb_model.sparse_set_names_ == ["taxi_zones"]
@@ -155,9 +168,18 @@ def test_duckdb_sparse_shap_adapter_accepts_relations():
         learning_rate=0.5,
         max_depth=1,
         min_samples_leaf=1,
-        splitters=["sparse_set"],
+        split_policy="structured",
     )
-    _fit_or_skip(model, x, y, sparse_sets=sparse_sets)
+    _fit_or_skip(
+        model,
+        x,
+        y,
+        sparse_sets=sparse_sets,
+        feature_schema={
+            "dense": [("feature_0", "numeric")],
+            "sparse_sets": [("route_cells", "sparse_set")],
+        },
+    )
 
     explanation = model.explain_shap(
         x.limit(2),
@@ -176,3 +198,31 @@ def test_duckdb_sparse_shap_adapter_accepts_relations():
         "taxi_zones=11",
     ]
     assert reconstructed == pytest.approx(model.predict(x.limit(2), sparse_sets=sparse_head))
+
+
+@pytest.mark.parametrize("input_name", ["X", "y", "sample_weight"])
+def test_duckdb_numeric_nulls_are_not_silently_replaced_by_masked_backing_data(input_name):
+    inputs = {"X": [[0.0], [1.0]], "y": [0.0, 1.0], "sample_weight": [1.0, 1.0]}
+    inputs[input_name] = duckdb.sql("select * from (values (1.0), (NULL)) as rows(value)")
+    with pytest.raises(ValueError, match="finite"):
+        CartoBoostRegressor(n_estimators=1).fit(**inputs)
+
+
+def test_duckdb_prediction_null_matches_numpy_nan():
+    model = CartoBoostRegressor(n_estimators=2, min_samples_leaf=1).fit(
+        [[0.0], [1.0], [2.0], [3.0]], [0.0, 1.0, 2.0, 3.0]
+    )
+    relation = duckdb.sql("select * from (values (1.0), (NULL)) as rows(value)")
+    for values in (relation, [[1.0], [np.nan]]):
+        with pytest.raises(ValueError, match="finite"):
+            model.predict(values)
+
+
+def test_duckdb_connection_result_can_be_consumed_once_for_fit():
+    connection = duckdb.connect()
+    try:
+        query = connection.execute("select * from (values (0.0), (1.0)) as rows(value)")
+        model = CartoBoostRegressor(n_estimators=1, min_samples_leaf=1).fit(query, [0.0, 1.0])
+        assert model.predict([[0.0], [1.0]]).shape == (2,)
+    finally:
+        connection.close()

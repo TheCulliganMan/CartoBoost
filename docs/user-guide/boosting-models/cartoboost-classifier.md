@@ -2,10 +2,13 @@ import {RegressionModelExample} from '@site/src/components/ModelingLabClient';
 
 # CartoBoost Classifier
 
-Use `CartoBoostClassifier` for binary or multiclass labels when the decision
-boundary may depend on time, location, route membership, or sparse signals.
-It fits binary logistic loss for two classes and multiclass logistic loss for
-three or more classes.
+Predict a class and its probability with `CartoBoostClassifier`. A taxi-trip
+label might indicate whether a journey exceeds a duration threshold; pickup
+zone, hour, and route features can help define the decision boundary.
+
+The estimator uses binary logistic loss for two classes and multiclass logistic
+loss for three or more. Check probability calibration on held-out trips before
+using a probability as a decision threshold.
 
 ## Python Example
 
@@ -24,14 +27,13 @@ clf.fit(X_train, binary_label)
 prob_positive = clf.predict_proba(X_test)[:, list(clf.classes_).index(1)]
 ```
 
-## Browser WASM Example
+## Interactive Example
 
-The browser bundle currently exposes the shared boosted-tree runner through
-`runRegressionModel`. Use this example to inspect the same splitter, loss, and
-visualization path in WASM; use the Python classifier API above for class-label
-training and probability calibration.
+Explore shared tree-splitting behavior on a numeric target below. This browser
+example runs regression; use the Python classifier above to train labels and
+evaluate class probabilities.
 
-<RegressionModelExample title="Boosted tree browser classifier analog" mode="auto" loss="log_l2" />
+<RegressionModelExample title="Explore boosted-tree splits" mode="auto" loss="log_l2" />
 
 ## Use When
 

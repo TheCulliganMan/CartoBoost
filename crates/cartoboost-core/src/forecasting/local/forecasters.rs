@@ -1,7 +1,34 @@
 impl Forecaster for NaiveForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
         let observed = frame.observed_target_frame(self.model_name())?;
-        self.fitted = Some(FittedLocalState::from_frame_with_anchor(&observed, frame));
+        let fitted = FittedLocalState::from_frame_with_anchor(&observed, frame);
+        let mut intervals = self
+            .intervals
+            .as_ref()
+            .map(ResidualForecastIntervals::reset);
+        if let Some(calibration) = &mut intervals {
+            for (series_id, history) in &fitted.history_by_series {
+                calibration.fit_series(
+                    series_id,
+                    history
+                        .windows(2)
+                        .filter(|rows| {
+                            rows[1].timestamp - rows[0].timestamp == frame.frequency().step()
+                        })
+                        .map(|rows| rows[1].target - rows[0].target),
+                )?;
+                let last = history.last().expect("observed series is nonempty");
+                let anchor = fitted.anchor_timestamp_by_series[series_id];
+                if anchor != last.timestamp {
+                    let elapsed = anchor - last.timestamp;
+                    let age = elapsed.num_seconds() as f64
+                        / frame.frequency().step().num_seconds() as f64;
+                    calibration.origin_age_steps.insert(series_id.clone(), age);
+                }
+            }
+        }
+        self.intervals = intervals;
+        self.fitted = Some(fitted);
         Ok(())
     }
 
@@ -41,7 +68,7 @@ impl Forecaster for NaiveForecaster {
         for series in series_predictions {
             predictions.extend(series);
         }
-        ForecastResult::new(predictions)
+        residual_interval_result(predictions, self.intervals.as_ref(), 1)
     }
 
     fn model_name(&self) -> &'static str {
@@ -49,7 +76,11 @@ impl Forecaster for NaiveForecaster {
     }
 
     fn metadata(&self) -> Value {
-        json!({"model": self.model_name()})
+        let mut metadata = json!({"model": self.model_name()});
+        if let Some(calibration) = &self.intervals {
+            metadata["prediction_intervals"] = calibration.metadata("sqrt_horizon");
+        }
+        metadata
     }
 }
 
@@ -63,6 +94,23 @@ impl Forecaster for SeasonalNaiveForecaster {
             self.model_name(),
             "one complete requested season",
         )?;
+        let mut intervals = self
+            .intervals
+            .as_ref()
+            .map(ResidualForecastIntervals::reset);
+        if let Some(calibration) = &mut intervals {
+            for (series_id, history) in &fitted.history_by_series {
+                calibration.fit_series(
+                    series_id,
+                    history
+                        .iter()
+                        .skip(self.season_length)
+                        .zip(history)
+                        .map(|(row, prior)| row.target - prior.target),
+                )?;
+            }
+        }
+        self.intervals = intervals;
         self.fitted = Some(fitted);
         Ok(())
     }
@@ -100,7 +148,7 @@ impl Forecaster for SeasonalNaiveForecaster {
         for series in series_predictions {
             predictions.extend(series);
         }
-        ForecastResult::new(predictions)
+        residual_interval_result(predictions, self.intervals.as_ref(), self.season_length)
     }
 
     fn model_name(&self) -> &'static str {
@@ -108,7 +156,11 @@ impl Forecaster for SeasonalNaiveForecaster {
     }
 
     fn metadata(&self) -> Value {
-        json!({"model": self.model_name(), "season_length": self.season_length})
+        let mut metadata = json!({"model": self.model_name(), "season_length": self.season_length});
+        if let Some(calibration) = &self.intervals {
+            metadata["prediction_intervals"] = calibration.metadata("sqrt_seasonal_recurrences");
+        }
+        metadata
     }
 }
 
@@ -258,12 +310,18 @@ impl Forecaster for SeasonalWindowAverageForecaster {
 impl Forecaster for ThetaForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
         frame.require_regular_for_model(self.model_name())?;
-        self.fitted = Some(FittedThetaState::from_frame(
-            frame,
-            self.theta,
-            self.alpha,
-            self.seasonality,
-        )?);
+        let fitted = FittedThetaState::from_frame(frame, self.theta, self.alpha, self.seasonality)?;
+        let mut intervals = self
+            .intervals
+            .as_ref()
+            .map(ResidualForecastIntervals::reset);
+        if let Some(calibration) = &mut intervals {
+            for (series_id, series) in &fitted.series {
+                calibration.fit_series(series_id, series.residuals.iter().copied().skip(1))?;
+            }
+        }
+        self.intervals = intervals;
+        self.fitted = Some(fitted);
         Ok(())
     }
 
@@ -276,13 +334,18 @@ impl Forecaster for ThetaForecaster {
     }
 
     fn metadata(&self) -> Value {
-        json!({
+        let mut metadata = json!({
             "model": self.model_name(),
             "theta": self.theta,
             "alpha": self.alpha,
             "seasonality": self.seasonality.map(ThetaSeasonality::name),
             "season_length": self.seasonality.map(|seasonality| seasonality.season_length),
-        })
+        });
+        if let Some(calibration) = &self.intervals {
+            metadata["prediction_intervals"] =
+                calibration.metadata("constant_residual_approximation");
+        }
+        metadata
     }
 }
 
@@ -352,7 +415,13 @@ impl Forecaster for OptimizedThetaForecaster {
         let (_, theta, alpha) = best.ok_or_else(|| {
             CartoBoostError::InvalidInput("theta validation grid must not be empty".to_string())
         })?;
-        let mut fitted = ThetaForecaster::with_seasonality(theta.0, alpha.0, self.seasonality)?;
+        let mut fitted = ThetaForecaster::with_seasonality(theta.0, alpha.0, self.seasonality)?
+            .with_prediction_interval_levels(
+                self.intervals
+                    .as_ref()
+                    .map(|value| value.levels.clone())
+                    .unwrap_or_default(),
+            )?;
         fitted.fit(frame)?;
         self.selected_theta = Some(theta.0);
         self.selected_alpha = Some(alpha.0);
@@ -372,7 +441,7 @@ impl Forecaster for OptimizedThetaForecaster {
     }
 
     fn metadata(&self) -> Value {
-        json!({
+        let mut metadata = json!({
             "model": self.model_name(),
             "selected_theta": self.selected_theta,
             "selected_alpha": self.selected_alpha,
@@ -382,7 +451,12 @@ impl Forecaster for OptimizedThetaForecaster {
             "validation_scores": self.validation_scores.iter().map(|score| {
                 json!({"theta": score.theta, "alpha": score.alpha, "mse": score.mse})
             }).collect::<Vec<_>>(),
-        })
+        });
+        if let Some(calibration) = &self.intervals {
+            metadata["prediction_intervals"] =
+                calibration.metadata("constant_residual_approximation");
+        }
+        metadata
     }
 }
 
@@ -1079,9 +1153,9 @@ impl Forecaster for KrigingForecaster {
             self.config,
             Some(&self.backend.selected),
         )?
-            .into_iter()
-            .map(|prediction| prediction.mean)
-            .collect::<Vec<_>>();
+        .into_iter()
+        .map(|prediction| prediction.mean)
+        .collect::<Vec<_>>();
         let predictions = series_ids
             .into_par_iter()
             .zip(means)
@@ -1367,11 +1441,14 @@ impl Forecaster for PiecewiseLinearSeasonalForecaster {
     fn fit(&mut self, frame: &ForecastFrame) -> Result<()> {
         let observed = frame.observed_target_frame(self.model_name())?;
         let resolved_config = resolve_piecewise_auto_seasonalities(&observed, &self.config);
-        self.fitted = Some(FittedPiecewiseLinearSeasonalState::from_frame_with_anchor(
-            &observed,
-            frame,
-            resolved_config.clone(),
-        )?);
+        self.fitted = Some(Arc::new(
+            FittedPiecewiseLinearSeasonalState::from_frame_with_anchor(
+                &observed,
+                frame,
+                resolved_config.clone(),
+                &self.regressor_standardization_by_name,
+            )?,
+        ));
         self.config = resolved_config;
         Ok(())
     }
@@ -1390,7 +1467,7 @@ impl Forecaster for PiecewiseLinearSeasonalForecaster {
         let residual_rmse = self
             .fitted
             .as_ref()
-            .map(FittedPiecewiseLinearSeasonalState::root_mean_squared_residual);
+            .map(|fitted| fitted.root_mean_squared_residual());
         let mut metadata = json!({
             "model": self.model_name(),
             "growth": self.config.growth.name(),
@@ -1493,4 +1570,3 @@ impl Forecaster for PiecewiseLinearSeasonalForecaster {
         metadata
     }
 }
-

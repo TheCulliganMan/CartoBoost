@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import random
 import tempfile
 
 import numpy as np
+import pytest
 from cartoboost.accelerators import available_backends
 from cartoboost.graph import (
     DirectedMetaPath,
@@ -125,6 +127,17 @@ def test_signed_sampler_returns_fewer_negatives_when_source_is_dense() -> None:
     assert sampled == {edge: [] for edge in edges}
 
 
+def test_signed_sampler_preserves_seeded_draws_for_repeated_sources() -> None:
+    edges = [(0, 1), (0, 2), (1, 2), (0, 3), (1, 3), (2, 0)]
+    for seed in (0, 7, 91):
+        rng = random.Random(seed)
+        expected = {}
+        for source, target in edges:
+            candidates = [node for node in range(6) if (source, node) not in edges]
+            expected[(source, target)] = [(source, node) for node in rng.sample(candidates, 3)]
+        assert SignedEdgeSampler(negative_samples=3, seed=seed).sample(6, edges) == expected
+
+
 def test_graph_metrics_match_simple_reference() -> None:
     labels = [1, 0, 1, 0]
     scores = [0.9, 0.1, 0.8, 0.2]
@@ -142,6 +155,48 @@ def test_graph_metrics_match_simple_reference() -> None:
     assert report["auc"] > 0.8
     assert report["average_precision"] > 0.9
     assert report["mean_reciprocal_rank"] > 0.8
+
+
+def test_graph_native_metrics_preserve_ties_interleaved_groups_and_empty_groups():
+    labels = [0, 0, 1, 1, 0]
+    scores = [2.0, 9.0, 2.0, 1.0, 0.0]
+    queries = [("a", 1), None, ("a", 1), "b", None]
+    assert mean_reciprocal_rank(labels, scores, queries) == 0.75
+    assert mean_reciprocal_rank([], [], []) == 0.0
+    assert mean_reciprocal_rank([0], [2.0], ["empty"]) == 0.0
+    assert binary_auc([], []) == 0.0
+    assert binary_auc([1, 1], [0.0, 1.0]) == 0.0
+    assert binary_auc([0, 1], [-0.0, 0.0]) == 0.5
+
+
+@pytest.mark.parametrize("seed", range(5))
+def test_graph_auc_and_mrr_match_pairwise_and_stable_sort_references(seed):
+    rng = np.random.default_rng(seed)
+    labels = rng.integers(0, 2, 99)
+    scores = rng.integers(-4, 5, 99).astype(float)
+    groups = rng.integers(0, 7, 99).tolist()
+    pairs = [
+        float(p > n) + 0.5 * float(p == n) for p in scores[labels == 1] for n in scores[labels == 0]
+    ]
+    assert binary_auc(labels, scores) == pytest.approx(np.mean(pairs), abs=1e-12)
+    ranks = []
+    for query in dict.fromkeys(groups):
+        ordered = sorted(
+            (row for row in range(99) if groups[row] == query),
+            key=lambda row: scores[row],
+            reverse=True,
+        )
+        positives = [rank + 1 for rank, row in enumerate(ordered) if labels[row] > 0.5]
+        if positives:
+            ranks.append(1.0 / positives[0])
+    assert mean_reciprocal_rank(labels, scores, groups) == pytest.approx(np.mean(ranks), abs=1e-12)
+
+
+def test_graph_native_metrics_reject_nonfinite_inputs():
+    with pytest.raises(ValueError, match="finite"):
+        binary_auc([0, 1], [0.0, np.nan])
+    with pytest.raises(ValueError, match="finite"):
+        mean_reciprocal_rank([0, 1], [0.0, np.inf], ["a", "a"])
 
 
 def test_graph_feature_transformer_homogeneous_fit_transform_smoke() -> None:
@@ -201,6 +256,19 @@ def test_native_node2vec_feature_encoder_fits_directed_weighted_graph() -> None:
     assert bundle.provenance["encoder"] == "node2vec"
     assert bundle.provenance["native"] == "rust"
     assert len(encoder.loss_curve()) == 2
+
+
+def test_weighted_undirected_graph_with_self_loop_matches_explicit_reverse_edges() -> None:
+    config = {"dim": 2, "walk_length": 3, "walks_per_node": 2, "epochs": 1, "seed": 19}
+    undirected = Node2VecFeatureEncoder.from_config(config).fit(
+        [(0, 0), (0, 1), (1, 2)], node_count=3, directed=False, edge_weights=[2.0, 3.0, 4.0]
+    )
+    explicit = Node2VecFeatureEncoder.from_config(config).fit(
+        [(0, 0), (0, 1), (1, 0), (1, 2), (2, 1)],
+        node_count=3,
+        edge_weights=[2.0, 3.0, 3.0, 4.0, 4.0],
+    )
+    np.testing.assert_array_equal(undirected.embeddings, explicit.embeddings)
 
 
 def test_native_node2vec_encode_returns_fitted_embeddings_and_node_ids() -> None:
@@ -762,6 +830,24 @@ def test_source_target_pair_nodes_keep_forward_and_reverse_distinct() -> None:
     ) in materialized.edges
 
 
+@pytest.mark.parametrize(
+    "edges",
+    [
+        [(1, "a", "r"), ("1", "b", "r")],
+        [("a:b", "c", "r"), ("a", "b:c", "r")],
+        [("a", "b", "r"), ("od_pair:a:b", "c", "r")],
+    ],
+)
+def test_source_target_pair_nodes_reject_colliding_ids(edges) -> None:
+    with pytest.raises(ValueError, match="collid|same pair node ID"):
+        materialize_source_target_pair_nodes(edges)
+
+
+def test_source_target_pair_nodes_preserve_unambiguous_colons() -> None:
+    result = materialize_source_target_pair_nodes([("a:b", "c", "r")])
+    assert result.pair_node_ids == [("od_pair", "a:b", "c")]
+
+
 def test_graph_feature_transformer_can_create_od_pair_nodes_with_zero_features() -> None:
     features = [[0.1, 0.2], [0.0, 0.3], [0.2, 0.7]]
     node_ids = ["taxi_trip_a", "pickup", "dropoff"]
@@ -1102,3 +1188,120 @@ def test_graph_feature_transformer_uses_true_hinsage_when_schema_is_provided() -
 
     assert bundle.embeddings.shape == (3, 2)
     assert bundle.provenance["encoder"] == "hinsage"
+
+
+@pytest.mark.parametrize("family", ["node2vec", "graphsage", "hetero", "hinsage"])
+@pytest.mark.parametrize("layout", ["contiguous", "fortran", "reversed", "strided"])
+def test_all_graph_encoder_array_endpoints_preserve_artifacts_and_outputs(family, layout, tmp_path):
+    from cartoboost import _native
+
+    features = np.array([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0], [0.5, 0.25]], dtype=np.float32)
+    edges = np.array([[0, 1], [1, 2], [2, 3], [3, 0]], dtype=np.uintp)
+    typed_edges = np.column_stack([edges, np.array([0, 1, 0, 1], dtype=np.uintp)])
+    config = dict(epochs=1, negative_samples=1, seed=31)
+    if family == "node2vec":
+        cls = _native.Node2VecEncoder
+        config.update(dim=3, walk_length=3, walks_per_node=1, window_size=2)
+        fit = dict(node_count=4, edges=edges, edge_weights=np.ones(4, dtype=np.float32))
+    else:
+        cls = {
+            "graphsage": _native.GraphSageEncoder,
+            "hetero": _native.HeteroGraphSageEncoder,
+            "hinsage": _native.HinSageEncoder,
+        }[family]
+        config.update(input_dim=2, hidden_dims=[3])
+        fit = dict(node_count=4, edges=edges, node_features=features)
+        if family == "hetero":
+            config.update(relation_count=2)
+            fit["edges"] = typed_edges
+        elif family == "hinsage":
+            config.update(node_type_count=2, edge_type_triples=[(0, 0, 1), (1, 1, 0)])
+            fit.pop("node_count")
+            fit.update(node_types=np.array([0, 1, 0, 1], dtype=np.uintp), edges=typed_edges)
+
+    def view(value):
+        if not isinstance(value, np.ndarray):
+            return value
+        if layout == "fortran":
+            return np.asfortranarray(value)
+        if layout == "reversed":
+            return value[::-1].copy()[::-1]
+        if layout == "strided":
+            return np.repeat(value, 2, axis=0)[::2]
+        return value
+
+    legacy, candidate = cls(**config), cls(**config)
+    lists = {
+        key: value.tolist() if isinstance(value, np.ndarray) else value
+        for key, value in fit.items()
+    }
+    edge_rows = lists["edges"]
+    assert isinstance(edge_rows, list)
+    lists["edges"] = [tuple(edge) for edge in edge_rows]
+    expected = legacy.fit(**lists)
+    actual = candidate.fit_arrays(**{key: view(value) for key, value in fit.items()})
+    assert actual.dtype == np.float32 and actual.shape == (4, 3) and actual.flags.c_contiguous
+    np.testing.assert_array_equal(actual, expected)
+    np.testing.assert_array_equal(candidate.loss_curve(), legacy.loss_curve())
+    assert candidate.to_artifact_json() == legacy.to_artifact_json()
+    if family == "node2vec":
+        np.testing.assert_array_equal(candidate.encode_arrays(), legacy.encode())
+    else:
+        np.testing.assert_array_equal(
+            candidate.encode_arrays(view(features)), legacy.encode(features.tolist())
+        )
+        np.testing.assert_array_equal(
+            candidate.encode_graph_arrays(**{key: view(value) for key, value in fit.items()}),
+            legacy.encode_graph(**lists),
+        )
+        with pytest.raises(ValueError):
+            candidate.encode_arrays(np.ones((4, 1), dtype=np.float32))
+    path = tmp_path / "encoder.json"
+    candidate.save_artifact_json(str(path))
+    restored = cls.load_artifact_json(str(path))
+    assert restored.to_artifact_json() == candidate.to_artifact_json()
+    if family == "hinsage":
+        pairs = np.array([[0, 1], [1, 2]], dtype=np.uintp)
+        np.testing.assert_array_equal(
+            candidate.link_embeddings_arrays(view(actual), view(pairs)),
+            legacy.link_embeddings(expected, [tuple(pair) for pair in pairs.tolist()]),
+        )
+        assert candidate.link_embeddings_arrays(actual, np.empty((0, 2), dtype=np.uintp)).shape == (
+            0,
+            12,
+        )
+        with pytest.raises(ValueError, match="shape"):
+            candidate.link_embeddings_arrays(actual, np.zeros((2, 3), dtype=np.uintp))
+
+
+def test_directional_feature_arrays_preserve_values_and_selected_names():
+    from cartoboost import _native
+
+    features = np.asfortranarray(np.arange(12, dtype=np.float32).reshape(4, 3))
+    edges = np.asfortranarray(np.array([[0, 1], [1, 2], [2, 3]], dtype=np.uintp))
+    weights = np.array([1.0, 0.5, 2.0], dtype=np.float32)
+    timestamps = np.array([0.0, 2.0, 4.0], dtype=np.float32)
+    for requested in [[], ["taxi_graph_flow_imbalance_ratio"]]:
+        expected, expected_names = _native.graph_compute_directional_features(
+            4,
+            [tuple(edge) for edge in edges.tolist()],
+            features.tolist(),
+            weights.tolist(),
+            timestamps.tolist(),
+            "taxi_graph",
+            requested,
+            "cpu",
+        )
+        actual, names = _native.graph_compute_directional_features_arrays(
+            4,
+            edges,
+            features,
+            weights,
+            timestamps,
+            "taxi_graph",
+            requested,
+            "cpu",
+        )
+        np.testing.assert_array_equal(actual, expected)
+        assert names == expected_names
+        assert actual.dtype == np.float32 and actual.flags.c_contiguous

@@ -3,7 +3,7 @@ use crate::{CartoBoostError, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::fs::{self, File};
-use std::io::{BufReader, BufWriter};
+use std::io::{BufReader, BufWriter, Write};
 use std::path::{Component, Path, PathBuf};
 
 pub const FORECAST_ARTIFACT_SCHEMA_VERSION: u32 = 1;
@@ -105,10 +105,12 @@ impl ForecastArtifact {
         if let Some(parent) = forecast_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let manifest_file = BufWriter::new(File::create(manifest_path)?);
-        serde_json::to_writer_pretty(manifest_file, &self.manifest)?;
-        let forecast_file = BufWriter::new(File::create(forecast_path)?);
-        serde_json::to_writer_pretty(forecast_file, &self.forecast)?;
+        let mut forecast_file = BufWriter::new(File::create(forecast_path)?);
+        serde_json::to_writer_pretty(&mut forecast_file, &self.forecast)?;
+        forecast_file.flush()?;
+        let mut manifest_file = BufWriter::new(File::create(manifest_path)?);
+        serde_json::to_writer_pretty(&mut manifest_file, &self.manifest)?;
+        manifest_file.flush()?;
         Ok(())
     }
 
@@ -127,11 +129,23 @@ impl ForecastArtifact {
         let forecast_path = resolve_child_path(directory, &manifest.forecast_path)?;
         let forecast_file = BufReader::new(File::open(forecast_path)?);
         let forecast: ForecastResult = serde_json::from_reader(forecast_file)?;
+        let forecast = forecast.into_validated()?;
         Self::new(manifest, forecast)
     }
 }
 
 fn validate_manifest(manifest: &ForecastArtifactManifest) -> Result<()> {
+    if manifest.schema_version != FORECAST_ARTIFACT_SCHEMA_VERSION {
+        return Err(CartoBoostError::InvalidInput(format!(
+            "unsupported forecast artifact schema_version {}",
+            manifest.schema_version
+        )));
+    }
+    if Path::new(&manifest.forecast_path) == Path::new(DEFAULT_MANIFEST_FILE) {
+        return Err(CartoBoostError::InvalidInput(
+            "artifact forecast_path must not overwrite manifest.json".to_string(),
+        ));
+    }
     if manifest.model_name.trim().is_empty() {
         return Err(CartoBoostError::InvalidInput(
             "artifact model_name must be non-empty".to_string(),
@@ -262,6 +276,44 @@ mod tests {
         let err = ForecastArtifact::new(manifest, forecast).expect_err("model mismatch");
 
         assert!(err.to_string().contains("must match manifest model_name"));
+    }
+
+    #[test]
+    fn artifact_rejects_manifest_path_collision_and_unsupported_schema() {
+        assert!(ForecastArtifactManifest::new("naive", 1, DEFAULT_MANIFEST_FILE).is_err());
+        let mut manifest =
+            ForecastArtifactManifest::new("naive", 1, DEFAULT_FORECAST_FILE).expect("manifest");
+        manifest.schema_version += 1;
+        assert!(validate_manifest(&manifest).is_err());
+    }
+
+    #[test]
+    fn artifact_load_validates_deserialized_prediction_contents() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manifest =
+            ForecastArtifactManifest::new("naive", 1, DEFAULT_FORECAST_FILE).expect("manifest");
+        fs::write(
+            dir.path().join(DEFAULT_MANIFEST_FILE),
+            serde_json::to_vec(&manifest).expect("manifest JSON"),
+        )
+        .expect("write manifest");
+        for invalid_forecast in [
+            serde_json::json!({"predictions": []}),
+            serde_json::json!({"predictions": [{
+                "series_id": "PULocationID=100",
+                "timestamp": ts(),
+                "horizon": 0,
+                "model": "naive",
+                "mean": 42.0
+            }]}),
+        ] {
+            fs::write(
+                dir.path().join(DEFAULT_FORECAST_FILE),
+                serde_json::to_vec(&invalid_forecast).expect("forecast JSON"),
+            )
+            .expect("write forecast");
+            assert!(ForecastArtifact::load_json(dir.path()).is_err());
+        }
     }
 
     fn ts() -> chrono::NaiveDateTime {
