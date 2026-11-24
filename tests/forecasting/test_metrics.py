@@ -183,7 +183,12 @@ def test_native_array_probability_metrics_match_legacy_lists(layout, rows):
     for name, args in cases:
         legacy = tuple(value.tolist() if isinstance(value, np.ndarray) else value for value in args)
         expected = getattr(_native, f"{name}_value")(*legacy)
-        assert getattr(_native, f"{name}_arrays")(*args) == expected
+        result = getattr(_native, f"{name}_arrays")(*args)
+        if "conformal" in name:
+            assert result == expected
+        else:
+            # Parallel reductions may associate the same terms differently.
+            assert result == pytest.approx(expected, rel=1e-14, abs=1e-15)
 
 
 @pytest.mark.parametrize("groups", [1, 8, 128])

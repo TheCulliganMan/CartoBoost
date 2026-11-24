@@ -34,10 +34,10 @@ external learned baseline (`lightgbm_lag`) across the three rolling origins. It
 does not beat the seasonal-naive library baseline. That distinction matters
 when choosing a model: learned structure adds complexity, and a simple seasonal
 forecast remains a strong comparator on this panel.
-The current run loaded and aggregated 13,069,067 source rows in 2.050 seconds
-and completed in 22.379 seconds. It recorded 71.205 CPU-seconds and a 925 MiB
-peak resident set; per-fold fit and prediction timings remain in the JSON
-artifact.
+The 0.3.13 run loaded and aggregated 13,069,067 source rows in 5.005 seconds
+and completed in 25.042 seconds. It recorded 44.045 CPU-seconds and a
+1,146 MiB peak resident set. The JSON artifact contains the exact invocation
+and per-fold fit and prediction timings.
 
 Reproduce the maintained artifact with:
 
@@ -70,8 +70,8 @@ benchmark suite. They are not real TLC data.
 | Scalable external roster | 1 | `cartoboost_auto_forecast` | 1.013744 | 3 | `forecasting_overhaul_committed_suite_scalable_roster.json` |
 | Scalable external roster | 3 | `lightgbm_lag` | 1.279238 | 1 | `forecasting_overhaul_committed_suite_scalable_roster.json` |
 | Generalization guardrail | 1 | `cartoboost_auto_forecast` | 1.000000 | 4 | `forecasting_generalization_scalable_synthetic.json` |
-| Generalization guardrail | 3 | `lightgbm_lag` | 1.196396 | 0 | `forecasting_generalization_scalable_synthetic.json` |
-| Generalization guardrail | 4 | `xgboost_lag` | 1.258816 | 0 | `forecasting_generalization_scalable_synthetic.json` |
+| Generalization guardrail | 3 | `lightgbm_lag` | 1.213984 | 0 | `forecasting_generalization_scalable_synthetic.json` |
+| Generalization guardrail | 4 | `xgboost_lag` | 1.276519 | 0 | `forecasting_generalization_scalable_synthetic.json` |
 
 Read: the current scalable synthetic checks favor CartoBoost.
 
