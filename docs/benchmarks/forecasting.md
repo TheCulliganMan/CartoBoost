@@ -301,23 +301,26 @@ It is a sample, not a full M4 corpus result.
 
 | Rank | Model | Mean RMSE Ratio | Wins/Ties | Top-3 Finishes | Artifact |
 | ---: | --- | ---: | ---: | ---: | --- |
-| 1 | `cartoboost_auto_forecast` | 1.000000 | 6 | 6 | `forecasting_overhaul_m4_committed.json` |
-| 2 | `cartoboost_lag` | 12.104570 | 3 | 6 | `forecasting_overhaul_m4_committed.json` |
+| 1 | `cartoboost_auto_forecast` | 1.001186 | 5 | 6 | `forecasting_overhaul_m4_committed.json` |
+| 2 | `cartoboost_lag` | 5.801499 | 3 | 6 | `forecasting_overhaul_m4_committed.json` |
 
-Read: `cartoboost_auto_forecast` wins or ties all six M4 sample groups on this
-artifact.
+`cartoboost_auto_forecast` wins or ties five of six frequency groups.
+`cartoboost_lag` leads on Quarterly. The run took 833.194 seconds, with per-group
+metrics and timings in the JSON artifact.
 
 ## M5 Demand Forecasting
 
 The M5 table reports current-code CartoBoost models against external baselines.
 The 100-series comparison uses the public M5 files and a full external roster.
+The 96-series run used official calendar, SNAP, price, and hierarchy inputs
+and completed in 53.105 seconds.
 The full-corpus fast check covers all 30,490 bottom-level item-store series with
 the fast CartoBoost roster.
 
 | Run | Rank | Model | RMSE | MAE | WAPE | WRMSSE | Artifact |
 | --- | ---: | --- | ---: | ---: | ---: | ---: | --- |
-| Sample | 1 | `cartoboost_auto_forecast` | 2.415225 | 1.139285 | 0.910615 | 0.568942 | `forecasting_overhaul_m5_committed.json` |
-| Sample | 2 | `cartoboost_lag` | 2.540625 | 1.219927 | 0.975071 | 0.743721 | `forecasting_overhaul_m5_committed.json` |
+| Sample | 1 | `cartoboost_auto_forecast` | 2.430246 | 1.123254 | 0.897801 | 0.561745 | `forecasting_overhaul_m5_committed.json` |
+| Sample | 2 | `cartoboost_lag` | 2.477738 | 1.206172 | 0.964076 | 0.737805 | `forecasting_overhaul_m5_committed.json` |
 | 100-series comparison | 1 | `cartoboost_auto_forecast` | 2.511292 | 1.135585 | 0.916059 | 0.669928 | `forecasting_m5_full_roster_sample.json` |
 | 100-series comparison | 2 | `statsforecast_autoets` | 2.525734 | 1.141999 | 0.921232 | 0.717426 | `forecasting_m5_full_roster_sample.json` |
 | 100-series comparison | 3 | `statsforecast_dynamic_optimized_theta` | 2.556517 | 1.163750 | 0.938779 | 0.712698 | `forecasting_m5_full_roster_sample.json` |

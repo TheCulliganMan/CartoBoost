@@ -3570,8 +3570,13 @@ def test_forecasting_benchmark_docs_match_committed_artifacts():
     m4_quality = m4["aggregate_quality"]
     m4_lag = m4_quality["mean_rmse_ratio_to_problem_best"]["cartoboost_lag"]
     m4_auto = m4_quality["mean_rmse_ratio_to_problem_best"]["cartoboost_auto_forecast"]
-    assert f"| 1 | `cartoboost_auto_forecast` | {m4_auto:.6f} | 6 | 6 |" in docs
-    assert f"| 2 | `cartoboost_lag` | {m4_lag:.6f} | 3 | 6 |" in docs
+    for rank, model, ratio in [
+        (1, "cartoboost_auto_forecast", m4_auto),
+        (2, "cartoboost_lag", m4_lag),
+    ]:
+        wins = m4_quality["wins_or_ties"][model]
+        top_three = m4_quality["top3_finishes"][model]
+        assert f"| {rank} | `{model}` | {ratio:.6f} | {wins} | {top_three} |" in docs
     assert m4_auto < m4_lag
 
     m5 = json.loads((artifacts / "forecasting_overhaul_m5_committed.json").read_text())
